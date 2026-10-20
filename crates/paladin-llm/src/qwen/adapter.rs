@@ -274,12 +274,33 @@ impl QwenConfig {
         Ok(config)
     }
 
-    /// Create configuration with custom values.
-    pub fn new(api_key: String, base_url: String, model: String) -> Self {
+    /// Create a configuration for `model`, authenticating with `api_key`.
+    ///
+    /// - `api_key`: the Qwen (DashScope) API key, never a URL.
+    /// - `model`: the default model requested when a call names none.
+    ///
+    /// The endpoint is [`QWEN_DEFAULT_BASE_URL`] (replace it with
+    /// [`with_base_url`](Self::with_base_url)) and the timeout is 300 s for a seeded reasoning
+    /// model and 60 s otherwise (replace it with
+    /// [`with_timeout_seconds`](Self::with_timeout_seconds)). Construction is infallible: an
+    /// empty key or model, or a non-`http(s)` endpoint, is refused when the adapter is built.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_llm::qwen::QwenConfig;
+    /// use paladin_llm::qwen::adapter::{QWEN_DEFAULT_BASE_URL, QWEN_DEFAULT_MODEL};
+    ///
+    /// let key = "qwen-example-key".to_string();
+    /// let config = QwenConfig::new(key, QWEN_DEFAULT_MODEL.to_string()).with_timeout_seconds(600);
+    /// assert_eq!(config.base_url, QWEN_DEFAULT_BASE_URL);
+    /// assert_eq!(config.timeout_seconds, 600);
+    /// ```
+    pub fn new(api_key: String, model: String) -> Self {
         let timeout_seconds = default_timeout_seconds(QWEN_PROVIDER, &model, 60);
         Self {
             api_key,
-            base_url,
+            base_url: QWEN_DEFAULT_BASE_URL.to_string(),
             model,
             timeout_seconds,
             max_tokens: None,
@@ -484,6 +505,34 @@ mod tests {
     use paladin_ports::output::llm_port::FinishReason;
     use serde_json::json;
 
+    // ── QwenConfig::new (SURFACE-02, D-05) ──
+
+    #[test]
+    fn qwen_config_new_takes_key_and_model_and_defaults_the_endpoint() {
+        let config = QwenConfig::new("k".to_string(), "qwen-plus".to_string());
+        assert_eq!(config.base_url, QWEN_DEFAULT_BASE_URL);
+        assert_eq!(config.model, "qwen-plus");
+        assert_eq!(config.api_key, "k");
+        // The timeout default is unchanged: whatever `default_timeout_seconds` answered for the
+        // same model before the endpoint left the constructor.
+        assert_eq!(
+            config.timeout_seconds,
+            default_timeout_seconds(QWEN_PROVIDER, "qwen-plus", 60)
+        );
+        let seeded = QwenConfig::new("k".to_string(), QWEN_DEFAULT_MODEL.to_string());
+        assert_eq!(
+            seeded.timeout_seconds,
+            default_timeout_seconds(QWEN_PROVIDER, QWEN_DEFAULT_MODEL, 60)
+        );
+    }
+
+    #[test]
+    fn qwen_config_with_base_url_replaces_the_default_endpoint() {
+        let config = QwenConfig::new("k".to_string(), "m".to_string())
+            .with_base_url("http://localhost:1234");
+        assert_eq!(config.base_url, "http://localhost:1234");
+    }
+
     fn build_request(model: &str) -> LlmRequest {
         LlmRequest::new(
             model,
@@ -499,11 +548,10 @@ mod tests {
     async fn qwen_stop_reaches_the_wire_in_order() {
         let mut server = crate::compat::test_support::server().await;
         let captured = crate::compat::test_support::mock_completion(&mut server).await;
-        let adapter = QwenAdapter::new(QwenConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            QWEN_DEFAULT_MODEL.to_string(),
-        ))
+        let adapter = QwenAdapter::new(
+            QwenConfig::new("test-key".to_string(), QWEN_DEFAULT_MODEL.to_string())
+                .with_base_url(server.url()),
+        )
         .unwrap();
         let mut request = build_request(QWEN_DEFAULT_MODEL);
         request.prompt.entity.data.parameters = PromptParameters {
@@ -570,11 +618,10 @@ mod tests {
             )
             .create_async()
             .await;
-        let adapter = QwenAdapter::new(QwenConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            "qwen3.8-flash".to_string(),
-        ))
+        let adapter = QwenAdapter::new(
+            QwenConfig::new("test-key".to_string(), "qwen3.8-flash".to_string())
+                .with_base_url(server.url()),
+        )
         .unwrap();
 
         let response = adapter
@@ -599,11 +646,10 @@ mod tests {
 
     #[test]
     fn qwen_default_model_is_seeded() {
-        let adapter = QwenAdapter::new(QwenConfig::new(
-            "test-key".to_string(),
-            "https://example.invalid/v1".to_string(),
-            QWEN_DEFAULT_MODEL.to_string(),
-        ))
+        let adapter = QwenAdapter::new(
+            QwenConfig::new("test-key".to_string(), QWEN_DEFAULT_MODEL.to_string())
+                .with_base_url("https://example.invalid/v1"),
+        )
         .unwrap();
         let profile = adapter
             .model_profile(QWEN_DEFAULT_MODEL)
@@ -710,11 +756,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = QwenConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            "qwen-plus".to_string(),
-        );
+        let config = QwenConfig::new("test-key".to_string(), "qwen-plus".to_string())
+            .with_base_url(server.url());
         let adapter = QwenAdapter::new(config).unwrap();
 
         let response = adapter
@@ -750,11 +793,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = QwenConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            "qwen-plus".to_string(),
-        );
+        let config = QwenConfig::new("test-key".to_string(), "qwen-plus".to_string())
+            .with_base_url(server.url());
         let adapter = QwenAdapter::new(config).unwrap();
 
         let stream = adapter
@@ -789,11 +829,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = QwenConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            "qwen-plus".to_string(),
-        );
+        let config = QwenConfig::new("test-key".to_string(), "qwen-plus".to_string())
+            .with_base_url(server.url());
         let adapter = QwenAdapter::new(config).unwrap();
 
         let result = adapter.generate(build_request("qwen-plus")).await;
@@ -811,11 +848,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = QwenConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            "qwen-plus".to_string(),
-        );
+        let config = QwenConfig::new("test-key".to_string(), "qwen-plus".to_string())
+            .with_base_url(server.url());
         let adapter = QwenAdapter::new(config).unwrap();
 
         let result = adapter.generate(build_request("qwen-plus")).await;
@@ -832,11 +866,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = QwenConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            "qwen-plus".to_string(),
-        );
+        let config = QwenConfig::new("test-key".to_string(), "qwen-plus".to_string())
+            .with_base_url(server.url());
         let adapter = QwenAdapter::new(config).unwrap();
 
         let result = adapter.generate(build_request("qwen-plus")).await;
@@ -853,11 +884,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = QwenConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            "qwen-plus".to_string(),
-        );
+        let config = QwenConfig::new("test-key".to_string(), "qwen-plus".to_string())
+            .with_base_url(server.url());
         let adapter = QwenAdapter::new(config).unwrap();
 
         let result = adapter.generate(build_request("qwen-plus")).await;
@@ -879,11 +907,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = QwenConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            "qwen-plus".to_string(),
-        );
+        let config = QwenConfig::new("test-key".to_string(), "qwen-plus".to_string())
+            .with_base_url(server.url());
         let adapter = QwenAdapter::new(config).unwrap();
 
         let result = adapter.generate(build_request("qwen-plus")).await;
@@ -913,22 +938,14 @@ mod tests {
 
     #[test]
     fn get_provider_name_returns_qwen() {
-        let config = QwenConfig::new(
-            "test-key".to_string(),
-            QWEN_DEFAULT_BASE_URL.to_string(),
-            QWEN_DEFAULT_MODEL.to_string(),
-        );
+        let config = QwenConfig::new("test-key".to_string(), QWEN_DEFAULT_MODEL.to_string());
         let adapter = QwenAdapter::new(config).unwrap();
         assert_eq!(adapter.get_provider_name(), "qwen");
     }
 
     #[test]
     fn get_capabilities_reports_no_vision_and_no_tool_or_function_calling() {
-        let config = QwenConfig::new(
-            "test-key".to_string(),
-            QWEN_DEFAULT_BASE_URL.to_string(),
-            QWEN_DEFAULT_MODEL.to_string(),
-        );
+        let config = QwenConfig::new("test-key".to_string(), QWEN_DEFAULT_MODEL.to_string());
         let adapter = QwenAdapter::new(config).unwrap();
         let caps = adapter.get_capabilities();
 
@@ -964,11 +981,9 @@ mod tests {
             }
 
             fn adapter(base_url: &str) -> Arc<dyn LlmPort> {
-                let config = QwenConfig::new(
-                    "test-key".to_string(),
-                    base_url.to_string(),
-                    QWEN_DEFAULT_MODEL.to_string(),
-                );
+                let config =
+                    QwenConfig::new("test-key".to_string(), QWEN_DEFAULT_MODEL.to_string())
+                        .with_base_url(base_url);
                 Arc::new(QwenAdapter::new(config).expect("test config must build"))
             }
 
@@ -1012,7 +1027,7 @@ mod tests {
     const UNSEEDED: &str = "qwen-unseeded-test-model";
 
     fn knob_config(url: &str, model: &str) -> QwenConfig {
-        QwenConfig::new("test-key".to_string(), url.to_string(), model.to_string())
+        QwenConfig::new("test-key".to_string(), model.to_string()).with_base_url(url)
     }
 
     #[tokio::test]

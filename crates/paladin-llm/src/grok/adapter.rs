@@ -174,12 +174,33 @@ impl GrokConfig {
         Ok(config)
     }
 
-    /// Create configuration with custom values.
-    pub fn new(api_key: String, base_url: String, model: String) -> Self {
+    /// Create a configuration for `model`, authenticating with `api_key`.
+    ///
+    /// - `api_key`: the xAI API key, never a URL.
+    /// - `model`: the default model requested when a call names none.
+    ///
+    /// The endpoint is [`GROK_DEFAULT_BASE_URL`] (replace it with
+    /// [`with_base_url`](Self::with_base_url)) and the timeout is 300 s for a seeded reasoning
+    /// model and 60 s otherwise (replace it with
+    /// [`with_timeout_seconds`](Self::with_timeout_seconds)). Construction is infallible: an
+    /// empty key or model, or a non-`http(s)` endpoint, is refused when the adapter is built.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_llm::grok::GrokConfig;
+    /// use paladin_llm::grok::adapter::{GROK_DEFAULT_BASE_URL, GROK_DEFAULT_MODEL};
+    ///
+    /// let key = "grok-example-key".to_string();
+    /// let config = GrokConfig::new(key, GROK_DEFAULT_MODEL.to_string()).with_timeout_seconds(600);
+    /// assert_eq!(config.base_url, GROK_DEFAULT_BASE_URL);
+    /// assert_eq!(config.timeout_seconds, 600);
+    /// ```
+    pub fn new(api_key: String, model: String) -> Self {
         let timeout_seconds = default_timeout_seconds(GROK_PROVIDER, &model, 60);
         Self {
             api_key,
-            base_url,
+            base_url: GROK_DEFAULT_BASE_URL.to_string(),
             model,
             timeout_seconds,
             max_tokens: None,
@@ -390,6 +411,34 @@ mod tests {
     use paladin_ports::output::model_profile::ParamSupport;
     use serde_json::json;
 
+    // ── GrokConfig::new (SURFACE-02, D-05) ──
+
+    #[test]
+    fn grok_config_new_takes_key_and_model_and_defaults_the_endpoint() {
+        let config = GrokConfig::new("k".to_string(), "grok-4.3".to_string());
+        assert_eq!(config.base_url, GROK_DEFAULT_BASE_URL);
+        assert_eq!(config.model, "grok-4.3");
+        assert_eq!(config.api_key, "k");
+        // The timeout default is unchanged: whatever `default_timeout_seconds` answered for the
+        // same model before the endpoint left the constructor.
+        assert_eq!(
+            config.timeout_seconds,
+            default_timeout_seconds(GROK_PROVIDER, "grok-4.3", 60)
+        );
+        let seeded = GrokConfig::new("k".to_string(), GROK_DEFAULT_MODEL.to_string());
+        assert_eq!(
+            seeded.timeout_seconds,
+            default_timeout_seconds(GROK_PROVIDER, GROK_DEFAULT_MODEL, 60)
+        );
+    }
+
+    #[test]
+    fn grok_config_with_base_url_replaces_the_default_endpoint() {
+        let config = GrokConfig::new("k".to_string(), "m".to_string())
+            .with_base_url("http://localhost:1234");
+        assert_eq!(config.base_url, "http://localhost:1234");
+    }
+
     fn build_request(model: &str) -> LlmRequest {
         LlmRequest::new(
             model,
@@ -403,11 +452,10 @@ mod tests {
 
     #[test]
     fn grok_model_profile_does_not_take_stop_or_penalties() {
-        let adapter = GrokAdapter::new(GrokConfig::new(
-            "test-key".to_string(),
-            "https://example.invalid/v1".to_string(),
-            GROK_DEFAULT_MODEL.to_string(),
-        ))
+        let adapter = GrokAdapter::new(
+            GrokConfig::new("test-key".to_string(), GROK_DEFAULT_MODEL.to_string())
+                .with_base_url("https://example.invalid/v1"),
+        )
         .unwrap();
         let profile = adapter
             .model_profile(GROK_DEFAULT_MODEL)
@@ -422,11 +470,10 @@ mod tests {
 
     #[test]
     fn grok_default_model_is_seeded() {
-        let adapter = GrokAdapter::new(GrokConfig::new(
-            "test-key".to_string(),
-            "https://example.invalid/v1".to_string(),
-            GROK_DEFAULT_MODEL.to_string(),
-        ))
+        let adapter = GrokAdapter::new(
+            GrokConfig::new("test-key".to_string(), GROK_DEFAULT_MODEL.to_string())
+                .with_base_url("https://example.invalid/v1"),
+        )
         .unwrap();
         let profile = adapter
             .model_profile(GROK_DEFAULT_MODEL)
@@ -451,11 +498,10 @@ mod tests {
     async fn grok_stop_is_omitted_and_recorded() {
         let mut server = crate::compat::test_support::server().await;
         let captured = crate::compat::test_support::mock_completion(&mut server).await;
-        let adapter = GrokAdapter::new(GrokConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            GROK_DEFAULT_MODEL.to_string(),
-        ))
+        let adapter = GrokAdapter::new(
+            GrokConfig::new("test-key".to_string(), GROK_DEFAULT_MODEL.to_string())
+                .with_base_url(server.url()),
+        )
         .unwrap();
         let mut request = build_request(GROK_DEFAULT_MODEL);
         request.prompt.entity.data.parameters = PromptParameters {
@@ -550,11 +596,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = GrokConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            GROK_DEFAULT_MODEL.to_string(),
-        );
+        let config = GrokConfig::new("test-key".to_string(), GROK_DEFAULT_MODEL.to_string())
+            .with_base_url(server.url());
         let adapter = GrokAdapter::new(config).unwrap();
 
         let response = adapter
@@ -590,11 +633,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = GrokConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            GROK_DEFAULT_MODEL.to_string(),
-        );
+        let config = GrokConfig::new("test-key".to_string(), GROK_DEFAULT_MODEL.to_string())
+            .with_base_url(server.url());
         let adapter = GrokAdapter::new(config).unwrap();
 
         let stream = adapter
@@ -640,11 +680,10 @@ mod tests {
             .with_body(sse_body)
             .create_async()
             .await;
-        let adapter = GrokAdapter::new(GrokConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            GROK_DEFAULT_MODEL.to_string(),
-        ))
+        let adapter = GrokAdapter::new(
+            GrokConfig::new("test-key".to_string(), GROK_DEFAULT_MODEL.to_string())
+                .with_base_url(server.url()),
+        )
         .unwrap();
         let stream = adapter
             .generate_stream(build_request(GROK_DEFAULT_MODEL))
@@ -710,11 +749,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = GrokConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            GROK_DEFAULT_MODEL.to_string(),
-        );
+        let config = GrokConfig::new("test-key".to_string(), GROK_DEFAULT_MODEL.to_string())
+            .with_base_url(server.url());
         let adapter = GrokAdapter::new(config).unwrap();
 
         let result = adapter.generate(build_request(GROK_DEFAULT_MODEL)).await;
@@ -732,11 +768,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = GrokConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            GROK_DEFAULT_MODEL.to_string(),
-        );
+        let config = GrokConfig::new("test-key".to_string(), GROK_DEFAULT_MODEL.to_string())
+            .with_base_url(server.url());
         let adapter = GrokAdapter::new(config).unwrap();
 
         let result = adapter.generate(build_request(GROK_DEFAULT_MODEL)).await;
@@ -753,11 +786,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = GrokConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            GROK_DEFAULT_MODEL.to_string(),
-        );
+        let config = GrokConfig::new("test-key".to_string(), GROK_DEFAULT_MODEL.to_string())
+            .with_base_url(server.url());
         let adapter = GrokAdapter::new(config).unwrap();
 
         let result = adapter.generate(build_request(GROK_DEFAULT_MODEL)).await;
@@ -774,11 +804,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = GrokConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            GROK_DEFAULT_MODEL.to_string(),
-        );
+        let config = GrokConfig::new("test-key".to_string(), GROK_DEFAULT_MODEL.to_string())
+            .with_base_url(server.url());
         let adapter = GrokAdapter::new(config).unwrap();
 
         let result = adapter.generate(build_request(GROK_DEFAULT_MODEL)).await;
@@ -800,11 +827,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = GrokConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            GROK_DEFAULT_MODEL.to_string(),
-        );
+        let config = GrokConfig::new("test-key".to_string(), GROK_DEFAULT_MODEL.to_string())
+            .with_base_url(server.url());
         let adapter = GrokAdapter::new(config).unwrap();
 
         let result = adapter.generate(build_request(GROK_DEFAULT_MODEL)).await;
@@ -834,22 +858,14 @@ mod tests {
 
     #[test]
     fn get_provider_name_returns_grok() {
-        let config = GrokConfig::new(
-            "test-key".to_string(),
-            GROK_DEFAULT_BASE_URL.to_string(),
-            GROK_DEFAULT_MODEL.to_string(),
-        );
+        let config = GrokConfig::new("test-key".to_string(), GROK_DEFAULT_MODEL.to_string());
         let adapter = GrokAdapter::new(config).unwrap();
         assert_eq!(adapter.get_provider_name(), "grok");
     }
 
     #[test]
     fn get_capabilities_reports_no_tool_or_function_calling() {
-        let config = GrokConfig::new(
-            "test-key".to_string(),
-            GROK_DEFAULT_BASE_URL.to_string(),
-            GROK_DEFAULT_MODEL.to_string(),
-        );
+        let config = GrokConfig::new("test-key".to_string(), GROK_DEFAULT_MODEL.to_string());
         let adapter = GrokAdapter::new(config).unwrap();
         let caps = adapter.get_capabilities();
 
@@ -898,11 +914,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = GrokConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            GROK_DEFAULT_MODEL.to_string(),
-        );
+        let config = GrokConfig::new("test-key".to_string(), GROK_DEFAULT_MODEL.to_string())
+            .with_base_url(server.url());
         let adapter = GrokAdapter::new(config).unwrap();
 
         let mut request = build_request(GROK_DEFAULT_MODEL);
@@ -983,11 +996,10 @@ mod tests {
             .create_async()
             .await;
 
-        let grok = GrokAdapter::new(GrokConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            GROK_DEFAULT_MODEL.to_string(),
-        ))
+        let grok = GrokAdapter::new(
+            GrokConfig::new("test-key".to_string(), GROK_DEFAULT_MODEL.to_string())
+                .with_base_url(server.url()),
+        )
         .unwrap();
         // $1 per million input tokens, $10 per million output tokens.
         let table = Arc::new(PriceTable::new(CurrencyCode::new("USD").unwrap()).with_row(
@@ -1067,11 +1079,10 @@ mod tests {
             .create_async()
             .await;
 
-        let grok = GrokAdapter::new(GrokConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            "grok-4.3".to_string(),
-        ))
+        let grok = GrokAdapter::new(
+            GrokConfig::new("test-key".to_string(), "grok-4.3".to_string())
+                .with_base_url(server.url()),
+        )
         .unwrap();
         // xAI listing price in ticks per token x 100_000 = nanos per million tokens.
         let row = PriceRow::new(1_250_000_000, 2_500_000_000)
@@ -1138,11 +1149,9 @@ mod tests {
             }
 
             fn adapter(base_url: &str) -> Arc<dyn LlmPort> {
-                let config = GrokConfig::new(
-                    "test-key".to_string(),
-                    base_url.to_string(),
-                    GROK_DEFAULT_MODEL.to_string(),
-                );
+                let config =
+                    GrokConfig::new("test-key".to_string(), GROK_DEFAULT_MODEL.to_string())
+                        .with_base_url(base_url);
                 Arc::new(GrokAdapter::new(config).expect("test config must build"))
             }
 
@@ -1219,7 +1228,7 @@ mod tests {
     const UNSEEDED: &str = "grok-unseeded-test-model";
 
     fn knob_config(url: &str, model: &str) -> GrokConfig {
-        GrokConfig::new("test-key".to_string(), url.to_string(), model.to_string())
+        GrokConfig::new("test-key".to_string(), model.to_string()).with_base_url(url)
     }
 
     #[tokio::test]

@@ -2087,24 +2087,16 @@ mod endpoint_builder_tests {
         }
         #[cfg(feature = "qwen")]
         {
-            let config = crate::qwen::QwenConfig::new(
-                "k".to_string(),
-                "https://dashscope.example/v1".to_string(),
-                "qwen-plus".to_string(),
-            )
-            .with_base_url(URL)
-            .with_timeout_seconds(7);
+            let config = crate::qwen::QwenConfig::new("k".to_string(), "qwen-plus".to_string())
+                .with_base_url(URL)
+                .with_timeout_seconds(7);
             assert_eq!((config.base_url.as_str(), config.timeout_seconds), (URL, 7));
         }
         #[cfg(feature = "grok")]
         {
-            let config = crate::grok::GrokConfig::new(
-                "k".to_string(),
-                "https://api.x.ai/v1".to_string(),
-                "grok-4.3".to_string(),
-            )
-            .with_base_url(URL)
-            .with_timeout_seconds(7);
+            let config = crate::grok::GrokConfig::new("k".to_string(), "grok-4.3".to_string())
+                .with_base_url(URL)
+                .with_timeout_seconds(7);
             assert_eq!((config.base_url.as_str(), config.timeout_seconds), (URL, 7));
         }
         #[cfg(feature = "ollama")]

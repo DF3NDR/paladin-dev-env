@@ -597,14 +597,14 @@ crate = "paladin-llm"
 lint = "struct_marked_non_exhaustive"
 migration_row = "paladin-llm | QwenConfig"
 requirement_id = "PARITY-03"
-justification = "QwenConfig gained max_tokens, max_retries, context_window and model_overrides (Phase 50, plans 50-08/50-09) and is marked #[non_exhaustive] with with_* builders (owner decision option-a) so the next field is free; only a downstream struct literal breaks, every constructor signature is unchanged. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+justification = "QwenConfig gained max_tokens, max_retries, context_window and model_overrides (Phase 50, plans 50-08/50-09) and is marked #[non_exhaustive] with with_* builders (owner decision option-a) so the next field is free; only a downstream struct literal breaks, its new(..) shape changes in Phase 50.1 (SURFACE-02, the entry below). Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
 
 [[entry]]
 crate = "paladin-llm"
 lint = "struct_marked_non_exhaustive"
 migration_row = "paladin-llm | GrokConfig"
 requirement_id = "PARITY-03"
-justification = "GrokConfig gained max_tokens, max_retries, context_window and model_overrides (Phase 50, plans 50-08/50-09) and is marked #[non_exhaustive] with with_* builders (owner decision option-a) so the next field is free; only a downstream struct literal breaks, every constructor signature is unchanged. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+justification = "GrokConfig gained max_tokens, max_retries, context_window and model_overrides (Phase 50, plans 50-08/50-09) and is marked #[non_exhaustive] with with_* builders (owner decision option-a) so the next field is free; only a downstream struct literal breaks, its new(..) shape changes in Phase 50.1 (SURFACE-02, the entry below). Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
 
 [[entry]]
 crate = "paladin-llm"
@@ -685,3 +685,24 @@ lint = "method_parameter_count_changed"
 migration_row = "paladin-llm | GeminiConfig"
 requirement_id = "SURFACE-02"
 justification = "GeminiConfig::new(api_key, base_url, model) became new(api_key, model) (Phase 50.1, plan 50.1-04, D-05): the endpoint defaults to GEMINI_DEFAULT_BASE_URL and is set with the with_base_url builder, the timeout with with_timeout_seconds. A clean break with no alias (ADR-0060): new(k, url, m) becomes new(k, m).with_base_url(url); from_env() is unchanged. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+# Plan 50.1-04 Task 2 (D-05, D-09, D-00b), measured 2026-10-20 after both changes: cargo-semver-checks
+# 0.50.0 vs the published `paladin-llm` 0.10.1, `--release-type minor`, with
+# `crates/paladin-llm/Cargo.toml`'s lint table removed and restored byte-for-byte (`cmp`-verified),
+# all nine adapter features: 196 checks, 3 lints fired -- the two already allowed and
+# `method_parameter_count_changed`, which named `QwenConfig::new` and `GrokConfig::new` (3 parameters
+# before, 2 now; each reported on both its `adapter` and its re-export path).
+
+[[entry]]
+crate = "paladin-llm"
+lint = "method_parameter_count_changed"
+migration_row = "paladin-llm | QwenConfig"
+requirement_id = "SURFACE-02"
+justification = "QwenConfig::new(api_key, base_url, model) became new(api_key, model) (Phase 50.1, plan 50.1-04, D-05): the endpoint defaults to QWEN_DEFAULT_BASE_URL and is set with the with_base_url builder, the timeout with with_timeout_seconds. A clean break with no alias (ADR-0060): new(k, url, m) becomes new(k, m).with_base_url(url); from_env() is unchanged. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+[[entry]]
+crate = "paladin-llm"
+lint = "method_parameter_count_changed"
+migration_row = "paladin-llm | GrokConfig"
+requirement_id = "SURFACE-02"
+justification = "GrokConfig::new(api_key, base_url, model) became new(api_key, model) (Phase 50.1, plan 50.1-04, D-05): the endpoint defaults to GROK_DEFAULT_BASE_URL and is set with the with_base_url builder, the timeout with with_timeout_seconds. A clean break with no alias (ADR-0060): new(k, url, m) becomes new(k, m).with_base_url(url); from_env() is unchanged. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."

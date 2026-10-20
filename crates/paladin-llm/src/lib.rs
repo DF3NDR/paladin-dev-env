@@ -406,7 +406,7 @@ mod capability_invariants {
 mod capability_invariants_new_providers {
     use crate::gemini::adapter::GEMINI_DEFAULT_MODEL;
     use crate::gemini::{GeminiAdapter, GeminiConfig};
-    use crate::grok::adapter::{GROK_DEFAULT_BASE_URL, GROK_DEFAULT_MODEL};
+    use crate::grok::adapter::GROK_DEFAULT_MODEL;
     use crate::grok::{GrokAdapter, GrokConfig};
     use crate::kimi::adapter::{KIMI_DEFAULT_BASE_URL, KIMI_DEFAULT_MODEL};
     use crate::kimi::{KimiAdapter, KimiConfig};
@@ -415,7 +415,7 @@ mod capability_invariants_new_providers {
     use crate::openai_compatible::{
         OpenAiCompatibleAdapter, OpenAiCompatibleCapabilitiesConfig, OpenAiCompatibleConfig,
     };
-    use crate::qwen::adapter::{QWEN_DEFAULT_BASE_URL, QWEN_DEFAULT_MODEL};
+    use crate::qwen::adapter::QWEN_DEFAULT_MODEL;
     use crate::qwen::{QwenAdapter, QwenConfig};
     use paladin_ports::output::llm_port::LlmPort;
 
@@ -437,13 +437,11 @@ mod capability_invariants_new_providers {
         .unwrap();
         let qwen = QwenAdapter::new(QwenConfig::new(
             "test-key".to_string(),
-            QWEN_DEFAULT_BASE_URL.to_string(),
             QWEN_DEFAULT_MODEL.to_string(),
         ))
         .unwrap();
         let grok = GrokAdapter::new(GrokConfig::new(
             "test-key".to_string(),
-            GROK_DEFAULT_BASE_URL.to_string(),
             GROK_DEFAULT_MODEL.to_string(),
         ))
         .unwrap();
@@ -531,13 +529,11 @@ mod capability_invariants_new_providers {
         .unwrap();
         let qwen = QwenAdapter::new(QwenConfig::new(
             "test-key".to_string(),
-            QWEN_DEFAULT_BASE_URL.to_string(),
             QWEN_DEFAULT_MODEL.to_string(),
         ))
         .unwrap();
         let grok = GrokAdapter::new(GrokConfig::new(
             "test-key".to_string(),
-            GROK_DEFAULT_BASE_URL.to_string(),
             GROK_DEFAULT_MODEL.to_string(),
         ))
         .unwrap();

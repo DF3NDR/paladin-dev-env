@@ -147,6 +147,27 @@ pub(crate) fn default_timeout_seconds(provider: &str, model: &str, compiled_defa
     }
 }
 
+/// Whether `url` is an `http://` or `https://` URL: the check every `*Config::validate` applies
+/// to a base URL (the shared `with_base_url` builder documents it).
+///
+/// Only the scheme prefix is checked, and it is checked in full: a value that merely starts with
+/// `http` (`httpx://host`, a scheme-less `http-gateway.internal/v1`) is not an HTTP URL. One
+/// function serves all nine adapters so their validation cannot drift apart.
+#[cfg(any(
+    feature = "openai",
+    feature = "kimi",
+    feature = "qwen",
+    feature = "grok",
+    feature = "ollama",
+    feature = "openai-compatible",
+    feature = "anthropic",
+    feature = "deepseek",
+    feature = "gemini"
+))]
+pub(crate) fn is_http_url(url: &str) -> bool {
+    url.starts_with("http://") || url.starts_with("https://")
+}
+
 /// Generate the `with_*` builders of the shared knobs on one `*Config` type (D-12).
 ///
 /// Every adapter config carries the same knobs -- `max_tokens`, `max_retries`,

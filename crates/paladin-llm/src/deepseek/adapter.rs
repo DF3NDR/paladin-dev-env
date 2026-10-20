@@ -27,7 +27,7 @@ use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
 use crate::redaction::RedactedKey;
 use crate::registry::{
     DEFAULT_MAX_RETRIES, ModelOverride, ModelRegistry, config_knob_builders,
-    default_timeout_seconds, seeded, seeded_window,
+    default_timeout_seconds, is_http_url, seeded, seeded_window,
 };
 use crate::response_guards::{StreamCompletion, bill, classify_completion};
 use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
@@ -234,8 +234,8 @@ impl DeepSeekConfig {
         if self.base_url.is_empty() {
             return Err("Base URL cannot be empty".to_string());
         }
-        if !self.base_url.starts_with("http") {
-            return Err("Base URL must start with http or https".to_string());
+        if !is_http_url(&self.base_url) {
+            return Err("Base URL must start with http:// or https://".to_string());
         }
         if self.model.is_empty() {
             return Err("Model name cannot be empty".to_string());
@@ -1320,7 +1320,14 @@ mod tests {
 
     #[test]
     fn a_builder_set_non_http_base_url_fails_deepseek_construction() {
-        for bad in ["ftp://x", "", "api.deepseek.com/v1"] {
+        for bad in [
+            "ftp://x",
+            "",
+            "api.deepseek.com/v1",
+            "httpx://x",
+            "http-gateway.internal/v1",
+            "httpfoo:",
+        ] {
             let config = DeepSeekConfig::new("k".to_string(), "deepseek-chat".to_string())
                 .with_base_url(bad);
             assert!(

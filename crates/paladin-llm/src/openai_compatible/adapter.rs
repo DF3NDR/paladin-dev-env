@@ -109,7 +109,7 @@ use crate::compat::{
 use crate::redaction::RedactedKey;
 use crate::registry::{
     DEFAULT_MAX_RETRIES, ModelOverride, ModelRegistry, config_knob_builders,
-    default_timeout_seconds, fallback_from_compat,
+    default_timeout_seconds, fallback_from_compat, is_http_url,
 };
 
 /// Default request timeout, in seconds, when `OPENAI_COMPATIBLE_TIMEOUT_SECONDS`
@@ -542,8 +542,8 @@ impl OpenAiCompatibleConfig {
         if self.base_url.is_empty() {
             return Err("Base URL cannot be empty".to_string());
         }
-        if !self.base_url.starts_with("http") {
-            return Err("Base URL must start with http or https".to_string());
+        if !is_http_url(&self.base_url) {
+            return Err("Base URL must start with http:// or https://".to_string());
         }
         if self.model.is_empty() {
             return Err("Model name cannot be empty".to_string());
@@ -765,6 +765,50 @@ mod tests {
     };
     use paladin_ports::output::llm_port::FinishReason;
     use serde_json::json;
+
+    /// WR-03: the documented `with_base_url` guarantee is an `http://` or `https://` URL. A value
+    /// that merely starts with `http` (`httpx://x`, a scheme-less `http-gateway...`) must fail
+    /// construction like any other non-HTTP value.
+    #[test]
+    fn a_builder_set_non_http_base_url_fails_openai_compatible_construction() {
+        for bad in [
+            "ftp://x",
+            "",
+            "api.example.com/v1",
+            "httpx://x",
+            "http-gateway.internal/v1",
+            "httpfoo:",
+        ] {
+            let config = OpenAiCompatibleConfig::new(
+                "k".to_string(),
+                "https://gateway.example/v1".to_string(),
+                "some-model".to_string(),
+                default_capabilities(),
+            )
+            .with_base_url(bad);
+            assert!(
+                config.validate().is_err(),
+                "base URL {bad:?} must fail validation"
+            );
+            assert!(
+                OpenAiCompatibleAdapter::new(config).is_err(),
+                "base URL {bad:?} must fail adapter construction"
+            );
+        }
+        for good in ["http://localhost:1", "https://gateway.example/v1"] {
+            let config = OpenAiCompatibleConfig::new(
+                "k".to_string(),
+                "https://gateway.example/v1".to_string(),
+                "some-model".to_string(),
+                default_capabilities(),
+            )
+            .with_base_url(good);
+            assert!(
+                config.validate().is_ok(),
+                "base URL {good:?} must pass validation"
+            );
+        }
+    }
 
     fn build_request(model: &str) -> LlmRequest {
         LlmRequest::new(

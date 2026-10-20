@@ -123,8 +123,9 @@ pub struct AnthropicConfig {
     pub api_key: String,
     /// Base URL for Anthropic API.
     pub base_url: String,
-    /// Default model to use; [`ANTHROPIC_DEFAULT_MODEL`] when constructed from the environment
-    /// with `ANTHROPIC_MODEL` unset.
+    /// The adapter's default model, which selects the timeout default;
+    /// [`ANTHROPIC_DEFAULT_MODEL`] when constructed from the environment with `ANTHROPIC_MODEL`
+    /// unset. Each request's own `LlmRequest.model` decides what is sent on the wire.
     pub model: String,
     /// Output budget (`max_tokens`, required by the Claude API) sent when a request sets none.
     /// [`AnthropicConfig::new`], [`AnthropicConfig::from_env`] and the layered path all default it
@@ -228,7 +229,9 @@ impl AnthropicConfig {
     /// Create a configuration for `model`, authenticating with `api_key`.
     ///
     /// - `api_key`: the Anthropic API key, never a URL.
-    /// - `model`: the default model requested when a call names none.
+    /// - `model`: the adapter's default model. It selects the timeout default (300 s for a
+    ///   seeded reasoning model, 60 s otherwise); each request's own `LlmRequest.model`
+    ///   decides what is sent on the wire.
     ///
     /// The endpoint is [`ANTHROPIC_DEFAULT_BASE_URL`] (replace it with
     /// [`with_base_url`](Self::with_base_url)); the timeout is 300 s for a seeded reasoning model

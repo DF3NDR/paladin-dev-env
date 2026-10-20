@@ -218,7 +218,8 @@ pub struct GeminiConfig {
     pub api_key: String,
     /// Base URL for the Gemini API.
     pub base_url: String,
-    /// Default model to use (e.g. `gemini-2.5-flash`).
+    /// The adapter's default model (e.g. `gemini-2.5-flash`), which selects the timeout default;
+    /// each request's own `LlmRequest.model` decides what is sent on the wire.
     pub model: String,
     /// Request timeout in seconds. [`GeminiConfig::new`] and [`GeminiConfig::from_env`] default
     /// it to 300 for a seeded reasoning model and to 60 otherwise (D-13); an explicit
@@ -330,7 +331,9 @@ impl GeminiConfig {
     /// Create a configuration for `model`, authenticating with `api_key`.
     ///
     /// - `api_key`: the Gemini API key, never a URL.
-    /// - `model`: the default model requested when a call names none.
+    /// - `model`: the adapter's default model. It selects the timeout default (300 s for a
+    ///   seeded reasoning model, 60 s otherwise); each request's own `LlmRequest.model`
+    ///   decides what is sent on the wire.
     ///
     /// The endpoint is [`GEMINI_DEFAULT_BASE_URL`] (replace it with
     /// [`with_base_url`](Self::with_base_url)) and the timeout is 300 s for a seeded reasoning

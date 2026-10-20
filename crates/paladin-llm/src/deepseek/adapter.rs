@@ -92,8 +92,9 @@ pub struct DeepSeekConfig {
     /// Base URL for DeepSeek API; [`DEEPSEEK_DEFAULT_BASE_URL`] unless replaced with
     /// [`with_base_url`](Self::with_base_url) (or `DEEPSEEK_BASE_URL` for `from_env`).
     pub base_url: String,
-    /// Default model to use; [`DEEPSEEK_DEFAULT_MODEL`] when constructed from the environment
-    /// with `DEEPSEEK_MODEL` unset.
+    /// The adapter's default model, which selects the timeout default;
+    /// [`DEEPSEEK_DEFAULT_MODEL`] when constructed from the environment with `DEEPSEEK_MODEL`
+    /// unset. Each request's own `LlmRequest.model` decides what is sent on the wire.
     pub model: String,
     /// Request timeout in seconds. [`DeepSeekConfig::new`] and [`DeepSeekConfig::from_env`]
     /// default it to 300 for a seeded reasoning model and to 60 otherwise (D-13); an explicit
@@ -190,7 +191,9 @@ impl DeepSeekConfig {
     /// Create a configuration for `model`, authenticating with `api_key`.
     ///
     /// - `api_key`: the DeepSeek API key, never a URL.
-    /// - `model`: the default model requested when a call names none.
+    /// - `model`: the adapter's default model. It selects the timeout default (300 s for a
+    ///   seeded reasoning model, 60 s otherwise); each request's own `LlmRequest.model`
+    ///   decides what is sent on the wire.
     ///
     /// The endpoint is [`DEEPSEEK_DEFAULT_BASE_URL`] (replace it with
     /// [`with_base_url`](Self::with_base_url)) and the timeout is 300 s for a seeded reasoning

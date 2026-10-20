@@ -80,7 +80,8 @@ pub struct KimiConfig {
     pub api_key: String,
     /// Base URL for the Kimi API.
     pub base_url: String,
-    /// Default model to use.
+    /// The adapter's default model, which selects the timeout default; each request's own
+    /// `LlmRequest.model` decides what is sent on the wire.
     pub model: String,
     /// Request timeout in seconds.
     pub timeout_seconds: u64,
@@ -186,7 +187,9 @@ impl KimiConfig {
     /// Create a configuration for `model`, authenticating with `api_key`.
     ///
     /// - `api_key`: the Moonshot (Kimi) API key, never a URL.
-    /// - `model`: the default model requested when a call names none.
+    /// - `model`: the adapter's default model. It selects the timeout default (300 s for a
+    ///   seeded reasoning model, 60 s otherwise); each request's own `LlmRequest.model`
+    ///   decides what is sent on the wire.
     ///
     /// The endpoint is [`KIMI_DEFAULT_BASE_URL`] (replace it with
     /// [`with_base_url`](Self::with_base_url)) and the timeout is 300 s for a seeded reasoning

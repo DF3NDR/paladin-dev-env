@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 50.1
 current_phase_name: consumer-surface-readiness
 status: executing
-stopped_at: Completed 50.1-01-PLAN.md
-last_updated: "2026-10-19T22:20:40.914Z"
+stopped_at: Completed 50.1-02-PLAN.md
+last_updated: "2026-10-20T00:44:47.207Z"
 last_activity: 2026-10-19
 last_activity_desc: Phase 50.1 execution started
 progress:
   total_phases: 13
   completed_phases: 11
   total_plans: 130
-  completed_plans: 122
+  completed_plans: 123
 ---
 
 # Project State
@@ -43,7 +43,7 @@ delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-1
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 86/86 plans ([█████████░] 94%) of the phases planned so far (38-45, 48);
+**Progress:** [████████████████████] 86/86 plans ([██████████] 95%) of the phases planned so far (38-45, 48);
 Phases 46, 47, 50 and 51 are not yet planned; Phase 49 closed 2026-10-14 (3/3 kept plans, 3 cancelled); Phase 50 is next, then Phase 51.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -63,7 +63,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 50.1 (consumer-surface-readiness) — EXECUTING
-Plan: 2 of 9
+Plan: 3 of 9
 Status: Ready to execute
 Last activity: 2026-10-19 — Phase 50.1 execution started
 
@@ -330,6 +330,7 @@ Last activity: 2026-10-19 — Phase 50.1 execution started
 | Phase 50 P31 | 16min | 3 tasks | 8 files |
 | Phase 50 P32 | approx 1h20m | 3 tasks | 10 files |
 | Phase 50.1 P01 | 35min | 3 tasks | 26 files |
+| Phase 50.1 P02 | 55min | 2 tasks | 19 files |
 
 ## Accumulated Context
 
@@ -585,6 +586,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 50-31: G-50-5a closed end to end: provider_swap_matrix case billed_failures_and_hopped_refusals_reach_the_ledger (real adapters, Pricing(Fallback), execution service, InMemoryTreasuryLedger); docs, CHANGELOGs, MIGRATION M-B-21/M-B-22/DR-18 and ADR-0061 limit (6) describe the shipped billing contract; WINDOWS row 74 fixed, remainder (c) (Grok cost_in_usd_ticks / num_sources_used) open as row 77 by the owner's 2026-10-17 deferral
 - [Phase ?]: 50-32: a hopped-past fallback bill is priced (collector-installed pricer, own model) and counted into ATTEMPT_SPEND at the hop; count_and_take counts only uncounted entries; additive unreleased surface (D-00b)
 - [Phase ?]: 50.1-01: Aegis family reaches consumers through five facade module re-exports plus nine prelude names; pacing-only path is public with_cadence; section 9.8 spend-cap wording names only evidenced vendors
+- [Phase ?]: [Phase 50.1 plan 02] D-05 proceed-as-locked (owner, 2026-10-20): DeepSeekConfig::new(api_key, model); with_base_url/with_timeout_seconds on all nine configs; measured lint method_parameter_count_changed registered
 
 ### Pending Todos
 
@@ -804,8 +806,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-19T22:20:40.874Z
-**Stopped at:** Completed 50.1-01-PLAN.md
+**Last session:** 2026-10-20T00:44:47.175Z
+**Stopped at:** Completed 50.1-02-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

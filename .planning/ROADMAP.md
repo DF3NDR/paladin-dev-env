@@ -1630,7 +1630,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 50.1-02-PLAN.md — `checkpoint:decision` on the one-way D-05 door (plus the D-06/C1 choice), then the tracer for the registered break: `with_base_url` and `with_timeout_seconds` macro arms for all nine types, `DeepSeekConfig::new(api_key, model)` with every call site and its muster pin, semver measured before any allowlist text, §9.2 row, new §9.8 DR-19, DR-12 amended
+- [x] 50.1-02-PLAN.md — `checkpoint:decision` on the one-way D-05 door (plus the D-06/C1 choice), then the tracer for the registered break: `with_base_url` and `with_timeout_seconds` macro arms for all nine types, `DeepSeekConfig::new(api_key, model)` with every call site and its muster pin, semver measured before any allowlist text, §9.2 row, new §9.8 DR-19, DR-12 amended
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

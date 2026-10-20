@@ -207,15 +207,15 @@ struct ProviderSpec {
 }
 
 /// Anthropic's static model list (mirrors `AnthropicAdapter::get_available_models`, which returns
-/// its seeded table). That table holds exactly the adapter's default model today, so the list is
-/// built from the adapter's own constant rather than restated; the unit test
-/// `the_static_model_lists_match_the_adapters` fails if the table grows.
-const ANTHROPIC_MODELS: &[&str] = &[ANTHROPIC_DEFAULT_MODEL];
+/// its seeded table, in table order). The adapter's default model comes first, built from its own
+/// constant rather than restated; the other ids are the seeded rows added by Phase 50.1. The unit
+/// test `the_static_model_lists_match_the_adapters` fails if the table and this list drift apart.
+const ANTHROPIC_MODELS: &[&str] = &[ANTHROPIC_DEFAULT_MODEL, "claude-opus-4-8"];
 
 /// DeepSeek's static model list (mirrors `DeepSeekAdapter::get_available_models`, which returns
-/// its seeded table). Built from the adapter's own default-model constant for the same reason as
+/// its seeded table, in table order). Default model first, for the same reason as
 /// [`ANTHROPIC_MODELS`], and guarded by the same unit test.
-const DEEPSEEK_MODELS: &[&str] = &[DEEPSEEK_DEFAULT_MODEL];
+const DEEPSEEK_MODELS: &[&str] = &[DEEPSEEK_DEFAULT_MODEL, "deepseek-v4-pro"];
 
 // The harness's OpenAI candidate is `OPENAI_DEFAULT_MODEL`, the adapter's own default (the
 // first seeded OpenAI model, and the one whose rejection of the old `max_tokens` key went

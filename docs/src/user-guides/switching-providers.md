@@ -217,8 +217,10 @@ One row per seeded model, then one adapter-wide fallback row per provider. Rows 
 provider in the fixed order above, then by model id ascending, and a drift test
 (`switching_providers_page_lists_every_seeded_model`) fails when a seeded model is missing from the
 page, extra, out of order, or listed with a different value or verified-on date than its registry
-entry. Every seeded row was verified on 2026-10-15. The fallback rows describe what each adapter
-sends today and are **unverified**: they apply to any model the registry does not list.
+entry. A seeded row's verified-on date names the seed probe transcript its values come from:
+2026-10-15 is `50-SEED-PROBE.md`, 2026-10-20 is `50.1-SEED-PROBE.md`. The fallback rows describe
+what each adapter sends today and are **unverified**: they apply to any model the registry does not
+list.
 
 | Provider | Model | Verified on | Context window | Max output | Temperature | top_p | Penalties | Stop sequences | Reasoning | JSON mode |
 |----------|-------|-------------|----------------|------------|-------------|-------|-----------|----------------|-----------|-----------|
@@ -226,8 +228,10 @@ sends today and are **unverified**: they apply to any model the registry does no
 | openai | `gpt-5.4-nano` | 2026-10-15 | 400,000 [d] | 128,000 [d] | 0.0 to 1.0 [a] | 0.0 to 1.0 [c] | not sent [e] | not sent | no | object, schema |
 | openai | (adapter-wide fallback) | unverified | 128,000 | not set | 0.0 to 1.0 | 0.0 to 1.0 | not sent | up to 4 | no | object, schema |
 | anthropic | `claude-haiku-5-5` | 2026-10-15 | 1,000,000 | 128,000 | only 1.0 | not sent | not sent | yes | no | none |
+| anthropic | `claude-opus-4-8` | 2026-10-20 | 1,000,000 | 128,000 | only 1.0 | not sent | not sent | yes | no | none |
 | anthropic | (adapter-wide fallback) | unverified | 1,000,000 | not set | not sent | not sent | not sent | yes | no | none |
 | deepseek | `deepseek-flash` | 2026-10-15 | 1,048,576 | 393,216 | 0.0 to 2.0 | 0.0 to 1.0 [c] | -2.0 to 2.0 [c] | yes | yes | object |
+| deepseek | `deepseek-v4-pro` | 2026-10-20 | 1,048,576 | 393,216 | 0.0 to 2.0 | 0.0 to 1.0 [c] | -2.0 to 2.0 [c] | yes | yes | object |
 | deepseek | (adapter-wide fallback) | unverified | 1,048,576 | not set | 0.0 to 2.0 | 0.0 to 1.0 | -2.0 to 2.0 | yes | no | object |
 | kimi | `kimi-k2.6` | 2026-10-15 | 262,144 | not set | not sent | not sent | not sent | yes | yes | object, schema |
 | kimi | `kimi-k3` | 2026-10-15 | 1,048,576 | not set | not sent | not sent | not sent | yes | yes | object, schema |
@@ -276,9 +280,8 @@ window of `not set` is not a statement that the model has none.
 
 **Probed but not seeded** (so they run on the adapter-wide fallback): the eight retired Claude ids
 (`claude-3-*`, `claude-2.*`, `claude-instant-1.2`, all HTTP 404) and the other current Claude ids
-(not probed); `deepseek-chat` and `deepseek-coder` (answered 200 but are undocumented aliases) and
-`deepseek-v4-pro` (not probed); `kimi-k2.7-code` and `kimi-k2.7-code-highspeed` (every probe was
-rejected); `qwen-turbo` (rate-limited on every probe, nothing measured) and `qwen3-max` (HTTP 404
+(not probed); `deepseek-chat` and `deepseek-coder` (answered 200 but are undocumented aliases);
+`kimi-k2.7-code` and `kimi-k2.7-code-highspeed` (every probe was rejected); `qwen-turbo` (rate-limited on every probe, nothing measured) and `qwen3-max` (HTTP 404
 on the International endpoint); the other Grok chat ids (not probed).
 
 ## Responses

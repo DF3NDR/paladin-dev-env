@@ -2,12 +2,20 @@
 //!
 //! # Single source
 //!
-//! Every value in this file comes from one document: the operator's live seed probe,
-//! `.planning/phases/50-provider-parity-config-driven-model-swap/50-SEED-PROBE.md`, run on the
-//! operator's own vendor keys at commit `c33022b9` on **2026-10-15** (the transcript's UTC date
-//! line, 22:23:15Z). Seven of the nine providers were PROBED (OpenAI, Anthropic, DeepSeek, Kimi,
-//! Qwen, Grok, Gemini); Ollama and OpenAI-compatible were SKIPPED (no daemon and no endpoint
-//! were configured), so the Ollama table is empty and the OpenAI-compatible adapter has none.
+//! Every value in this file comes from one of two documents, both operator live seed probes run
+//! on the operator's own vendor keys:
+//!
+//! - `.planning/phases/50-provider-parity-config-driven-model-swap/50-SEED-PROBE.md`, run at
+//!   commit `c33022b9` on **2026-10-15** (the transcript's UTC date line, 22:23:15Z).
+//! - `.planning/phases/50.1-consumer-surface-readiness/50.1-SEED-PROBE.md`, two runs at commit
+//!   `8ad298dd` on **2026-10-20** (UTC date lines 15:20:29Z and 15:55:58Z). Run 1 probed the
+//!   current model range of all seven providers; run 2 re-ran only OpenAI, Qwen and Grok to retry
+//!   five candidates, and its Anthropic, DeepSeek, Kimi and Gemini sections read SKIPPED by design.
+//!
+//! Each entry's `verified_on` date says which transcript its values come from. In both, seven of
+//! the nine providers were PROBED (OpenAI, Anthropic, DeepSeek, Kimi, Qwen, Grok, Gemini); Ollama
+//! and OpenAI-compatible were SKIPPED (no daemon and no endpoint were configured), so the Ollama
+//! table is empty and the OpenAI-compatible adapter has none.
 //!
 //! **A value with no evidence in that transcript is not written here.** Not from a research
 //! note, not from a hand-off, not from memory. A field the transcript does not evidence keeps
@@ -46,15 +54,23 @@ mod anthropic_table {
     use crate::registry::SeededProfile;
     use paladin_ports::output::model_profile::{ModelProfile, ParamSupport, StopSupport};
 
-    /// Anthropic. Only `claude-haiku-5-5` was measured: the eight curated legacy ids (claude-3
-    /// family, claude-2.x, claude-instant) all answered 404 `not_found_error` (retired, not
-    /// seeded), and the other current ids in the live listing were not probed, so their
+    /// Anthropic. `claude-haiku-5-5` (2026-10-15, `50-SEED-PROBE.md`) and `claude-opus-4-8`
+    /// (2026-10-20, `50.1-SEED-PROBE.md`) were measured end to end. The eight curated legacy ids
+    /// (claude-3 family, claude-2.x, claude-instant) all answered 404 `not_found_error` (retired,
+    /// not seeded), and the other current ids in the live listing have not been probed, so their
     /// sampling behaviour is unknown and they are not listed.
-    pub(crate) static ANTHROPIC: &[SeededProfile] = &[SeededProfile {
-        model: "claude-haiku-5-5",
-        verified_on: "2026-10-15",
-        build: claude_haiku_5_5,
-    }];
+    pub(crate) static ANTHROPIC: &[SeededProfile] = &[
+        SeededProfile {
+            model: "claude-haiku-5-5",
+            verified_on: "2026-10-15",
+            build: claude_haiku_5_5,
+        },
+        SeededProfile {
+            model: "claude-opus-4-8",
+            verified_on: "2026-10-20",
+            build: claude_opus_4_8,
+        },
+    ];
 
     fn claude_haiku_5_5() -> ModelProfile {
         ModelProfile::new()
@@ -75,6 +91,32 @@ mod anthropic_table {
             // truncated in the transcript, so reasoning is not evidenced.
             .with_reasoning(false)
             // Anthropic has no JSON mode (probe: NOT APPLICABLE).
+            .with_json_object(false)
+            .with_json_schema(false)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `claude-opus-4-8``, probe numbers as in that table, and its listing row.
+    fn claude_opus_4_8() -> ModelProfile {
+        ModelProfile::new()
+            // Probe 3: temperature 1.00 ACCEPTED; probes 2 and 4 (0.00, 0.50) answered
+            // "`temperature` is deprecated for this model", probe 5 (1.01) "temperature: range:
+            // 0..1". Only 1.00 was accepted.
+            .with_temperature(ParamSupport::Fixed(1.0))
+            // Probe 6: top_p 0.5 answered "`top_p` is deprecated for this model".
+            .with_top_p(ParamSupport::NotSent)
+            // Probes 7 and 8: NOT APPLICABLE, the Messages API has no such request field.
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probes 9 and 10: one and five stop sequences were accepted.
+            .with_stop_sequences(StopSupport::Supported { max: None })
+            // Listing: max_input_tokens=1000000, max_tokens=128000.
+            .with_context_window(1_000_000)
+            .with_max_output_tokens(128_000)
+            // Probe 1 (the default call) carried no reasoning text; the listing capabilities
+            // were truncated in the transcript, so reasoning is not evidenced.
+            .with_reasoning(false)
+            // Probes 12 and 13: NOT APPLICABLE, Anthropic has no JSON mode.
             .with_json_object(false)
             .with_json_schema(false)
     }
@@ -155,15 +197,23 @@ mod deepseek_table {
     use crate::registry::SeededProfile;
     use paladin_ports::output::model_profile::{ModelProfile, ParamSupport, StopSupport};
 
-    /// DeepSeek. `deepseek-flash` is the live listing's general-purpose model. `deepseek-v4-pro`
-    /// is listed but was not probed, so it is not seeded. `deepseek-chat` and `deepseek-coder`
-    /// answered 200 but are absent from the listing and from the vendor's pricing page (the
-    /// operator classes them as undocumented aliases): not seeded.
-    pub(crate) static DEEPSEEK: &[SeededProfile] = &[SeededProfile {
-        model: "deepseek-flash",
-        verified_on: "2026-10-15",
-        build: deepseek_flash,
-    }];
+    /// DeepSeek. `deepseek-flash` is the live listing's general-purpose model (2026-10-15,
+    /// `50-SEED-PROBE.md`); `deepseek-v4-pro` is its larger sibling, listed and probed on
+    /// 2026-10-20 (`50.1-SEED-PROBE.md`, run 1). `deepseek-chat` and `deepseek-coder` answered
+    /// 200 but are absent from the listing and from the vendor's pricing page (the operator
+    /// classes them as undocumented aliases): not seeded.
+    pub(crate) static DEEPSEEK: &[SeededProfile] = &[
+        SeededProfile {
+            model: "deepseek-flash",
+            verified_on: "2026-10-15",
+            build: deepseek_flash,
+        },
+        SeededProfile {
+            model: "deepseek-v4-pro",
+            verified_on: "2026-10-20",
+            build: deepseek_v4_pro,
+        },
+    ];
 
     fn deepseek_flash() -> ModelProfile {
         ModelProfile::new()
@@ -183,6 +233,31 @@ mod deepseek_table {
             .with_reasoning(true)
             .with_json_object(true)
             // "This response_format type is unavailable now".
+            .with_json_schema(false)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `deepseek-v4-pro``, probe numbers as in that table, and its listing row.
+    fn deepseek_v4_pro() -> ModelProfile {
+        ModelProfile::new()
+            // Probes 2 and 3: 0.00 and 2.00 ACCEPTED; probe 5: 2.01 answered "the valid range of
+            // temperature is [0, 2]".
+            .with_temperature(ParamSupport::Range(0.0, 2.0))
+            // Probe 6: top_p 0.5 accepted: `0..=1` is contract-derived.
+            .with_top_p(ParamSupport::Range(0.0, 1.0))
+            // Probes 7 and 8: both penalties accepted at 0.5: `-2..=2` is contract-derived.
+            .with_frequency_penalty(ParamSupport::Range(-2.0, 2.0))
+            .with_presence_penalty(ParamSupport::Range(-2.0, 2.0))
+            // Probe 10: five stop sequences accepted.
+            .with_stop_sequences(StopSupport::Supported { max: None })
+            // Listing: context_window=1048576, max_output_tokens=393216.
+            .with_context_window(1_048_576)
+            .with_max_output_tokens(393_216)
+            // Probe 1 (the default call) returned reasoning text.
+            .with_reasoning(true)
+            // Probe 12: json_object accepted.
+            .with_json_object(true)
+            // Probe 13: "This response_format type is unavailable now".
             .with_json_schema(false)
     }
 }

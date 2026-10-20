@@ -1047,8 +1047,8 @@ mod tests {
 }
 
 /// Tests of the dated per-vendor tables in [`seeded`]: structural invariants over every table, and
-/// one test per PROBED vendor that pins an entry to the transcript row it cites
-/// (`50-SEED-PROBE.md`, run on 2026-10-15).
+/// tests that pin an entry to the transcript row it cites: `50-SEED-PROBE.md` (run on 2026-10-15)
+/// for the first rows, `50.1-SEED-PROBE.md` (run on 2026-10-20) for the Phase 50.1 rows.
 #[cfg(test)]
 mod seeded_tests {
     use super::*;
@@ -1168,16 +1168,21 @@ mod seeded_tests {
         }
     }
 
+    /// The UTC dates of the two operator probe transcripts every row comes from: `50-SEED-PROBE.md`
+    /// and `50.1-SEED-PROBE.md`. An entry's `verified_on` names the transcript its values are from.
+    const PROBE_DATES: [&str; 2] = ["2026-10-15", "2026-10-20"];
+
     #[test]
-    fn every_entry_carries_the_probe_date() {
-        // One probe run seeds every table; a different date here means a value came from a
-        // source other than 50-SEED-PROBE.md.
+    fn every_entry_carries_one_of_the_two_probe_dates() {
+        // Two probe runs seed the tables; a date outside this pair means a value came from a
+        // source other than 50-SEED-PROBE.md or 50.1-SEED-PROBE.md.
         for (provider, table) in tables() {
             for entry in table {
-                assert_eq!(
-                    entry.verified_on, "2026-10-15",
-                    "{provider}/{}: not from the 2026-10-15 probe",
-                    entry.model
+                assert!(
+                    PROBE_DATES.contains(&entry.verified_on),
+                    "{provider}/{}: {} is not the date of a seed probe transcript",
+                    entry.model,
+                    entry.verified_on
                 );
             }
         }
@@ -1191,10 +1196,9 @@ mod seeded_tests {
             "claude-3-opus-20240229",
             "claude-2.1",
             "claude-instant-1.2",
-            // DeepSeek: undocumented aliases, and listed-but-unprobed `deepseek-v4-pro`.
+            // DeepSeek: undocumented aliases.
             "deepseek-chat",
             "deepseek-coder",
-            "deepseek-v4-pro",
             // Kimi: every probe was rejected for the thinking mode.
             "kimi-k2.7-code",
             "kimi-k2.7-code-highspeed",
@@ -1357,6 +1361,81 @@ mod seeded_tests {
         assert_eq!(p.max_output_tokens, None);
         // Probe 1 carried no reasoning text.
         assert!(!p.reasoning);
+    }
+
+    /// SURFACE-06 (D-14): the two models web3sec runs resolve to seeded, dated profiles, so a
+    /// call to either carries no `paladin.unprofiled_model` stamp. The values behind them are
+    /// pinned to `50.1-SEED-PROBE.md` by the two `*_seed_matches_the_transcript` tests below.
+    #[test]
+    fn surface_06_models_resolve_seeded() {
+        #[cfg(feature = "anthropic")]
+        {
+            let registry = ModelRegistry::new("anthropic", seeded::ANTHROPIC, ModelProfile::new());
+            assert_eq!(
+                registry.resolve("claude-opus-4-8").1,
+                ProfileOrigin::Seeded {
+                    verified_on: "2026-10-20"
+                }
+            );
+        }
+        #[cfg(feature = "deepseek")]
+        {
+            let registry = ModelRegistry::new("deepseek", seeded::DEEPSEEK, ModelProfile::new());
+            assert_eq!(
+                registry.resolve("deepseek-v4-pro").1,
+                ProfileOrigin::Seeded {
+                    verified_on: "2026-10-20"
+                }
+            );
+        }
+    }
+
+    #[cfg(feature = "anthropic")]
+    #[test]
+    fn anthropic_opus_4_8_seed_matches_the_transcript() {
+        let p = entry(seeded::ANTHROPIC, "claude-opus-4-8");
+        // Probes 3, 2, 4 and 5: only temperature 1.00 ACCEPTED; 0.00 and 0.50 "`temperature` is
+        // deprecated for this model", 1.01 "temperature: range: 0..1".
+        assert_eq!(p.temperature, ParamSupport::Fixed(1.0));
+        // Probe 6: top_p "is deprecated for this model".
+        assert_eq!(p.top_p, ParamSupport::NotSent);
+        // Probes 7 and 8: NOT APPLICABLE, the Messages API has no penalty field.
+        assert_eq!(p.frequency_penalty, ParamSupport::NotSent);
+        assert_eq!(p.presence_penalty, ParamSupport::NotSent);
+        // Probes 9 and 10: one and five stop sequences ACCEPTED.
+        assert_eq!(p.stop_sequences, StopSupport::Supported { max: None });
+        // Listing: max_input_tokens=1000000, max_tokens=128000.
+        assert_eq!(p.context_window, Some(1_000_000));
+        assert_eq!(p.max_output_tokens, Some(128_000));
+        // Probe 1 carried no reasoning text and the listing capabilities were truncated.
+        assert!(!p.reasoning);
+        // Probes 12 and 13: Anthropic has no JSON mode.
+        assert!(!p.json_object && !p.json_schema);
+        assert_eq!(p.verified_on.as_deref(), Some("2026-10-20"));
+    }
+
+    #[cfg(feature = "deepseek")]
+    #[test]
+    fn deepseek_v4_pro_seed_matches_the_transcript() {
+        let p = entry(seeded::DEEPSEEK, "deepseek-v4-pro");
+        // Probes 2, 3 and 5: 0.00 and 2.00 ACCEPTED, 2.01 rejected "valid range is [0, 2]".
+        assert_eq!(p.temperature, ParamSupport::Range(0.0, 2.0));
+        // Probe 6: top_p 0.5 ACCEPTED, so the contract span 0..=1 (contract-derived).
+        assert_eq!(p.top_p, ParamSupport::Range(0.0, 1.0));
+        // Probes 7 and 8: both penalties ACCEPTED at 0.5, so the contract span -2..=2.
+        assert_eq!(p.frequency_penalty, ParamSupport::Range(-2.0, 2.0));
+        assert_eq!(p.presence_penalty, ParamSupport::Range(-2.0, 2.0));
+        // Probe 10: five stop sequences ACCEPTED.
+        assert_eq!(p.stop_sequences, StopSupport::Supported { max: None });
+        // Listing: context_window=1048576, max_output_tokens=393216.
+        assert_eq!(p.context_window, Some(1_048_576));
+        assert_eq!(p.max_output_tokens, Some(393_216));
+        // Probe 1 returned reasoning text.
+        assert!(p.reasoning);
+        // Probe 12 ACCEPTED; probe 13 rejected "response_format type is unavailable now".
+        assert!(p.json_object);
+        assert!(!p.json_schema);
+        assert_eq!(p.verified_on.as_deref(), Some("2026-10-20"));
     }
 
     #[cfg(feature = "grok")]

@@ -112,7 +112,8 @@ struct OpenAIVisionApiRequest {
     /// The output-token limit. Paladin calls it `max_tokens`; the OpenAI wire key is
     /// `max_completion_tokens` for every model (owner decision 2026-10-17, UAT test 5, G-50-5b),
     /// the same name the chat path sends. Acceptance was measured for `gpt-5.4-nano` and
-    /// `gpt-4o-mini` only (2026-10-15).
+    /// `gpt-4o-mini` (2026-10-15) and for the 17 further ids seeded on 2026-10-20, on the chat
+    /// path; the vision path itself was not probed.
     #[serde(rename = "max_completion_tokens")]
     max_tokens: usize,
     #[serde(skip_serializing_if = "Option::is_none")]

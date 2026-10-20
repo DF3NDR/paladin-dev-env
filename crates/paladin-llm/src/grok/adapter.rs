@@ -488,6 +488,32 @@ mod tests {
         );
     }
 
+    /// The recorded `grok-4.7` exception (owner ruling, 2026-10-20): through the adapter, the
+    /// seeded profile does not admit `temperature` 2.00, which failed at the vendor identically
+    /// in both probe runs, and it is stamped with the Phase 50.1 date rather than the fallback's.
+    #[test]
+    fn grok_4_7_profile_does_not_admit_temperature_2_00() {
+        let adapter = GrokAdapter::new(
+            GrokConfig::new("test-key".to_string(), "grok-4.7".to_string())
+                .with_base_url("https://example.invalid/v1"),
+        )
+        .unwrap();
+        let profile = adapter
+            .model_profile("grok-4.7")
+            .expect("Grok profiles every model");
+        assert_eq!(profile.verified_on.as_deref(), Some("2026-10-20"));
+        assert!(!profile.temperature.admits(2.0));
+        assert!(profile.temperature.admits(0.5));
+        // The adapter-wide declaration still admits 2.0 for an unseeded model: only the seeded
+        // row narrows it.
+        let fallback = adapter
+            .model_profile(UNSEEDED_FOR_PROFILE)
+            .expect("Grok profiles every model");
+        assert!(fallback.temperature.admits(2.0));
+    }
+
+    const UNSEEDED_FOR_PROFILE: &str = "grok-unseeded-profile-test-model";
+
     #[test]
     fn grok_default_model_is_the_operator_identified_current_model() {
         assert_eq!(GROK_DEFAULT_MODEL, "grok-4.3");
@@ -1316,7 +1342,16 @@ mod tests {
     fn grok_config_defaults_a_reasoning_model_to_300s() {
         // (model, expected default timeout): a seeded reasoning model gets 300 s (D-13); any
         // other model keeps this preset's compiled default (60 s).
-        for (model, expected) in [(GROK_DEFAULT_MODEL, 300), ("grok-4.6", 300), (UNSEEDED, 60)] {
+        for (model, expected) in [
+            (GROK_DEFAULT_MODEL, 300),
+            ("grok-4.6", 300),
+            // The Phase 50.1 rows: the reasoning ones (`reasoning: true`) get 300 s, the
+            // non-reasoning alias keeps the hosted-preset 60 s.
+            ("grok-4.7", 300),
+            ("grok-4.20-reasoning", 300),
+            ("grok-4.20-non-reasoning", 60),
+            (UNSEEDED, 60),
+        ] {
             let url = "https://example.invalid/v1";
             assert_eq!(
                 knob_config(url, model).timeout_seconds,

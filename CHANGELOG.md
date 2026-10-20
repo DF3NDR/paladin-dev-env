@@ -37,6 +37,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NodeId` and `Transience`. A consumer no longer needs a direct core-crate dependency for the
   MIGRATION.md section 9.8 rows DR-1, DR-2, DR-8 and DR-9. Purely additive; the consumer-surface
   muster pins both forms.
+- **Seeded profiles for the current model range (SURFACE-06, D-14, D-15; Phase 50.1 plans 08 and
+  09).** 51 models gain a dated `SeededProfile` row from the operator's live probe of 2026-10-20
+  (`50.1-SEED-PROBE.md`, two runs at commit `8ad298dd`; the 2026-10-15 rows are untouched):
+  ten Anthropic, one DeepSeek, nine Gemini, 17 OpenAI, 11 Qwen and three Grok ids, among them
+  `claude-opus-4-8` and `deepseek-v4-pro` (the two models web3sec runs, so a call to either carries
+  no `paladin.unprofiled_model`).
+  The full per-model list, with every value, is the Switching providers page. Every value is a probe
+  outcome, a listing field or the operator's dated vendor-docs evidence; an OpenAI or Qwen window or
+  maximum output the docs did not state stays unset. Not seeded: the four OpenAI pro-tier ids (their
+  default call answered 404 on chat completions; they need the Responses API), `gemini-2.5-*`, and
+  the rate-limited or struck ids the page lists. `grok-4.7` is seeded under a recorded exception:
+  its `temperature=2.00` probe failed at the vendor identically in both runs, so its range stops at
+  1.99. Behaviour for a model that gains a row (MIGRATION.md section 9.8, "Models seeded in Phase
+  50.1."): an explicit parameter its profile does not admit, or a `max_tokens` above its seeded
+  maximum output, is refused at build naming provider, model and parameter; `paladin.unprofiled_model`
+  is no longer stamped; Anthropic and DeepSeek `validate_model` and `get_available_models` include
+  it; a direct `new` defaults a seeded reasoning model to 300 s; `AnthropicConfig::new` still sends
+  `max_tokens` 4,096; `Commissary::for_model` rations against its seeded window. The OpenAI adapter's
+  `max_completion_tokens` key is now also measured on the 17 new OpenAI ids (ADR-0061 limit (5)).
+- **The consumer-surface muster covers the surfaces a downstream consumer builds and matches
+  (SURFACE-03, D-09, D-10, D-11; Phase 50.1 plans 03 and 06).** `tests/consumer_surface_muster.rs`
+  pins the `with_aegis` / `node_errors` round trip, `DeepSeekConfig::new` and `AnthropicConfig::new` in
+  the `(api_key, model)` shape with the builder chain, the `LlmError` rate-limit and usage-limit
+  arms, `Commissary::for_model` / `dispense` / `verify_fits`, the `MockLlmAdapter` builders,
+  `PaladinBuilder`, the streamable-HTTP MCP client, `PromptItem::parameters`, the four-field
+  `Armament` literal, and exhaustive wildcard-free matches on `FinishReason` and `ArsenalError`. It
+  runs in CI as the `consumer-surface` job (`Consumer-Surface Muster`), which fails if it ran no test.
 - **The bill of a billed-but-failed call, on the error (G-50-5a, PARITY-05; Phase 50 plans 50-25
   and 50-26).** `paladin_ports::output::llm_port::BilledUsage { model, usage, cost }`
   (`#[non_exhaustive]`; `BilledUsage::new(model, usage)`, `with_cost(cost)`), the constructors

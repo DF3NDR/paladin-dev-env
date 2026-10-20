@@ -149,7 +149,7 @@ pub(crate) struct ProviderEnv {
     pub(crate) key: Option<&'static str>,
     /// The base URL variable.
     pub(crate) base_url: Option<&'static str>,
-    /// The model variable. `None` for a provider whose config carries no model (OpenAI).
+    /// The model variable. `None` for a provider whose model has no environment variable (OpenAI).
     pub(crate) model: Option<&'static str>,
     /// The timeout variable, in seconds.
     pub(crate) timeout: Option<&'static str>,
@@ -166,7 +166,7 @@ pub(crate) struct CompiledDefaults {
     /// OpenAI-compatible provider), which makes the base URL required.
     pub(crate) base_url: Option<&'static str>,
     /// The default model. `None` with `model_required` makes the model required; `None` without
-    /// it means the provider's config carries no model at all.
+    /// it means the provider has no compiled default model.
     pub(crate) model: Option<&'static str>,
     /// Whether a model must be resolved from the layers above (the generic provider).
     pub(crate) model_required: bool,

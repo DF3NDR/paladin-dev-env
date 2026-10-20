@@ -77,11 +77,11 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Create vision-capable LLM adapter
-    // `OpenAIConfig` is `#[non_exhaustive]`: start from `new(..)`, then set knobs with the
-    // `with_*` builders or by assigning the public fields
-    let mut config = OpenAIConfig::new(std::env::var("OPENAI_API_KEY")?).with_max_retries(3);
-    config.base_url = "https://api.openai.com/v1".to_string();
-    config.timeout_seconds = 300;
+    // `OpenAIConfig` is `#[non_exhaustive]`: start from `new(api_key, model)`, then set knobs
+    // with the `with_*` builders
+    let config = OpenAIConfig::new(std::env::var("OPENAI_API_KEY")?, "gpt-4o".to_string())
+        .with_max_retries(3)
+        .with_timeout_seconds(300);
     let llm = Arc::new(OpenAIAdapter::new(config)?);
 
     // 2. Build vision-enabled Paladin (model is set on the builder, not the config)
@@ -186,10 +186,11 @@ pub enum ImageDetail {
 ```rust,ignore
 use paladin_llm::openai::{OpenAIAdapter, OpenAIConfig};
 
-// The model ("gpt-4o") is set on the PaladinBuilder, not on OpenAIConfig -- see the Quick Example above.
-let mut config = OpenAIConfig::new(env::var("OPENAI_API_KEY")?).with_max_retries(3);
-config.base_url = "https://api.openai.com/v1".to_string();
-config.timeout_seconds = 300;
+// `new(api_key, model)` names the adapter's default model ("gpt-4o"); the model the
+// PaladinBuilder sets decides each request -- see the Quick Example above.
+let config = OpenAIConfig::new(env::var("OPENAI_API_KEY")?, "gpt-4o".to_string())
+    .with_max_retries(3)
+    .with_timeout_seconds(300);
 
 let llm = Arc::new(OpenAIAdapter::new(config)?);
 ```

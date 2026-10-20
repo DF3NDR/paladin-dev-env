@@ -533,7 +533,10 @@ mod tests {
     use crate::openai::OpenAIConfig;
 
     fn create_test_adapter() -> OpenAIAdapter {
-        let config = OpenAIConfig::new("test-key".to_string());
+        let config = OpenAIConfig::new(
+            "test-key".to_string(),
+            crate::openai::adapter::OPENAI_DEFAULT_MODEL.to_string(),
+        );
         OpenAIAdapter::new(config).unwrap()
     }
 

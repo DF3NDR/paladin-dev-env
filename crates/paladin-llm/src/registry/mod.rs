@@ -2070,9 +2070,12 @@ mod endpoint_builder_tests {
     fn knob_builders_set_base_url_and_timeout_on_every_config() {
         #[cfg(feature = "openai")]
         {
-            let config = crate::openai::OpenAIConfig::new("k".to_string())
-                .with_base_url(URL)
-                .with_timeout_seconds(7);
+            let config = crate::openai::OpenAIConfig::new(
+                "k".to_string(),
+                crate::openai::adapter::OPENAI_DEFAULT_MODEL.to_string(),
+            )
+            .with_base_url(URL)
+            .with_timeout_seconds(7);
             assert_eq!((config.base_url.as_str(), config.timeout_seconds), (URL, 7));
         }
         #[cfg(feature = "anthropic")]

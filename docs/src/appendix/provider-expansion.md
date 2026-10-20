@@ -215,11 +215,11 @@ use paladin_llm::openai::{OpenAIAdapter, OpenAIConfig};
 let config = OpenAIConfig::from_env()?;
 let adapter = OpenAIAdapter::new(config)?;
 
-// Or custom: `OpenAIConfig` is `#[non_exhaustive]`, so start from `new(..)` and set the
-// knobs with the `with_*` builders or by assigning the public fields
-let mut config = OpenAIConfig::new(api_key).with_max_retries(3);
-config.base_url = "https://api.openai.com/v1".to_string();
-config.timeout_seconds = 30;
+// Or custom: `OpenAIConfig` is `#[non_exhaustive]`, so start from `new(api_key, model)` and
+// set the knobs with the `with_*` builders
+let config = OpenAIConfig::new(api_key, "gpt-5.4-nano".to_string())
+    .with_max_retries(3)
+    .with_timeout_seconds(30);
 let adapter = OpenAIAdapter::new(config)?;
 ```
 

@@ -95,12 +95,12 @@ async fn test_openai_integration() {
 #[tokio::test]
 async fn test_adapter_configuration() {
     // Test config validation without making API calls
-    let config = OpenAIConfig::new("test-key".to_string());
+    let config = OpenAIConfig::new("test-key".to_string(), "gpt-3.5-turbo".to_string());
 
     assert!(config.validate().is_ok(), "Config should be valid");
 
     // Test invalid configs
-    let invalid_config = OpenAIConfig::new("".to_string());
+    let invalid_config = OpenAIConfig::new("".to_string(), "gpt-3.5-turbo".to_string());
     assert!(
         invalid_config.validate().is_err(),
         "Empty API key should be invalid"
@@ -110,7 +110,7 @@ async fn test_adapter_configuration() {
 #[tokio::test]
 async fn test_model_mapping() {
     // Test the adapter's model mapping without API calls
-    let config = OpenAIConfig::new("test-key".to_string());
+    let config = OpenAIConfig::new("test-key".to_string(), "gpt-3.5-turbo".to_string());
 
     let adapter = OpenAIAdapter::new(config).expect("Should create adapter");
 

@@ -15,6 +15,10 @@ and this project follows lockstep workspace versioning.
   `deepseek::adapter::DEEPSEEK_DEFAULT_BASE_URL`, now the one copy of the DeepSeek endpoint (used by
   `from_env()` and the `llm.deepseek` bridge). The credential header goes wherever `with_base_url`
   points and redirects are never followed.
+- Phase 50.1 (SURFACE-02, D-06; plan 50.1-05): `openai::adapter::OPENAI_DEFAULT_MODEL`,
+  `openai::adapter::OPENAI_DEFAULT_BASE_URL`, the `OpenAIConfig.model` field and
+  `OpenAIConfig::with_organization(impl Into<String>)` (the one knob only OpenAI carries, from a
+  variant form of `config_knob_builders!`).
 - Phase 50 (G-50-5a remainder (a), PARITY-05, PARITY-06; plan 50-30): a hopped-past bill is
   carried, not dropped. `FallbackLlmAdapter` records the `BilledUsage` of every billed error it hops
   past (a `Refusal` under `hop_on_refusal(true)`) into the call's
@@ -200,6 +204,15 @@ and this project follows lockstep workspace versioning.
   to 300 s for a seeded reasoning model and 60 s otherwise (`with_timeout_seconds` replaces it);
   `from_env()` is unchanged. `new(k, url, m)` becomes `new(k, m).with_base_url(url)`. Registered
   in `MIGRATION.md` section 9.2 and 9.8 (DR-19) and the crate's `cargo-semver-checks` lints table
+  (`method_parameter_count_changed`).
+- Phase 50.1 (SURFACE-02, D-05, D-06; plan 50.1-05): `OpenAIConfig::new(api_key)` becomes
+  `new(api_key, model)`, with no alias, and `OpenAIConfig` gains the public field `model` (the
+  adapter's default model, additive on the `#[non_exhaustive]` struct) set by `new`, by
+  `from_env()` (`OPENAI_DEFAULT_MODEL`, `"gpt-5.4-nano"`; no new variable) and by the layered
+  path. The field changes no adapter-wide limit (the window stays `context_window` or 128,000).
+  The endpoint defaults to `OPENAI_DEFAULT_BASE_URL` (`with_base_url` replaces it) and the timeout
+  stays 300 s. `new(k)` becomes `new(k, OPENAI_DEFAULT_MODEL.to_string())`. Registered in
+  `MIGRATION.md` section 9.2 and 9.8 (DR-19) and the crate's `cargo-semver-checks` lints table
   (`method_parameter_count_changed`).
 - Phase 50 (PARITY-03, PARITY-06; owner decision option-a): the nine `*Config` types and
   `LlmProviderConfig` are `#[non_exhaustive]`, so a struct literal outside the crate no longer

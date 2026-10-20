@@ -750,11 +750,10 @@ mod tests {
 
         let mut server = Server::new_async().await;
         // `OpenAIConfig` is `#[non_exhaustive]`: build it with `new` and set what differs.
-        let mut openai_config = OpenAIConfig::new("test-key".to_string());
-        openai_config.base_url = server.url();
-        openai_config.organization = None;
-        openai_config.timeout_seconds = 5;
-        openai_config.max_retries = 3;
+        let openai_config = OpenAIConfig::new("test-key".to_string(), "gpt-4o".to_string())
+            .with_base_url(server.url())
+            .with_timeout_seconds(5)
+            .with_max_retries(3);
         let openai = OpenAIAdapter::new(openai_config)?;
         let llm = compose_llm(Arc::new(openai), &empty_price_table()?, wiring.as_ref());
 

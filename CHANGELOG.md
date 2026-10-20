@@ -1366,8 +1366,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never a URL; `OllamaConfig::new` keeps the endpoint as its first argument (D-08). Registered in
   `MIGRATION.md` section 9.2 and section 9.8 (DR-19; DR-12 amended) and the allowlist entries
   `paladin-llm | <Type>Config` (`method_parameter_count_changed`, measured with
-  cargo-semver-checks 0.50.0 against 0.10.1). The other two types' `new` (`OpenAIConfig`,
-  `AnthropicConfig`) follow in plans 50.1-05 and -06.
+  cargo-semver-checks 0.50.0 against 0.10.1). `AnthropicConfig::new` follows in plan 50.1-06
+  (`OpenAIConfig::new` is the next entry).
+- **BREAKING (`paladin-llm`): `OpenAIConfig::new(api_key)` becomes `new(api_key, model)`**
+  (SURFACE-02, D-05, D-06; Phase 50.1 plan 05). The second argument is the adapter's default
+  model, stored in the new public field `OpenAIConfig.model` (additive on the `#[non_exhaustive]`
+  struct); `from_env()` sets it to the new `OPENAI_DEFAULT_MODEL` (`"gpt-5.4-nano"`) and still
+  reads exactly the variables it read before, and the layered path puts the agent's or block's
+  resolved model on it. The field changes no adapter-wide limit: the context window stays
+  `context_window` or 128,000 whatever `model` says, and each request's own model still decides
+  what is sent. The endpoint defaults to the new `OPENAI_DEFAULT_BASE_URL`; replace it with
+  `with_base_url`, the timeout with `with_timeout_seconds`, the organisation with the new
+  `with_organization`. There is no alias: `new(k)` becomes `new(k, OPENAI_DEFAULT_MODEL.to_string())`.
+  `Debug` prints the model and still redacts the key; `validate()` rejects an empty model.
+  Registered in `MIGRATION.md` section 9.2 (`paladin-llm | OpenAIConfig`, SURFACE-02) and section
+  9.8 (DR-19) and the allowlist entry (`method_parameter_count_changed`, measured with
+  cargo-semver-checks 0.50.0 against 0.10.1; no lint named the new field).
 - **BREAKING (`paladin-web`): `Principal` gains the required `tenant_id: TenantId` field and is
   marked `#[non_exhaustive]`** — build it with `Principal::new(id, role, tenant_id)`; a struct
   literal outside the crate no longer compiles (TENANT-01; Phase 40 plan 40-01; `MIGRATION.md`

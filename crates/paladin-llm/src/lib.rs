@@ -298,7 +298,11 @@ mod capability_invariants {
         // correspondence below is checked against (D-12).
         const RESPONSE_SURFACE_SUPPORTS_FUNCTION_CALLING: bool = false;
 
-        let openai = OpenAIAdapter::new(OpenAIConfig::new("test-key".to_string())).unwrap();
+        let openai = OpenAIAdapter::new(OpenAIConfig::new(
+            "test-key".to_string(),
+            crate::openai::adapter::OPENAI_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
         let anthropic = AnthropicAdapter::new(AnthropicConfig::new(
             "sk-ant-test123".to_string(),
             "https://api.anthropic.com/v1".to_string(),
@@ -354,7 +358,11 @@ mod capability_invariants {
     /// `capability_invariants_new_providers` below.
     #[test]
     fn test_every_adapter_declares_a_temperature_range() {
-        let openai = OpenAIAdapter::new(OpenAIConfig::new("test-key".to_string())).unwrap();
+        let openai = OpenAIAdapter::new(OpenAIConfig::new(
+            "test-key".to_string(),
+            crate::openai::adapter::OPENAI_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
         let anthropic = AnthropicAdapter::new(AnthropicConfig::new(
             "sk-ant-test123".to_string(),
             "https://api.anthropic.com/v1".to_string(),

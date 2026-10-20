@@ -114,8 +114,9 @@ fn show_openai_config() {
     println!("   // Option 2: Custom configuration");
     println!("   let config = OpenAIConfig::new(");
     println!("       api_key,");
-    println!("       \"https://api.openai.com/v1\".to_string()");
-    println!("   );");
+    println!("       \"gpt-5.4-nano\".to_string()");
+    println!("   )");
+    println!("   .with_base_url(\"https://api.openai.com/v1\");");
     println!("   let adapter = OpenAIAdapter::new(config)?;");
     println!();
 }

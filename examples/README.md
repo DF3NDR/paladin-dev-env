@@ -1959,10 +1959,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("OPENAI_API_KEY")?;
 
     // Create LLM adapter (OpenAIAdapter::new takes an OpenAIConfig, not a
-    // builder chain -- the model is set on PaladinBuilder below, per-request,
-    // not on the adapter itself)
+    // builder chain -- `OpenAIConfig::new(api_key, model)` names the adapter's
+    // default model; the model PaladinBuilder sets below decides each request)
     let llm_adapter: Arc<dyn LlmPort> = Arc::new(
-        OpenAIAdapter::new(OpenAIConfig::new(api_key))?
+        OpenAIAdapter::new(OpenAIConfig::new(api_key, "gpt-4".to_string()))?
     );
 
     // Create Paladin

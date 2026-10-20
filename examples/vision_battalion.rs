@@ -29,11 +29,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY environment variable not set");
 
     // `OpenAIConfig` is `#[non_exhaustive]`: build it with `new` and set what differs.
-    let mut config = OpenAIConfig::new(openai_api_key);
-    config.base_url = "https://api.openai.com/v1".to_string();
-    config.organization = None;
-    config.timeout_seconds = 300;
-    config.max_retries = 3;
+    let config = OpenAIConfig::new(openai_api_key, "gpt-4o".to_string())
+        .with_timeout_seconds(300)
+        .with_max_retries(3);
     let llm_port: Arc<dyn LlmPort> =
         Arc::new(OpenAIAdapter::new(config).expect("Failed to create OpenAI adapter"));
     println!("✅ OpenAI configured\n");

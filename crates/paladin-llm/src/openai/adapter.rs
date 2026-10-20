@@ -224,12 +224,34 @@ impl OpenAIConfig {
         })
     }
 
-    /// Create a configuration with the given API key and sensible defaults.
-    pub fn new(api_key: String) -> Self {
+    /// Create a configuration from an OpenAI API key and the adapter's default model.
+    ///
+    /// `api_key` is the OpenAI key, never a URL: the endpoint is [`OPENAI_DEFAULT_BASE_URL`]
+    /// (replace it with [`with_base_url`](Self::with_base_url)). `model` is the adapter's
+    /// default model, stored in [`model`](Self::model); each request's own model still decides
+    /// what is sent, and the value changes no adapter-wide limit. The timeout is 300 s,
+    /// `max_tokens` is `Some(4096)` and the retry budget is the shared default; set any of them
+    /// with the `with_*` builders.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_llm::openai::adapter::{
+    ///     OPENAI_DEFAULT_BASE_URL, OPENAI_DEFAULT_MODEL, OpenAIConfig,
+    /// };
+    ///
+    /// let config = OpenAIConfig::new("sk-example".to_string(), OPENAI_DEFAULT_MODEL.to_string())
+    ///     .with_timeout_seconds(60);
+    /// assert_eq!(config.model, OPENAI_DEFAULT_MODEL);
+    /// assert_eq!(config.base_url, OPENAI_DEFAULT_BASE_URL);
+    /// assert_eq!(config.timeout_seconds, 60);
+    /// assert_eq!(config.max_tokens, Some(4096));
+    /// ```
+    pub fn new(api_key: String, model: String) -> Self {
         Self {
             api_key,
             base_url: OPENAI_DEFAULT_BASE_URL.to_string(),
-            model: OPENAI_DEFAULT_MODEL.to_string(),
+            model,
             organization: None,
             timeout_seconds: 300,
             max_retries: DEFAULT_MAX_RETRIES,
@@ -1255,7 +1277,7 @@ mod tests {
 
     #[test]
     fn test_config_creation() {
-        let config = OpenAIConfig::new("test-key".to_string());
+        let config = OpenAIConfig::new("test-key".to_string(), OPENAI_DEFAULT_MODEL.to_string());
         assert_eq!(config.api_key, "test-key");
         assert_eq!(config.base_url, "https://api.openai.com/v1");
         assert_eq!(config.timeout_seconds, 300);
@@ -1264,7 +1286,8 @@ mod tests {
 
     #[test]
     fn test_config_validation() {
-        let valid_config = OpenAIConfig::new("test-key".to_string());
+        let valid_config =
+            OpenAIConfig::new("test-key".to_string(), OPENAI_DEFAULT_MODEL.to_string());
         assert!(valid_config.validate().is_ok());
 
         let invalid_config = OpenAIConfig {
@@ -1283,7 +1306,10 @@ mod tests {
 
     #[test]
     fn openai_config_debug_prints_the_model_and_redacts_the_key() {
-        let config = OpenAIConfig::new("sk-secret-key-123".to_string());
+        let config = OpenAIConfig::new(
+            "sk-secret-key-123".to_string(),
+            OPENAI_DEFAULT_MODEL.to_string(),
+        );
         let printed = format!("{config:?}");
         assert!(printed.contains(OPENAI_DEFAULT_MODEL), "{printed}");
         assert!(printed.contains("<redacted>"), "{printed}");
@@ -1292,7 +1318,8 @@ mod tests {
 
     #[test]
     fn openai_config_validate_rejects_an_empty_model() {
-        let mut config = OpenAIConfig::new("test-key".to_string());
+        let mut config =
+            OpenAIConfig::new("test-key".to_string(), OPENAI_DEFAULT_MODEL.to_string());
         config.model = String::new();
         let error = config.validate().unwrap_err();
         assert!(error.contains("Model"), "{error}");
@@ -1302,10 +1329,8 @@ mod tests {
     fn openai_config_model_changes_no_adapter_wide_limit() {
         // D-06 as locked (plan 50.1-02 checkpoint, `proceed-as-locked`): `model` is a stored
         // default-model label. It must not move the adapter-wide window.
-        let mut small = OpenAIConfig::new("test-key".to_string());
-        small.model = "gpt-4o-mini".to_string();
-        let mut nano = OpenAIConfig::new("test-key".to_string());
-        nano.model = "gpt-5.4-nano".to_string();
+        let small = OpenAIConfig::new("test-key".to_string(), "gpt-4o-mini".to_string());
+        let nano = OpenAIConfig::new("test-key".to_string(), "gpt-5.4-nano".to_string());
         let small = OpenAIAdapter::new(small).unwrap().get_capabilities();
         let nano = OpenAIAdapter::new(nano).unwrap().get_capabilities();
         assert_eq!(small.max_context_tokens, Some(128_000));
@@ -1314,36 +1339,44 @@ mod tests {
 
     #[test]
     fn openai_config_with_organization_sets_the_field() {
-        let config = OpenAIConfig::new("test-key".to_string()).with_organization("org-x");
+        let config = OpenAIConfig::new("test-key".to_string(), OPENAI_DEFAULT_MODEL.to_string())
+            .with_organization("org-x");
         assert_eq!(config.organization, Some("org-x".to_string()));
-        assert_eq!(OpenAIConfig::new("k".to_string()).organization, None);
+        assert_eq!(
+            OpenAIConfig::new("k".to_string(), OPENAI_DEFAULT_MODEL.to_string()).organization,
+            None
+        );
     }
 
     #[test]
-    fn openai_config_constants_name_the_compiled_defaults() {
-        let config = OpenAIConfig::new("test-key".to_string());
-        assert_eq!(OPENAI_DEFAULT_MODEL, "gpt-5.4-nano");
-        assert_eq!(config.model, OPENAI_DEFAULT_MODEL);
+    fn openai_config_new_takes_key_and_model_and_defaults_the_endpoint() {
+        let config = OpenAIConfig::new("test-key".to_string(), "gpt-4o-mini".to_string());
+        assert_eq!(config.api_key, "test-key");
+        assert_eq!(config.model, "gpt-4o-mini");
         assert_eq!(config.base_url, OPENAI_DEFAULT_BASE_URL);
+        assert_eq!(config.timeout_seconds, 300);
+        assert_eq!(config.max_tokens, Some(4096));
+        assert_eq!(OPENAI_DEFAULT_MODEL, "gpt-5.4-nano");
+        assert_eq!(OPENAI_DEFAULT_BASE_URL, "https://api.openai.com/v1");
     }
 
     #[test]
     fn test_adapter_creation() {
-        let config = OpenAIConfig::new("test-key".to_string());
+        let config = OpenAIConfig::new("test-key".to_string(), OPENAI_DEFAULT_MODEL.to_string());
         let adapter = OpenAIAdapter::new(config);
         assert!(adapter.is_ok());
     }
 
     #[test]
     fn test_get_provider_name() {
-        let config = OpenAIConfig::new("test-key".to_string());
+        let config = OpenAIConfig::new("test-key".to_string(), OPENAI_DEFAULT_MODEL.to_string());
         let adapter = OpenAIAdapter::new(config).unwrap();
         assert_eq!(adapter.get_provider_name(), "openai");
     }
 
     #[test]
     fn test_get_capabilities() {
-        let config = OpenAIConfig::new("test-key".to_string());
+        let config = OpenAIConfig::new("test-key".to_string(), OPENAI_DEFAULT_MODEL.to_string());
         let adapter = OpenAIAdapter::new(config).unwrap();
         let caps = adapter.get_capabilities();
         assert!(caps.supports_streaming);
@@ -1365,7 +1398,11 @@ mod tests {
     /// no default model's window exists to follow.
     #[test]
     fn openai_default_model_is_seeded() {
-        let adapter = OpenAIAdapter::new(OpenAIConfig::new("test-key".to_string())).unwrap();
+        let adapter = OpenAIAdapter::new(OpenAIConfig::new(
+            "test-key".to_string(),
+            OPENAI_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
         for (model, window) in [("gpt-5.4-nano", 400_000), ("gpt-4o-mini", 128_000)] {
             let (profile, origin) = adapter.model_registry.resolve(model);
             assert_eq!(
@@ -1383,7 +1420,8 @@ mod tests {
 
     #[test]
     fn test_config_with_organization() {
-        let mut config = OpenAIConfig::new("test-key".to_string());
+        let mut config =
+            OpenAIConfig::new("test-key".to_string(), OPENAI_DEFAULT_MODEL.to_string());
         config.organization = Some("org-123".to_string());
         assert_eq!(config.organization, Some("org-123".to_string()));
     }
@@ -1408,7 +1446,7 @@ mod tests {
 
     #[test]
     fn map_error_maps_a_redirect_status_to_an_actionable_provider_error() {
-        let config = OpenAIConfig::new("test-key".to_string());
+        let config = OpenAIConfig::new("test-key".to_string(), OPENAI_DEFAULT_MODEL.to_string());
         let adapter = OpenAIAdapter::new(config).unwrap();
 
         for expected in [301u16, 302, 307] {
@@ -3384,7 +3422,8 @@ mod tests {
         }
 
         fn config_at(base_url: &str) -> OpenAIConfig {
-            let mut config = OpenAIConfig::new("test-key".to_string());
+            let mut config =
+                OpenAIConfig::new("test-key".to_string(), OPENAI_DEFAULT_MODEL.to_string());
             config.base_url = base_url.to_string();
             config
         }
@@ -3468,7 +3507,8 @@ mod knob_tests {
     const UNSEEDED: &str = "gpt-unseeded-test-model";
 
     fn config(base_url: &str) -> OpenAIConfig {
-        let mut config = OpenAIConfig::new("test-key".to_string());
+        let mut config =
+            OpenAIConfig::new("test-key".to_string(), OPENAI_DEFAULT_MODEL.to_string());
         config.base_url = base_url.to_string();
         config
     }
@@ -3489,7 +3529,7 @@ mod knob_tests {
 
     #[test]
     fn openai_config_keeps_the_4096_output_cap_by_default() {
-        let config = OpenAIConfig::new("test-key".to_string());
+        let config = OpenAIConfig::new("test-key".to_string(), OPENAI_DEFAULT_MODEL.to_string());
         assert_eq!(config.max_tokens, Some(4096));
         assert_eq!(config.max_retries, 3);
         assert_eq!(config.timeout_seconds, 300);

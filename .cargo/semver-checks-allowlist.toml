@@ -562,7 +562,7 @@ crate = "paladin-llm"
 lint = "struct_marked_non_exhaustive"
 migration_row = "paladin-llm | OpenAIConfig"
 requirement_id = "PARITY-03"
-justification = "OpenAIConfig gained max_tokens, context_window and model_overrides (it already carried max_retries) (Phase 50, plans 50-08/50-09) and is marked #[non_exhaustive] with with_* builders (owner decision option-a) so the next field is free; only a downstream struct literal breaks, every constructor signature is unchanged. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+justification = "OpenAIConfig gained max_tokens, context_window and model_overrides (it already carried max_retries) (Phase 50, plans 50-08/50-09) and is marked #[non_exhaustive] with with_* builders (owner decision option-a) so the next field is free; only a downstream struct literal breaks, its new(..) shape changes in Phase 50.1 (SURFACE-02, the entry below). Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
 
 [[entry]]
 crate = "paladin-llm"
@@ -720,3 +720,20 @@ lint = "method_parameter_count_changed"
 migration_row = "paladin-llm | KimiConfig"
 requirement_id = "SURFACE-02"
 justification = "KimiConfig::new(api_key, base_url, model) became new(api_key, model) (Phase 50.1, plan 50.1-04, D-05): the endpoint defaults to KIMI_DEFAULT_BASE_URL and is set with the with_base_url builder, the timeout with with_timeout_seconds. A clean break with no alias (ADR-0060): new(k, url, m) becomes new(k, m).with_base_url(url); from_env() is unchanged. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+# Plan 50.1-05 Task 2 (D-05, D-06, D-09, D-00b), measured 2026-10-20: cargo-semver-checks 0.50.0 vs
+# the published `paladin-llm` 0.10.1, `--release-type minor`, with `crates/paladin-llm/Cargo.toml`'s
+# lint table removed and restored byte-for-byte (`cmp`-verified), run with the default features
+# (`openai` is a default feature) and again with all nine adapter features: 196 checks, 3 lints
+# fired in both runs -- the two already allowed and `method_parameter_count_changed`, which named
+# `OpenAIConfig::new` (1 parameter before, 2 now; reported on both the `openai::adapter` and the
+# `openai` re-export path). No lint named the new public field `OpenAIConfig.model`, the new
+# constants or `with_organization`: the only lint on `OpenAIConfig` besides `new` is the
+# already-registered `struct_marked_non_exhaustive`.
+
+[[entry]]
+crate = "paladin-llm"
+lint = "method_parameter_count_changed"
+migration_row = "paladin-llm | OpenAIConfig"
+requirement_id = "SURFACE-02"
+justification = "OpenAIConfig::new(api_key) became new(api_key, model) (Phase 50.1, plan 50.1-05, D-05, D-06), and the struct gained the public field model (additive on the #[non_exhaustive] struct; no lint named it), the adapter's default model, set by new, by from_env() (OPENAI_DEFAULT_MODEL, no new variable) and by the layered path. A clean break with no alias (ADR-0060): new(k) becomes new(k, m); with the owner's proceed-as-locked answer the field changes no adapter-wide limit. The endpoint defaults to OPENAI_DEFAULT_BASE_URL and is set with the with_base_url builder, the timeout with with_timeout_seconds, the organisation with the new with_organization. from_env() reads the same variables. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."

@@ -145,6 +145,25 @@ Phase 37 plans; 2 open artifacts acknowledged — both already deferred by Phase
 entry points with `# Examples` doctests, `WINDOWS.md` `open_count: 0`, MSRV 1.88 measured. Full
 record: `MILESTONES.md`. **Next: `/gsd-new-milestone`** — new phases start at Phase 38.
 
+**Phase 50.1 complete (2026-10-20)** — consumer-surface-readiness (SURFACE-01..06; 9 plans in 7
+waves, inserted from the fourth web3sec handoff). In the tree: the Aegis family (`Aegis`,
+`ErrorHandlerSpec`, `TimeoutPolicy`, `StateDelta`, `NodeError`, `NodeErrorSource`, `TimeoutKind`,
+`NodeId`, `Transience`) is nameable through the `paladin` facade and prelude; seven `*Config::new`
+signatures harmonised to `new(api_key, model)` (Ollama and OpenAI-compatible are the two endpoint-only
+exceptions, DR-19) with `with_base_url` / `with_timeout_seconds` on all nine shared knob builders, a
+registered clean break; `AnthropicConfig::new` defaults `max_tokens` to 4,096 for every model (D-07);
+the consumer-surface muster pins handoff Appendix B, proven red first, in an advisory
+`consumer-surface` CI job with a reachable zero-test guard; MIGRATION §9.8 gains the pre-`v0.10.0`
+pointers, the no-pacing-without-Cadence recipe, decorator `model_profile` forwarding and the
+context-window consequence; `with_cadence` is the facade's pacing-only path; and 51 dated rows from
+`50.1-SEED-PROBE.md` (two runs, 2026-10-20) seed `claude-opus-4-8`, `deepseek-v4-pro` and the current
+OpenAI / Grok / Kimi / Qwen range under the "measured end to end" rule. Code review iteration 1:
+4 warnings, all fixed (`9d0eaa3d`, `ec3fdc92`, `5ebd315b`, `c5bdea75`); WR-03 also made every
+adapter's `validate()` require a full `http://` / `https://` prefix, recorded in both CHANGELOGs and
+§9.8 at the owner's request before the seal (`aa48314d`). Verification `passed` 6/6, UAT 1/1,
+security verified (30/30 closed). Next: `/gsd-discuss-phase 51` (Adjustable Reasoning Effort, plans
+against the harmonised `*Config::new` shape).
+
 **Phase 50 complete (2026-10-19)** — provider-parity-config-driven-model-swap (PARITY-01..08; 31
 plans: 18 original plus the 13-plan gap-closure set 50-19..50-31, 167 phase commits). In the tree: any
 Paladin agent moves between the nine LLM providers by configuration only, or `PaladinBuilder` refuses
@@ -2044,6 +2063,14 @@ This document evolves at phase transitions and milestone boundaries.
 2. Core Value check — still the right priority?
 3. Audit Out of Scope — reasons still valid?
 4. Update Context with current state
+
+---
+*Last updated: 2026-10-20 after **Phase 50.1: Consumer-Surface Readiness for v0.11.0** completed and
+verified — SURFACE-01..06 validated (REQUIREMENTS.md traceability Complete); 9/9 plans; verification
+`passed` 6/6, UAT 1/1 (owner chose fix-before-tag for review findings WR-01..03), security 30/30
+closed; the WR-03 base-URL scheme tightening recorded in CHANGELOG and MIGRATION §9.8. No new ADR
+(seeding stays under ADR-0061's rule); no requirement invalidated or emerged; "What This Is"
+unchanged. Next: `/gsd-discuss-phase 51`.*
 
 ---
 *Last updated: 2026-10-19 after **Phase 50.1: Consumer-Surface Readiness for v0.11.0** was inserted

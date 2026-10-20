@@ -2,30 +2,30 @@
 gsd_state_version: 1.0
 milestone: v0.11.0
 milestone_name: Crate Release
-current_phase: 50.1
-current_phase_name: consumer-surface-readiness
-status: executing
-stopped_at: Completed 50.1-07-PLAN.md
-last_updated: "2026-10-20T19:04:48.276Z"
-last_activity: 2026-10-19
-last_activity_desc: Phase 50.1 execution started
+current_phase: 51
+current_phase_name: Adjustable Reasoning Effort
+status: planning
+stopped_at: Phase 50.1 complete, ready to plan Phase 51
+last_updated: "2026-10-20T21:13:45.076Z"
+last_activity: 2026-10-20
+last_activity_desc: Phase 50.1 complete, transitioned to Phase 51
 progress:
   total_phases: 13
-  completed_phases: 11
+  completed_phases: 12
   total_plans: 130
-  completed_plans: 128
+  completed_plans: 130
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-10-14 after Phase 48)
+See: .planning/PROJECT.md (updated 2026-10-20 after Phase 50.1)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 50.1 — consumer-surface-readiness
+**Current focus:** Phase 51 — adjustable-reasoning-effort
 2026-10-14 from the web3sec handoff and sequenced before Phases 46-47 (the first of a series of
 consumer-driven phases). Phase 50 (Provider Parity & Configuration-Driven Model Swap, added
 2026-10-14 from the second web3sec handoff, `50-HANDOFF-web3sec-parity.md`) follows it, then Phase 51
@@ -43,8 +43,8 @@ delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-1
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 86/86 plans ([██████████] 98%) of the phases planned so far (38-45, 48);
-Phases 46, 47, 50 and 51 are not yet planned; Phase 49 closed 2026-10-14 (3/3 kept plans, 3 cancelled); Phase 50 is next, then Phase 51.
+**Progress:** [████████████████████] 130/130 plans (100%) of the phases planned so far (38-45, 48-50.1);
+Phases 46, 47 and 51 are not yet planned; Phase 49 closed 2026-10-14 (3/3 kept plans, 3 cancelled); Phase 50.1 sealed 2026-10-20; Phase 51 is next, then Phases 46 and 47.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
 (22-37.1), 231 plans, 574 tasks, 88/89 requirements (SHIP-05 superseded by SHIP-06), 1,678 commits
@@ -62,16 +62,16 @@ under `milestones/`.
 
 ## Current Position
 
-Phase: 50.1 (consumer-surface-readiness) — EXECUTING
-Plan: 9 of 9
-Status: Executing Phase 50.1
-Last activity: 2026-10-19 — Phase 50.1 execution started
+Phase: 51 — Adjustable Reasoning Effort
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-10-20 — Phase 50.1 complete, transitioned to Phase 51
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 536
+- Total plans completed: 545
 - Average duration: —
 - Total execution time: —
 
@@ -128,6 +128,7 @@ Last activity: 2026-10-19 — Phase 50.1 execution started
 | 48 | 9 | - | - |
 | 49 | 3 | - | - |
 | 50 | 32 | - | - |
+| 50.1 | 9 | - | - |
 
 *Updated after each plan completion*
 
@@ -599,6 +600,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 50.1-07: Claude ran the SURFACE-06 seed probe at the operator's direction on the operator's keys (plan's no-key premise was stale); provenance says so
 - [Phase ?]: 50.1-07: OpenAI ids with a Deprecated badge that were measured end to end (gpt-5.1, gpt-5, gpt-5-mini, gpt-5-nano, o3) SHOULD be seeded by plan 50.1-09; D-15 excludes only shutdowns on or before 2027-01-31
 - [Phase ?]: 50.1-07: grok-4.7 (temperature=2.00 UNREACHABLE in both runs) and the 7 default-rejected ids (gpt-5.5-pro, gpt-5.4-pro, gpt-5.2-pro, gpt-5-pro, gemini-2.5-pro/flash/flash-lite) are not seedable; 50 of 58 candidates measured end to end
+- [Phase 50.1 seal]: UAT 1/1 — owner chose fix-before-tag for WR-01..03 (2026-10-20). WR-01/02 were doc-only; WR-03 (`5ebd315b`) tightened `validate()` in seven adapters to a full `http://`/`https://` prefix, a behaviour change recorded in both CHANGELOGs and MIGRATION §9.8 (`aa48314d`) at the owner's request before sealing
 
 ### Pending Todos
 
@@ -818,8 +820,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-20T16:26:21.703Z
-**Stopped at:** Completed 50.1-07-PLAN.md
+**Last session:** 2026-10-20T21:20:00.000Z
+**Stopped at:** Phase 50.1 complete, ready to plan Phase 51
 **Resume file:** None
 
 ## Operator Next Steps
@@ -874,7 +876,20 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
   deferred; **D-E** seed via probe re-run on the operator's keys, a listing-only tier, or decline
   with a `model_overrides` recipe. Phase 51's "Depends on" now names 50.1.
 
-- **Next:** `/clear` then `/gsd-execute-phase 50.1` — 9 plans in 7 waves; three owner checkpoints
+- **Phase 50.1 (Consumer-Surface Readiness for v0.11.0) is sealed 2026-10-20:**
+  `50.1-VERIFICATION.md` passed (6/6), `50.1-UAT.md` complete (1/1 — owner chose fix-before-tag for
+  review findings WR-01..03; the fixes had landed as `9d0eaa3d`, `ec3fdc92`, `5ebd315b`, with WR-04
+  in `c5bdea75`), `50.1-SECURITY.md` verified (30/30 closed, threats_open 0). WR-03 changed
+  behaviour (seven adapters now refuse a `base_url` that only begins with `http`), so at the
+  owner's request it is recorded in root and `paladin-llm` CHANGELOG *Changed* and a MIGRATION §9.8
+  bullet (`aa48314d`) before the seal. ROADMAP row 50.1 reads 9/9 Complete; SURFACE-01..06
+  Complete. web3sec can now adapt to the 50.1 surface and report back before Phase 46 freezes the
+  guide.
+
+- **Next:** `/clear` then `/gsd-discuss-phase 51` (no `51-CONTEXT.md` yet; the third web3sec
+  handoff is filed as `51-HANDOFF-web3sec-reasoning-effort.md`), or `/gsd-plan-phase 51`.
+
+- *(done 2026-10-20)* `/gsd-execute-phase 50.1` — 9 plans in 7 waves; three owner checkpoints
   along the way (50.1-02 the one-way D-05 constructor door, 50.1-06 the D-07 `max_tokens` source,
   50.1-07 the probe run on the operator's keys with the D-16 candidate table). Research corrected
   two CONTEXT premises (C1: `config.model` is not read by the adapters' window chain, so OpenAI's

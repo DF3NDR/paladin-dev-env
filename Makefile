@@ -233,12 +233,14 @@ check-release-consistency: ## Verify a release tag's version matches every publi
 
 .PHONY: check-consumer-surface
 # Deliberately NOT part of check-gates: the eight members of check-gates are
-# offline script guards that finish in about a second and no workflow invokes
-# check-gates, while this target compiles the facade crate. `make check` and
-# `make lint` (so `make clean-code`) and CI's clippy, all-targets check and
-# integration-test steps already compile or run the muster; this alias runs it
-# on its own. The explicit --test form fails loudly if the consumer's provider
-# features are off, instead of skipping the target silently.
+# offline script guards that finish in about a second, while this target
+# compiles the facade crate. `make check` and `make lint` (so `make clean-code`)
+# and CI's clippy, all-targets check and integration-test steps already compile
+# or run the muster; this alias runs it on its own, and CI's `consumer-surface`
+# job (display name "Consumer-Surface Muster") runs it as a named check so a red
+# muster is attributable at a glance (D-10, Phase 50.1). The explicit --test form
+# fails loudly if the consumer's provider features are off, instead of skipping
+# the target silently.
 check-consumer-surface: ## Compile and run the consumer-surface muster (ADOPT-04); not part of check-gates (it builds)
 	@$(CARGO) test --test consumer_surface_muster
 

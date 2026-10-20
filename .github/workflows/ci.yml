@@ -1697,6 +1697,40 @@ jobs:
           fi
           echo "cli-tests executed $executed test(s)"
 
+  # Consumer-surface muster (SURFACE-03, D-10) — a dedicated job, not a step inside
+  # another job, so a red muster is attributable at a glance in the PR checks list:
+  # "Consumer-Surface Muster" failing names the downstream-consumer contract
+  # (`tests/consumer_surface_muster.rs`) rather than surfacing as a generic compile
+  # error inside `Code Quality`. It is attribution, not a new merge gate: the muster
+  # also compiles inside the required `Code Quality` clippy step
+  # (`--all-targets --all-features`). The test target declares `required-features`, and
+  # Cargo silently skips a target whose features are inactive (no error, zero tests run),
+  # hence the zero-tests guard below.
+  consumer-surface:
+    name: Consumer-Surface Muster
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Consumer-surface muster (make check-consumer-surface)
+        shell: bash
+        run: |
+          set -o pipefail
+          make check-consumer-surface 2>&1 | tee consumer-surface-output.log
+          executed=$(grep -oE 'test result: ok\. [0-9]+ passed' consumer-surface-output.log | tail -1 | grep -oE '[0-9]+')
+          if [ -z "$executed" ] || [ "$executed" -eq 0 ]; then
+            echo "::error::consumer-surface reported zero executed tests. This usually means the muster's required provider features were dropped, causing Cargo to silently skip the consumer_surface_muster test target."
+            exit 1
+          fi
+          echo "consumer-surface executed $executed test(s)"
+
   # Benchmark compile-check (PIPE-01) — compiles every [[bench]] target without
   # executing it: no Criterion runtime, no performance numbers, no timing
   # output. This is the missing compile-check prerequisite for the existing

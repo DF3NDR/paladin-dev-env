@@ -76,6 +76,7 @@ blocking a merge into `main`.
 | `e2e-platform-api` | E2E Platform API (PRD 06 acceptance-1 lifecycle + SHIP-02 boot proof) | The assistant → run → SSE → `AwaitingInput` → webhook → resume → history → fork lifecycle, plus the `v0_9_config_boot` backward-compat proof | Advisory |
 | `coverage` | Coverage | Workspace line-coverage measurement and floor gate (see excerpt below) | Required |
 | `cli-tests` | CLI Snapshot Tests | `cargo test -p paladin-ai --features cli --test cli` | Required |
+| `consumer-surface` | Consumer-Surface Muster | `make check-consumer-surface` (the compile-time consumer-surface muster, `tests/consumer_surface_muster.rs`); fails when zero tests ran. The muster also compiles inside the required `Code Quality` clippy step, so this job names a red muster rather than adding a gate | Advisory |
 | `bench-check` | Benchmark Compile Check | `cargo bench --workspace --no-run` (compiles every `[[bench]]` target; runs none) | Required |
 | `docker` | Docker Build | Multi-arch image build and the 500 MB size budget; wall-clock is reported, not enforced | Advisory |
 | `kubernetes-smoke` | Kubernetes Smoke Test | Deploys to a `kind` cluster and checks pod readiness | Advisory |

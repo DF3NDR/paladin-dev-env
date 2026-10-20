@@ -526,6 +526,37 @@ fn phase_50_1_config_shapes() -> Result<DeepSeekAdapter, LlmError> {
     DeepSeekAdapter::new(chained)
 }
 
+// ---- Phase 50.1 (SURFACE-03, D-11) ----
+// Two enums a consumer matches without a wildcard are pinned exhaustively. Neither enum is
+// `#[non_exhaustive]`, so a consumer's own exhaustive `match` is a supported shape; adding a
+// variant to either breaks that consumer at compile time, and the pin below turns this target
+// red first.
+
+/// D-11: deliberately exhaustive; a new variant turns this red and is a registered break with a
+/// MIGRATION.md section 9.2 row. No wildcard arm, on purpose.
+fn finish_reason_is_exhaustive(reason: &FinishReason) -> u8 {
+    match reason {
+        FinishReason::Stop => 0,
+        FinishReason::Length => 1,
+        FinishReason::ContentFilter => 2,
+        FinishReason::FunctionCall => 3,
+        FinishReason::Error(_) => 4,
+    }
+}
+
+/// D-11: deliberately exhaustive; a new variant turns this red and is a registered break with a
+/// MIGRATION.md section 9.2 row. No wildcard arm, on purpose.
+fn arsenal_error_is_exhaustive(error: &ArsenalError) -> u8 {
+    match error {
+        ArsenalError::ToolNotFound(_) => 0,
+        ArsenalError::InvalidArguments(_) => 1,
+        ArsenalError::Timeout(_) => 2,
+        ArsenalError::ProtocolError(_) => 3,
+        ArsenalError::TransportError(_) => 4,
+        ArsenalError::AuthFailed(_) => 5,
+    }
+}
+
 #[test]
 fn the_consumer_surface_still_resolves() {
     // Reaching this point means every `use`, fn-pointer, literal and trait-impl pin above

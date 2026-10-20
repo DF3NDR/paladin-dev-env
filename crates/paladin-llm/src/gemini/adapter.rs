@@ -1840,9 +1840,12 @@ mod tests {
 
     #[test]
     fn gemini_unseeded_model_still_resolves_the_adapter_default() {
+        // `gemini-2.5-flash` answered 404 "no longer available to new users" in the 2026-10-20
+        // probe, so nothing was measured and it stays unseeded (`gemini-3.1-flash-lite`, which
+        // this test used before, was seeded by Phase 50.1).
         let (_, origin) = test_adapter("http://localhost")
             .model_registry
-            .resolve("gemini-3.1-flash-lite");
+            .resolve("gemini-2.5-flash");
         assert_eq!(origin, crate::registry::ProfileOrigin::AdapterDefault);
     }
 

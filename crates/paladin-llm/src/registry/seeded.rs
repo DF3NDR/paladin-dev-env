@@ -54,11 +54,19 @@ mod anthropic_table {
     use crate::registry::SeededProfile;
     use paladin_ports::output::model_profile::{ModelProfile, ParamSupport, StopSupport};
 
-    /// Anthropic. `claude-haiku-5-5` (2026-10-15, `50-SEED-PROBE.md`) and `claude-opus-4-8`
-    /// (2026-10-20, `50.1-SEED-PROBE.md`) were measured end to end. The eight curated legacy ids
-    /// (claude-3 family, claude-2.x, claude-instant) all answered 404 `not_found_error` (retired,
-    /// not seeded), and the other current ids in the live listing have not been probed, so their
-    /// sampling behaviour is unknown and they are not listed.
+    /// Anthropic. `claude-haiku-5-5` (2026-10-15, `50-SEED-PROBE.md`) and the ten current
+    /// candidates of `50.1-SEED-PROBE.md` (2026-10-20, run 1: `claude-opus-4-8`,
+    /// `claude-fable-5-1`, `claude-fable-5`, `claude-opus-5-5`, `claude-opus-5`,
+    /// `claude-sonnet-5-5`, `claude-sonnet-5`, `claude-opus-4-7`, `claude-opus-4-6`,
+    /// `claude-sonnet-4-6`) were each measured end to end. The eight curated legacy ids (claude-3
+    /// family, claude-2.x, claude-instant) all answered 404 `not_found_error` (retired, not
+    /// seeded), and the 4.5-generation ids in the live listing were not candidates and were not
+    /// probed, so their sampling behaviour is unknown and they are not listed.
+    ///
+    /// Two shapes were measured. The 5.x ids, `claude-opus-4-8` and `claude-opus-4-7` accept only
+    /// `temperature` 1.00 and refuse `top_p` ("is deprecated for this model"); `claude-opus-4-6`
+    /// and `claude-sonnet-4-6` accept `temperature` 0..1 and `top_p`. Every row's window and
+    /// maximum output are its listing row's `max_input_tokens` and `max_tokens`.
     pub(crate) static ANTHROPIC: &[SeededProfile] = &[
         SeededProfile {
             model: "claude-haiku-5-5",
@@ -69,6 +77,51 @@ mod anthropic_table {
             model: "claude-opus-4-8",
             verified_on: "2026-10-20",
             build: claude_opus_4_8,
+        },
+        SeededProfile {
+            model: "claude-fable-5-1",
+            verified_on: "2026-10-20",
+            build: claude_fable_5_1,
+        },
+        SeededProfile {
+            model: "claude-fable-5",
+            verified_on: "2026-10-20",
+            build: claude_fable_5,
+        },
+        SeededProfile {
+            model: "claude-opus-5-5",
+            verified_on: "2026-10-20",
+            build: claude_opus_5_5,
+        },
+        SeededProfile {
+            model: "claude-opus-5",
+            verified_on: "2026-10-20",
+            build: claude_opus_5,
+        },
+        SeededProfile {
+            model: "claude-sonnet-5-5",
+            verified_on: "2026-10-20",
+            build: claude_sonnet_5_5,
+        },
+        SeededProfile {
+            model: "claude-sonnet-5",
+            verified_on: "2026-10-20",
+            build: claude_sonnet_5,
+        },
+        SeededProfile {
+            model: "claude-opus-4-7",
+            verified_on: "2026-10-20",
+            build: claude_opus_4_7,
+        },
+        SeededProfile {
+            model: "claude-opus-4-6",
+            verified_on: "2026-10-20",
+            build: claude_opus_4_6,
+        },
+        SeededProfile {
+            model: "claude-sonnet-4-6",
+            verified_on: "2026-10-20",
+            build: claude_sonnet_4_6,
         },
     ];
 
@@ -115,6 +168,236 @@ mod anthropic_table {
             .with_max_output_tokens(128_000)
             // Probe 1 (the default call) carried no reasoning text; the listing capabilities
             // were truncated in the transcript, so reasoning is not evidenced.
+            .with_reasoning(false)
+            // Probes 12 and 13: NOT APPLICABLE, Anthropic has no JSON mode.
+            .with_json_object(false)
+            .with_json_schema(false)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `claude-fable-5-1``, probe numbers as in that table, and its listing row.
+    fn claude_fable_5_1() -> ModelProfile {
+        ModelProfile::new()
+            // Probe 3: temperature 1.00 ACCEPTED; probes 2 and 4 (0.00, 0.50) answered
+            // "`temperature` is deprecated for this model", probe 5 (1.01) "temperature: range:
+            // 0..1". Only 1.00 was accepted.
+            .with_temperature(ParamSupport::Fixed(1.0))
+            // Probe 6: top_p 0.5 answered "`top_p` is deprecated for this model".
+            .with_top_p(ParamSupport::NotSent)
+            // Probes 7 and 8: NOT APPLICABLE, the Messages API has no such request field.
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probes 9 and 10: one and five stop sequences were accepted.
+            .with_stop_sequences(StopSupport::Supported { max: None })
+            // Listing: max_input_tokens=1000000, max_tokens=128000.
+            .with_context_window(1_000_000)
+            .with_max_output_tokens(128_000)
+            // Probe 1 (the default call) carried no reasoning text; the listing
+            // capabilities were truncated in the transcript, so reasoning is not evidenced.
+            .with_reasoning(false)
+            // Probes 12 and 13: NOT APPLICABLE, Anthropic has no JSON mode.
+            .with_json_object(false)
+            .with_json_schema(false)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `claude-fable-5``, probe numbers as in that table, and its listing row.
+    fn claude_fable_5() -> ModelProfile {
+        ModelProfile::new()
+            // Probe 3: temperature 1.00 ACCEPTED; probes 2 and 4 (0.00, 0.50) answered
+            // "`temperature` is deprecated for this model", probe 5 (1.01) "temperature: range:
+            // 0..1". Only 1.00 was accepted.
+            .with_temperature(ParamSupport::Fixed(1.0))
+            // Probe 6: top_p 0.5 answered "`top_p` is deprecated for this model".
+            .with_top_p(ParamSupport::NotSent)
+            // Probes 7 and 8: NOT APPLICABLE, the Messages API has no such request field.
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probes 9 and 10: one and five stop sequences were accepted.
+            .with_stop_sequences(StopSupport::Supported { max: None })
+            // Listing: max_input_tokens=1000000, max_tokens=128000.
+            .with_context_window(1_000_000)
+            .with_max_output_tokens(128_000)
+            // Probe 1 (the default call) returned reasoning text.
+            .with_reasoning(true)
+            // Probes 12 and 13: NOT APPLICABLE, Anthropic has no JSON mode.
+            .with_json_object(false)
+            .with_json_schema(false)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `claude-opus-5-5``, probe numbers as in that table, and its listing row.
+    fn claude_opus_5_5() -> ModelProfile {
+        ModelProfile::new()
+            // Probe 3: temperature 1.00 ACCEPTED; probes 2 and 4 (0.00, 0.50) answered
+            // "`temperature` is deprecated for this model", probe 5 (1.01) "temperature: range:
+            // 0..1". Only 1.00 was accepted.
+            .with_temperature(ParamSupport::Fixed(1.0))
+            // Probe 6: top_p 0.5 answered "`top_p` is deprecated for this model".
+            .with_top_p(ParamSupport::NotSent)
+            // Probes 7 and 8: NOT APPLICABLE, the Messages API has no such request field.
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probes 9 and 10: one and five stop sequences were accepted.
+            .with_stop_sequences(StopSupport::Supported { max: None })
+            // Listing: max_input_tokens=1000000, max_tokens=128000.
+            .with_context_window(1_000_000)
+            .with_max_output_tokens(128_000)
+            // Probe 1 (the default call) carried no reasoning text; the listing
+            // capabilities were truncated in the transcript, so reasoning is not evidenced.
+            .with_reasoning(false)
+            // Probes 12 and 13: NOT APPLICABLE, Anthropic has no JSON mode.
+            .with_json_object(false)
+            .with_json_schema(false)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `claude-opus-5``, probe numbers as in that table, and its listing row.
+    fn claude_opus_5() -> ModelProfile {
+        ModelProfile::new()
+            // Probe 3: temperature 1.00 ACCEPTED; probes 2 and 4 (0.00, 0.50) answered
+            // "`temperature` is deprecated for this model", probe 5 (1.01) "temperature: range:
+            // 0..1". Only 1.00 was accepted.
+            .with_temperature(ParamSupport::Fixed(1.0))
+            // Probe 6: top_p 0.5 answered "`top_p` is deprecated for this model".
+            .with_top_p(ParamSupport::NotSent)
+            // Probes 7 and 8: NOT APPLICABLE, the Messages API has no such request field.
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probes 9 and 10: one and five stop sequences were accepted.
+            .with_stop_sequences(StopSupport::Supported { max: None })
+            // Listing: max_input_tokens=1000000, max_tokens=128000.
+            .with_context_window(1_000_000)
+            .with_max_output_tokens(128_000)
+            // Probe 1 (the default call) returned reasoning text.
+            .with_reasoning(true)
+            // Probes 12 and 13: NOT APPLICABLE, Anthropic has no JSON mode.
+            .with_json_object(false)
+            .with_json_schema(false)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `claude-sonnet-5-5``, probe numbers as in that table, and its listing row.
+    fn claude_sonnet_5_5() -> ModelProfile {
+        ModelProfile::new()
+            // Probe 3: temperature 1.00 ACCEPTED; probes 2 and 4 (0.00, 0.50) answered
+            // "`temperature` is deprecated for this model", probe 5 (1.01) "temperature: range:
+            // 0..1". Only 1.00 was accepted.
+            .with_temperature(ParamSupport::Fixed(1.0))
+            // Probe 6: top_p 0.5 answered "`top_p` is deprecated for this model".
+            .with_top_p(ParamSupport::NotSent)
+            // Probes 7 and 8: NOT APPLICABLE, the Messages API has no such request field.
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probes 9 and 10: one and five stop sequences were accepted.
+            .with_stop_sequences(StopSupport::Supported { max: None })
+            // Listing: max_input_tokens=1000000, max_tokens=128000.
+            .with_context_window(1_000_000)
+            .with_max_output_tokens(128_000)
+            // Probe 1 (the default call) carried no reasoning text; the listing
+            // capabilities were truncated in the transcript, so reasoning is not evidenced.
+            .with_reasoning(false)
+            // Probes 12 and 13: NOT APPLICABLE, Anthropic has no JSON mode.
+            .with_json_object(false)
+            .with_json_schema(false)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `claude-sonnet-5``, probe numbers as in that table, and its listing row.
+    fn claude_sonnet_5() -> ModelProfile {
+        ModelProfile::new()
+            // Probe 3: temperature 1.00 ACCEPTED; probes 2 and 4 (0.00, 0.50) answered
+            // "`temperature` is deprecated for this model", probe 5 (1.01) "temperature: range:
+            // 0..1". Only 1.00 was accepted.
+            .with_temperature(ParamSupport::Fixed(1.0))
+            // Probe 6: top_p 0.5 answered "`top_p` is deprecated for this model".
+            .with_top_p(ParamSupport::NotSent)
+            // Probes 7 and 8: NOT APPLICABLE, the Messages API has no such request field.
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probes 9 and 10: one and five stop sequences were accepted.
+            .with_stop_sequences(StopSupport::Supported { max: None })
+            // Listing: max_input_tokens=1000000, max_tokens=128000.
+            .with_context_window(1_000_000)
+            .with_max_output_tokens(128_000)
+            // Probe 1 (the default call) carried no reasoning text; the listing
+            // capabilities were truncated in the transcript, so reasoning is not evidenced.
+            .with_reasoning(false)
+            // Probes 12 and 13: NOT APPLICABLE, Anthropic has no JSON mode.
+            .with_json_object(false)
+            .with_json_schema(false)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `claude-opus-4-7``, probe numbers as in that table, and its listing row.
+    fn claude_opus_4_7() -> ModelProfile {
+        ModelProfile::new()
+            // Probe 3: temperature 1.00 ACCEPTED; probes 2 and 4 (0.00, 0.50) answered
+            // "`temperature` is deprecated for this model", probe 5 (1.01) "temperature: range:
+            // 0..1". Only 1.00 was accepted.
+            .with_temperature(ParamSupport::Fixed(1.0))
+            // Probe 6: top_p 0.5 answered "`top_p` is deprecated for this model".
+            .with_top_p(ParamSupport::NotSent)
+            // Probes 7 and 8: NOT APPLICABLE, the Messages API has no such request field.
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probes 9 and 10: one and five stop sequences were accepted.
+            .with_stop_sequences(StopSupport::Supported { max: None })
+            // Listing: max_input_tokens=1000000, max_tokens=128000.
+            .with_context_window(1_000_000)
+            .with_max_output_tokens(128_000)
+            // Probe 1 (the default call) carried no reasoning text; the listing
+            // capabilities were truncated in the transcript, so reasoning is not evidenced.
+            .with_reasoning(false)
+            // Probes 12 and 13: NOT APPLICABLE, Anthropic has no JSON mode.
+            .with_json_object(false)
+            .with_json_schema(false)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `claude-opus-4-6``, probe numbers as in that table, and its listing row.
+    fn claude_opus_4_6() -> ModelProfile {
+        ModelProfile::new()
+            // Probes 2, 3 and 4: temperature 0.00, 1.00 and 0.50 ACCEPTED; probe 5: 1.01
+            // answered "temperature: range: 0..1".
+            .with_temperature(ParamSupport::Range(0.0, 1.0))
+            // Probe 6: top_p 0.5 accepted: `0..=1` is contract-derived.
+            .with_top_p(ParamSupport::Range(0.0, 1.0))
+            // Probes 7 and 8: NOT APPLICABLE, the Messages API has no such request field.
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probes 9 and 10: one and five stop sequences were accepted.
+            .with_stop_sequences(StopSupport::Supported { max: None })
+            // Listing: max_input_tokens=1000000, max_tokens=128000.
+            .with_context_window(1_000_000)
+            .with_max_output_tokens(128_000)
+            // Probe 1 (the default call) carried no reasoning text; the listing
+            // capabilities were truncated in the transcript, so reasoning is not evidenced.
+            .with_reasoning(false)
+            // Probes 12 and 13: NOT APPLICABLE, Anthropic has no JSON mode.
+            .with_json_object(false)
+            .with_json_schema(false)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `claude-sonnet-4-6``, probe numbers as in that table, and its listing row.
+    fn claude_sonnet_4_6() -> ModelProfile {
+        ModelProfile::new()
+            // Probes 2, 3 and 4: temperature 0.00, 1.00 and 0.50 ACCEPTED; probe 5: 1.01
+            // answered "temperature: range: 0..1".
+            .with_temperature(ParamSupport::Range(0.0, 1.0))
+            // Probe 6: top_p 0.5 accepted: `0..=1` is contract-derived.
+            .with_top_p(ParamSupport::Range(0.0, 1.0))
+            // Probes 7 and 8: NOT APPLICABLE, the Messages API has no such request field.
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probes 9 and 10: one and five stop sequences were accepted.
+            .with_stop_sequences(StopSupport::Supported { max: None })
+            // Listing: max_input_tokens=1000000, max_tokens=128000.
+            .with_context_window(1_000_000)
+            .with_max_output_tokens(128_000)
+            // Probe 1 (the default call) carried no reasoning text; the listing
+            // capabilities were truncated in the transcript, so reasoning is not evidenced.
             .with_reasoning(false)
             // Probes 12 and 13: NOT APPLICABLE, Anthropic has no JSON mode.
             .with_json_object(false)
@@ -486,12 +769,22 @@ mod gemini_table {
     use paladin_ports::output::model_profile::{ModelProfile, ParamSupport, StopSupport};
 
     /// Gemini. `gemini-3.5-flash-lite`, `gemini-3.5-flash` and `gemini-3.6-flash` were
-    /// measured. Common to all three: temperature `0.00` and `2.00` accepted and `2.01`
-    /// rejected ("temperature must be in the range [0.0, 2.0]"); `top_p` 0.5 accepted
-    /// (`0..=1` is contract-derived); the `generateContent` wire has no penalty field (probe: NOT
+    /// measured on 2026-10-15 (`50-SEED-PROBE.md`); nine further ids were measured end to end on
+    /// 2026-10-20 (`50.1-SEED-PROBE.md`, run 1): `gemini-4-argon`, `gemini-3.8-flash`,
+    /// `gemini-3.7-flash`, `gemini-3.1-pro-preview`, `gemini-pro-latest`, `gemini-flash-latest`,
+    /// `gemini-flash-lite-latest`, `gemini-3.1-flash-lite` and `gemini-3-flash-preview`. A
+    /// `*-latest` id is a moving alias and a `*-preview` id a preview: such a row is true on its
+    /// `verified_on` date only. `gemini-2.5-pro`, `gemini-2.5-flash` and `gemini-2.5-flash-lite`
+    /// answered the default call 404 ("no longer available to new users"), so nothing was
+    /// measured for them and they are not seeded.
+    ///
+    /// Common to all twelve: temperature `0.00` and `2.00` accepted and `2.01` rejected
+    /// ("temperature must be in the range [0.0, 2.0]"); `top_p` 0.5 accepted (`0..=1` is
+    /// contract-derived); the `generateContent` wire has no penalty field (probe: NOT
     /// APPLICABLE), so both penalties are `NotSent`; five stop sequences accepted; JSON object
     /// (`responseMimeType`) and JSON schema (`responseSchema`) both accepted; the listing
-    /// reports `inputTokenLimit=1048576`, `outputTokenLimit=65536` and `thinking=true`.
+    /// reports `thinking=true` and an `inputTokenLimit` of 1048576. The `outputTokenLimit` is
+    /// 65536 for every id except `gemini-4-argon`, which reports 32768.
     pub(crate) static GEMINI: &[SeededProfile] = &[
         SeededProfile {
             model: "gemini-3.5-flash-lite",
@@ -507,6 +800,51 @@ mod gemini_table {
             model: "gemini-3.5-flash",
             verified_on: "2026-10-15",
             build: gemini_3_5_flash,
+        },
+        SeededProfile {
+            model: "gemini-4-argon",
+            verified_on: "2026-10-20",
+            build: gemini_4_argon,
+        },
+        SeededProfile {
+            model: "gemini-3.8-flash",
+            verified_on: "2026-10-20",
+            build: gemini_3_8_flash,
+        },
+        SeededProfile {
+            model: "gemini-3.7-flash",
+            verified_on: "2026-10-20",
+            build: gemini_3_7_flash,
+        },
+        SeededProfile {
+            model: "gemini-3.1-pro-preview",
+            verified_on: "2026-10-20",
+            build: gemini_3_1_pro_preview,
+        },
+        SeededProfile {
+            model: "gemini-pro-latest",
+            verified_on: "2026-10-20",
+            build: gemini_pro_latest,
+        },
+        SeededProfile {
+            model: "gemini-flash-latest",
+            verified_on: "2026-10-20",
+            build: gemini_flash_latest,
+        },
+        SeededProfile {
+            model: "gemini-flash-lite-latest",
+            verified_on: "2026-10-20",
+            build: gemini_flash_lite_latest,
+        },
+        SeededProfile {
+            model: "gemini-3.1-flash-lite",
+            verified_on: "2026-10-20",
+            build: gemini_3_1_flash_lite,
+        },
+        SeededProfile {
+            model: "gemini-3-flash-preview",
+            verified_on: "2026-10-20",
+            build: gemini_3_flash_preview,
         },
     ];
 
@@ -534,6 +872,232 @@ mod gemini_table {
 
     fn gemini_3_5_flash() -> ModelProfile {
         measured()
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `gemini-4-argon``, probe numbers as in that table, and its listing row.
+    fn gemini_4_argon() -> ModelProfile {
+        ModelProfile::new()
+            // Probes 2 and 3: temperature 0.00 and 2.00 ACCEPTED; probe 5: 2.01 answered
+            // "temperature must be in the range [0.0, 2.0]".
+            .with_temperature(ParamSupport::Range(0.0, 2.0))
+            // Probe 6: top_p 0.5 accepted: `0..=1` is contract-derived.
+            .with_top_p(ParamSupport::Range(0.0, 1.0))
+            // Probes 7 and 8: NOT APPLICABLE, the generateContent wire has no penalty field.
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probe 10: five stop sequences accepted.
+            .with_stop_sequences(StopSupport::Supported { max: None })
+            // Listing: inputTokenLimit=1048576, outputTokenLimit=32768.
+            .with_context_window(1_048_576)
+            .with_max_output_tokens(32_768)
+            // Listing: thinking=true.
+            .with_reasoning(true)
+            // Probes 12 and 13: responseMimeType and responseSchema both accepted.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `gemini-3.8-flash``, probe numbers as in that table, and its listing row.
+    fn gemini_3_8_flash() -> ModelProfile {
+        ModelProfile::new()
+            // Probes 2 and 3: temperature 0.00 and 2.00 ACCEPTED; probe 5: 2.01 answered
+            // "temperature must be in the range [0.0, 2.0]".
+            .with_temperature(ParamSupport::Range(0.0, 2.0))
+            // Probe 6: top_p 0.5 accepted: `0..=1` is contract-derived.
+            .with_top_p(ParamSupport::Range(0.0, 1.0))
+            // Probes 7 and 8: NOT APPLICABLE, the generateContent wire has no penalty field.
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probe 10: five stop sequences accepted.
+            .with_stop_sequences(StopSupport::Supported { max: None })
+            // Listing: inputTokenLimit=1048576, outputTokenLimit=65536.
+            .with_context_window(1_048_576)
+            .with_max_output_tokens(65_536)
+            // Listing: thinking=true.
+            .with_reasoning(true)
+            // Probes 12 and 13: responseMimeType and responseSchema both accepted.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `gemini-3.7-flash``, probe numbers as in that table, and its listing row.
+    fn gemini_3_7_flash() -> ModelProfile {
+        ModelProfile::new()
+            // Probes 2 and 3: temperature 0.00 and 2.00 ACCEPTED; probe 5: 2.01 answered
+            // "temperature must be in the range [0.0, 2.0]".
+            .with_temperature(ParamSupport::Range(0.0, 2.0))
+            // Probe 6: top_p 0.5 accepted: `0..=1` is contract-derived.
+            .with_top_p(ParamSupport::Range(0.0, 1.0))
+            // Probes 7 and 8: NOT APPLICABLE, the generateContent wire has no penalty field.
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probe 10: five stop sequences accepted.
+            .with_stop_sequences(StopSupport::Supported { max: None })
+            // Listing: inputTokenLimit=1048576, outputTokenLimit=65536.
+            .with_context_window(1_048_576)
+            .with_max_output_tokens(65_536)
+            // Listing: thinking=true.
+            .with_reasoning(true)
+            // Probes 12 and 13: responseMimeType and responseSchema both accepted.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `gemini-3.1-pro-preview``, probe numbers as in that table, and its listing row.
+    // A preview id: its row is true on its `verified_on` date only, because the vendor
+    // may change or retire a preview without notice.
+    fn gemini_3_1_pro_preview() -> ModelProfile {
+        ModelProfile::new()
+            // Probes 2 and 3: temperature 0.00 and 2.00 ACCEPTED; probe 5: 2.01 answered
+            // "temperature must be in the range [0.0, 2.0]".
+            .with_temperature(ParamSupport::Range(0.0, 2.0))
+            // Probe 6: top_p 0.5 accepted: `0..=1` is contract-derived.
+            .with_top_p(ParamSupport::Range(0.0, 1.0))
+            // Probes 7 and 8: NOT APPLICABLE, the generateContent wire has no penalty field.
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probe 10: five stop sequences accepted.
+            .with_stop_sequences(StopSupport::Supported { max: None })
+            // Listing: inputTokenLimit=1048576, outputTokenLimit=65536.
+            .with_context_window(1_048_576)
+            .with_max_output_tokens(65_536)
+            // Listing: thinking=true.
+            .with_reasoning(true)
+            // Probes 12 and 13: responseMimeType and responseSchema both accepted.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `gemini-pro-latest``, probe numbers as in that table, and its listing row.
+    // A moving alias: its row is true on its `verified_on` date only, because the
+    // vendor re-points the alias at a newer model without changing the id.
+    fn gemini_pro_latest() -> ModelProfile {
+        ModelProfile::new()
+            // Probes 2 and 3: temperature 0.00 and 2.00 ACCEPTED; probe 5: 2.01 answered
+            // "temperature must be in the range [0.0, 2.0]".
+            .with_temperature(ParamSupport::Range(0.0, 2.0))
+            // Probe 6: top_p 0.5 accepted: `0..=1` is contract-derived.
+            .with_top_p(ParamSupport::Range(0.0, 1.0))
+            // Probes 7 and 8: NOT APPLICABLE, the generateContent wire has no penalty field.
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probe 10: five stop sequences accepted.
+            .with_stop_sequences(StopSupport::Supported { max: None })
+            // Listing: inputTokenLimit=1048576, outputTokenLimit=65536.
+            .with_context_window(1_048_576)
+            .with_max_output_tokens(65_536)
+            // Listing: thinking=true.
+            .with_reasoning(true)
+            // Probes 12 and 13: responseMimeType and responseSchema both accepted.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `gemini-flash-latest``, probe numbers as in that table, and its listing row.
+    // A moving alias: its row is true on its `verified_on` date only, because the
+    // vendor re-points the alias at a newer model without changing the id.
+    fn gemini_flash_latest() -> ModelProfile {
+        ModelProfile::new()
+            // Probes 2 and 3: temperature 0.00 and 2.00 ACCEPTED; probe 5: 2.01 answered
+            // "temperature must be in the range [0.0, 2.0]".
+            .with_temperature(ParamSupport::Range(0.0, 2.0))
+            // Probe 6: top_p 0.5 accepted: `0..=1` is contract-derived.
+            .with_top_p(ParamSupport::Range(0.0, 1.0))
+            // Probes 7 and 8: NOT APPLICABLE, the generateContent wire has no penalty field.
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probe 10: five stop sequences accepted.
+            .with_stop_sequences(StopSupport::Supported { max: None })
+            // Listing: inputTokenLimit=1048576, outputTokenLimit=65536.
+            .with_context_window(1_048_576)
+            .with_max_output_tokens(65_536)
+            // Listing: thinking=true.
+            .with_reasoning(true)
+            // Probes 12 and 13: responseMimeType and responseSchema both accepted.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `gemini-flash-lite-latest``, probe numbers as in that table, and its listing row.
+    // A moving alias: its row is true on its `verified_on` date only, because the
+    // vendor re-points the alias at a newer model without changing the id.
+    fn gemini_flash_lite_latest() -> ModelProfile {
+        ModelProfile::new()
+            // Probes 2 and 3: temperature 0.00 and 2.00 ACCEPTED; probe 5: 2.01 answered
+            // "temperature must be in the range [0.0, 2.0]".
+            .with_temperature(ParamSupport::Range(0.0, 2.0))
+            // Probe 6: top_p 0.5 accepted: `0..=1` is contract-derived.
+            .with_top_p(ParamSupport::Range(0.0, 1.0))
+            // Probes 7 and 8: NOT APPLICABLE, the generateContent wire has no penalty field.
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probe 10: five stop sequences accepted.
+            .with_stop_sequences(StopSupport::Supported { max: None })
+            // Listing: inputTokenLimit=1048576, outputTokenLimit=65536.
+            .with_context_window(1_048_576)
+            .with_max_output_tokens(65_536)
+            // Listing: thinking=true.
+            .with_reasoning(true)
+            // Probes 12 and 13: responseMimeType and responseSchema both accepted.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `gemini-3.1-flash-lite``, probe numbers as in that table, and its listing row.
+    fn gemini_3_1_flash_lite() -> ModelProfile {
+        ModelProfile::new()
+            // Probes 2 and 3: temperature 0.00 and 2.00 ACCEPTED; probe 5: 2.01 answered
+            // "temperature must be in the range [0.0, 2.0]".
+            .with_temperature(ParamSupport::Range(0.0, 2.0))
+            // Probe 6: top_p 0.5 accepted: `0..=1` is contract-derived.
+            .with_top_p(ParamSupport::Range(0.0, 1.0))
+            // Probes 7 and 8: NOT APPLICABLE, the generateContent wire has no penalty field.
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probe 10: five stop sequences accepted.
+            .with_stop_sequences(StopSupport::Supported { max: None })
+            // Listing: inputTokenLimit=1048576, outputTokenLimit=65536.
+            .with_context_window(1_048_576)
+            .with_max_output_tokens(65_536)
+            // Listing: thinking=true.
+            .with_reasoning(true)
+            // Probes 12 and 13: responseMimeType and responseSchema both accepted.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `gemini-3-flash-preview``, probe numbers as in that table, and its listing row.
+    // A preview id: its row is true on its `verified_on` date only, because the vendor
+    // may change or retire a preview without notice.
+    fn gemini_3_flash_preview() -> ModelProfile {
+        ModelProfile::new()
+            // Probes 2 and 3: temperature 0.00 and 2.00 ACCEPTED; probe 5: 2.01 answered
+            // "temperature must be in the range [0.0, 2.0]".
+            .with_temperature(ParamSupport::Range(0.0, 2.0))
+            // Probe 6: top_p 0.5 accepted: `0..=1` is contract-derived.
+            .with_top_p(ParamSupport::Range(0.0, 1.0))
+            // Probes 7 and 8: NOT APPLICABLE, the generateContent wire has no penalty field.
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probe 10: five stop sequences accepted.
+            .with_stop_sequences(StopSupport::Supported { max: None })
+            // Listing: inputTokenLimit=1048576, outputTokenLimit=65536.
+            .with_context_window(1_048_576)
+            .with_max_output_tokens(65_536)
+            // Listing: thinking=true.
+            .with_reasoning(true)
+            // Probes 12 and 13: responseMimeType and responseSchema both accepted.
+            .with_json_object(true)
+            .with_json_schema(true)
     }
 }
 #[cfg(feature = "gemini")]

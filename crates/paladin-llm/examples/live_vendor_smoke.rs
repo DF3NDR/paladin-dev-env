@@ -210,7 +210,19 @@ struct ProviderSpec {
 /// its seeded table, in table order). The adapter's default model comes first, built from its own
 /// constant rather than restated; the other ids are the seeded rows added by Phase 50.1. The unit
 /// test `the_static_model_lists_match_the_adapters` fails if the table and this list drift apart.
-const ANTHROPIC_MODELS: &[&str] = &[ANTHROPIC_DEFAULT_MODEL, "claude-opus-4-8"];
+const ANTHROPIC_MODELS: &[&str] = &[
+    ANTHROPIC_DEFAULT_MODEL,
+    "claude-opus-4-8",
+    "claude-fable-5-1",
+    "claude-fable-5",
+    "claude-opus-5-5",
+    "claude-opus-5",
+    "claude-sonnet-5-5",
+    "claude-sonnet-5",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-sonnet-4-6",
+];
 
 /// DeepSeek's static model list (mirrors `DeepSeekAdapter::get_available_models`, which returns
 /// its seeded table, in table order). Default model first, for the same reason as

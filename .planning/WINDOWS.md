@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 12
+open_count: 13
 waived_count: 37
 fixed_count: 29
-total_count: 78
-last_updated: 2026-10-19T15:50:15.480Z
+total_count: 79
+last_updated: 2026-10-20T16:26:47.433Z
 ---
 
 # Broken Windows Ledger
@@ -93,6 +93,7 @@ last_updated: 2026-10-19T15:50:15.480Z
 | 76 | 50 | deviation | crates/paladin-llm/src/kimi/adapter.rs |  | 50-16 closeout: the Kimi adapter-wide fallback profile (temperature Fixed(1.0), top_p Fixed(0.95), declared range (1.0, 1.0)) comes from the 2026-08-22 measurement and contradicts the 2026-10-15 probe (kimi-k2.6 and kimi-k3 accept only 0.6 and reject top_p). Applies to unseeded Kimi ids only; carried unreconciled from 50-06 and 50-15; labelled unverified on the Switching providers page. Owner decision pending | fixed |  | 2026-10-16T21:57:02.159Z | 2026-10-17T18:55:35.713Z |
 | 77 | 50 | deviation | crates/paladin-llm/src/grok/adapter.rs |  | G-50-5a remainder (c): Grok's vendor-computed cost_in_usd_ticks and num_sources_used are not parsed or compared with the Treasurer price; owner-accepted deferral, 2026-10-17, kept open; plan 50-22's probe (live_vendor_smoke --usage, 50-USAGE-PROBE.md) recorded the cross-check data; closing condition: parse both fields on the Grok wire and compare cost_in_usd_ticks with the Treasurer price under the ADR-0061 visibility rule, with fixture tests | open |  | 2026-10-19T00:23:33.273Z |  |
 | 78 | 50 | deviation | crates/paladin-ports/src/output/spend_scope.rs |  | 50-REVIEW WR-03 (G-50-5a remainder (b)): a hopped-past fallback bill reached ATTEMPT_SPEND only when its whole model call returned, so a Battalion attempt dropped by its deadline or idle bound while a later hop was in flight was not charged for the earlier hop's billed refusal; commit 0cdbc302 documented it as a limit; closing condition: the bill is priced and counted into the attempt scope at its hop, proven by paused-clock drop tests (plan 50-32). | fixed |  | 2026-10-19T13:00:16.400Z | 2026-10-19T15:50:15.480Z |
+| 79 | 50.1 | deviation | .planning/phases/50.1-consumer-surface-readiness/50.1-SEED-PROBE.md |  | 50.1-07: probe was run by Claude at operator direction in the devcontainer (plan assumed an operator-machine run); grok-4.7 and 7 default-rejected candidates are not measured end to end and must not be seeded | open |  | 2026-10-20T16:26:47.433Z |  |
 
 ````json
 [
@@ -1031,6 +1032,18 @@ last_updated: 2026-10-19T15:50:15.480Z
     "reason": "",
     "recorded_at": "2026-10-19T13:00:16.400Z",
     "resolved_at": "2026-10-19T15:50:15.480Z"
+  },
+  {
+    "id": 79,
+    "kind": "deviation",
+    "phase": "50.1",
+    "file": ".planning/phases/50.1-consumer-surface-readiness/50.1-SEED-PROBE.md",
+    "line": null,
+    "description": "50.1-07: probe was run by Claude at operator direction in the devcontainer (plan assumed an operator-machine run); grok-4.7 and 7 default-rejected candidates are not measured end to end and must not be seeded",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-10-20T16:26:47.433Z",
+    "resolved_at": null
   }
 ]
 ````

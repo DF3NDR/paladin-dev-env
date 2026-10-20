@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 50.1
 current_phase_name: consumer-surface-readiness
 status: paused
-stopped_at: Completed 50.1-06-PLAN.md
-last_updated: "2026-10-20T14:40:19.116Z"
+stopped_at: Completed 50.1-07-PLAN.md
+last_updated: "2026-10-20T16:26:21.782Z"
 last_activity: 2026-10-19
 last_activity_desc: Phase 50.1 execution started
 progress:
   total_phases: 13
   completed_phases: 11
   total_plans: 130
-  completed_plans: 127
+  completed_plans: 128
 ---
 
 # Project State
@@ -63,7 +63,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 50.1 (consumer-surface-readiness) — EXECUTING
-Plan: 7 of 9
+Plan: 8 of 9
 Status: paused_at_checkpoint
 Last activity: 2026-10-19 — Phase 50.1 execution started
 
@@ -335,6 +335,7 @@ Last activity: 2026-10-19 — Phase 50.1 execution started
 | Phase 50.1 P04 | 50min | 3 tasks | 13 files |
 | Phase 50.1 P05 | 60min | 2 tasks | 24 files |
 | Phase 50.1 P06 | 75min | 3 tasks | 21 files |
+| Phase 50.1 P07 | 45min | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -595,6 +596,9 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 50.1-04: D-05 applied as locked to Gemini, Qwen, Grok and Kimi; each allowlist entry names method_parameter_count_changed as measured per task; SURFACE-02 stays open until 50.1-05 and -06
 - [Phase ?]: 50.1-05: D-06 applied as proceed-as-locked; OpenAIConfig.model is a default-model label with no context-window change (128,000 stays); D-05 new(api_key, model) with no alias
 - [Phase ?]: Phase 50.1-06: D-07 resolved by owner as compiled-default (2026-10-20): AnthropicConfig::new sets max_tokens 4096 for every model; with_max_tokens is the override; no seeded_max_output helper
+- [Phase ?]: 50.1-07: Claude ran the SURFACE-06 seed probe at the operator's direction on the operator's keys (plan's no-key premise was stale); provenance says so
+- [Phase ?]: 50.1-07: OpenAI ids with a Deprecated badge that were measured end to end (gpt-5.1, gpt-5, gpt-5-mini, gpt-5-nano, o3) SHOULD be seeded by plan 50.1-09; D-15 excludes only shutdowns on or before 2027-01-31
+- [Phase ?]: 50.1-07: grok-4.7 (temperature=2.00 UNREACHABLE in both runs) and the 7 default-rejected ids (gpt-5.5-pro, gpt-5.4-pro, gpt-5.2-pro, gpt-5-pro, gemini-2.5-pro/flash/flash-lite) are not seedable; 50 of 58 candidates measured end to end
 
 ### Pending Todos
 
@@ -814,8 +818,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-20T12:59:20.789Z
-**Stopped at:** Completed 50.1-06-PLAN.md
+**Last session:** 2026-10-20T16:26:21.703Z
+**Stopped at:** Completed 50.1-07-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

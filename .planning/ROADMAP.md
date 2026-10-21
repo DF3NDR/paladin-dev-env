@@ -1807,8 +1807,8 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 51-04-PLAN.md — compile-enforced `ReasoningWire` on every compat preset, per-wire mapping, self-hosted `with_reasoning_wire`, `CompatRequestParameters` break registered (wave 3)
-- [ ] 51-05-PLAN.md — Anthropic `output_config.effort` / profile-gated budget and Gemini `thinkingConfig` mappings (wave 3)
+- [x] 51-04-PLAN.md — compile-enforced `ReasoningWire` on every compat preset, per-wire mapping, self-hosted `with_reasoning_wire`, `CompatRequestParameters` break registered (wave 3)
+- [x] 51-05-PLAN.md — Anthropic `output_config.effort` / profile-gated budget and Gemini `thinkingConfig` mappings (wave 3)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

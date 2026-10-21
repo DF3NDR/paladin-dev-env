@@ -9,6 +9,12 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- Phase 51 (REASON-02 to REASON-04; plan 51-04): `compat::CompatRequestParameters.reasoning`
+  (`ReasoningWire`), `OllamaConfig.reasoning_wire` / `OpenAiCompatibleConfig.reasoning_wire` with
+  `with_reasoning_wire(ReasoningWire)`, and the shared compat engine's exact mapping for
+  `top_level_effort`, `thinking_object` and `enable_thinking` (refused before HTTP on any other
+  effort or an `unsupported` wire). `compat::ReasoningWire` re-exports the enum. See the
+  repository `CHANGELOG.md`.
 - Phase 51 (REASON-02 to REASON-06; plan 51-03): `paladin_llm::reasoning` (`ReasoningWire` and the
   re-exported `REASONING_REQUESTED_METADATA_KEY` / `REASONING_EFFECTIVE_METADATA_KEY`);
   `registry::ModelOverride.effort` (YAML `llm.<provider>.models.<model-id>.effort`); the DeepSeek
@@ -170,6 +176,10 @@ and this project follows lockstep workspace versioning.
 
 ### Changed
 
+- BREAKING: `compat::CompatRequestParameters` gains the field `reasoning: ReasoningWire` and
+  `CompatRequestParameters::all()` becomes `all(reasoning: ReasoningWire)` (Phase 51 plan 51-04,
+  REASON-02). Migration: state `reasoning: ReasoningWire::Unsupported` in the literal, or pass the
+  wire to `all(..)`. No alias.
 - Every `*Config::validate()` now requires the base URL to start with `http://` or `https://`
   through one shared `registry::is_http_url` (WR-03, Phase 50.1 review fix `5ebd315b`). OpenAI,
   DeepSeek, Kimi, Qwen, Grok, Ollama and OpenAI-compatible used to test only `starts_with("http")`,

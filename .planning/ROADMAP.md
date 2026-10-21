@@ -1812,7 +1812,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 51-06-PLAN.md — provider-level defaults on the nine configs and `llm.<provider>` YAML, self-hosted `reasoning_wire` key (wave 4)
+- [x] 51-06-PLAN.md — provider-level defaults on the nine configs and `llm.<provider>` YAML, self-hosted `reasoning_wire` key (wave 4)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 

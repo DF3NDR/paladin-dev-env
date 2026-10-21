@@ -779,3 +779,16 @@ lint = "register-only (unmeasured: cargo-semver-checks absent on 2026-10-21; mea
 migration_row = "paladin-ai-core | PaladinData"
 requirement_id = "REASON-01"
 justification = "PaladinData gained the public fields reasoning_effort: Option<ReasoningEffort> and reasoning_fallback: Option<ReasoningFallback> (Phase 51, plan 51-07, D-00e, D-05): the agent level of the reasoning-effort precedence. The struct stays constructible and is not #[non_exhaustive], so only full struct literals break; every in-tree one named both fields in the same commit. #[serde(default, skip_serializing_if = \"Option::is_none\")] keeps stored snapshots loading and an agent that sets neither serialises byte-identically. Migration: name both fields in the literal or spread ..PaladinData::default(). Registered without a measured lint id; plan 51-14 measures and corrects it."
+
+# Plan 51-08 (D-00b, D-00e, REASON-01), registered 2026-10-21 in the SAME commit that adds the fields:
+# cargo-semver-checks is absent in this container, so the lint id below is UNMEASURED. Plan 51-14
+# measures it against the published `paladin-ai` 0.10.1 (`--release-type minor`, the root crate's
+# crate-wide allow disabled and restored byte-for-byte) and corrects this entry. The expected lint is
+# `constructible_struct_adds_field`, already allowed crate-wide in the root Cargo.toml.
+
+[[entry]]
+crate = "paladin-ai"
+lint = "register-only (unmeasured: cargo-semver-checks absent on 2026-10-21; measured in plan 51-14)"
+migration_row = "paladin-ai | AgentDefinition"
+requirement_id = "REASON-01"
+justification = "AgentDefinition gained the public fields reasoning_effort: Option<ReasoningEffort> and reasoning_fallback: Option<ReasoningFallback> (Phase 51, plan 51-08, D-00e, D-05, #[serde(default)]): the YAML keys agents[].reasoning_effort and agents[].reasoning_fallback. The struct stays constructible and is deliberately NOT #[non_exhaustive] (cross-crate functional-update syntax must keep working); only a downstream full struct literal breaks, and every in-tree literal named both fields in the same commit. Migration: add reasoning_effort: None, reasoning_fallback: None to the literal; YAML is unaffected. Registered without a measured lint id; plan 51-14 measures and corrects it."

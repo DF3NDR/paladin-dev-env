@@ -213,6 +213,14 @@ async fn build_agent_with_llm_and_block_temperature(
         }
         (None, None) => None,
     };
+    // D-00e: the agent's own effort and fallback are *expressed* values, judged by the builder
+    // against the model's profile exactly like a temperature the agent wrote (D-09).
+    if let Some(effort) = def.reasoning_effort {
+        builder = builder.reasoning_effort(effort);
+    }
+    if let Some(fallback) = def.reasoning_fallback {
+        builder = builder.reasoning_fallback(fallback);
+    }
     if let Some(max_loops) = def.max_loops {
         builder = builder.max_loops(max_loops);
     }
@@ -597,6 +605,8 @@ mod tests {
             max_loops: None,
             stop_words: vec![],
             timeout_seconds: None,
+            reasoning_effort: None,
+            reasoning_fallback: None,
             allowed_roles: vec![],
         }
     }
@@ -635,6 +645,142 @@ mod tests {
         assert_eq!(paladin.data.name, "researcher");
         assert_eq!(paladin.data.model, "gpt-4o");
         assert!(streamer.is_some(), "execution service is streaming-capable");
+    }
+
+    // --- Phase 51 (plan 51-08, D-00e / D-09): agents[].reasoning_effort ---
+
+    /// A mock that reports a model profile listing exactly `levels` as reasoning efforts and
+    /// records every request it is sent, delegating the rest to [`MockLlmAdapter`].
+    struct EffortMock {
+        inner: MockLlmAdapter,
+        levels: Vec<paladin_core::platform::container::reasoning::ReasoningEffort>,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmPort for EffortMock {
+        async fn generate(
+            &self,
+            request: paladin_ports::output::llm_port::LlmRequest,
+        ) -> Result<
+            paladin_ports::output::llm_port::LlmResponse,
+            paladin_ports::output::llm_port::LlmError,
+        > {
+            self.inner.generate(request).await
+        }
+
+        async fn generate_stream(
+            &self,
+            request: paladin_ports::output::llm_port::LlmRequest,
+        ) -> Result<
+            Box<
+                dyn futures::Stream<
+                        Item = Result<
+                            paladin_ports::output::llm_port::StreamingResponse,
+                            paladin_ports::output::llm_port::LlmError,
+                        >,
+                    > + Send,
+            >,
+            paladin_ports::output::llm_port::LlmError,
+        > {
+            self.inner.generate_stream(request).await
+        }
+
+        async fn validate_model(
+            &self,
+            model: &str,
+        ) -> Result<bool, paladin_ports::output::llm_port::LlmError> {
+            self.inner.validate_model(model).await
+        }
+
+        async fn get_available_models(
+            &self,
+        ) -> Result<Vec<String>, paladin_ports::output::llm_port::LlmError> {
+            self.inner.get_available_models().await
+        }
+
+        fn get_provider_name(&self) -> &'static str {
+            "effort-mock"
+        }
+
+        fn get_capabilities(&self) -> paladin_ports::output::llm_port::ProviderCapabilities {
+            self.inner.get_capabilities()
+        }
+
+        fn model_profile(
+            &self,
+            _model: &str,
+        ) -> Option<paladin_ports::output::model_profile::ModelProfile> {
+            use paladin_ports::output::model_profile::{EffortLevels, EffortSupport, ModelProfile};
+            Some(
+                ModelProfile::new().with_effort(EffortSupport::Supported(EffortLevels::new(
+                    self.levels.iter().copied(),
+                ))),
+            )
+        }
+    }
+
+    fn effort_mock(
+        levels: impl IntoIterator<Item = paladin_core::platform::container::reasoning::ReasoningEffort>,
+    ) -> Arc<EffortMock> {
+        Arc::new(EffortMock {
+            inner: MockLlmAdapter::new().with_response("ack"),
+            levels: levels.into_iter().collect(),
+        })
+    }
+
+    #[tokio::test]
+    async fn an_agents_yaml_effort_reaches_the_built_paladin_and_its_model_calls() {
+        use paladin_core::platform::container::reasoning::{ReasoningEffort, ReasoningFallback};
+        let llm = effort_mock([ReasoningEffort::Low, ReasoningEffort::High]);
+        let mut def = base("r");
+        def.reasoning_effort = Some(ReasoningEffort::High);
+        def.reasoning_fallback = Some(ReasoningFallback::NearestLower);
+
+        let (paladin, executor, _) = build_agent_with_llm(
+            &def,
+            llm.clone(),
+            default_circuit_breaker(),
+            None,
+            TokenBudgetConfig::default(),
+        )
+        .await
+        .expect("a level the model lists builds");
+
+        assert_eq!(paladin.data.reasoning_effort, Some(ReasoningEffort::High));
+        assert_eq!(
+            paladin.data.reasoning_fallback,
+            Some(ReasoningFallback::NearestLower)
+        );
+        executor.execute(&paladin, "hi").await.expect("runs");
+        let request = llm.inner.last_request().expect("the model was called");
+        assert_eq!(request.reasoning, Some(ReasoningEffort::High));
+        assert_eq!(
+            request.reasoning_fallback,
+            Some(ReasoningFallback::NearestLower)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_definition_that_sets_no_effort_builds_todays_agent() {
+        use paladin_core::platform::container::reasoning::ReasoningEffort;
+        let llm = effort_mock([ReasoningEffort::High]);
+
+        let (paladin, executor, _) = build_agent_with_llm(
+            &base("plain"),
+            llm.clone(),
+            default_circuit_breaker(),
+            None,
+            TokenBudgetConfig::default(),
+        )
+        .await
+        .expect("builds");
+
+        assert_eq!(paladin.data.reasoning_effort, None);
+        assert_eq!(paladin.data.reasoning_fallback, None);
+        executor.execute(&paladin, "hi").await.expect("runs");
+        let request = llm.inner.last_request().expect("the model was called");
+        assert_eq!(request.reasoning, None);
+        assert_eq!(request.reasoning_fallback, None);
     }
 
     #[tokio::test]
@@ -1316,6 +1462,8 @@ mod config_driven_tests {
             max_loops: Some(1),
             stop_words: vec![],
             timeout_seconds: None,
+            reasoning_effort: None,
+            reasoning_fallback: None,
             allowed_roles: vec![],
         }
     }

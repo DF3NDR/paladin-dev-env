@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Reasoning effort per agent in YAML (REASON-01, REASON-04; Phase 51 plan 08).** An agent in the
+  `agents:` list takes `reasoning_effort` (a level, `off`, `auto` or `{budget: N}`) and
+  `reasoning_fallback` (`refuse`, `nearest_lower`, `nearest_higher`). The agent host passes both to
+  `PaladinBuilder::reasoning_effort` / `reasoning_fallback`, so every model call the agent makes
+  carries them (request, then agent, then `llm.<provider>.reasoning_effort`). An unknown spelling
+  fails config load naming the field, and an agent that sets neither builds today's agent.
+
 - **Reasoning effort: the agent level, a build-time refusal and a fallback-chain pre-flight
   (REASON-01, REASON-04, REASON-05; Phase 51 plan 07).** `PaladinBuilder::reasoning_effort` and
   `reasoning_fallback` set a per-agent default that rides on every model call the Paladin makes: it
@@ -929,6 +936,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only; no public API change.
 
 ### Changed
+
+- **BREAKING (`paladin-ai`): `AgentDefinition` gains the fields `reasoning_effort:
+  Option<ReasoningEffort>` and `reasoning_fallback: Option<ReasoningFallback>` (REASON-01, D-00b,
+  D-00e; Phase 51 plan 08; `MIGRATION.md` 9.2).** Both are `#[serde(default)]`, so every existing
+  YAML file loads unchanged; only a full struct literal of the definition breaks. Migration: add
+  `reasoning_effort: None, reasoning_fallback: None` to the literal. There is no deprecated alias.
 
 - **BREAKING (`paladin-ai-core`): `PaladinData` gains the fields `reasoning_effort:
   Option<ReasoningEffort>` and `reasoning_fallback: Option<ReasoningFallback>` (REASON-01, D-00b,

@@ -517,6 +517,100 @@ impl EffortLevels {
     }
 }
 
+/// Intersect two budget spans: the overlap, or `None` when either side takes no (valid) budget
+/// or the spans are disjoint. An invalid span states nothing usable and counts as no budget.
+fn and_budget(a: Option<BudgetBounds>, b: Option<BudgetBounds>) -> Option<BudgetBounds> {
+    let (a, b) = (
+        a.filter(BudgetBounds::is_valid)?,
+        b.filter(BudgetBounds::is_valid)?,
+    );
+    let (min, max) = (a.min.max(b.min), a.max.min(b.max));
+    (min <= max).then(|| BudgetBounds::new(min, max))
+}
+
+impl EffortLevels {
+    /// The admission arm for a `Supported` model; see [`EffortSupport::resolve`].
+    fn admit(
+        &self,
+        requested: ReasoningEffort,
+        fallback: ReasoningFallback,
+    ) -> Result<ResolvedEffort, EffortRefusal> {
+        // A level the vendor silently runs as another is refused whatever the fallback.
+        if requested.is_level() && self.coerced.contains(&requested) {
+            return Err(EffortRefusal::LevelCoerced);
+        }
+        match requested {
+            ReasoningEffort::Off if self.off => Ok(ResolvedEffort::exact(requested, true)),
+            ReasoningEffort::Off => Err(EffortRefusal::OffUnsupported),
+            ReasoningEffort::Auto if self.auto => Ok(ResolvedEffort::exact(requested, true)),
+            ReasoningEffort::Auto => Err(EffortRefusal::AutoUnsupported),
+            ReasoningEffort::Budget(n) => match self.budget {
+                None => Err(EffortRefusal::BudgetUnsupported),
+                Some(bounds) if bounds.is_valid() && (bounds.min..=bounds.max).contains(&n) => {
+                    Ok(ResolvedEffort::exact(requested, true))
+                }
+                Some(bounds) => Err(EffortRefusal::BudgetOutOfBounds(bounds)),
+            },
+            level => self.admit_level(level, fallback),
+        }
+    }
+
+    /// Admit one of the six levels, substituting only along the caller's chosen direction.
+    fn admit_level(
+        &self,
+        level: ReasoningEffort,
+        fallback: ReasoningFallback,
+    ) -> Result<ResolvedEffort, EffortRefusal> {
+        let Some(rank) = level.level_rank() else {
+            // A future non-level variant this rule does not know: fail closed.
+            return Err(EffortRefusal::LevelUnsupported);
+        };
+        if self.levels.contains(&level) {
+            return Ok(ResolvedEffort::exact(level, true));
+        }
+        // Candidates are listed levels only: a coerced level is never a substitution target.
+        let candidates = self
+            .levels
+            .iter()
+            .copied()
+            .filter(|l| !self.coerced.contains(l))
+            .filter_map(|l| l.level_rank().map(|r| (r, l)));
+        let chosen = match fallback {
+            ReasoningFallback::NearestLower => candidates
+                .filter(|(r, _)| *r < rank)
+                .max_by_key(|(r, _)| *r),
+            ReasoningFallback::NearestHigher => candidates
+                .filter(|(r, _)| *r > rank)
+                .min_by_key(|(r, _)| *r),
+            // `Refuse`, and any future fallback this rule does not know: fail closed.
+            _ => return Err(EffortRefusal::LevelUnsupported),
+        };
+        chosen
+            .map(|(_, effective)| ResolvedEffort::substitute(level, effective))
+            .ok_or(EffortRefusal::NoLevelInDirection)
+    }
+
+    /// AND of two supports: a level, `off`, `auto` or budget span is usable only when both
+    /// operands allow it; a level coerced on either side stays coerced (and unlisted).
+    fn and(&self, other: &Self) -> Self {
+        let coerced = normalise_levels(self.coerced.iter().chain(&other.coerced).copied());
+        let listed = self
+            .levels
+            .iter()
+            .filter(|l| other.levels.contains(l) && !coerced.contains(l))
+            .copied();
+        Self {
+            levels: normalise_levels(listed),
+            off: self.off && other.off,
+            auto: self.auto && other.auto,
+            budget: and_budget(self.budget, other.budget),
+            coerced,
+            enable_thinking_with_level: self.enable_thinking_with_level
+                || other.enable_thinking_with_level,
+        }
+    }
+}
+
 /// Which reasoning efforts one model takes (REASON-02, D-03).
 ///
 /// Fail closed: the [`Default`] is [`Unmeasured`](Self::Unmeasured), which refuses every effort,
@@ -599,6 +693,15 @@ impl ResolvedEffort {
         }
     }
 
+    /// A level substituted for the one asked for (the caller chose a substituting fallback).
+    fn substitute(requested: ReasoningEffort, effective: ReasoningEffort) -> Self {
+        Self {
+            requested,
+            effective,
+            on_wire: true,
+        }
+    }
+
     /// Whether a different effort than the one asked for reaches the wire.
     ///
     /// # Examples
@@ -608,8 +711,9 @@ impl ResolvedEffort {
     /// use paladin_ports::output::llm_port::{ReasoningEffort, ReasoningFallback};
     ///
     /// let support = EffortSupport::Supported(EffortLevels::new([ReasoningEffort::High]));
-    /// let resolved = support.resolve(ReasoningEffort::High, ReasoningFallback::NearestLower)?;
-    /// assert!(!resolved.substituted());
+    /// let resolved = support.resolve(ReasoningEffort::Max, ReasoningFallback::NearestLower)?;
+    /// assert!(resolved.substituted());
+    /// assert_eq!(resolved.effective, ReasoningEffort::High);
     /// # Ok::<(), paladin_ports::output::model_profile::EffortRefusal>(())
     /// ```
     #[must_use]
@@ -728,7 +832,7 @@ impl EffortSupport {
     pub fn resolve(
         &self,
         requested: ReasoningEffort,
-        _fallback: ReasoningFallback,
+        fallback: ReasoningFallback,
     ) -> Result<ResolvedEffort, EffortRefusal> {
         match self {
             Self::Unmeasured => Err(EffortRefusal::Unmeasured),
@@ -740,44 +844,75 @@ impl EffortSupport {
                     Err(EffortRefusal::NoReasoning)
                 }
             }
-            Self::Supported(levels) => {
-                if levels.levels.contains(&requested) {
-                    return Ok(ResolvedEffort::exact(requested, true));
-                }
-                Err(match requested {
-                    ReasoningEffort::Off => EffortRefusal::OffUnsupported,
-                    ReasoningEffort::Auto => EffortRefusal::AutoUnsupported,
-                    ReasoningEffort::Budget(_) => EffortRefusal::BudgetUnsupported,
-                    _ => EffortRefusal::LevelUnsupported,
-                })
-            }
+            Self::Supported(levels) => levels.admit(requested, fallback),
         }
     }
 
-    /// The support acceptable to **both** `self` and `other`.
+    /// The support acceptable to **both** `self` and `other` (D-09).
     ///
-    /// Fail closed: equal operands stay as they are, anything else is `Unmeasured`.
+    /// AND semantics, consistent with `json_object` / `json_schema`: a level, `off`, `auto` or
+    /// budget span is usable only when every operand supports it (budget spans intersect to
+    /// their overlap, or to none), and a level coerced on either operand stays coerced and
+    /// unlisted. Precedence between kinds is `WireUnsupported` over `Unmeasured` over
+    /// `NoReasoning` over `Supported`. `NoReasoning` acts as "off only": intersected with a
+    /// `Supported` row it stays `NoReasoning` when that row accepts `off`, otherwise nothing is
+    /// usable (an empty `Supported`). Whenever an intersection leaves no level, no `auto` and no
+    /// budget, the `coerced` and `enable_thinking_with_level` detail is dropped, since nothing
+    /// is left to refuse by level; that normal form is what keeps the operation associative.
+    /// The result is commutative and associative.
     ///
     /// # Examples
     ///
     /// ```
-    /// use paladin_ports::output::model_profile::EffortSupport;
+    /// use paladin_ports::output::model_profile::{EffortLevels, EffortSupport};
+    /// use paladin_ports::output::llm_port::ReasoningEffort::{High, Low, Max};
     ///
+    /// let a = EffortSupport::Supported(EffortLevels::new([Low, High]));
+    /// let b = EffortSupport::Supported(EffortLevels::new([High, Max]));
     /// assert_eq!(
-    ///     EffortSupport::NoReasoning.intersect(&EffortSupport::NoReasoning),
-    ///     EffortSupport::NoReasoning
+    ///     a.intersect(&b),
+    ///     EffortSupport::Supported(EffortLevels::new([High]))
     /// );
     /// assert_eq!(
     ///     EffortSupport::NoReasoning.intersect(&EffortSupport::WireUnsupported),
-    ///     EffortSupport::Unmeasured
+    ///     EffortSupport::WireUnsupported
     /// );
     /// ```
     #[must_use]
     pub fn intersect(&self, other: &Self) -> Self {
-        if self == other {
-            self.clone()
+        match (self, other) {
+            (Self::WireUnsupported, _) | (_, Self::WireUnsupported) => Self::WireUnsupported,
+            (Self::Unmeasured, _) | (_, Self::Unmeasured) => Self::Unmeasured,
+            (a, b) => match (a.as_levels(), b.as_levels()) {
+                (Some(a), Some(b)) => Self::from_and(a.and(&b)),
+                // A future support kind this rule does not know: fail closed.
+                _ => Self::Unmeasured,
+            },
+        }
+    }
+
+    /// The `EffortLevels` view used by `intersect`: `NoReasoning` is "off only".
+    fn as_levels(&self) -> Option<std::borrow::Cow<'_, EffortLevels>> {
+        match self {
+            Self::NoReasoning => Some(std::borrow::Cow::Owned(
+                EffortLevels::new([]).with_off(true),
+            )),
+            Self::Supported(levels) => Some(std::borrow::Cow::Borrowed(levels)),
+            _ => None,
+        }
+    }
+
+    /// Normal form of an intersection result: nothing but possibly `off` left collapses to
+    /// `NoReasoning` (when `off`) or an empty `Supported` (when not).
+    fn from_and(result: EffortLevels) -> Self {
+        if result.levels.is_empty() && !result.auto && result.budget.is_none() {
+            if result.off {
+                Self::NoReasoning
+            } else {
+                Self::Supported(EffortLevels::new([]))
+            }
         } else {
-            Self::Unmeasured
+            Self::Supported(result)
         }
     }
 }
@@ -1461,5 +1596,401 @@ mod tests {
         ] {
             assert!(!refusal.to_string().is_empty());
         }
+    }
+
+    const THREE_FALLBACKS: [ReasoningFallback; 3] = [
+        ReasoningFallback::Refuse,
+        ReasoningFallback::NearestLower,
+        ReasoningFallback::NearestHigher,
+    ];
+
+    /// Levels {Low, High}, off accepted, auto not, no budget, Medium coerced.
+    fn low_high_with_coerced_medium() -> EffortSupport {
+        EffortSupport::Supported(
+            EffortLevels::new([ReasoningEffort::Low, ReasoningEffort::High])
+                .with_off(true)
+                .with_coerced([ReasoningEffort::Medium]),
+        )
+    }
+
+    /// D-03 / D-06 / D-07 admission table over one `Supported` row.
+    #[test]
+    fn admission_table_for_a_supported_row() {
+        use ReasoningEffort::{Auto, Budget, High, Low, Max, Medium, Minimal, Off, XHigh};
+        use ReasoningFallback::{NearestHigher, NearestLower, Refuse};
+        let support = low_high_with_coerced_medium();
+
+        // Off accepted (on the wire) under every fallback.
+        for fb in THREE_FALLBACKS {
+            let off = support.resolve(Off, fb).expect("off is accepted");
+            assert!(off.on_wire && !off.substituted());
+            assert_eq!(
+                support.resolve(Auto, fb),
+                Err(EffortRefusal::AutoUnsupported)
+            );
+            // A coerced level is refused whatever the fallback.
+            assert_eq!(
+                support.resolve(Medium, fb),
+                Err(EffortRefusal::LevelCoerced)
+            );
+            // A budget on a row without one is never converted to a level.
+            assert_eq!(
+                support.resolve(Budget(2048), fb),
+                Err(EffortRefusal::BudgetUnsupported)
+            );
+        }
+
+        // Missing level below the list.
+        assert_eq!(
+            support.resolve(Minimal, NearestLower),
+            Err(EffortRefusal::NoLevelInDirection)
+        );
+        assert_eq!(
+            support.resolve(Minimal, NearestHigher).map(|r| r.effective),
+            Ok(Low)
+        );
+        assert_eq!(
+            support.resolve(Minimal, Refuse),
+            Err(EffortRefusal::LevelUnsupported)
+        );
+        // Missing level above the list.
+        assert_eq!(
+            support.resolve(XHigh, NearestLower).map(|r| r.effective),
+            Ok(High)
+        );
+        assert_eq!(
+            support.resolve(Max, NearestHigher),
+            Err(EffortRefusal::NoLevelInDirection)
+        );
+        assert_eq!(
+            support.resolve(Max, Refuse),
+            Err(EffortRefusal::LevelUnsupported)
+        );
+    }
+
+    /// Edge REASON-02/adjacency: with {Low, High}, Medium picks by the caller's direction.
+    #[test]
+    fn substitution_follows_the_chosen_direction_and_keeps_both_values() {
+        use ReasoningEffort::{High, Low, Medium};
+        let support = levels(&[Low, High]);
+        let lower = support
+            .resolve(Medium, ReasoningFallback::NearestLower)
+            .expect("Low is below Medium");
+        assert_eq!((lower.requested, lower.effective), (Medium, Low));
+        assert!(lower.substituted() && lower.on_wire);
+        let higher = support
+            .resolve(Medium, ReasoningFallback::NearestHigher)
+            .expect("High is above Medium");
+        assert_eq!((higher.requested, higher.effective), (Medium, High));
+        assert!(higher.substituted() && higher.on_wire);
+        assert_eq!(
+            support.resolve(Medium, ReasoningFallback::Refuse),
+            Err(EffortRefusal::LevelUnsupported)
+        );
+    }
+
+    /// D-07: `Off` is never substituted by a level, nor a level by `Off`.
+    #[test]
+    fn off_is_never_substituted() {
+        let no_off = levels(&[ReasoningEffort::Low, ReasoningEffort::High]);
+        for fb in [
+            ReasoningFallback::NearestLower,
+            ReasoningFallback::NearestHigher,
+        ] {
+            assert_eq!(
+                no_off.resolve(ReasoningEffort::Off, fb),
+                Err(EffortRefusal::OffUnsupported)
+            );
+            assert_eq!(
+                no_off.resolve(ReasoningEffort::Auto, fb),
+                Err(EffortRefusal::AutoUnsupported)
+            );
+        }
+    }
+
+    /// A coerced level is never a substitution target even when it is the nearest.
+    #[test]
+    fn a_coerced_level_is_never_a_substitution_target() {
+        use ReasoningEffort::{High, Low, Max, Medium};
+        let support =
+            EffortSupport::Supported(EffortLevels::new([Low, Medium, High]).with_coerced([Medium]));
+        // Medium was removed from `levels` by with_coerced, so Low is the nearest lower to High+1.
+        let r = support
+            .resolve(Max, ReasoningFallback::NearestLower)
+            .expect("High is listed");
+        assert_eq!(r.effective, High);
+        let r = support
+            .resolve(ReasoningEffort::Minimal, ReasoningFallback::NearestHigher)
+            .expect("Low is listed");
+        assert_eq!(r.effective, Low);
+    }
+
+    /// Edge REASON-06: inclusive bounds, off-by-one refusals, never converted to a level.
+    #[test]
+    fn budget_table_is_inclusive_and_never_substituted() {
+        use ReasoningEffort::Budget;
+        let support = EffortSupport::Supported(
+            EffortLevels::new([ReasoningEffort::High]).with_budget(BudgetBounds::new(1024, 32_000)),
+        );
+        let bounds = BudgetBounds::new(1024, 32_000);
+        for fb in THREE_FALLBACKS {
+            for n in [1024_u32, 2048, 32_000] {
+                let r = support.resolve(Budget(n), fb).expect("inside the span");
+                assert_eq!(r.effective, Budget(n));
+                assert!(r.on_wire && !r.substituted());
+            }
+            for n in [0_u32, 1023, 32_001, u32::MAX] {
+                assert_eq!(
+                    support.resolve(Budget(n), fb),
+                    Err(EffortRefusal::BudgetOutOfBounds(bounds)),
+                    "Budget({n}) under {fb}"
+                );
+            }
+        }
+    }
+
+    /// Edge REASON-06/empty: an invalid span accepts no budget at all.
+    #[test]
+    fn an_invalid_budget_span_fails_closed() {
+        for bounds in [BudgetBounds::new(0, 10), BudgetBounds::new(10, 5)] {
+            assert!(!bounds.is_valid());
+            let support = EffortSupport::Supported(EffortLevels::new([]).with_budget(bounds));
+            for n in [1_u32, 5, 10, u32::MAX] {
+                assert_eq!(
+                    support.resolve(ReasoningEffort::Budget(n), ReasoningFallback::Refuse),
+                    Err(EffortRefusal::BudgetOutOfBounds(bounds))
+                );
+            }
+            assert!(support_levels(&support).validate().is_err());
+        }
+        assert!(BudgetBounds::new(1, 1).is_valid());
+    }
+
+    fn support_levels(support: &EffortSupport) -> &EffortLevels {
+        match support {
+            EffortSupport::Supported(levels) => levels,
+            other => panic!("expected Supported, got {other:?}"),
+        }
+    }
+
+    /// Edge REASON-01/empty: a budget-only model refuses every level whatever the fallback.
+    #[test]
+    fn empty_levels_validate_and_refuse_every_level() {
+        let empty = EffortLevels::new([]);
+        assert!(empty.validate().is_ok());
+        let budget_only = EffortSupport::Supported(
+            EffortLevels::new([])
+                .with_off(true)
+                .with_auto(true)
+                .with_budget(BudgetBounds::new(1, 100)),
+        );
+        for fb in THREE_FALLBACKS {
+            for level in ReasoningEffort::LEVELS {
+                let refusal = budget_only.resolve(level, fb);
+                if fb == ReasoningFallback::Refuse {
+                    assert_eq!(refusal, Err(EffortRefusal::LevelUnsupported));
+                } else {
+                    assert_eq!(refusal, Err(EffortRefusal::NoLevelInDirection));
+                }
+            }
+            assert!(budget_only.resolve(ReasoningEffort::Off, fb).is_ok());
+            assert!(budget_only.resolve(ReasoningEffort::Auto, fb).is_ok());
+            assert!(
+                budget_only
+                    .resolve(ReasoningEffort::Budget(100), fb)
+                    .is_ok()
+            );
+        }
+    }
+
+    /// Edge REASON-01/ordering: construction normalises, validation rejects bad data.
+    #[test]
+    fn effort_levels_normalise_and_validate() {
+        use ReasoningEffort::{Auto, Budget, High, Low, Off};
+        assert_eq!(
+            EffortLevels::new([High, Low, Low, Off, Auto, Budget(1)]).levels,
+            [Low, High]
+        );
+        let coerced = EffortLevels::new([Low, High]).with_coerced([Low]);
+        assert_eq!(coerced.levels, [High]);
+        assert_eq!(coerced.coerced, [Low]);
+        assert!(coerced.validate().is_ok());
+
+        for bad in [
+            r#"{"levels":["high","low"]}"#,
+            r#"{"levels":["low","low"]}"#,
+            r#"{"levels":["off"]}"#,
+            r#"{"levels":["auto"]}"#,
+            r#"{"levels":[{"budget":5}]}"#,
+            r#"{"levels":["low"],"budget":{"min":0,"max":10}}"#,
+            r#"{"levels":["low"],"budget":{"min":9,"max":3}}"#,
+            r#"{"levels":["low"],"coerced":["low"]}"#,
+            r#"{"levels":[],"coerced":["high","low"]}"#,
+        ] {
+            let parsed: EffortLevels = serde_json::from_str(bad).expect("shape parses");
+            assert!(parsed.validate().is_err(), "{bad} validated");
+        }
+        let good: EffortLevels = serde_json::from_str(r#"{"levels":["low","high"]}"#).unwrap();
+        assert!(good.validate().is_ok());
+        assert!(serde_json::from_str::<EffortLevels>(r#"{"levels":[],"surprise":1}"#).is_err());
+    }
+
+    /// Edge REASON-01/precision: a budget survives resolve with no rounding.
+    #[test]
+    fn budget_precision_survives_resolve() {
+        for n in [1_u32, 1024, 32_768, u32::MAX] {
+            let support = EffortSupport::Supported(
+                EffortLevels::new([]).with_budget(BudgetBounds::new(1, u32::MAX)),
+            );
+            let r = support
+                .resolve(ReasoningEffort::Budget(n), ReasoningFallback::Refuse)
+                .expect("inside the span");
+            assert_eq!(r.effective, ReasoningEffort::Budget(n));
+        }
+    }
+
+    fn intersect_operands() -> Vec<EffortSupport> {
+        use ReasoningEffort::{High, Low, Max};
+        vec![
+            EffortSupport::Unmeasured,
+            EffortSupport::WireUnsupported,
+            EffortSupport::NoReasoning,
+            EffortSupport::Supported(
+                EffortLevels::new([Low, High])
+                    .with_off(true)
+                    .with_budget(BudgetBounds::new(1024, 32_000))
+                    .with_coerced([ReasoningEffort::Medium]),
+            ),
+            EffortSupport::Supported(
+                EffortLevels::new([High, Max])
+                    .with_auto(true)
+                    .with_budget(BudgetBounds::new(2048, 64_000))
+                    .with_enable_thinking_with_level(true),
+            ),
+            EffortSupport::Supported(EffortLevels::new([])),
+            EffortSupport::Supported(EffortLevels::new([]).with_off(true)),
+            EffortSupport::Supported(EffortLevels::new([]).with_budget(BudgetBounds::new(1, 10))),
+            EffortSupport::Supported(
+                EffortLevels::new([Low, High, Max])
+                    .with_coerced([High])
+                    .with_off(true),
+            ),
+            EffortSupport::Supported(EffortLevels::new([Low]).with_budget(BudgetBounds::new(0, 5))),
+        ]
+    }
+
+    /// D-09: the effort intersection is commutative and associative.
+    #[test]
+    fn effort_intersect_is_commutative_and_associative() {
+        let table = intersect_operands();
+        for a in &table {
+            for b in &table {
+                assert_eq!(
+                    a.intersect(b),
+                    b.intersect(a),
+                    "not commutative for {a:?}, {b:?}"
+                );
+                for c in &table {
+                    assert_eq!(
+                        a.intersect(b).intersect(c),
+                        a.intersect(&b.intersect(c)),
+                        "not associative for {a:?}, {b:?}, {c:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// D-09: AND semantics for levels, off, auto, budget; union for coerced.
+    #[test]
+    fn effort_intersect_follows_the_documented_cases() {
+        use ReasoningEffort::{High, Low, Max};
+        let ops = intersect_operands();
+        let (a, b) = (&ops[3], &ops[4]);
+        let both = a.intersect(b);
+        let l = support_levels(&both);
+        assert_eq!(l.levels, [High]);
+        assert!(!l.off && !l.auto);
+        assert_eq!(l.budget, Some(BudgetBounds::new(2048, 32_000)));
+        assert_eq!(l.coerced, [ReasoningEffort::Medium]);
+        assert!(l.enable_thinking_with_level);
+
+        // {Low, High} and {High, Max} (no budgets) list exactly High.
+        let two = levels(&[Low, High]).intersect(&levels(&[High, Max]));
+        assert_eq!(support_levels(&two).levels, [High]);
+
+        // Disjoint budgets give none; a coerced level on either side stays coerced.
+        let x =
+            EffortSupport::Supported(EffortLevels::new([]).with_budget(BudgetBounds::new(1, 10)));
+        let y =
+            EffortSupport::Supported(EffortLevels::new([]).with_budget(BudgetBounds::new(20, 30)));
+        assert_eq!(support_levels(&x.intersect(&y)).budget, None);
+        let listed = levels(&[Low, High]);
+        let coerced = EffortSupport::Supported(EffortLevels::new([Low, High]).with_coerced([High]));
+        let narrowed = listed.intersect(&coerced);
+        assert_eq!(support_levels(&narrowed).levels, [Low]);
+        assert_eq!(support_levels(&narrowed).coerced, [High]);
+        assert_eq!(
+            narrowed.resolve(High, ReasoningFallback::NearestLower),
+            Err(EffortRefusal::LevelCoerced)
+        );
+
+        // Absorbing elements: WireUnsupported over Unmeasured over NoReasoning over Supported.
+        for other in &ops {
+            assert_eq!(
+                EffortSupport::WireUnsupported.intersect(other),
+                EffortSupport::WireUnsupported
+            );
+            if *other != EffortSupport::WireUnsupported {
+                assert_eq!(
+                    EffortSupport::Unmeasured.intersect(other),
+                    EffortSupport::Unmeasured
+                );
+            }
+        }
+        assert_eq!(
+            EffortSupport::NoReasoning.intersect(&EffortSupport::NoReasoning),
+            EffortSupport::NoReasoning
+        );
+        // NoReasoning with a Supported row: NoReasoning when it accepts Off, else nothing usable.
+        let accepts_off = EffortSupport::Supported(EffortLevels::new([Low]).with_off(true));
+        assert_eq!(
+            EffortSupport::NoReasoning.intersect(&accepts_off),
+            EffortSupport::NoReasoning
+        );
+        let no_off = levels(&[Low]);
+        let nothing = EffortSupport::NoReasoning.intersect(&no_off);
+        assert_eq!(nothing, EffortSupport::Supported(EffortLevels::new([])));
+        for effort in [ReasoningEffort::Off, ReasoningEffort::Auto, Low] {
+            assert!(nothing.resolve(effort, ReasoningFallback::Refuse).is_err());
+        }
+    }
+
+    /// The whole `ModelProfile` intersection stays commutative with effort data in play.
+    #[test]
+    fn model_profile_intersect_covers_effort() {
+        let a = ModelProfile::new()
+            .with_effort(low_high_with_coerced_medium())
+            .with_effort_verified_on("2026-10-21");
+        let b =
+            ModelProfile::new().with_effort(levels(&[ReasoningEffort::High, ReasoningEffort::Max]));
+        let both = a.intersect(&b);
+        assert_eq!(support_levels(&both.effort).levels, [ReasoningEffort::High]);
+        assert_eq!(both.effort_verified_on, None);
+        assert_eq!(both, b.intersect(&a));
+    }
+
+    /// A3-51-01 neighbour: the support enum serialises with snake_case tags.
+    #[test]
+    fn effort_support_serde_round_trips() {
+        for support in intersect_operands() {
+            let json = serde_json::to_string(&support).expect("serialise");
+            let back: EffortSupport = serde_json::from_str(&json).expect("deserialise");
+            assert_eq!(back, support);
+        }
+        assert_eq!(
+            serde_json::to_string(&EffortSupport::Unmeasured).unwrap(),
+            "\"unmeasured\""
+        );
     }
 }

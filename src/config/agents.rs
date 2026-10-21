@@ -10,6 +10,7 @@
 use std::collections::{HashMap, HashSet};
 
 use paladin_core::platform::container::principal::TenantId;
+use paladin_core::platform::container::reasoning::{ReasoningEffort, ReasoningFallback};
 use paladin_core::platform::container::user::UserRole;
 use serde::{Deserialize, Serialize};
 
@@ -316,6 +317,7 @@ impl Default for WebHttpConfig {
 ///     model: "gpt-4"
 ///     system_prompt: "You research topics thoroughly."
 ///     temperature: 0.7
+///     reasoning_effort: low   # optional; see `reasoning_effort` below
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentDefinition {
@@ -349,6 +351,27 @@ pub struct AgentDefinition {
     /// Per-agent execution timeout (seconds). When absent, the server default applies.
     #[serde(default)]
     pub timeout_seconds: Option<u64>,
+
+    /// How hard this agent's model is asked to think (YAML key `reasoning_effort`, Phase 51,
+    /// D-00e): a level (`minimal`, `low`, `medium`, `high`, `xhigh`, `max`), `off`, `auto`, or a
+    /// token budget written `{budget: 2048}`. Any other spelling fails config load, naming the
+    /// field.
+    ///
+    /// Sent on every model call this agent makes that does not carry an effort of its own, and
+    /// it beats the provider-level default `llm.<provider>.reasoning_effort` (precedence: request,
+    /// then agent, then provider). When absent the agent expresses nothing and builds exactly as
+    /// before. When set, the host checks it against the agent's model at build time and refuses
+    /// the agent with an error ending in ``(set by `agents[<id>].reasoning_effort`)`` if the
+    /// model cannot honour it (see `reasoning_fallback` for substituting the nearest level).
+    #[serde(default)]
+    pub reasoning_effort: Option<ReasoningEffort>,
+
+    /// What to do when the model does not offer the exact `reasoning_effort` (YAML key
+    /// `reasoning_fallback`, Phase 51, D-00e): `refuse` (the default when absent),
+    /// `nearest_lower` or `nearest_higher`. Applies only to the six levels; it never
+    /// converts a budget, `off` or `auto`.
+    #[serde(default)]
+    pub reasoning_fallback: Option<ReasoningFallback>,
 
     /// Roles permitted to invoke this agent; empty/absent ⇒ any authenticated caller.
     #[serde(default)]
@@ -412,6 +435,106 @@ mod tests {
         });
         let def: AgentDefinition = serde_json::from_value(json).expect("parses");
         assert_eq!(def.allowed_roles, vec![UserRole::Admin, UserRole::User]);
+    }
+
+    // --- Phase 51 (plan 51-08, D-00e): agents[].reasoning_effort / reasoning_fallback ---
+
+    #[test]
+    fn definition_parses_reasoning_effort_and_fallback() {
+        let json = serde_json::json!({
+            "id": "r", "model": "m", "system_prompt": "s",
+            "reasoning_effort": "high",
+            "reasoning_fallback": "nearest_lower"
+        });
+        let def: AgentDefinition = serde_json::from_value(json).expect("parses");
+        assert_eq!(def.reasoning_effort, Some(ReasoningEffort::High));
+        assert_eq!(
+            def.reasoning_fallback,
+            Some(ReasoningFallback::NearestLower)
+        );
+    }
+
+    #[test]
+    fn definition_parses_every_effort_spelling() {
+        let cases = [
+            (serde_json::json!("off"), ReasoningEffort::Off),
+            (serde_json::json!("auto"), ReasoningEffort::Auto),
+            (serde_json::json!("minimal"), ReasoningEffort::Minimal),
+            (serde_json::json!("xhigh"), ReasoningEffort::XHigh),
+            (
+                serde_json::json!({ "budget": 2048 }),
+                ReasoningEffort::Budget(2048),
+            ),
+        ];
+        for (value, expected) in cases {
+            let json = serde_json::json!({
+                "id": "r", "model": "m", "system_prompt": "s", "reasoning_effort": value
+            });
+            let def: AgentDefinition = serde_json::from_value(json).expect("parses");
+            assert_eq!(def.reasoning_effort, Some(expected));
+        }
+    }
+
+    #[test]
+    fn definition_without_the_reasoning_keys_has_both_unset() {
+        let json = serde_json::json!({ "id": "r", "model": "m", "system_prompt": "s" });
+        let def: AgentDefinition = serde_json::from_value(json).expect("parses");
+        assert_eq!(def.reasoning_effort, None);
+        assert_eq!(def.reasoning_fallback, None);
+    }
+
+    /// T-51-26: a mistyped spelling must fail the load and name the field, never read as unset.
+    #[test]
+    fn an_unknown_effort_spelling_fails_config_load_naming_the_field() {
+        #[derive(Debug, Deserialize)]
+        struct Doc {
+            #[allow(dead_code)]
+            agents: Vec<AgentDefinition>,
+        }
+        for (key, bad) in [
+            ("reasoning_effort", "x_high"),
+            ("reasoning_effort", "extreme"),
+            ("reasoning_fallback", "nearest"),
+        ] {
+            let yaml = format!(
+                "agents:\n  - id: r\n    model: m\n    system_prompt: s\n    {key}: {bad}\n"
+            );
+            let outcome = config::Config::builder()
+                .add_source(config::File::from_str(&yaml, config::FileFormat::Yaml))
+                .build()
+                .and_then(config::Config::try_deserialize::<Doc>);
+            let error = outcome.expect_err("an unknown spelling must not load");
+            let text = error.to_string();
+            assert!(text.contains(key), "'{key}' not named in: {text}");
+            assert!(text.contains(bad), "'{bad}' not echoed in: {text}");
+        }
+    }
+
+    #[test]
+    fn effort_and_fallback_round_trip_through_yaml_config_load() {
+        #[derive(Debug, Deserialize)]
+        struct Doc {
+            agents: Vec<AgentDefinition>,
+        }
+        let yaml = "agents:\n  - id: a\n    model: m\n    system_prompt: s\n    \
+                    reasoning_effort: xhigh\n    reasoning_fallback: nearest_higher\n  \
+                    - id: b\n    model: m\n    system_prompt: s\n    \
+                    reasoning_effort:\n      budget: 2048\n";
+        let doc: Doc = config::Config::builder()
+            .add_source(config::File::from_str(yaml, config::FileFormat::Yaml))
+            .build()
+            .and_then(config::Config::try_deserialize)
+            .expect("loads");
+        assert_eq!(doc.agents[0].reasoning_effort, Some(ReasoningEffort::XHigh));
+        assert_eq!(
+            doc.agents[0].reasoning_fallback,
+            Some(ReasoningFallback::NearestHigher)
+        );
+        assert_eq!(
+            doc.agents[1].reasoning_effort,
+            Some(ReasoningEffort::Budget(2048))
+        );
+        assert_eq!(doc.agents[1].reasoning_fallback, None);
     }
 
     #[test]

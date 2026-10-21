@@ -109,6 +109,14 @@ include = [
 # `constructible_struct_adds_field` for them -- the only lint it fired for this plan -- so no
 # new line was needed. `ModelFallbackConfig` has its own row and entry; `AgentRuntimeDeps`'s
 # existing row and entry were extended, not duplicated.
+#
+# REASON-01 (MIGRATION.md §9.2, Phase 51 plan 51-08, D-00b, D-00e): `AgentDefinition` gained the
+# `#[serde(default)]` fields `reasoning_effort` and `reasoning_fallback` (the YAML keys
+# `agents[].reasoning_effort` and `agents[].reasoning_fallback`). It stays constructible and
+# NOT `#[non_exhaustive]`, so only full struct literals break; every in-tree one named both fields
+# in the same commit. The expected lint is `constructible_struct_adds_field`, already allowed
+# below, so no new line was needed; it is UNMEASURED here (cargo-semver-checks is absent in this
+# container) and plan 51-14 measures it. The row and entry are registered in the same commit.
 [package.metadata.cargo-semver-checks.lints]
 constructible_struct_adds_field = "allow"
 

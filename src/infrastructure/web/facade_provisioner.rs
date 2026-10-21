@@ -421,6 +421,10 @@ fn spec_to_definition(spec: &AgentSpec) -> AgentDefinition {
         // The per-agent timeout is applied by the web layer (registry entry), not the
         // build path, so it is not mapped onto the definition here.
         timeout_seconds: None,
+        // `AgentSpec` carries no reasoning effort (Phase 51, D-00e is the YAML agent level), so a
+        // provisioned agent expresses none.
+        reasoning_effort: None,
+        reasoning_fallback: None,
         // Authorization is enforced by the web layer from `AgentSpec.allowed_roles`; the
         // build path is role-agnostic.
         allowed_roles: Vec::new(),

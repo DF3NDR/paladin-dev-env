@@ -676,6 +676,60 @@ fn armament_literal() -> Armament {
     }
 }
 
+// ---- Phase 51 (REASON-01, REASON-02; D-00e, D-05) ----
+// The consumer (web3sec) builds adapters directly, so the request-level reasoning surface is what
+// it can reach without the agent or config layers. Every touched type is `#[non_exhaustive]`
+// and the change is additive; this pin keeps it that way.
+
+/// D-00e: the effort and fallback are set through chainable builders and read as public
+/// `Option` fields; the facade and the ports crate name ONE `ReasoningEffort` and
+/// `ReasoningFallback`; the new refusal is a `#[non_exhaustive]` struct variant matched by field
+/// followed by `..`; a profile states its effort support through `with_effort`. NEVER CALLED.
+fn phase_51_request_surface(
+    request: LlmRequest,
+    error: &LlmError,
+) -> (
+    LlmRequest,
+    Option<(String, String, String, String, String)>,
+    ModelProfile,
+) {
+    use paladin::core::platform::container::reasoning::{ReasoningEffort, ReasoningFallback};
+    use paladin_ports::output::model_profile::EffortSupport;
+
+    let _same_effort: fn(paladin_ports::output::llm_port::ReasoningEffort) -> ReasoningEffort =
+        |a| a;
+    let _same_fallback: fn(
+        paladin_ports::output::llm_port::ReasoningFallback,
+    ) -> ReasoningFallback = |a| a;
+
+    let built = request
+        .with_reasoning(ReasoningEffort::Budget(1))
+        .with_reasoning_fallback(ReasoningFallback::NearestLower);
+    let _read: (Option<ReasoningEffort>, Option<ReasoningFallback>) =
+        (built.reasoning, built.reasoning_fallback);
+
+    let refused = match error {
+        LlmError::UnsupportedParameter {
+            param,
+            value,
+            provider,
+            model,
+            reason,
+            ..
+        } => Some((
+            param.clone(),
+            value.clone(),
+            provider.clone(),
+            model.clone(),
+            reason.clone(),
+        )),
+        _ => None,
+    };
+
+    let profile = ModelProfile::new().with_effort(EffortSupport::Unmeasured);
+    (built, refused, profile)
+}
+
 #[test]
 fn the_consumer_surface_still_resolves() {
     // Reaching this point means every `use`, fn-pointer, literal and trait-impl pin above

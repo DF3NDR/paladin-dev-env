@@ -15,6 +15,13 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- Phase 51 (REASON-01; plan 51-01): `platform::container::reasoning` -- `ReasoningEffort`
+  (`Off`, `Auto`, `Minimal`, `Low`, `Medium`, `High`, `XHigh`, `Max`, `Budget(u32)`; `level_rank`,
+  `is_level`, `LEVELS`, `Display`, serde spellings `off auto minimal low medium high xhigh max`
+  and `{"budget":n}`), `ReasoningFallback` (`Refuse` default, `NearestLower`, `NearestHigher`) and
+  the response-metadata keys `REASONING_REQUESTED_METADATA_KEY` /
+  `REASONING_EFFECTIVE_METADATA_KEY`. Additive: both enums are `#[non_exhaustive]`.
+
 - Phase 50 (G-50-5a remainder (b), PARITY-05; plan 50-29): `IncurredSpend` in
   `platform::container::cost` -- the spend an operation has incurred so far, every billed call
   counted, whatever its eventual outcome: `new`, `record(usage, cost)` (usage summed saturating,

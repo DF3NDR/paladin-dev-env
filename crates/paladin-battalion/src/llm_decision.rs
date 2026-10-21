@@ -309,6 +309,7 @@ pub(crate) fn llm_error_class(error: &LlmError) -> &'static str {
         LlmError::TokenLimitExceeded => "token limit exceeded",
         LlmError::EmptyCompletion { .. } => "empty completion",
         LlmError::Refusal { .. } => "refusal",
+        LlmError::UnsupportedParameter { .. } => "unsupported parameter",
         LlmError::ProcessingError(_) => "processing error",
         LlmError::Timeout(_) => "timeout",
         LlmError::ProviderError { .. } => "provider error",
@@ -331,6 +332,14 @@ mod tests {
     fn llm_error_class_labels_a_refusal() {
         let err = LlmError::refusal("openai", "m", "sensitive vendor text");
         assert_eq!(llm_error_class(&err), "refusal");
+    }
+
+    /// D-00f: an unsupported-parameter refusal has its own fixed class label and the label never
+    /// carries the reason text.
+    #[test]
+    fn llm_error_class_labels_an_unsupported_parameter() {
+        let err = LlmError::unsupported_parameter("reasoning_effort", "high", "p", "m", "why");
+        assert_eq!(llm_error_class(&err), "unsupported parameter");
     }
 
     fn make_evaluator(llm: Arc<dyn LlmPort>) -> LlmDecisionEvaluator {

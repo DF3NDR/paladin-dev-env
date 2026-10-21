@@ -100,10 +100,10 @@ pub fn to_paladin_error(err: &LlmError) -> PaladinError {
 ///
 /// Only `ProviderError` carries a status, so every other variant converts
 /// with `status: None` -- never a sentinel such as `0`, and never a value
-/// parsed out of the rendered message (T-25-24). `UsageLimitExceeded` and
-/// `Refusal` name their provider by value without a status. A fallback chain reports whatever
-/// its last attempt carried, matching how its `transience()` delegates to
-/// `last` (FT-FR-16).
+/// parsed out of the rendered message (T-25-24). `UsageLimitExceeded`,
+/// `Refusal` and `UnsupportedParameter` name their provider by value without a status. A
+/// fallback chain reports whatever its last attempt carried, matching how its `transience()`
+/// delegates to `last` (FT-FR-16).
 ///
 /// `LlmError` is `#[non_exhaustive]` from this crate's point of view (D-04),
 /// so the wildcard arm is compiler-required; a future variant that gains a
@@ -115,6 +115,7 @@ fn typed_origin(err: &LlmError) -> (Option<u16>, Option<String>) {
         } => (Some(*status), Some(provider.clone())),
         LlmError::UsageLimitExceeded { provider, .. } => (None, Some(provider.clone())),
         LlmError::Refusal { provider, .. } => (None, Some(provider.clone())),
+        LlmError::UnsupportedParameter { provider, .. } => (None, Some(provider.clone())),
         LlmError::AllProvidersFailed { last, .. } => typed_origin(last),
         _ => (None, None),
     }
@@ -408,6 +409,25 @@ mod tests {
         assert_eq!(transience, Transience::Permanent);
         assert_eq!(status, None);
         assert_eq!(provider.as_deref(), Some("anthropic"));
+    }
+
+    /// D-00f: an `UnsupportedParameter` names its provider by value, carries no HTTP status and
+    /// converts as `Permanent`.
+    #[test]
+    fn unsupported_parameter_carries_its_provider() {
+        let err = LlmError::unsupported_parameter(
+            "reasoning_effort",
+            "high",
+            "deepseek",
+            "deepseek-v4-pro",
+            "no measured effort data",
+        );
+
+        let (transience, status, provider, _) = expect_failure(to_paladin_error(&err));
+
+        assert_eq!(transience, Transience::Permanent);
+        assert_eq!(status, None);
+        assert_eq!(provider.as_deref(), Some("deepseek"));
     }
 
     /// Test 6 (FT-FR-16): a fallback chain's transience is exactly its last

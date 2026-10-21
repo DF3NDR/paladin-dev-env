@@ -104,6 +104,9 @@ impl TokenUsage {
 
     /// Set the reasoning sub-count (of the already-reported completion tokens).
     ///
+    /// This records how many reasoning tokens a call *spent*. It does not ask for any effort: to
+    /// set the effort a request asks for, use `LlmRequest::with_reasoning` in `paladin-ports`.
+    ///
     /// ```
     /// use paladin_core::platform::container::token_usage::TokenUsage;
     ///

@@ -36,6 +36,7 @@ pub mod container {
     pub use paladin_core::platform::container::prompt;
     pub use paladin_core::platform::container::queue_config;
     pub use paladin_core::platform::container::queue_item;
+    pub use paladin_core::platform::container::reasoning;
     pub use paladin_core::platform::container::registry_error;
     pub use paladin_core::platform::container::sanctum;
     pub use paladin_core::platform::container::schedule;

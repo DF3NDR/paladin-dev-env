@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Reasoning effort: the provider-neutral vocabulary, the one admission rule and the first
+  typed refusal (REASON-01, REASON-02, REASON-04, REASON-06; Phase 51 plan 01).**
+  `ReasoningEffort` (`Off`, `Auto`, `Minimal`, `Low`, `Medium`, `High`, `XHigh`, `Max`,
+  `Budget(u32)`) and `ReasoningFallback` (`Refuse` by default, `NearestLower`, `NearestHigher`)
+  in `paladin::core::platform::container::reasoning`, re-exported on
+  `paladin_ports::output::llm_port`. `LlmRequest` gains `reasoning` and `reasoning_fallback`
+  (both `None` from `LlmRequest::new`, set by `with_reasoning` / `with_reasoning_fallback`, absent
+  from a serialised unset request). `ModelProfile` gains `effort: EffortSupport` (fail closed:
+  `Unmeasured`) and `effort_verified_on`, with `EffortSupport::resolve` as the single admission
+  rule and `EffortSupport::intersect` for fallback chains. `LlmError::UnsupportedParameter`
+  (`param`, `value`, `provider`, `model`, `reason`; built by `LlmError::unsupported_parameter`;
+  `Permanent`) is the refusal an effort the model cannot honour produces before any HTTP call.
+  Additive: every touched type is `#[non_exhaustive]`. No adapter sends an effort yet; the nine
+  raw request bodies an unset effort produces are pinned byte for byte under
+  `crates/paladin-llm/tests/golden/reasoning_unset/` by the conformance case
+  `unset_reasoning_leaves_the_wire_body_unchanged`.
+
 - **`with_base_url` and `with_timeout_seconds` on all nine adapter configs (SURFACE-02, D-05;
   Phase 50.1 plan 02).** `OpenAIConfig`, `AnthropicConfig`, `DeepSeekConfig`, `GeminiConfig`,
   `KimiConfig`, `QwenConfig`, `GrokConfig`, `OllamaConfig` and `OpenAiCompatibleConfig` gain the

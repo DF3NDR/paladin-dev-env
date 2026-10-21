@@ -23,10 +23,22 @@
 //!
 //! # Future proofing
 //!
-//! [`ModelProfile`] and [`SamplingParam`] are `#[non_exhaustive]`, so a later phase can add effort
-//! levels or budget bounds without a breaking change. Construct a profile only through
+//! [`ModelProfile`] and [`SamplingParam`] are `#[non_exhaustive]`, so a later phase can add
+//! further capabilities without a breaking change. Construct a profile only through
 //! [`ModelProfile::new`] plus the `with_*` setters.
+//!
+//! # Reasoning effort (Phase 51)
+//!
+//! [`EffortSupport`] states which reasoning efforts a model takes, and
+//! [`EffortSupport::resolve`] is the **one** admission rule for a requested
+//! [`ReasoningEffort`]: the adapters, the builder, the fallback pre-flight and the docs drift test
+//! all call it, so they cannot drift apart (the [`ParamSupport::admits`] precedent). It is fail
+//! closed: [`ModelProfile::new`] states [`EffortSupport::Unmeasured`], which refuses every effort.
+//! A level is substituted only when the caller chose a substituting [`ReasoningFallback`].
 
+use std::fmt;
+
+use paladin_core::platform::container::reasoning::{ReasoningEffort, ReasoningFallback};
 use serde::{Deserialize, Serialize};
 
 /// What a model accepts for one numeric sampling parameter (temperature, `top_p`, a penalty).
@@ -258,6 +270,518 @@ impl SamplingParam {
     }
 }
 
+/// An inclusive span of reasoning-token budgets a model accepts (REASON-06).
+///
+/// Built with the infallible [`BudgetBounds::new`] so seed tables can state a span without a
+/// panicking call; [`is_valid`](Self::is_valid) reports a span that states nothing usable
+/// (`min == 0` or `min > max`). [`EffortSupport::resolve`] accepts no budget at all against an
+/// invalid span (fail closed), and [`EffortLevels::validate`] reports it.
+///
+/// Marked `#[non_exhaustive]`: build it with [`BudgetBounds::new`].
+///
+/// # Examples
+///
+/// ```
+/// use paladin_ports::output::model_profile::BudgetBounds;
+///
+/// let bounds = BudgetBounds::new(1024, 32_000);
+/// assert!(bounds.is_valid());
+/// assert!(!BudgetBounds::new(0, 10).is_valid());
+/// assert!(!BudgetBounds::new(10, 5).is_valid());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct BudgetBounds {
+    /// The smallest accepted budget in reasoning tokens (inclusive).
+    pub min: u32,
+    /// The largest accepted budget in reasoning tokens (inclusive).
+    pub max: u32,
+}
+
+impl BudgetBounds {
+    /// State a span of accepted budgets, both ends inclusive. Never fails; check
+    /// [`is_valid`](Self::is_valid) on data that did not come from a trusted table.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_ports::output::model_profile::BudgetBounds;
+    ///
+    /// let bounds = BudgetBounds::new(1, u32::MAX);
+    /// assert_eq!((bounds.min, bounds.max), (1, u32::MAX));
+    /// ```
+    #[must_use]
+    pub const fn new(min: u32, max: u32) -> Self {
+        Self { min, max }
+    }
+
+    /// Whether the span states something usable: `min >= 1` and `min <= max`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_ports::output::model_profile::BudgetBounds;
+    ///
+    /// assert!(BudgetBounds::new(5, 5).is_valid());
+    /// assert!(!BudgetBounds::new(0, 5).is_valid());
+    /// ```
+    #[must_use]
+    pub const fn is_valid(&self) -> bool {
+        self.min != 0 && self.min <= self.max
+    }
+}
+
+/// The reasoning efforts one model takes when it is `Supported`: its levels, whether `off` and
+/// `auto` are accepted, and an optional budget span (REASON-02, REASON-06).
+///
+/// The `levels` are always the six ranked levels, strictly ascending; build them with
+/// [`EffortLevels::new`], which normalises its input, and check a deserialised value with
+/// [`EffortLevels::validate`]. An empty `levels` list is valid: it is a budget-only model such as
+/// Qwen, which refuses every level whatever the fallback.
+///
+/// Marked `#[non_exhaustive]`: build it with [`EffortLevels::new`] plus the `with_*` setters.
+///
+/// # Examples
+///
+/// ```
+/// use paladin_ports::output::model_profile::{BudgetBounds, EffortLevels};
+/// use paladin_ports::output::llm_port::ReasoningEffort;
+///
+/// let levels = EffortLevels::new([ReasoningEffort::High, ReasoningEffort::Low])
+///     .with_off(true)
+///     .with_budget(BudgetBounds::new(1024, 32_000));
+/// assert_eq!(levels.levels, [ReasoningEffort::Low, ReasoningEffort::High]);
+/// assert!(levels.validate().is_ok());
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct EffortLevels {
+    /// The levels the model lists, strictly ascending by rank, with no `Off`, `Auto` or
+    /// `Budget`. May be empty.
+    pub levels: Vec<ReasoningEffort>,
+    /// Whether reasoning can be switched off ([`ReasoningEffort::Off`] is accepted).
+    #[serde(default)]
+    pub off: bool,
+    /// Whether the vendor's own default depth can be requested ([`ReasoningEffort::Auto`]).
+    #[serde(default)]
+    pub auto: bool,
+    /// The reasoning-token budgets accepted, when the model takes a budget at all.
+    #[serde(default)]
+    pub budget: Option<BudgetBounds>,
+    /// Levels the vendor accepts but silently runs as another. They are refused whatever the
+    /// fallback and are never a substitution target (D-00f, D-07).
+    #[serde(default)]
+    pub coerced: Vec<ReasoningEffort>,
+    /// A level is sent together with the vendor's explicit thinking-enable flag. Admission
+    /// never reads it; it only shapes the wire form.
+    #[serde(default)]
+    pub enable_thinking_with_level: bool,
+}
+
+/// Keep only the six ranked levels, sorted by rank and de-duplicated.
+fn normalise_levels(levels: impl IntoIterator<Item = ReasoningEffort>) -> Vec<ReasoningEffort> {
+    let mut kept: Vec<ReasoningEffort> = levels.into_iter().filter(|e| e.is_level()).collect();
+    kept.sort_by_key(|e| e.level_rank());
+    kept.dedup();
+    kept
+}
+
+/// Check that a deserialised level list holds only levels, strictly ascending.
+fn check_levels(name: &str, list: &[ReasoningEffort]) -> Result<(), String> {
+    let mut previous: Option<u8> = None;
+    for effort in list {
+        let Some(rank) = effort.level_rank() else {
+            return Err(format!("{name} holds '{effort}', which is not a level"));
+        };
+        if let Some(before) = previous {
+            if rank == before {
+                return Err(format!("{name} repeats the level '{effort}'"));
+            }
+            if rank < before {
+                return Err(format!("{name} is not sorted ascending at '{effort}'"));
+            }
+        }
+        previous = Some(rank);
+    }
+    Ok(())
+}
+
+impl EffortLevels {
+    /// List the levels a model takes. Infallible: anything that is not one of the six levels
+    /// (`Off`, `Auto`, a `Budget`) is dropped, and the rest is sorted by rank and de-duplicated,
+    /// so a seed table needs no panicking call. `off`, `auto`, `budget` and `coerced` start
+    /// empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_ports::output::model_profile::EffortLevels;
+    /// use paladin_ports::output::llm_port::ReasoningEffort::{High, Low, Off};
+    ///
+    /// assert_eq!(EffortLevels::new([High, Low, Low, Off]).levels, [Low, High]);
+    /// assert!(EffortLevels::new([]).validate().is_ok());
+    /// ```
+    #[must_use]
+    pub fn new(levels: impl IntoIterator<Item = ReasoningEffort>) -> Self {
+        Self {
+            levels: normalise_levels(levels),
+            off: false,
+            auto: false,
+            budget: None,
+            coerced: Vec::new(),
+            enable_thinking_with_level: false,
+        }
+    }
+
+    /// Set whether reasoning can be switched off.
+    #[must_use]
+    pub fn with_off(mut self, off: bool) -> Self {
+        self.off = off;
+        self
+    }
+
+    /// Set whether the vendor's own default depth can be requested.
+    #[must_use]
+    pub fn with_auto(mut self, auto: bool) -> Self {
+        self.auto = auto;
+        self
+    }
+
+    /// Set the budget span the model accepts.
+    #[must_use]
+    pub fn with_budget(mut self, bounds: BudgetBounds) -> Self {
+        self.budget = Some(bounds);
+        self
+    }
+
+    /// Set the levels the vendor accepts but silently runs as another. They are normalised like
+    /// [`EffortLevels::new`] and removed from `levels` (fail closed: a coerced level is never
+    /// both listed and refused).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_ports::output::model_profile::EffortLevels;
+    /// use paladin_ports::output::llm_port::ReasoningEffort::{High, Low};
+    ///
+    /// let levels = EffortLevels::new([Low, High]).with_coerced([Low]);
+    /// assert_eq!(levels.levels, [High]);
+    /// assert_eq!(levels.coerced, [Low]);
+    /// ```
+    #[must_use]
+    pub fn with_coerced(mut self, coerced: impl IntoIterator<Item = ReasoningEffort>) -> Self {
+        let coerced = normalise_levels(coerced);
+        self.levels.retain(|level| !coerced.contains(level));
+        self.coerced = coerced;
+        self
+    }
+
+    /// Set whether a level is sent together with the vendor's explicit thinking-enable flag.
+    #[must_use]
+    pub fn with_enable_thinking_with_level(mut self, together: bool) -> Self {
+        self.enable_thinking_with_level = together;
+        self
+    }
+
+    /// Check data that did not come from [`EffortLevels::new`] (for example a deserialised
+    /// override): `levels` and `coerced` hold only levels, strictly ascending and without
+    /// repeats; the two lists are disjoint; a budget span is valid.
+    ///
+    /// # Errors
+    ///
+    /// Returns a plain-English description of the first problem found.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_ports::output::model_profile::EffortLevels;
+    ///
+    /// let bad: EffortLevels = serde_json::from_str(r#"{"levels":["high","low"]}"#)?;
+    /// assert!(bad.validate().is_err());
+    /// # Ok::<(), serde_json::Error>(())
+    /// ```
+    pub fn validate(&self) -> Result<(), String> {
+        check_levels("levels", &self.levels)?;
+        check_levels("coerced", &self.coerced)?;
+        if let Some(level) = self.levels.iter().find(|l| self.coerced.contains(l)) {
+            return Err(format!("the level '{level}' is both listed and coerced"));
+        }
+        if let Some(bounds) = self.budget.filter(|b| !b.is_valid()) {
+            return Err(format!(
+                "the budget span {}..={} is invalid (min must be at least 1 and at most max)",
+                bounds.min, bounds.max
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Which reasoning efforts one model takes (REASON-02, D-03).
+///
+/// Fail closed: the [`Default`] is [`Unmeasured`](Self::Unmeasured), which refuses every effort,
+/// so a model nobody has measured never receives one by guess.
+///
+/// - [`Unmeasured`](Self::Unmeasured) -- no measured data: refuses everything.
+/// - [`WireUnsupported`](Self::WireUnsupported) -- the adapter has no wire form for an effort on
+///   this model: refuses everything, `Off` included.
+/// - [`NoReasoning`](Self::NoReasoning) -- the model has no reasoning to adjust: accepts only
+///   `Off`, as an exact no-op that sends nothing.
+/// - [`Supported`](Self::Supported) -- the model takes the efforts its [`EffortLevels`] list.
+///
+/// Marked `#[non_exhaustive]`: match it with a wildcard arm.
+///
+/// # Examples
+///
+/// ```
+/// use paladin_ports::output::model_profile::{EffortLevels, EffortSupport};
+/// use paladin_ports::output::llm_port::{ReasoningEffort, ReasoningFallback};
+///
+/// let support = EffortSupport::Supported(EffortLevels::new([ReasoningEffort::High]));
+/// assert!(support.resolve(ReasoningEffort::High, ReasoningFallback::Refuse).is_ok());
+/// assert!(EffortSupport::default()
+///     .resolve(ReasoningEffort::High, ReasoningFallback::Refuse)
+///     .is_err());
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum EffortSupport {
+    /// No measured effort data for this model. Refuses every effort.
+    #[default]
+    Unmeasured,
+    /// The adapter has no wire form for an effort on this model. Refuses every effort.
+    WireUnsupported,
+    /// The model does not reason. Accepts only `Off`, as an exact no-op.
+    NoReasoning,
+    /// The model takes the efforts these levels list.
+    Supported(EffortLevels),
+}
+
+/// The outcome of an accepted effort: what was asked, what reaches the wire, and whether
+/// anything reaches the wire at all.
+///
+/// Marked `#[non_exhaustive]`: read it, do not construct it.
+///
+/// # Examples
+///
+/// ```
+/// use paladin_ports::output::model_profile::{EffortLevels, EffortSupport};
+/// use paladin_ports::output::llm_port::{ReasoningEffort, ReasoningFallback};
+///
+/// let support = EffortSupport::Supported(EffortLevels::new([ReasoningEffort::Low]));
+/// let resolved = support.resolve(ReasoningEffort::Low, ReasoningFallback::Refuse)?;
+/// assert_eq!(resolved.effective, ReasoningEffort::Low);
+/// assert!(resolved.on_wire);
+/// assert!(!resolved.substituted());
+/// # Ok::<(), paladin_ports::output::model_profile::EffortRefusal>(())
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ResolvedEffort {
+    /// The effort the caller asked for.
+    pub requested: ReasoningEffort,
+    /// The effort that reaches the wire. Equal to `requested` unless the caller chose a
+    /// substituting [`ReasoningFallback`] and a level was substituted.
+    pub effective: ReasoningEffort,
+    /// Whether anything is sent. `false` only for `Off` on a model that does not reason, an
+    /// exact no-op.
+    pub on_wire: bool,
+}
+
+impl ResolvedEffort {
+    /// An effort accepted exactly as asked.
+    fn exact(requested: ReasoningEffort, on_wire: bool) -> Self {
+        Self {
+            requested,
+            effective: requested,
+            on_wire,
+        }
+    }
+
+    /// Whether a different effort than the one asked for reaches the wire.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_ports::output::model_profile::{EffortLevels, EffortSupport};
+    /// use paladin_ports::output::llm_port::{ReasoningEffort, ReasoningFallback};
+    ///
+    /// let support = EffortSupport::Supported(EffortLevels::new([ReasoningEffort::High]));
+    /// let resolved = support.resolve(ReasoningEffort::High, ReasoningFallback::NearestLower)?;
+    /// assert!(!resolved.substituted());
+    /// # Ok::<(), paladin_ports::output::model_profile::EffortRefusal>(())
+    /// ```
+    #[must_use]
+    pub fn substituted(&self) -> bool {
+        self.requested != self.effective
+    }
+}
+
+/// Why [`EffortSupport::resolve`] refused an effort.
+///
+/// The [`Display`](fmt::Display) text is plain English with no provider-specific wording; the
+/// caller adds the provider, model and parameter (see `LlmError::UnsupportedParameter`).
+///
+/// Marked `#[non_exhaustive]`: match it with a wildcard arm.
+///
+/// # Examples
+///
+/// ```
+/// use paladin_ports::output::model_profile::EffortRefusal;
+///
+/// assert!(EffortRefusal::Unmeasured.to_string().contains("measured"));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EffortRefusal {
+    /// The model has no measured effort data.
+    Unmeasured,
+    /// The adapter has no wire form for an effort on this model.
+    WireUnsupported,
+    /// The model does not reason, so only `Off` could be honoured.
+    NoReasoning,
+    /// The model does not list the level asked for, and the fallback is `Refuse`.
+    LevelUnsupported,
+    /// The vendor accepts the level but silently runs it as another.
+    LevelCoerced,
+    /// The chosen fallback direction holds no listed level.
+    NoLevelInDirection,
+    /// The model cannot run with reasoning off.
+    OffUnsupported,
+    /// The model has no automatic reasoning depth.
+    AutoUnsupported,
+    /// The model takes no reasoning-token budget.
+    BudgetUnsupported,
+    /// The budget lies outside the span the model accepts (carried here).
+    BudgetOutOfBounds(BudgetBounds),
+}
+
+impl fmt::Display for EffortRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unmeasured => f.write_str("no measured reasoning-effort data for this model"),
+            Self::WireUnsupported => {
+                f.write_str("no wire form for a reasoning effort on this model")
+            }
+            Self::NoReasoning => f.write_str("this model has no reasoning to adjust"),
+            Self::LevelUnsupported => f.write_str("this model does not offer that effort level"),
+            Self::LevelCoerced => {
+                f.write_str("the vendor accepts that effort level but silently runs it as another")
+            }
+            Self::NoLevelInDirection => {
+                f.write_str("no offered effort level lies in the chosen fallback direction")
+            }
+            Self::OffUnsupported => f.write_str("this model cannot run with reasoning off"),
+            Self::AutoUnsupported => {
+                f.write_str("this model has no automatic reasoning depth to request")
+            }
+            Self::BudgetUnsupported => f.write_str("this model takes no reasoning-token budget"),
+            Self::BudgetOutOfBounds(bounds) if bounds.is_valid() => write!(
+                f,
+                "the reasoning-token budget is outside the accepted span {}..={}",
+                bounds.min, bounds.max
+            ),
+            Self::BudgetOutOfBounds(_) => {
+                f.write_str("the accepted reasoning-token budget span is invalid")
+            }
+        }
+    }
+}
+
+impl std::error::Error for EffortRefusal {}
+
+impl EffortSupport {
+    /// The single admission rule for a requested effort (D-03, D-06, D-07).
+    ///
+    /// Pure and free of logging. Against a model whose support is:
+    ///
+    /// - `Unmeasured` or `WireUnsupported`: refuses everything.
+    /// - `NoReasoning`: accepts only `Off`, as an exact no-op (`on_wire == false`).
+    /// - `Supported`: refuses a `coerced` level whatever the fallback; accepts a listed level
+    ///   exactly; accepts `Off` only when `off`, `Auto` only when `auto`; accepts `Budget(n)` only
+    ///   inside the `budget` bounds, inclusive. A level the model lacks is refused under
+    ///   `Refuse`, and under `NearestLower` / `NearestHigher` replaced by the closest listed
+    ///   level strictly below / above by rank, or refused with
+    ///   [`EffortRefusal::NoLevelInDirection`] when that direction holds none. The direction is
+    ///   never flipped, and `Off`, `Auto`, a `Budget` and a coerced level are never substituted.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`EffortRefusal`] naming why the effort was not admitted.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_ports::output::model_profile::{EffortLevels, EffortRefusal, EffortSupport};
+    /// use paladin_ports::output::llm_port::{ReasoningEffort, ReasoningFallback};
+    ///
+    /// let support = EffortSupport::Supported(EffortLevels::new([
+    ///     ReasoningEffort::Low,
+    ///     ReasoningEffort::High,
+    /// ]));
+    /// assert_eq!(
+    ///     support.resolve(ReasoningEffort::Medium, ReasoningFallback::Refuse),
+    ///     Err(EffortRefusal::LevelUnsupported)
+    /// );
+    /// ```
+    pub fn resolve(
+        &self,
+        requested: ReasoningEffort,
+        _fallback: ReasoningFallback,
+    ) -> Result<ResolvedEffort, EffortRefusal> {
+        match self {
+            Self::Unmeasured => Err(EffortRefusal::Unmeasured),
+            Self::WireUnsupported => Err(EffortRefusal::WireUnsupported),
+            Self::NoReasoning => {
+                if requested == ReasoningEffort::Off {
+                    Ok(ResolvedEffort::exact(requested, false))
+                } else {
+                    Err(EffortRefusal::NoReasoning)
+                }
+            }
+            Self::Supported(levels) => {
+                if levels.levels.contains(&requested) {
+                    return Ok(ResolvedEffort::exact(requested, true));
+                }
+                Err(match requested {
+                    ReasoningEffort::Off => EffortRefusal::OffUnsupported,
+                    ReasoningEffort::Auto => EffortRefusal::AutoUnsupported,
+                    ReasoningEffort::Budget(_) => EffortRefusal::BudgetUnsupported,
+                    _ => EffortRefusal::LevelUnsupported,
+                })
+            }
+        }
+    }
+
+    /// The support acceptable to **both** `self` and `other`.
+    ///
+    /// Fail closed: equal operands stay as they are, anything else is `Unmeasured`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_ports::output::model_profile::EffortSupport;
+    ///
+    /// assert_eq!(
+    ///     EffortSupport::NoReasoning.intersect(&EffortSupport::NoReasoning),
+    ///     EffortSupport::NoReasoning
+    /// );
+    /// assert_eq!(
+    ///     EffortSupport::NoReasoning.intersect(&EffortSupport::WireUnsupported),
+    ///     EffortSupport::Unmeasured
+    /// );
+    /// ```
+    #[must_use]
+    pub fn intersect(&self, other: &Self) -> Self {
+        if self == other {
+            self.clone()
+        } else {
+            Self::Unmeasured
+        }
+    }
+}
+
 /// What one model of one provider accepts, and its limits (ADR-0061).
 ///
 /// Built only through [`ModelProfile::new`] plus the `with_*` setters; the struct is
@@ -301,7 +825,10 @@ pub struct ModelProfile {
     pub context_window: Option<u32>,
     /// The most tokens the model can generate in one response, when known.
     pub max_output_tokens: Option<u32>,
-    /// Whether the model is a reasoning model.
+    /// Whether the default call to this model **returned reasoning text**. It is a measurement
+    /// about the model's output, not a statement of what effort the model accepts, and effort
+    /// admission never consults it: [`effort`](Self::effort) decides that. It still drives the
+    /// reasoning-model timeout default and is OR-ed when profiles are intersected.
     pub reasoning: bool,
     /// Whether the model supports a JSON-object `response_format`.
     pub json_object: bool,
@@ -309,14 +836,20 @@ pub struct ModelProfile {
     pub json_schema: bool,
     /// The date (`YYYY-MM-DD`) this entry was last checked against the vendor, when known.
     pub verified_on: Option<String>,
+    /// Which reasoning efforts the model takes (Phase 51). Fail closed:
+    /// [`EffortSupport::Unmeasured`] until a probe-backed table says otherwise.
+    pub effort: EffortSupport,
+    /// The date (`YYYY-MM-DD`) of the effort probe the [`effort`](Self::effort) data came from.
+    pub effort_verified_on: Option<String>,
 }
 
 impl ModelProfile {
     /// A profile that states nothing as sendable (fail closed).
     ///
     /// Every sampling parameter and stop sequences are `NotSent`, both windows are `None`,
-    /// `reasoning`, `json_object` and `json_schema` are `false`, and `verified_on` is `None`.
-    /// Opt each capability in with a `with_*` setter.
+    /// `reasoning`, `json_object` and `json_schema` are `false`, `verified_on` is `None`, and
+    /// `effort` is [`EffortSupport::Unmeasured`] with `effort_verified_on` `None`. Opt each
+    /// capability in with a `with_*` setter.
     ///
     /// # Examples
     ///
@@ -341,6 +874,8 @@ impl ModelProfile {
             json_object: false,
             json_schema: false,
             verified_on: None,
+            effort: EffortSupport::Unmeasured,
+            effort_verified_on: None,
         }
     }
 
@@ -393,7 +928,9 @@ impl ModelProfile {
         self
     }
 
-    /// Set whether the model is a reasoning model.
+    /// Record that the default call to this model returned reasoning text. This is a measurement
+    /// about the output; it does not state which efforts the model accepts (use
+    /// [`with_effort`](Self::with_effort)).
     #[must_use]
     pub fn with_reasoning(mut self, reasoning: bool) -> Self {
         self.reasoning = reasoning;
@@ -418,6 +955,29 @@ impl ModelProfile {
     #[must_use]
     pub fn with_verified_on(mut self, date: impl Into<String>) -> Self {
         self.verified_on = Some(date.into());
+        self
+    }
+
+    /// Set which reasoning efforts the model takes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_ports::output::model_profile::{EffortSupport, ModelProfile};
+    ///
+    /// let profile = ModelProfile::new().with_effort(EffortSupport::NoReasoning);
+    /// assert_eq!(profile.effort, EffortSupport::NoReasoning);
+    /// ```
+    #[must_use]
+    pub fn with_effort(mut self, effort: EffortSupport) -> Self {
+        self.effort = effort;
+        self
+    }
+
+    /// Record the date (`YYYY-MM-DD`) of the effort probe the effort data came from.
+    #[must_use]
+    pub fn with_effort_verified_on(mut self, date: impl Into<String>) -> Self {
+        self.effort_verified_on = Some(date.into());
         self
     }
 
@@ -449,7 +1009,8 @@ impl ModelProfile {
     /// The five parameters are intersected; the smaller known context window and maximum output
     /// are kept; `reasoning` is OR-ed (a chain that may reach a reasoning model must treat it as
     /// one); `json_object` and `json_schema` are AND-ed (a format is usable only if every hop
-    /// supports it); `verified_on` is cleared because a combination was never itself verified.
+    /// supports it); `effort` is intersected with [`EffortSupport::intersect`]; `verified_on` and
+    /// `effort_verified_on` are cleared because a combination was never itself verified.
     /// Commutative and associative.
     ///
     /// # Examples
@@ -475,6 +1036,8 @@ impl ModelProfile {
             json_object: self.json_object && other.json_object,
             json_schema: self.json_schema && other.json_schema,
             verified_on: None,
+            effort: self.effort.intersect(&other.effort),
+            effort_verified_on: None,
         }
     }
 }
@@ -675,6 +1238,8 @@ mod tests {
         assert_eq!(p.max_output_tokens, None);
         assert!(!p.reasoning && !p.json_object && !p.json_schema);
         assert_eq!(p.verified_on, None);
+        assert_eq!(p.effort, EffortSupport::Unmeasured);
+        assert_eq!(p.effort_verified_on, None);
         assert_eq!(ModelProfile::default(), p);
         // A fail-closed profile refuses every explicit numeric value.
         for param in [
@@ -718,6 +1283,14 @@ mod tests {
             ("json_object", base.clone().with_json_object(true)),
             ("json_schema", base.clone().with_json_schema(true)),
             ("verified_on", base.clone().with_verified_on("2026-10-15")),
+            (
+                "effort",
+                base.clone().with_effort(EffortSupport::NoReasoning),
+            ),
+            (
+                "effort_verified_on",
+                base.clone().with_effort_verified_on("2026-10-21"),
+            ),
         ];
         for (name, changed) in cases {
             assert_ne!(changed, base, "with_{name} changed nothing");
@@ -734,6 +1307,10 @@ mod tests {
                 "reasoning" => restored.reasoning = base.reasoning,
                 "json_object" => restored.json_object = base.json_object,
                 "json_schema" => restored.json_schema = base.json_schema,
+                "effort" => restored.effort = base.effort.clone(),
+                "effort_verified_on" => {
+                    restored.effort_verified_on = base.effort_verified_on.clone();
+                }
                 _ => restored.verified_on = base.verified_on.clone(),
             }
             assert_eq!(restored, base, "with_{name} touched another field");
@@ -803,5 +1380,86 @@ mod tests {
             serde_json::to_string(&ParamSupport::NotSent).expect("serialise"),
             "\"not_sent\""
         );
+    }
+
+    fn levels(list: &[ReasoningEffort]) -> EffortSupport {
+        EffortSupport::Supported(EffortLevels::new(list.iter().copied()))
+    }
+
+    #[test]
+    fn unmeasured_profile_refuses_every_effort() {
+        let profile = ModelProfile::new();
+        assert_eq!(profile.effort, EffortSupport::Unmeasured);
+        let all = [
+            ReasoningEffort::Off,
+            ReasoningEffort::Auto,
+            ReasoningEffort::Minimal,
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+            ReasoningEffort::XHigh,
+            ReasoningEffort::Max,
+            ReasoningEffort::Budget(2048),
+        ];
+        for effort in all {
+            assert_eq!(
+                profile.effort.resolve(effort, ReasoningFallback::Refuse),
+                Err(EffortRefusal::Unmeasured),
+                "Unmeasured admitted {effort}"
+            );
+        }
+    }
+
+    #[test]
+    fn listed_level_resolves_exactly() {
+        use ReasoningEffort::{High, Low};
+        let support = levels(&[Low, High]);
+        let resolved = support
+            .resolve(High, ReasoningFallback::Refuse)
+            .expect("High is listed");
+        assert_eq!(resolved.requested, High);
+        assert_eq!(resolved.effective, High);
+        assert!(resolved.on_wire);
+        assert!(!resolved.substituted());
+    }
+
+    #[test]
+    fn no_reasoning_accepts_only_off_as_a_no_op() {
+        let resolved = EffortSupport::NoReasoning
+            .resolve(ReasoningEffort::Off, ReasoningFallback::Refuse)
+            .expect("Off is an exact no-op");
+        assert!(!resolved.on_wire);
+        assert!(!resolved.substituted());
+        assert_eq!(
+            EffortSupport::NoReasoning.resolve(ReasoningEffort::Low, ReasoningFallback::Refuse),
+            Err(EffortRefusal::NoReasoning)
+        );
+        assert_eq!(
+            EffortSupport::WireUnsupported.resolve(ReasoningEffort::Off, ReasoningFallback::Refuse),
+            Err(EffortRefusal::WireUnsupported)
+        );
+    }
+
+    #[test]
+    fn effort_refusal_display_is_plain_english() {
+        assert!(
+            EffortRefusal::BudgetOutOfBounds(BudgetBounds::new(1024, 32_000))
+                .to_string()
+                .contains("1024..=32000")
+        );
+        for refusal in [
+            EffortRefusal::Unmeasured,
+            EffortRefusal::WireUnsupported,
+            EffortRefusal::NoReasoning,
+            EffortRefusal::LevelUnsupported,
+            EffortRefusal::LevelCoerced,
+            EffortRefusal::NoLevelInDirection,
+            EffortRefusal::OffUnsupported,
+            EffortRefusal::AutoUnsupported,
+            EffortRefusal::BudgetUnsupported,
+            EffortRefusal::BudgetOutOfBounds(BudgetBounds::new(0, 0)),
+        ] {
+            assert!(!refusal.to_string().is_empty());
+        }
     }
 }

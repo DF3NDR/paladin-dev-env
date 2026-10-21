@@ -38,6 +38,7 @@ pub mod principal;
 pub mod prompt;
 pub mod queue_config;
 pub mod queue_item;
+pub mod reasoning;
 pub mod registry_error;
 pub mod run;
 pub mod run_schedule;

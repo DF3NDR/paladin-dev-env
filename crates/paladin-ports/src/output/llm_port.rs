@@ -236,7 +236,14 @@ use paladin_core::platform::container::transience::Transience;
 use crate::output::rate_limit_hints::RateLimitHints;
 
 /// Re-exported so `paladin_ports::output::llm_port::ModelProfile` resolves (ADR-0061).
-pub use super::model_profile::{ModelProfile, ParamSupport, SamplingParam, StopSupport};
+pub use super::model_profile::{
+    BudgetBounds, EffortLevels, EffortRefusal, EffortSupport, ModelProfile, ParamSupport,
+    ResolvedEffort, SamplingParam, StopSupport,
+};
+
+/// Re-exported so a port caller names the effort vocabulary beside the request that carries it.
+/// The types live in the domain core so `PaladinData` can hold them (Phase 51, REASON-01).
+pub use paladin_core::platform::container::reasoning::{ReasoningEffort, ReasoningFallback};
 
 /// The usage of a call the vendor answered and billed even though the call
 /// failed (G-50-5a): a reasoning model that spent its whole budget thinking and
@@ -560,6 +567,58 @@ pub enum LlmError {
         billed: Option<Box<BilledUsage>>,
     },
 
+    /// A request parameter the target model cannot honour was refused **before any HTTP call**
+    /// (REASON-02, D-00f). Today the parameter is a reasoning effort: the model is unmeasured, has
+    /// no reasoning, lacks that level, or the vendor would silently run it as another level.
+    ///
+    /// The text names the parameter, the value, the provider, the model and the reason, and
+    /// nothing else: no prompt text, no request body and no credential ever reaches it. It is
+    /// [`Transience::Permanent`]: the identical request is refused identically, so loops and
+    /// fallback chains do not retry it.
+    ///
+    /// **Recovery**: choose a level the model offers, pick a substituting
+    /// [`ReasoningFallback`], or state the model's support in the
+    /// `llm.<provider>.models.<model-id>.effort` override.
+    ///
+    /// Marked `#[non_exhaustive]`: build it with [`LlmError::unsupported_parameter`] and match
+    /// it with `UnsupportedParameter { .. }` (naming fields followed by `..`).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_core::platform::container::transience::Transience;
+    /// use paladin_ports::output::llm_port::LlmError;
+    ///
+    /// let error = LlmError::unsupported_parameter(
+    ///     "reasoning_effort",
+    ///     "high",
+    ///     "deepseek",
+    ///     "deepseek-v4-pro",
+    ///     "no measured effort data",
+    /// );
+    /// let rendered = error.to_string();
+    /// assert!(rendered.contains("reasoning_effort"));
+    /// assert!(rendered.contains("deepseek-v4-pro"));
+    /// assert_eq!(error.transience(), Transience::Permanent);
+    /// assert!(matches!(&error, LlmError::UnsupportedParameter { provider, .. } if provider == "deepseek"));
+    /// ```
+    #[error(
+        "Unsupported parameter '{param}' = '{value}' for provider '{provider}' (model '{model}'): {reason}"
+    )]
+    #[non_exhaustive]
+    UnsupportedParameter {
+        /// The request parameter that was refused (for example `"reasoning_effort"`).
+        param: String,
+        /// The value that was refused, in the words a caller wrote it (for example `"high"`).
+        value: String,
+        /// The provider whose model cannot honour it.
+        provider: String,
+        /// The model that cannot honour it, as named on the request.
+        model: String,
+        /// Why it was refused, in plain English. Names how to fix it; carries no request content.
+        reason: String,
+    },
+
     /// Requested model not available or not supported by provider
     ///
     /// **Recovery**: Use `get_available_models()` to find alternatives
@@ -763,6 +822,48 @@ impl LlmError {
         }
     }
 
+    /// Build a [`LlmError::UnsupportedParameter`]: `model` at `provider` cannot honour `param`
+    /// set to `value`, for the stated `reason`.
+    ///
+    /// This is the supported way to build the variant (it is `#[non_exhaustive]`). It takes
+    /// only these five strings, so no request content and no credential can reach the error.
+    /// Match it with `UnsupportedParameter { .. }`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::LlmError;
+    ///
+    /// let error = LlmError::unsupported_parameter(
+    ///     "reasoning_effort",
+    ///     "xhigh",
+    ///     "openai",
+    ///     "gpt-x",
+    ///     "the model does not offer that effort level",
+    /// );
+    /// assert_eq!(
+    ///     error.to_string(),
+    ///     "Unsupported parameter 'reasoning_effort' = 'xhigh' for provider 'openai' \
+    ///      (model 'gpt-x'): the model does not offer that effort level"
+    /// );
+    /// assert!(error.billed_usage().is_none());
+    /// ```
+    pub fn unsupported_parameter(
+        param: impl Into<String>,
+        value: impl Into<String>,
+        provider: impl Into<String>,
+        model: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        LlmError::UnsupportedParameter {
+            param: param.into(),
+            value: value.into(),
+            provider: provider.into(),
+            model: model.into(),
+            reason: reason.into(),
+        }
+    }
+
     /// Attach the usage the vendor billed for a call that still failed (G-50-5a).
     ///
     /// Only [`LlmError::EmptyCompletion`] and [`LlmError::Refusal`] carry a bill: they are the
@@ -944,6 +1045,8 @@ impl LlmError {
             LlmError::TokenLimitExceeded => Transience::Permanent,
             LlmError::EmptyCompletion { .. } => Transience::Permanent,
             LlmError::Refusal { .. } => Transience::Permanent,
+            // Refused before any HTTP call: the identical request is refused identically.
+            LlmError::UnsupportedParameter { .. } => Transience::Permanent,
 
             // Unresolvable from a bare string: no typed field distinguishes
             // a transient cause from a permanent one.
@@ -1090,6 +1193,23 @@ pub struct LlmRequest {
     /// deserializes.
     #[serde(default)]
     pub response_format: Option<ResponseFormat>,
+    /// The reasoning effort to ask the model for (see [`ReasoningEffort`]).
+    ///
+    /// `None` by default and then **nothing** about reasoning is sent: the vendor's own default
+    /// stays in force and the request body is unchanged. [`ReasoningEffort::Auto`] is a set
+    /// value, not the same as `None`. Precedence when several layers state one: this request,
+    /// then the agent, then the provider config, then the vendor default. A model that cannot
+    /// honour the effort refuses the request with [`LlmError::UnsupportedParameter`] before any
+    /// HTTP call. Absent from a serialised request when `None`, so an unset request serialises
+    /// exactly as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<ReasoningEffort>,
+    /// What to do when the model lacks the exact level in [`reasoning`](Self::reasoning).
+    ///
+    /// `None` means the layer below decides, ending at [`ReasoningFallback::Refuse`]. Absent from
+    /// a serialised request when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_fallback: Option<ReasoningFallback>,
 }
 
 impl LlmRequest {
@@ -1097,8 +1217,8 @@ impl LlmRequest {
     /// `model` and `prompt`.
     ///
     /// Produces a fresh [`Uuid`] (different on every call), no attachments,
-    /// `stream: false`, empty `metadata`, and `response_format: None`. Use the
-    /// chainable `with_*` methods to override any default.
+    /// `stream: false`, empty `metadata`, `response_format: None`, and no reasoning effort or
+    /// fallback (`None`). Use the chainable `with_*` methods to override any default.
     ///
     /// # Examples
     ///
@@ -1117,6 +1237,8 @@ impl LlmRequest {
     /// assert!(!request.stream);
     /// assert!(request.metadata.is_empty());
     /// assert!(request.response_format.is_none());
+    /// assert!(request.reasoning.is_none());
+    /// assert!(request.reasoning_fallback.is_none());
     /// ```
     pub fn new(model: impl Into<String>, prompt: PromptItem) -> Self {
         Self {
@@ -1127,6 +1249,8 @@ impl LlmRequest {
             stream: false,
             metadata: HashMap::new(),
             response_format: None,
+            reasoning: None,
+            reasoning_fallback: None,
         }
     }
 
@@ -1217,6 +1341,59 @@ impl LlmRequest {
     /// ```
     pub fn with_response_format(mut self, response_format: ResponseFormat) -> Self {
         self.response_format = Some(response_format);
+        self
+    }
+
+    /// Ask the model for a reasoning effort. **This sets the effort the request asks for.**
+    /// It is not [`LlmResponse::with_reasoning`], which records the reasoning *text* a vendor
+    /// returned, nor [`TokenUsage::with_reasoning`], which records the reasoning-token *count*.
+    ///
+    /// Left unset, nothing is sent and the vendor default applies. A model that cannot honour
+    /// the effort refuses the request with [`LlmError::UnsupportedParameter`] before any HTTP
+    /// call.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::{LlmRequest, ReasoningEffort};
+    /// use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+    ///
+    /// let prompt = PromptItem::new(PromptType::User(UserPrompt {
+    ///     query: "Prove it".to_string(),
+    ///     context: None,
+    /// })).unwrap();
+    /// let request = LlmRequest::new("gpt-4", prompt).with_reasoning(ReasoningEffort::High);
+    ///
+    /// assert_eq!(request.reasoning, Some(ReasoningEffort::High));
+    /// ```
+    #[must_use]
+    pub fn with_reasoning(mut self, effort: ReasoningEffort) -> Self {
+        self.reasoning = Some(effort);
+        self
+    }
+
+    /// Choose what to do when the model lacks the exact level asked for with
+    /// [`with_reasoning`](Self::with_reasoning). Left unset, the request is refused
+    /// ([`ReasoningFallback::Refuse`]).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::{LlmRequest, ReasoningFallback};
+    /// use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+    ///
+    /// let prompt = PromptItem::new(PromptType::User(UserPrompt {
+    ///     query: "Prove it".to_string(),
+    ///     context: None,
+    /// })).unwrap();
+    /// let request = LlmRequest::new("gpt-4", prompt)
+    ///     .with_reasoning_fallback(ReasoningFallback::NearestLower);
+    ///
+    /// assert_eq!(request.reasoning_fallback, Some(ReasoningFallback::NearestLower));
+    /// ```
+    #[must_use]
+    pub fn with_reasoning_fallback(mut self, fallback: ReasoningFallback) -> Self {
+        self.reasoning_fallback = Some(fallback);
         self
     }
 }
@@ -1394,6 +1571,9 @@ impl LlmResponse {
     ///
     /// Text that is empty after trimming is stored as `None`, so a vendor's empty reasoning
     /// field never becomes `Some("")`.
+    ///
+    /// This records the reasoning *text* a vendor returned. It does not ask for any effort: to
+    /// set the effort a request asks for, use [`LlmRequest::with_reasoning`].
     ///
     /// # Examples
     ///
@@ -2377,6 +2557,124 @@ mod tests {
         assert!(!request.stream);
         assert!(request.metadata.is_empty());
         assert!(request.response_format.is_none());
+        assert!(request.reasoning.is_none());
+        assert!(request.reasoning_fallback.is_none());
+    }
+
+    fn user_prompt(query: &str) -> PromptItem {
+        PromptItem::new(PromptType::User(UserPrompt {
+            query: query.to_string(),
+            context: None,
+        }))
+        .unwrap()
+    }
+
+    /// D-00e: an unset request serialises with neither effort key, so its JSON is unchanged.
+    #[test]
+    fn unset_reasoning_is_absent_from_the_serialised_request() {
+        let request = LlmRequest::new("gpt-4", user_prompt("hi"));
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(!json.contains("reasoning"), "{json}");
+        let back: LlmRequest = serde_json::from_str(&json).unwrap();
+        assert!(back.reasoning.is_none() && back.reasoning_fallback.is_none());
+    }
+
+    /// D-00e: a set effort and fallback survive a serde round trip and are set by the builders.
+    #[test]
+    fn with_reasoning_and_fallback_set_and_round_trip() {
+        let request = LlmRequest::new("gpt-4", user_prompt("hi"))
+            .with_reasoning(ReasoningEffort::High)
+            .with_reasoning_fallback(ReasoningFallback::NearestHigher);
+        assert_eq!(request.reasoning, Some(ReasoningEffort::High));
+        assert_eq!(
+            request.reasoning_fallback,
+            Some(ReasoningFallback::NearestHigher)
+        );
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("\"reasoning\":\"high\""), "{json}");
+        assert!(
+            json.contains("\"reasoning_fallback\":\"nearest_higher\""),
+            "{json}"
+        );
+        let back: LlmRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.reasoning, Some(ReasoningEffort::High));
+    }
+
+    /// REASON-01: `Auto` is a set value, never treated as unset.
+    #[test]
+    fn auto_is_serialised_as_a_set_value() {
+        let request =
+            LlmRequest::new("gpt-4", user_prompt("hi")).with_reasoning(ReasoningEffort::Auto);
+        assert!(
+            serde_json::to_string(&request)
+                .unwrap()
+                .contains("\"reasoning\":\"auto\"")
+        );
+    }
+
+    /// D-00f / REASON-02: the refusal names the parameter, value, provider, model and reason, is
+    /// Permanent, carries no bill, and never renders request content (T-51-03).
+    #[test]
+    fn unsupported_parameter_names_its_five_fields_and_nothing_else() {
+        let error = LlmError::unsupported_parameter(
+            "reasoning_effort",
+            "high",
+            "deepseek",
+            "deepseek-v4-pro",
+            "no measured effort data",
+        );
+        let rendered = error.to_string();
+        for needle in [
+            "reasoning_effort",
+            "high",
+            "deepseek",
+            "deepseek-v4-pro",
+            "no measured effort data",
+        ] {
+            assert!(
+                rendered.contains(needle),
+                "{needle} missing from {rendered}"
+            );
+        }
+        assert_eq!(error.transience(), Transience::Permanent);
+        assert!(error.billed_usage().is_none());
+
+        // Building a request carrying a planted prompt never leaks it into the error: the
+        // constructor takes five strings and nothing else.
+        let request = LlmRequest::new("deepseek-v4-pro", user_prompt("PLANTED-SECRET-PROMPT"))
+            .with_reasoning(ReasoningEffort::High);
+        let refused = LlmError::unsupported_parameter(
+            "reasoning_effort",
+            request.reasoning.map(|e| e.to_string()).unwrap_or_default(),
+            "deepseek",
+            request.model.clone(),
+            "no measured effort data",
+        );
+        assert!(!refused.to_string().contains("PLANTED-SECRET-PROMPT"));
+        assert!(!format!("{refused:?}").contains("PLANTED-SECRET-PROMPT"));
+    }
+
+    /// The shape-proof pattern survives future fields: name the fields, then `..`.
+    #[test]
+    fn unsupported_parameter_matches_with_a_rest_pattern() {
+        let error = LlmError::unsupported_parameter("p", "v", "prov", "mod", "why");
+        match &error {
+            LlmError::UnsupportedParameter {
+                param,
+                value,
+                provider,
+                model,
+                reason,
+                ..
+            } => {
+                assert_eq!(
+                    (param.as_str(), value.as_str(), provider.as_str()),
+                    ("p", "v", "prov")
+                );
+                assert_eq!((model.as_str(), reason.as_str()), ("mod", "why"));
+            }
+            other => panic!("expected UnsupportedParameter, got {other:?}"),
+        }
     }
 
     /// D-28: two `new` calls with identical arguments produce different ids.
@@ -2903,6 +3201,10 @@ mod tests {
             (LlmError::TokenLimitExceeded, Permanent),
             (LlmError::empty_completion("x"), Permanent),
             (LlmError::refusal("anthropic", "m", "d"), Permanent),
+            (
+                LlmError::unsupported_parameter("reasoning_effort", "high", "p", "m", "r"),
+                Permanent,
+            ),
             (
                 LlmError::empty_completion("x")
                     .with_billed_usage(BilledUsage::new("m", TokenUsage::new(1, 1))),

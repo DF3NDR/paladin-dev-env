@@ -9,6 +9,15 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- **Reasoning effort: `FallbackLlmAdapter` pre-flights every hop before the first call (REASON-04,
+  REASON-05; D-08; Phase 51 plan 07).** A request that carries `reasoning` is resolved against each
+  hop's own `model_profile` (the step's model, else the request's) in chain order; the first hop that
+  has no profile or cannot honour or substitute the effort fails the whole request with
+  `LlmError::UnsupportedParameter` naming that hop's provider, model and chain index, and no hop is
+  called. The serving hop's `paladin.reasoning_requested` / `paladin.reasoning_effective` keys sit
+  beside `paladin.served_by` / `paladin.served_model` on the buffered response and on the streamed
+  terminal chunk. A request with no effort behaves exactly as before. No public item changed.
+
 - Phase 51 (REASON-01, REASON-02, REASON-04; plan 51-06): all nine adapters honour
   `LlmRequest.reasoning` exactly or refuse it before HTTP (plans 51-03 to 51-05). Provider-level
   default: `reasoning_effort` / `reasoning_fallback` fields and `with_reasoning_effort` /

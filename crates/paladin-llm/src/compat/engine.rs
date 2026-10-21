@@ -670,6 +670,7 @@ impl CompatEngine {
             params_omitted,
             format_adjusted,
             unprofiled_model,
+            ..RequestNotes::default()
         };
         Ok((body, notes))
     }

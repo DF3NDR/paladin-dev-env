@@ -56,6 +56,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use paladin_core::platform::container::prompt::PromptParameters;
+use paladin_core::platform::container::reasoning::{
+    REASONING_EFFECTIVE_METADATA_KEY, REASONING_REQUESTED_METADATA_KEY,
+};
 use paladin_ports::output::llm_port::{LlmError, ResponseFormat};
 use paladin_ports::output::model_profile::{ModelProfile, ParamSupport, SamplingParam};
 
@@ -365,8 +368,10 @@ pub(crate) fn check_max_tokens(
 /// record it on the response (the ADR-0061 visibility rule) and the streaming path can drop it
 /// after the `warn!` has been emitted.
 ///
-/// One type for every adapter -- the compat engine and the four bespoke wires -- so the three
-/// metadata keys are stamped identically everywhere.
+/// One type for every adapter -- the compat engine and the four bespoke wires -- so the five
+/// metadata keys are stamped identically everywhere. The last two are the reasoning-effort keys
+/// (Phase 51, D-11); they are set only when the request set an effort, so an unset effort
+/// leaves the metadata exactly as it was.
 #[derive(Debug, Default)]
 pub(crate) struct RequestNotes {
     /// Comma-joined omitted parameter names, when any ([`PARAMS_OMITTED_METADATA_KEY`]).
@@ -377,6 +382,13 @@ pub(crate) struct RequestNotes {
     /// The request's model, when it has neither a seeded entry nor an override
     /// ([`UNPROFILED_MODEL_METADATA_KEY`]).
     pub unprofiled_model: Option<String>,
+    /// The reasoning effort the request asked for, in its `Display` spelling, when it set one
+    /// ([`REASONING_REQUESTED_METADATA_KEY`]).
+    pub reasoning_requested: Option<String>,
+    /// The reasoning effort the adapter acted on, in its `Display` spelling, when the request
+    /// set one ([`REASONING_EFFECTIVE_METADATA_KEY`]). Differs from the requested value only when
+    /// the caller chose a substituting fallback.
+    pub reasoning_effective: Option<String>,
 }
 
 impl RequestNotes {
@@ -391,6 +403,12 @@ impl RequestNotes {
         }
         if let Some(model) = self.unprofiled_model {
             metadata.insert(UNPROFILED_MODEL_METADATA_KEY.to_string(), model);
+        }
+        if let Some(requested) = self.reasoning_requested {
+            metadata.insert(REASONING_REQUESTED_METADATA_KEY.to_string(), requested);
+        }
+        if let Some(effective) = self.reasoning_effective {
+            metadata.insert(REASONING_EFFECTIVE_METADATA_KEY.to_string(), effective);
         }
         metadata
     }

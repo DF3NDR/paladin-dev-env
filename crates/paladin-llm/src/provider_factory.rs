@@ -2136,6 +2136,251 @@ mod tests {
                 .await;
             }
 
+            #[cfg(feature = "openai")]
+            #[tokio::test]
+            async fn openai_applies_the_provider_default_below_the_request() {
+                assert_default_applies(Case {
+                    provider: "openai",
+                    support: levels(&[ReasoningEffort::Low, ReasoningEffort::High]),
+                    wire: None,
+                    default: ReasoningEffort::High,
+                    other: ReasoningEffort::Low,
+                    read: |body| body.get("reasoning_effort").cloned(),
+                    expect: level_spelling,
+                })
+                .await;
+            }
+
+            #[cfg(feature = "anthropic")]
+            #[tokio::test]
+            async fn anthropic_applies_the_provider_default_below_the_request() {
+                assert_default_applies(Case {
+                    provider: "anthropic",
+                    support: levels(&[ReasoningEffort::Low, ReasoningEffort::High]),
+                    wire: None,
+                    default: ReasoningEffort::High,
+                    other: ReasoningEffort::Low,
+                    read: |body| body.pointer("/output_config/effort").cloned(),
+                    expect: level_spelling,
+                })
+                .await;
+            }
+
+            #[cfg(feature = "gemini")]
+            #[tokio::test]
+            async fn gemini_applies_the_provider_default_below_the_request() {
+                assert_default_applies(Case {
+                    provider: "gemini",
+                    support: levels(&[ReasoningEffort::Low, ReasoningEffort::High]),
+                    wire: None,
+                    default: ReasoningEffort::High,
+                    other: ReasoningEffort::Low,
+                    read: |body| {
+                        body.pointer("/generationConfig/thinkingConfig/thinkingLevel")
+                            .cloned()
+                    },
+                    expect: level_spelling,
+                })
+                .await;
+            }
+
+            // Pre-probe position (A1-51-04): superseded by plan 51-11. Kimi's `ThinkingObject`
+            // position is the pre-probe one plan 51-04 labelled; plan 51-11 restates this test.
+            #[cfg(feature = "kimi")]
+            #[tokio::test]
+            async fn kimi_pre_probe_applies_the_provider_default_as_thinking_effort() {
+                assert_default_applies(Case {
+                    provider: "kimi",
+                    support: levels(&[ReasoningEffort::Low, ReasoningEffort::High]),
+                    wire: None,
+                    default: ReasoningEffort::High,
+                    other: ReasoningEffort::Low,
+                    read: |body| body.pointer("/thinking/effort").cloned(),
+                    expect: level_spelling,
+                })
+                .await;
+            }
+
+            #[cfg(feature = "qwen")]
+            #[tokio::test]
+            async fn qwen_applies_the_provider_default_budget_below_the_request() {
+                use paladin_ports::output::model_profile::BudgetBounds;
+                // Qwen's `EnableThinking` wire carries a bounded budget and no levels.
+                assert_default_applies(Case {
+                    provider: "qwen",
+                    support: EffortSupport::Supported(
+                        EffortLevels::new([]).with_budget(BudgetBounds::new(1, 32_768)),
+                    ),
+                    wire: None,
+                    default: ReasoningEffort::Budget(512),
+                    other: ReasoningEffort::Budget(256),
+                    read: |body| body.get("thinking_budget").cloned(),
+                    expect: |effort| match effort {
+                        ReasoningEffort::Budget(n) => json!(n),
+                        other => panic!("not a budget: {other}"),
+                    },
+                })
+                .await;
+            }
+
+            #[cfg(feature = "ollama")]
+            #[tokio::test]
+            async fn ollama_applies_the_provider_default_once_its_wire_is_declared() {
+                assert_default_applies(Case {
+                    provider: "ollama",
+                    support: levels(&[ReasoningEffort::Low, ReasoningEffort::High]),
+                    wire: Some(ReasoningWire::TopLevelEffort),
+                    default: ReasoningEffort::High,
+                    other: ReasoningEffort::Low,
+                    read: |body| body.get("reasoning_effort").cloned(),
+                    expect: level_spelling,
+                })
+                .await;
+            }
+
+            #[cfg(feature = "openai-compatible")]
+            #[tokio::test]
+            async fn openai_compatible_applies_the_provider_default_once_its_wire_is_declared() {
+                assert_default_applies(Case {
+                    provider: "openai-compatible",
+                    support: levels(&[ReasoningEffort::Low, ReasoningEffort::High]),
+                    wire: Some(ReasoningWire::TopLevelEffort),
+                    default: ReasoningEffort::High,
+                    other: ReasoningEffort::Low,
+                    read: |body| body.get("reasoning_effort").cloned(),
+                    expect: level_spelling,
+                })
+                .await;
+            }
+
+            /// Grok's wire is declared `Unsupported` (plan 51-04): its provider default refuses
+            /// before HTTP, naming the key that set it.
+            #[cfg(feature = "grok")]
+            #[tokio::test]
+            async fn grok_refuses_its_provider_default_before_http() {
+                let case = Case {
+                    provider: "grok",
+                    support: levels(&[ReasoningEffort::High]),
+                    wire: None,
+                    default: ReasoningEffort::High,
+                    other: ReasoningEffort::Low,
+                    read: |body| body.get("reasoning_effort").cloned(),
+                    expect: level_spelling,
+                };
+                let (body, result) = send(&case, true, None, None).await;
+                assert!(body.is_none(), "a refused default must not reach the wire");
+                match result {
+                    Err(LlmError::UnsupportedParameter {
+                        reason, provider, ..
+                    }) => {
+                        assert_eq!(provider, "grok");
+                        assert!(reason.contains("llm.grok.reasoning_effort"), "{reason}");
+                    }
+                    other => panic!("expected UnsupportedParameter, got {other:?}"),
+                }
+                // With no default the same adapter still answers (the golden path).
+                let (body, result) = send(&case, false, None, None).await;
+                result.expect("no effort set anywhere sends as before");
+                assert!(body.unwrap().get("reasoning_effort").is_none());
+            }
+
+            // ── D-10: the self-hosted wire declared from YAML ──────────────────────────────
+
+            #[cfg(feature = "openai-compatible")]
+            #[test]
+            fn an_openai_compatible_block_declares_its_wire() {
+                let wire = wire_cases()
+                    .into_iter()
+                    .find(|c| c.provider == "openai-compatible")
+                    .unwrap();
+                let block = block_for(&wire, "http://127.0.0.1:1/v1")
+                    .with_reasoning_wire(ReasoningWire::TopLevelEffort)
+                    .with_models(BTreeMap::from([(
+                        wire.model.to_string(),
+                        ModelOverride {
+                            effort: Some(levels(&[ReasoningEffort::High])),
+                            ..ModelOverride::default()
+                        },
+                    )]));
+                let config = config_with("openai-compatible", block);
+                let port = LlmProviderFactory::new()
+                    .create_from_config_with_env(&config, "openai-compatible", None, &no_env)
+                    .expect("a self-hosted block may declare its wire");
+                // The declared wire unmasks the override's levels in the reported profile.
+                let profile = port.model_profile(wire.model).expect("a profile");
+                assert!(
+                    matches!(profile.effort, EffortSupport::Supported(_)),
+                    "{:?}",
+                    profile.effort
+                );
+                // Without the declaration the same override is masked to `WireUnsupported`.
+                let undeclared = config_with(
+                    "openai-compatible",
+                    block_for(&wire, "http://127.0.0.1:1/v1").with_models(BTreeMap::from([(
+                        wire.model.to_string(),
+                        ModelOverride {
+                            effort: Some(levels(&[ReasoningEffort::High])),
+                            ..ModelOverride::default()
+                        },
+                    )])),
+                );
+                let port = LlmProviderFactory::new()
+                    .create_from_config_with_env(&undeclared, "openai-compatible", None, &no_env)
+                    .unwrap();
+                let profile = port.model_profile(wire.model).expect("a profile");
+                assert_eq!(profile.effort, EffortSupport::WireUnsupported);
+            }
+
+            /// Named vendors change their wire only through a Paladin release (D-10, T-51-20).
+            #[test]
+            fn a_named_vendor_block_with_a_reasoning_wire_is_refused() {
+                for case in wire_cases() {
+                    if matches!(case.provider, "ollama" | "openai-compatible") {
+                        continue;
+                    }
+                    let block = block_for(&case, "http://127.0.0.1:1/v1")
+                        .with_reasoning_wire(ReasoningWire::TopLevelEffort);
+                    let config = config_with(case.provider, block);
+                    let error = match LlmProviderFactory::new().create_from_config_with_env(
+                        &config,
+                        case.provider,
+                        None,
+                        &no_env,
+                    ) {
+                        Err(error) => error.to_string(),
+                        Ok(_) => panic!(
+                            "{}: a named vendor must refuse reasoning_wire",
+                            case.provider
+                        ),
+                    };
+                    assert!(
+                        error.contains(&format!("llm.{}.reasoning_wire", case.provider)),
+                        "{}: {error}",
+                        case.provider
+                    );
+                    assert!(
+                        error.contains("Paladin release"),
+                        "{}: {error}",
+                        case.provider
+                    );
+                }
+            }
+
+            #[cfg(feature = "ollama")]
+            #[test]
+            fn an_ollama_block_declares_its_wire() {
+                let wire = wire_cases()
+                    .into_iter()
+                    .find(|c| c.provider == "ollama")
+                    .unwrap();
+                let block = block_for(&wire, "http://127.0.0.1:1/v1")
+                    .with_reasoning_wire(ReasoningWire::ThinkingObject);
+                let config = config_with("ollama", block);
+                LlmProviderFactory::new()
+                    .create_from_config_with_env(&config, "ollama", None, &no_env)
+                    .expect("a keyless self-hosted block may declare its wire");
+            }
+
             #[cfg(feature = "deepseek")]
             #[tokio::test]
             async fn a_provider_fallback_default_substitutes_when_the_model_lacks_the_level() {

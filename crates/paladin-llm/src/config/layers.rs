@@ -631,6 +631,62 @@ mod tests {
         resolve_layers(block, agent_model, &ENV, &DEFAULTS, &never_reasoning, env)
     }
 
+    // ── Phase 51: reasoning defaults and the wire declaration ───────────────────
+
+    /// The block-only reasoning keys reach `Layered`; with none set, nothing is invented (D-00i)
+    /// and no environment variable can supply them.
+    #[test]
+    fn reasoning_defaults_come_from_the_block_alone() {
+        let env = env_of(&[("ACME_API_KEY", "k"), ("ACME_REASONING_EFFORT", "high")]);
+        let bare = resolve_with(None, None, &env).expect("resolves");
+        assert_eq!(
+            (
+                bare.reasoning_effort,
+                bare.reasoning_fallback,
+                bare.reasoning_wire
+            ),
+            (None, None, None)
+        );
+        let block = LlmProviderConfig::new("")
+            .with_reasoning_effort(ReasoningEffort::Medium)
+            .with_reasoning_fallback(ReasoningFallback::NearestHigher);
+        let layered = resolve_with(Some(&block), None, &env).expect("resolves");
+        assert_eq!(layered.reasoning_effort, Some(ReasoningEffort::Medium));
+        assert_eq!(
+            layered.reasoning_fallback,
+            Some(ReasoningFallback::NearestHigher)
+        );
+    }
+
+    /// D-10, T-51-20: only the self-hosted endpoints may declare a wire; any other provider's
+    /// block that sets one is refused with a message naming the key.
+    #[test]
+    fn a_reasoning_wire_is_refused_outside_the_self_hosted_providers() {
+        let env = env_of(&[("ACME_API_KEY", "k")]);
+        let block = LlmProviderConfig::new("").with_reasoning_wire(ReasoningWire::TopLevelEffort);
+        let error = resolve_with(Some(&block), None, &env).expect_err("acme is a named vendor");
+        assert!(error.contains("llm.acme.reasoning_wire"), "{error}");
+        assert!(error.contains("Paladin release"), "{error}");
+
+        for provider in REASONING_WIRE_PROVIDERS {
+            let self_hosted = ProviderEnv {
+                provider,
+                key: None,
+                ..ENV
+            };
+            let layered = resolve_layers(
+                Some(&block),
+                None,
+                &self_hosted,
+                &DEFAULTS,
+                &never_reasoning,
+                &env,
+            )
+            .expect("a self-hosted endpoint may declare its wire");
+            assert_eq!(layered.reasoning_wire, Some(ReasoningWire::TopLevelEffort));
+        }
+    }
+
     // ── placeholders ────────────────────────────────────────────────────────
 
     #[test]

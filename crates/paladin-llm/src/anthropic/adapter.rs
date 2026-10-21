@@ -22,9 +22,11 @@ use paladin_ports::output::llm_port::{
     FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ModelProfile, ParamSupport,
     ProviderCapabilities, StopSupport, StreamingResponse, TokenUsage,
 };
+use paladin_ports::output::model_profile::{EffortLevels, EffortSupport, ResolvedEffort};
 
 use crate::http_status::map_http_status_with_hints;
 use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
+use crate::reasoning::{self, SubstitutionLog, WireCaps, mask_effort};
 use crate::redaction::RedactedKey;
 use crate::registry::{
     DEFAULT_MAX_RETRIES, ModelOverride, ModelRegistry, config_knob_builders,
@@ -305,6 +307,9 @@ pub struct AnthropicAdapter {
     /// Which (model, check) usage findings this instance has already warned about (G-50-5a).
     /// Anthropic reports no vendor total, so only the containment checks can fire.
     usage_log: UsageLog,
+    /// Which (model, requested, effective) reasoning-effort substitutions this instance has
+    /// already warned about (Phase 51, D-06).
+    substitutions: SubstitutionLog,
 }
 
 /// What this adapter declares to the port, stated once so the adapter-wide fallback profile and
@@ -408,7 +413,20 @@ impl AnthropicAdapter {
             omissions: OmissionLog::new(),
             format_log: FormatLog::new(),
             usage_log: UsageLog::new(),
+            substitutions: SubstitutionLog::new(),
         })
+    }
+
+    /// The request model's profile as this adapter's wire can honour it: the effort data has
+    /// whatever Anthropic's body cannot carry removed ([`ANTHROPIC_REASONING_WIRE`]), so a caller
+    /// reading [`LlmPort::model_profile`] judges exactly what [`Self::build_request`] will send.
+    fn wire_profile(&self, model: &str) -> ModelProfile {
+        let mut profile = self.model_registry.profile(model);
+        profile.effort = mask_effort(
+            std::mem::take(&mut profile.effort),
+            ANTHROPIC_REASONING_WIRE,
+        );
+        profile
     }
 
     /// Build HTTP headers for Anthropic API requests.
@@ -489,7 +507,7 @@ impl AnthropicAdapter {
         }
 
         let params = &request.prompt.entity.data.parameters;
-        let profile = self.model_registry.profile(&request.model);
+        let profile = self.wire_profile(&request.model);
 
         let max_tokens = params.max_tokens.unwrap_or(self.config.max_tokens);
         sampling::check_max_tokens(
@@ -498,6 +516,30 @@ impl AnthropicAdapter {
             &profile,
             Some(max_tokens),
         )?;
+
+        // Phase 51 (D-00h): an explicit effort is sent in the form the model's profile states or
+        // refused here, before any HTTP call and before any retry loop -- never routed through
+        // the omit-and-log path below. `max_tokens` is always set on this wire, so the
+        // budget-below-`max_tokens` rule always has a cap to hold a budget to.
+        let resolved = reasoning::admit(
+            ANTHROPIC_PROVIDER,
+            &request.model,
+            &profile,
+            request.reasoning,
+            request.reasoning_fallback,
+            Some(max_tokens),
+            &self.substitutions,
+        )?;
+        let (output_config, thinking) = match &resolved {
+            Some(resolved) => {
+                let levels = match &profile.effort {
+                    EffortSupport::Supported(levels) => Some(levels),
+                    _ => None,
+                };
+                map_reasoning(&request.model, resolved, levels)?
+            }
+            None => (None, None),
+        };
 
         let applied = sampling::apply(&profile, params);
         let params_omitted = self
@@ -532,12 +574,15 @@ impl AnthropicAdapter {
             top_p: applied.top_p,
             stop_sequences: applied.stop,
             stream: false,
+            output_config,
+            thinking,
         };
         let notes = RequestNotes {
             params_omitted,
             format_adjusted,
             unprofiled_model,
-            ..RequestNotes::default()
+            reasoning_requested: resolved.map(|r| r.requested.to_string()),
+            reasoning_effective: resolved.map(|r| r.effective.to_string()),
         };
         Ok((body, notes))
     }
@@ -1076,7 +1121,7 @@ impl LlmPort for AnthropicAdapter {
     }
 
     fn model_profile(&self, model: &str) -> Option<ModelProfile> {
-        Some(self.model_registry.profile(model))
+        Some(self.wire_profile(model))
     }
 }
 
@@ -1099,6 +1144,82 @@ struct ClaudeRequest {
     stop_sequences: Option<Vec<String>>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     stream: bool,
+    /// `LlmRequest.reasoning` as a listed level, on the wire as `output_config.effort`
+    /// (Phase 51, D-00h). Omitted entirely when no effort is set or the effort travels as the
+    /// `thinking` switch alone, keeping an unset request's body byte-identical (D-00i). Placed
+    /// last so the existing field order is untouched.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_config: Option<ClaudeOutputConfig>,
+    /// Anthropic's thinking switch: `adaptive` beside a level whose profile says
+    /// `enable_thinking_with_level` and for `Auto`; `disabled` for `Off`; `enabled` with
+    /// `budget_tokens` for a budget, and only on a model whose profile carries budget bounds.
+    /// Never carries `display` (D-00g). Omitted otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<ClaudeThinking>,
+}
+
+/// `ClaudeRequest.output_config`'s only shape this adapter sends: `{"effort": "<level>"}`.
+#[derive(Debug, Serialize)]
+struct ClaudeOutputConfig {
+    effort: &'static str,
+}
+
+/// `ClaudeRequest.thinking`'s shapes: `{"type": "adaptive"}`, `{"type": "disabled"}` and the
+/// legacy `{"type": "enabled", "budget_tokens": n}`. It has no field through which reasoning
+/// text could be requested (D-00g).
+#[derive(Debug, Serialize)]
+struct ClaudeThinking {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    budget_tokens: Option<u32>,
+}
+
+/// What Anthropic's request body can carry of a profile's effort data (Phase 51, D-00h): a
+/// listed level (`output_config.effort`), `off` and `auto` (the `thinking` switch) and, on a model
+/// whose profile carries budget bounds, the legacy `thinking.budget_tokens`. Plan 51-12 confirms
+/// each form against the dated probe or sets this to [`WireCaps::NONE`] (D-04).
+const ANTHROPIC_REASONING_WIRE: WireCaps = WireCaps {
+    levels: true,
+    off: true,
+    auto: true,
+    budget: true,
+};
+
+/// Turn an admitted effort into Anthropic's two wire fields.
+///
+/// `levels` is the model's (masked) effort data: its `enable_thinking_with_level` flag decides
+/// whether a level also sends `thinking: {type: adaptive}`.
+///
+/// # Errors
+///
+/// [`LlmError::UnsupportedParameter`] for an effort this wire cannot carry. The profile masking
+/// and `admit` already refuse those, so this is the last line of defence: it can never put a
+/// field on the wire that the request did not ask for.
+fn map_reasoning(
+    model: &str,
+    resolved: &ResolvedEffort,
+    levels: Option<&EffortLevels>,
+) -> Result<(Option<ClaudeOutputConfig>, Option<ClaudeThinking>), LlmError> {
+    if !resolved.on_wire {
+        return Ok((None, None));
+    }
+    if let Some(level) = reasoning::level_spelling(resolved.effective) {
+        let thinking = levels
+            .filter(|l| l.enable_thinking_with_level)
+            .map(|_| ClaudeThinking {
+                kind: "adaptive",
+                budget_tokens: None,
+            });
+        return Ok((Some(ClaudeOutputConfig { effort: level }), thinking));
+    }
+    Err(LlmError::unsupported_parameter(
+        "reasoning_effort",
+        resolved.effective.to_string(),
+        ANTHROPIC_PROVIDER,
+        model,
+        "this adapter has no wire form for that effort",
+    ))
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -3664,6 +3785,272 @@ stake, so an attacker donating to himself alone is a strict loss.";
             .await;
             assert!(items.iter().all(Result::is_ok), "{items:?}");
             assert_eq!(items[0].as_ref().expect("text").delta, "ok");
+        }
+    }
+
+    /// Phase 51 (REASON-02, REASON-03, REASON-06): an explicit effort reaches the wire in the form
+    /// the model's profile states, or is refused before any HTTP call (D-00h).
+    mod reasoning_effort {
+        use super::*;
+        use crate::reasoning::{
+            REASONING_EFFECTIVE_METADATA_KEY, REASONING_REQUESTED_METADATA_KEY,
+        };
+        use mockito::Server;
+        use paladin_core::platform::container::prompt::{PromptItem, UserPrompt};
+        use paladin_core::platform::container::transience::Transience;
+        use paladin_ports::output::llm_port::ReasoningEffort::{High, Low, Max, Medium, XHigh};
+        use paladin_ports::output::llm_port::{ReasoningEffort, ReasoningFallback};
+        use paladin_ports::output::model_profile::{BudgetBounds, EffortLevels, EffortSupport};
+        use serde_json::{Value, json};
+        use std::sync::Mutex as StdMutex;
+
+        const OPUS_4_8: &str = "claude-opus-4-8";
+        const OPUS_4_6: &str = "claude-opus-4-6";
+
+        fn request_for(model: &str) -> LlmRequest {
+            LlmRequest::new(
+                model,
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))
+                .expect("a user prompt must build"),
+            )
+        }
+
+        fn adapter_over(base_url: &str, overrides: Vec<(&str, EffortSupport)>) -> AnthropicAdapter {
+            let map: BTreeMap<String, ModelOverride> = overrides
+                .into_iter()
+                .map(|(model, effort)| {
+                    (
+                        model.to_string(),
+                        ModelOverride {
+                            effort: Some(effort),
+                            ..ModelOverride::default()
+                        },
+                    )
+                })
+                .collect();
+            let config =
+                AnthropicConfig::new("sk-ant-test123".to_string(), "claude-haiku-5-5".to_string())
+                    .with_base_url(base_url)
+                    .with_model_overrides(map);
+            AnthropicAdapter::new(config).expect("a valid override builds")
+        }
+
+        /// Send `request` through an adapter carrying `overrides` against a mock `/messages`;
+        /// returns the raw request body (`None` when no HTTP call was made) and the result.
+        async fn send_raw(
+            overrides: Vec<(&str, EffortSupport)>,
+            request: LlmRequest,
+        ) -> (Option<String>, Result<LlmResponse, LlmError>) {
+            let mut server = Server::new_async().await;
+            let captured: Arc<StdMutex<Option<String>>> = Arc::new(StdMutex::new(None));
+            let slot = Arc::clone(&captured);
+            server
+                .mock("POST", "/messages")
+                .with_status(200)
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    TEXT_ONLY_OPUS_4_8_JSON.as_bytes().to_vec()
+                })
+                .create_async()
+                .await;
+            let adapter = adapter_over(&server.url(), overrides);
+            let result = adapter.generate(request).await;
+            let body = captured.lock().unwrap().take();
+            (body, result)
+        }
+
+        fn json_of(body: Option<String>) -> Value {
+            serde_json::from_str(&body.expect("the request reached the wire"))
+                .expect("the body must be JSON")
+        }
+
+        /// claude-opus-4-8's shape: levels, off, auto, no budget form, adaptive thinking beside
+        /// a level when `paired`.
+        fn opus_4_8_levels(paired: bool) -> EffortSupport {
+            EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High, XHigh, Max])
+                    .with_off(true)
+                    .with_auto(true)
+                    .with_enable_thinking_with_level(paired),
+            )
+        }
+
+        /// claude-opus-4-6's shape: levels, off, auto and the legacy budget form.
+        fn opus_4_6_budget() -> EffortSupport {
+            EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High, Max])
+                    .with_off(true)
+                    .with_auto(true)
+                    .with_budget(BudgetBounds::new(1024, 32_000)),
+            )
+        }
+
+        #[tokio::test]
+        async fn a_level_sends_output_config_effort_and_adaptive_thinking_when_the_profile_pairs_them()
+         {
+            let (body, result) = send_raw(
+                vec![(OPUS_4_8, opus_4_8_levels(true))],
+                request_for(OPUS_4_8).with_reasoning(High),
+            )
+            .await;
+            result.expect("a listed level is accepted");
+            let body = json_of(body);
+            assert_eq!(body["output_config"], json!({"effort": "high"}));
+            assert_eq!(body["thinking"], json!({"type": "adaptive"}));
+        }
+
+        #[tokio::test]
+        async fn a_level_sends_only_output_config_when_the_profile_does_not_pair_thinking() {
+            let (body, result) = send_raw(
+                vec![(OPUS_4_8, opus_4_8_levels(false))],
+                request_for(OPUS_4_8).with_reasoning(High),
+            )
+            .await;
+            result.expect("a listed level is accepted");
+            let body = json_of(body);
+            assert_eq!(body["output_config"], json!({"effort": "high"}));
+            assert!(body.get("thinking").is_none(), "{body}");
+        }
+
+        #[tokio::test]
+        async fn the_effort_body_is_the_unset_body_plus_the_two_trailing_fields() {
+            let (unset, _) = send_raw(
+                vec![(OPUS_4_8, opus_4_8_levels(true))],
+                request_for(OPUS_4_8),
+            )
+            .await;
+            let (set, _) = send_raw(
+                vec![(OPUS_4_8, opus_4_8_levels(true))],
+                request_for(OPUS_4_8).with_reasoning(High),
+            )
+            .await;
+            let unset = unset.expect("the unset request reached the wire");
+            let prefix = unset.strip_suffix('}').expect("a JSON object");
+            assert_eq!(
+                set.expect("the effort request reached the wire"),
+                format!(
+                    "{prefix},\"output_config\":{{\"effort\":\"high\"}},\"thinking\":{{\"type\":\"adaptive\"}}}}"
+                )
+            );
+        }
+
+        #[tokio::test]
+        async fn the_response_records_requested_and_effective_effort() {
+            let (_, result) = send_raw(
+                vec![(OPUS_4_8, opus_4_8_levels(true))],
+                request_for(OPUS_4_8).with_reasoning(High),
+            )
+            .await;
+            let metadata = result.expect("accepted").metadata;
+            assert_eq!(
+                metadata
+                    .get(REASONING_REQUESTED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("high")
+            );
+            assert_eq!(
+                metadata
+                    .get(REASONING_EFFECTIVE_METADATA_KEY)
+                    .map(String::as_str),
+                Some("high")
+            );
+        }
+
+        #[tokio::test]
+        async fn an_unset_effort_sends_neither_field_and_stamps_nothing() {
+            let (body, result) = send_raw(
+                vec![(OPUS_4_8, opus_4_8_levels(true))],
+                request_for(OPUS_4_8),
+            )
+            .await;
+            let metadata = result.expect("accepted").metadata;
+            assert!(!metadata.contains_key(REASONING_REQUESTED_METADATA_KEY));
+            assert!(!metadata.contains_key(REASONING_EFFECTIVE_METADATA_KEY));
+            let body = body.expect("reached the wire");
+            assert!(
+                !body.contains("output_config") && !body.contains("thinking"),
+                "{body}"
+            );
+        }
+
+        #[tokio::test]
+        async fn an_effort_on_an_unmeasured_model_is_refused_before_any_http_call() {
+            let (body, result) =
+                send_raw(Vec::new(), request_for(OPUS_4_8).with_reasoning(High)).await;
+            assert!(
+                body.is_none(),
+                "no request may reach the endpoint: {body:?}"
+            );
+            let error = result.expect_err("an unmeasured model refuses an explicit effort");
+            assert_eq!(error.transience(), Transience::Permanent);
+            match error {
+                LlmError::UnsupportedParameter {
+                    reason,
+                    provider,
+                    model,
+                    ..
+                } => {
+                    assert_eq!(provider, "anthropic");
+                    assert_eq!(model, OPUS_4_8);
+                    assert!(
+                        reason.contains("llm.anthropic.models.claude-opus-4-8.effort"),
+                        "{reason}"
+                    );
+                }
+                other => panic!("expected UnsupportedParameter, got {other:?}"),
+            }
+        }
+
+        #[tokio::test]
+        async fn an_unlisted_level_is_refused_before_any_http_call() {
+            let (body, result) = send_raw(
+                vec![(OPUS_4_8, opus_4_8_levels(true))],
+                request_for(OPUS_4_8).with_reasoning(ReasoningEffort::Minimal),
+            )
+            .await;
+            assert!(body.is_none(), "{body:?}");
+            assert!(matches!(result, Err(LlmError::UnsupportedParameter { .. })));
+        }
+
+        #[tokio::test]
+        async fn a_substituting_fallback_sends_the_nearest_lower_level_and_records_both() {
+            let levels = EffortSupport::Supported(EffortLevels::new([Low, High]));
+            let (body, result) = send_raw(
+                vec![(OPUS_4_8, levels)],
+                request_for(OPUS_4_8)
+                    .with_reasoning(Medium)
+                    .with_reasoning_fallback(ReasoningFallback::NearestLower),
+            )
+            .await;
+            let metadata = result.expect("a substitution is accepted").metadata;
+            assert_eq!(json_of(body)["output_config"], json!({"effort": "low"}));
+            assert_eq!(metadata[REASONING_REQUESTED_METADATA_KEY], "medium");
+            assert_eq!(metadata[REASONING_EFFECTIVE_METADATA_KEY], "low");
+        }
+
+        #[test]
+        fn the_reported_profile_keeps_levels_off_auto_and_budget() {
+            let adapter = adapter_over("http://localhost:1", vec![(OPUS_4_6, opus_4_6_budget())]);
+            let EffortSupport::Supported(levels) = adapter.model_profile(OPUS_4_6).unwrap().effort
+            else {
+                panic!("a wire that carries every form keeps the override Supported");
+            };
+            assert_eq!(levels.levels, [Low, Medium, High, Max]);
+            assert!(levels.off && levels.auto);
+            assert_eq!(levels.budget, Some(BudgetBounds::new(1024, 32_000)));
+        }
+
+        #[test]
+        fn an_unmeasured_model_stays_unmeasured_in_the_reported_profile() {
+            let adapter = adapter_over("http://localhost:1", Vec::new());
+            assert_eq!(
+                adapter.model_profile(OPUS_4_8).unwrap().effort,
+                EffortSupport::Unmeasured
+            );
         }
     }
 }

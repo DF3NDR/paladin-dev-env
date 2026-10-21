@@ -43,7 +43,9 @@ pub(crate) mod seeded;
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Mutex;
 
-use paladin_ports::output::model_profile::{ModelProfile, ParamSupport, StopSupport};
+use paladin_ports::output::model_profile::{
+    EffortSupport, ModelProfile, ParamSupport, StopSupport,
+};
 use serde::{Deserialize, Serialize};
 
 /// The `LlmResponse.metadata` key under which an adapter records that the request's model has
@@ -353,6 +355,18 @@ pub struct ModelOverride {
     pub json_object: Option<bool>,
     /// Whether the model supports a JSON-schema `response_format`.
     pub json_schema: Option<bool>,
+    /// Which reasoning efforts the model takes (REASON-04, D-03): the operator's statement that
+    /// unlocks an explicit `LlmRequest.reasoning` for a model nobody has measured, or replaces
+    /// the seeded data. YAML key `llm.<provider>.models.<model-id>.effort`.
+    ///
+    /// The shapes are `unmeasured`, `wire_unsupported`, `no_reasoning` and
+    /// `{supported: {levels: [low, high], off: true, auto: true, budget: {min: 1024, max:
+    /// 32000}, coerced: [medium], enable_thinking_with_level: true}}`. `levels` and `coerced`
+    /// hold only the six levels (`minimal`, `low`, `medium`, `high`, `xhigh`, `max`), strictly
+    /// ascending and without repeats, and the two lists must not overlap; a budget needs
+    /// `1 <= min <= max`. The adapter still sends only what its wire can carry: a form the wire
+    /// lacks is removed from the profile the adapter reports, never sent.
+    pub effort: Option<EffortSupport>,
 }
 
 impl ModelOverride {
@@ -360,7 +374,8 @@ impl ModelOverride {
     ///
     /// Rejects: a zero context window; a zero maximum output; a maximum output above the context
     /// window (when both are set here); a `Range` with `lo > hi`; any non-finite bound or fixed
-    /// value; and `Supported { max: Some(0) }` stop sequences.
+    /// value; `Supported { max: Some(0) }` stop sequences; and an `effort` whose levels are
+    /// unsorted, repeated, overlap the coerced list or carry an invalid budget span.
     ///
     /// # Errors
     ///
@@ -380,6 +395,9 @@ impl ModelOverride {
         }
         if let Some(stop) = self.stop_sequences {
             validate_stop(stop)?;
+        }
+        if let Some(effort) = &self.effort {
+            validate_effort(effort)?;
         }
         Ok(())
     }
@@ -418,6 +436,11 @@ impl ModelOverride {
         }
         if let Some(supported) = self.json_schema {
             profile = profile.with_json_schema(supported);
+        }
+        // The operator's effort statement replaces the seeded data; the probe date
+        // (`effort_verified_on`) is the seed's own and is left alone.
+        if let Some(effort) = &self.effort {
+            profile = profile.with_effort(effort.clone());
         }
         profile
     }
@@ -462,6 +485,17 @@ fn validate_support(field: &str, support: ParamSupport) -> Result<(), String> {
             }
         }
         ParamSupport::NotSent => {}
+    }
+    Ok(())
+}
+
+/// An effort statement: a `Supported` entry must be well formed (levels only, strictly ascending,
+/// no repeats, disjoint from the coerced list, a valid budget span). The error names the field.
+fn validate_effort(effort: &EffortSupport) -> Result<(), String> {
+    if let EffortSupport::Supported(levels) = effort {
+        levels
+            .validate()
+            .map_err(|problem| format!("effort: {problem}"))?;
     }
     Ok(())
 }
@@ -930,6 +964,95 @@ mod tests {
     fn model_override_rejects_a_window_past_u32_naming_the_field() {
         let error = parse("context_window: 4294967296\n").expect_err("past u32::MAX");
         assert!(error.to_string().contains("context_window"), "{error}");
+    }
+
+    #[test]
+    fn model_override_effort_parses_validates_and_is_laid_over_the_profile() {
+        use paladin_ports::output::llm_port::ReasoningEffort::{High, Low, Max};
+        use paladin_ports::output::model_profile::{EffortLevels, EffortSupport};
+
+        let over = parse(
+            "effort:\n  supported:\n    levels: [low, high, max]\n    off: true\n    auto: true\n",
+        )
+        .expect("an effort override");
+        assert_eq!(
+            over.effort,
+            Some(EffortSupport::Supported(
+                EffortLevels::new([Low, High, Max])
+                    .with_off(true)
+                    .with_auto(true)
+            ))
+        );
+        assert!(over.validate().is_ok());
+
+        let base = ModelProfile::new()
+            .with_context_window(1000)
+            .with_effort_verified_on("2026-10-01");
+        let merged = over.apply_to(base);
+        assert_eq!(merged.effort, over.effort.clone().unwrap());
+        assert_eq!(merged.context_window, Some(1000), "other fields are kept");
+        assert_eq!(
+            merged.effort_verified_on.as_deref(),
+            Some("2026-10-01"),
+            "an operator override never rewrites the probe date"
+        );
+    }
+
+    #[test]
+    fn model_override_without_effort_keeps_the_underlying_effort() {
+        use paladin_ports::output::model_profile::EffortSupport;
+
+        let base = ModelProfile::new().with_effort(EffortSupport::NoReasoning);
+        let merged = ModelOverride::default().apply_to(base);
+        assert_eq!(merged.effort, EffortSupport::NoReasoning);
+    }
+
+    #[test]
+    fn model_override_accepts_an_explicit_unmeasured_effort() {
+        use paladin_ports::output::model_profile::EffortSupport;
+
+        let over = parse("effort: unmeasured\n").expect("a unit variant");
+        assert_eq!(over.effort, Some(EffortSupport::Unmeasured));
+        assert!(over.validate().is_ok());
+        let merged = over.apply_to(ModelProfile::new().with_effort(EffortSupport::NoReasoning));
+        assert_eq!(merged.effort, EffortSupport::Unmeasured);
+    }
+
+    #[test]
+    fn model_override_effort_failures_name_the_field() {
+        for (yaml, why) in [
+            (
+                "effort:\n  supported:\n    levels: [high, low]\n",
+                "unsorted levels",
+            ),
+            (
+                "effort:\n  supported:\n    levels: [low, low]\n",
+                "repeated level",
+            ),
+            (
+                "effort:\n  supported:\n    levels: [low, high]\n    coerced: [high]\n",
+                "a level both listed and coerced",
+            ),
+            (
+                "effort:\n  supported:\n    levels: [low]\n    budget: {min: 0, max: 10}\n",
+                "a zero budget minimum",
+            ),
+            (
+                "effort:\n  supported:\n    levels: [low]\n    budget: {min: 20, max: 10}\n",
+                "an inverted budget span",
+            ),
+        ] {
+            let over = parse(yaml).unwrap_or_else(|e| panic!("{why}: parses ({e})"));
+            let error = over.validate().expect_err(why);
+            assert!(error.contains("effort"), "{why}: {error}");
+        }
+    }
+
+    #[test]
+    fn model_override_effort_still_rejects_unknown_keys() {
+        let error = parse("effort:\n  supported:\n    levels: [low]\n    offf: true\n")
+            .expect_err("an unknown key inside the effort");
+        assert!(error.to_string().contains("offf"), "{error}");
     }
 
     #[test]

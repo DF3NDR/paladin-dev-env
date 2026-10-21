@@ -103,6 +103,8 @@ pub mod pricing;
 pub mod provider_factory;
 // Documented by its own inner `//!` block (a `pub mod` carries one doc form, never both).
 pub mod rate_limit_headers;
+// Documented by its own inner `//!` block (a `pub mod` carries one doc form, never both).
+pub mod reasoning;
 /// Credential redaction shared by every provider adapter (not feature-gated
 /// — reused by the shared compatible core and by bespoke adapters alike).
 #[allow(missing_docs)]

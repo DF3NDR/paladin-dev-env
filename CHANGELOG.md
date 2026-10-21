@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Reasoning effort: DeepSeek and OpenAI honour it exactly or refuse before HTTP
+  (REASON-02 to REASON-06; Phase 51 plan 03).** New module `paladin_llm::reasoning` with
+  `ReasoningWire` (`unsupported`, `top_level_effort`, `thinking_object`, `enable_thinking`) and the
+  re-exported keys `paladin.reasoning_requested` / `paladin.reasoning_effective`. `ModelOverride`
+  gains `effort: Option<EffortSupport>` (YAML `llm.<provider>.models.<model-id>.effort`), validated
+  at adapter construction (levels only, strictly ascending, no duplicates, disjoint from `coerced`,
+  budget `1 <= min <= max`) with an error naming `effort`. `DeepSeekAdapter` and `OpenAIAdapter`
+  send `LlmRequest.reasoning` exactly (DeepSeek: `reasoning_effort` plus the `thinking` switch;
+  OpenAI: top-level `reasoning_effort`, `none` for `off`) or return `LlmError::UnsupportedParameter`
+  before any HTTP call and before any retry, naming the provider, model, effort and the override
+  key that would unlock the model. A budget cannot reach either wire, and a `Budget(n)` must stay
+  below the effective `max_tokens`. A substituting `ReasoningFallback` logs one `warn!` (target
+  `paladin::reasoning`) per adapter instance, model and pair of values, and every response (and a
+  stream's terminal chunk) carries both metadata keys; an unset effort changes no wire byte and
+  stamps nothing. No model is seeded with effort data yet, so only an override unlocks an explicit
+  effort until the dated probe lands.
 - **Reasoning effort: the provider-neutral vocabulary, the one admission rule and the first
   typed refusal (REASON-01, REASON-02, REASON-04, REASON-06; Phase 51 plan 01).**
   `ReasoningEffort` (`Off`, `Auto`, `Minimal`, `Low`, `Medium`, `High`, `XHigh`, `Max`,

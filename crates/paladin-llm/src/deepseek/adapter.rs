@@ -15,15 +15,18 @@ use std::env;
 use std::time::{Duration, SystemTime};
 
 use paladin_core::platform::container::prompt::{PromptItem, PromptType};
+use paladin_ports::output::llm_port::ReasoningEffort;
 use paladin_ports::output::llm_port::{
     FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ModelProfile, ParamSupport,
     ProviderCapabilities, StopSupport, StreamingResponse, TokenUsage,
 };
+use paladin_ports::output::model_profile::{EffortLevels, EffortSupport, ResolvedEffort};
 use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
 use crate::backoff::exponential_backoff;
 use crate::http_status::map_http_status_with_hints;
 use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
+use crate::reasoning::{self, SubstitutionLog, WireCaps, mask_effort};
 use crate::redaction::RedactedKey;
 use crate::registry::{
     DEFAULT_MAX_RETRIES, ModelOverride, ModelRegistry, config_knob_builders,
@@ -276,6 +279,80 @@ struct DeepSeekRequest {
     /// a pre-0.10 request (X-03).
     #[serde(skip_serializing_if = "Option::is_none")]
     stream_options: Option<DeepSeekStreamOptions>,
+    /// `LlmRequest.reasoning` as a listed level, on the wire as `reasoning_effort`
+    /// (Phase 51, D-00f). Omitted entirely when no effort is set or the effort is `Off` /
+    /// `Auto`, which travel as the `thinking` switch alone, keeping an unset request's body
+    /// byte-identical (D-00i). Placed last so the existing field order is untouched.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<&'static str>,
+    /// DeepSeek's thinking switch: `enabled` beside a level whose profile says
+    /// `enable_thinking_with_level`, and for `Auto`; `disabled` for `Off`. Omitted otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<DeepSeekThinking>,
+}
+
+/// `DeepSeekRequest.thinking`'s only shape this adapter sends: `{"type": "enabled"}` or
+/// `{"type": "disabled"}`.
+#[derive(Debug, Serialize)]
+struct DeepSeekThinking {
+    #[serde(rename = "type")]
+    kind: &'static str,
+}
+
+/// What DeepSeek's request body can carry of a profile's effort data (Phase 51, D-00f): a listed
+/// level (`reasoning_effort`), `off` and `auto` (the `thinking` switch). It has no field for a
+/// reasoning-token budget, so a budget is masked out of the profile this adapter reports and is
+/// never sent. Plan 51-12 confirms each form against the dated probe or sets this to
+/// [`WireCaps::NONE`] (D-04).
+const DEEPSEEK_REASONING_WIRE: WireCaps = WireCaps {
+    levels: true,
+    off: true,
+    auto: true,
+    budget: false,
+};
+
+/// Turn an admitted effort into DeepSeek's two wire fields.
+///
+/// `levels` is the model's (masked) effort data: its `enable_thinking_with_level` flag decides
+/// whether a level also sends `thinking: {type: enabled}`.
+///
+/// # Errors
+///
+/// [`LlmError::UnsupportedParameter`] for an effort this wire cannot carry. The profile masking
+/// and `admit` already refuse those, so this is the last line of defence: it can never put a
+/// field on the wire that the request did not ask for.
+fn map_reasoning(
+    model: &str,
+    resolved: &ResolvedEffort,
+    levels: Option<&EffortLevels>,
+) -> Result<(Option<&'static str>, Option<DeepSeekThinking>), LlmError> {
+    if !resolved.on_wire {
+        return Ok((None, None));
+    }
+    if let Some(level) = reasoning::level_spelling(resolved.effective) {
+        let thinking = levels
+            .filter(|l| l.enable_thinking_with_level)
+            .map(|_| DeepSeekThinking { kind: "enabled" });
+        return Ok((Some(level), thinking));
+    }
+    // `Off` switches thinking off and `Auto` switches it on at the vendor's own depth; neither
+    // carries a level.
+    match resolved.effective {
+        ReasoningEffort::Off => {
+            return Ok((None, Some(DeepSeekThinking { kind: "disabled" })));
+        }
+        ReasoningEffort::Auto => {
+            return Ok((None, Some(DeepSeekThinking { kind: "enabled" })));
+        }
+        _ => {}
+    }
+    Err(LlmError::unsupported_parameter(
+        "reasoning_effort",
+        resolved.effective.to_string(),
+        DEEPSEEK_PROVIDER,
+        model,
+        "this adapter has no wire form for that effort",
+    ))
 }
 
 /// `DeepSeekRequest.stream_options`'s only shape this adapter sends (D-15).
@@ -466,6 +543,9 @@ pub struct DeepSeekAdapter {
     format_log: FormatLog,
     /// Which (model, check) usage findings this instance has already warned about (G-50-5a).
     usage_log: UsageLog,
+    /// Which (model, requested, effective) effort substitutions this instance has already warned
+    /// about (Phase 51, D-06).
+    substitutions: SubstitutionLog,
 }
 
 /// What this adapter's request builder carries today, stated once so the adapter-wide fallback
@@ -569,7 +649,17 @@ impl DeepSeekAdapter {
             omissions: OmissionLog::new(),
             format_log: FormatLog::new(),
             usage_log: UsageLog::new(),
+            substitutions: SubstitutionLog::new(),
         })
+    }
+
+    /// The request model's profile as this adapter's wire can honour it: the effort data has
+    /// whatever DeepSeek's body cannot carry removed ([`DEEPSEEK_REASONING_WIRE`]), so a caller
+    /// reading [`LlmPort::model_profile`] judges exactly what [`Self::build_request`] will send.
+    fn wire_profile(&self, model: &str) -> ModelProfile {
+        let mut profile = self.model_registry.profile(model);
+        profile.effort = mask_effort(std::mem::take(&mut profile.effort), DEEPSEEK_REASONING_WIRE);
+        profile
     }
 
     /// Build DeepSeek API request from LlmRequest, plus the notes the buffered path records on
@@ -588,12 +678,34 @@ impl DeepSeekAdapter {
     ) -> Result<(DeepSeekRequest, RequestNotes), LlmError> {
         let messages = self.convert_prompt_to_messages(&request.prompt)?;
         let params = &request.prompt.entity.data.parameters;
-        let profile = self.model_registry.profile(&request.model);
+        let profile = self.wire_profile(&request.model);
 
         // The caller's value, else the configured default; either is held to the model's
         // maximum output before anything is sent.
         let max_tokens = params.max_tokens.or(self.config.max_tokens);
         sampling::check_max_tokens(DEEPSEEK_PROVIDER, &request.model, &profile, max_tokens)?;
+
+        // Phase 51 (D-00f): an explicit effort is sent exactly or refused here, before any HTTP
+        // call and before any retry loop -- never routed through the omit-and-log path below.
+        let resolved = reasoning::admit(
+            DEEPSEEK_PROVIDER,
+            &request.model,
+            &profile,
+            request.reasoning,
+            request.reasoning_fallback,
+            max_tokens,
+            &self.substitutions,
+        )?;
+        let (reasoning_effort, thinking) = match &resolved {
+            Some(resolved) => {
+                let levels = match &profile.effort {
+                    EffortSupport::Supported(levels) => Some(levels),
+                    _ => None,
+                };
+                map_reasoning(&request.model, resolved, levels)?
+            }
+            None => (None, None),
+        };
 
         let applied = sampling::apply(&profile, params);
         let params_omitted = self
@@ -634,11 +746,15 @@ impl DeepSeekAdapter {
             // existing defensive `api_request.stream = true` override below
             // (D-15).
             stream_options: None,
+            reasoning_effort,
+            thinking,
         };
         let notes = RequestNotes {
             params_omitted,
             format_adjusted,
             unprofiled_model,
+            reasoning_requested: resolved.map(|r| r.requested.to_string()),
+            reasoning_effective: resolved.map(|r| r.effective.to_string()),
         };
         Ok((body, notes))
     }
@@ -1223,7 +1339,7 @@ impl LlmPort for DeepSeekAdapter {
     }
 
     fn model_profile(&self, model: &str) -> Option<ModelProfile> {
-        Some(self.model_registry.profile(model))
+        Some(self.wire_profile(model))
     }
 }
 
@@ -2537,6 +2653,470 @@ mod tests {
                 }
                 other => panic!("expected InvalidPrompt, got {other:?}"),
             }
+        }
+    }
+
+    // ── Phase 51 (REASON-02, REASON-03, D-00f): an explicit effort reaches the wire or is refused ──
+
+    mod reasoning_effort {
+        use super::*;
+        use crate::reasoning::{
+            REASONING_EFFECTIVE_METADATA_KEY, REASONING_REQUESTED_METADATA_KEY,
+        };
+        use paladin_core::platform::container::prompt::UserPrompt;
+        use paladin_core::platform::container::transience::Transience;
+        use paladin_ports::output::llm_port::ReasoningEffort::{High, Low, Max};
+        use paladin_ports::output::llm_port::{ReasoningEffort, ReasoningFallback};
+        use paladin_ports::output::model_profile::{EffortLevels, EffortSupport};
+        use serde_json::json;
+        use std::sync::Mutex;
+
+        const PRO: &str = "deepseek-v4-pro";
+
+        fn request_for(model: &str) -> LlmRequest {
+            LlmRequest::new(
+                model,
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))
+                .expect("a user prompt must build"),
+            )
+        }
+
+        fn ok_body() -> Vec<u8> {
+            json!({
+                "id": "cmpl-1",
+                "model": PRO,
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop"
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            })
+            .to_string()
+            .into_bytes()
+        }
+
+        /// The operator's statement for the pro model used by most cases: three levels, off,
+        /// auto, and the explicit thinking flag sent beside a level.
+        fn pro_levels() -> EffortSupport {
+            EffortSupport::Supported(
+                EffortLevels::new([Low, High, Max])
+                    .with_off(true)
+                    .with_auto(true)
+                    .with_enable_thinking_with_level(true),
+            )
+        }
+
+        /// Send `request` through an adapter whose `llm.deepseek.models` carries `overrides`,
+        /// against a mock; returns the raw request body (`None` when no HTTP call was made) and
+        /// the result.
+        async fn send_raw(
+            overrides: Vec<(&str, EffortSupport)>,
+            request: LlmRequest,
+        ) -> (Option<String>, Result<LlmResponse, LlmError>) {
+            let mut server = mockito::Server::new_async().await;
+            let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let slot = Arc::clone(&captured);
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    ok_body()
+                })
+                .create_async()
+                .await;
+
+            let mut map = BTreeMap::new();
+            for (model, effort) in overrides {
+                map.insert(
+                    model.to_string(),
+                    ModelOverride {
+                        effort: Some(effort),
+                        ..ModelOverride::default()
+                    },
+                );
+            }
+            let config = DeepSeekConfig::new("test-key".to_string(), "deepseek-flash".to_string())
+                .with_base_url(server.url())
+                .with_model_overrides(map);
+            let adapter = DeepSeekAdapter::new(config).expect("a valid override builds");
+            let result = adapter.generate(request).await;
+            let body = captured.lock().unwrap().take();
+            (body, result)
+        }
+
+        #[tokio::test]
+        async fn a_listed_level_adds_exactly_the_effort_and_thinking_fields() {
+            let (unset, _) = send_raw(vec![(PRO, pro_levels())], request_for(PRO)).await;
+            let (set, result) = send_raw(
+                vec![(PRO, pro_levels())],
+                request_for(PRO).with_reasoning(High),
+            )
+            .await;
+            result.expect("a listed level is accepted");
+
+            let unset = unset.expect("the unset request reached the wire");
+            let set = set.expect("the effort request reached the wire");
+            // The effort body is the unset body plus two trailing fields, in this order: nothing
+            // else moved, so the existing field order is intact (D-00i).
+            let prefix = unset.strip_suffix('}').expect("a JSON object");
+            assert_eq!(
+                set,
+                format!(
+                    "{prefix},\"reasoning_effort\":\"high\",\"thinking\":{{\"type\":\"enabled\"}}}}"
+                )
+            );
+        }
+
+        #[tokio::test]
+        async fn a_level_without_the_thinking_flag_sends_only_the_effort() {
+            let plain = EffortSupport::Supported(EffortLevels::new([Low, High]));
+            let (body, result) =
+                send_raw(vec![(PRO, plain)], request_for(PRO).with_reasoning(Low)).await;
+            result.expect("accepted");
+            let body: serde_json::Value = serde_json::from_str(&body.unwrap()).unwrap();
+            assert_eq!(body["reasoning_effort"], "low");
+            assert!(body.get("thinking").is_none(), "{body}");
+        }
+
+        #[tokio::test]
+        async fn the_response_records_requested_and_effective_effort() {
+            let (_, result) = send_raw(
+                vec![(PRO, pro_levels())],
+                request_for(PRO).with_reasoning(High),
+            )
+            .await;
+            let metadata = result.expect("accepted").metadata;
+            assert_eq!(
+                metadata
+                    .get(REASONING_REQUESTED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("high")
+            );
+            assert_eq!(
+                metadata
+                    .get(REASONING_EFFECTIVE_METADATA_KEY)
+                    .map(String::as_str),
+                Some("high")
+            );
+        }
+
+        #[tokio::test]
+        async fn an_unset_effort_stamps_nothing_and_sends_nothing() {
+            let (body, result) = send_raw(vec![(PRO, pro_levels())], request_for(PRO)).await;
+            let metadata = result.expect("accepted").metadata;
+            assert!(!metadata.contains_key(REASONING_REQUESTED_METADATA_KEY));
+            assert!(!metadata.contains_key(REASONING_EFFECTIVE_METADATA_KEY));
+            let body = body.unwrap();
+            assert!(
+                !body.contains("reasoning_effort") && !body.contains("thinking"),
+                "{body}"
+            );
+        }
+
+        #[tokio::test]
+        async fn an_effort_on_an_unmeasured_model_is_refused_before_any_http_call() {
+            let (body, result) = send_raw(
+                Vec::new(),
+                request_for("deepseek-flash").with_reasoning(High),
+            )
+            .await;
+            assert!(
+                body.is_none(),
+                "no request may reach the endpoint: {body:?}"
+            );
+            let error = result.expect_err("an unmeasured model refuses an explicit effort");
+            assert_eq!(error.transience(), Transience::Permanent);
+            match error {
+                LlmError::UnsupportedParameter {
+                    reason,
+                    provider,
+                    model,
+                    ..
+                } => {
+                    assert_eq!(provider, "deepseek");
+                    assert_eq!(model, "deepseek-flash");
+                    assert!(
+                        reason.contains("llm.deepseek.models.deepseek-flash.effort"),
+                        "{reason}"
+                    );
+                }
+                other => panic!("expected UnsupportedParameter, got {other:?}"),
+            }
+        }
+
+        fn adapter_over(base_url: &str, model: &str, effort: EffortSupport) -> DeepSeekAdapter {
+            let over = ModelOverride {
+                effort: Some(effort),
+                ..ModelOverride::default()
+            };
+            let config = DeepSeekConfig::new("test-key".to_string(), "deepseek-flash".to_string())
+                .with_base_url(base_url)
+                .with_model_overrides(BTreeMap::from([(model.to_string(), over)]));
+            DeepSeekAdapter::new(config).expect("a valid override builds")
+        }
+
+        fn off_auto_coerced() -> EffortSupport {
+            EffortSupport::Supported(
+                EffortLevels::new([Low, High, Max])
+                    .with_off(true)
+                    .with_auto(true)
+                    .with_coerced([
+                        ReasoningEffort::Minimal,
+                        ReasoningEffort::Medium,
+                        ReasoningEffort::XHigh,
+                    ]),
+            )
+        }
+
+        #[tokio::test]
+        async fn off_sends_thinking_disabled_and_no_effort() {
+            let (body, result) = send_raw(
+                vec![(PRO, off_auto_coerced())],
+                request_for(PRO).with_reasoning(ReasoningEffort::Off),
+            )
+            .await;
+            let metadata = result.expect("off is accepted").metadata;
+            let body: serde_json::Value = serde_json::from_str(&body.unwrap()).unwrap();
+            assert_eq!(body["thinking"], json!({"type": "disabled"}));
+            assert!(body.get("reasoning_effort").is_none(), "{body}");
+            assert_eq!(metadata[REASONING_REQUESTED_METADATA_KEY], "off");
+            assert_eq!(metadata[REASONING_EFFECTIVE_METADATA_KEY], "off");
+        }
+
+        #[tokio::test]
+        async fn auto_sends_thinking_enabled_and_no_effort() {
+            let (body, result) = send_raw(
+                vec![(PRO, off_auto_coerced())],
+                request_for(PRO).with_reasoning(ReasoningEffort::Auto),
+            )
+            .await;
+            let metadata = result.expect("auto is accepted").metadata;
+            let body: serde_json::Value = serde_json::from_str(&body.unwrap()).unwrap();
+            assert_eq!(body["thinking"], json!({"type": "enabled"}));
+            assert!(body.get("reasoning_effort").is_none(), "{body}");
+            assert_eq!(metadata[REASONING_EFFECTIVE_METADATA_KEY], "auto");
+        }
+
+        #[tokio::test]
+        async fn a_coerced_level_is_refused_even_with_a_fallback() {
+            let (body, result) = send_raw(
+                vec![(PRO, off_auto_coerced())],
+                request_for(PRO)
+                    .with_reasoning(ReasoningEffort::Medium)
+                    .with_reasoning_fallback(ReasoningFallback::NearestLower),
+            )
+            .await;
+            assert!(body.is_none(), "no HTTP call: {body:?}");
+            assert!(
+                matches!(result, Err(LlmError::UnsupportedParameter { .. })),
+                "{result:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn a_substituting_fallback_sends_the_nearest_level_and_records_both() {
+            let mut server = mockito::Server::new_async().await;
+            let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let slot = Arc::clone(&captured);
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    ok_body()
+                })
+                .expect(2)
+                .create_async()
+                .await;
+            let adapter = adapter_over(
+                &server.url(),
+                PRO,
+                EffortSupport::Supported(EffortLevels::new([Low, High])),
+            );
+            let request = || {
+                request_for(PRO)
+                    .with_reasoning(ReasoningEffort::XHigh)
+                    .with_reasoning_fallback(ReasoningFallback::NearestLower)
+            };
+
+            let first = adapter.generate(request()).await.expect("substituted");
+            let body: serde_json::Value =
+                serde_json::from_str(&captured.lock().unwrap().take().unwrap()).unwrap();
+            assert_eq!(body["reasoning_effort"], "high");
+            assert_eq!(first.metadata[REASONING_REQUESTED_METADATA_KEY], "xhigh");
+            assert_eq!(first.metadata[REASONING_EFFECTIVE_METADATA_KEY], "high");
+
+            // The first request spent the warning; an identical one stays quiet but is still
+            // stamped.
+            let second = adapter
+                .generate(request())
+                .await
+                .expect("substituted again");
+            assert_eq!(second.metadata[REASONING_REQUESTED_METADATA_KEY], "xhigh");
+            assert_eq!(second.metadata[REASONING_EFFECTIVE_METADATA_KEY], "high");
+            assert!(!adapter.substitutions.record(
+                DEEPSEEK_PROVIDER,
+                PRO,
+                ReasoningEffort::XHigh,
+                High
+            ));
+        }
+
+        #[tokio::test]
+        async fn without_a_fallback_the_missing_level_is_refused() {
+            let (body, result) = send_raw(
+                vec![(
+                    PRO,
+                    EffortSupport::Supported(EffortLevels::new([Low, High])),
+                )],
+                request_for(PRO).with_reasoning(ReasoningEffort::XHigh),
+            )
+            .await;
+            assert!(body.is_none());
+            assert!(result.is_err());
+        }
+
+        #[tokio::test]
+        async fn a_budget_is_masked_away_and_refused() {
+            let with_budget = EffortSupport::Supported(EffortLevels::new([High]).with_budget(
+                paladin_ports::output::model_profile::BudgetBounds::new(1, 4096),
+            ));
+            let (body, result) = send_raw(
+                vec![(PRO, with_budget)],
+                request_for(PRO).with_reasoning(ReasoningEffort::Budget(1000)),
+            )
+            .await;
+            assert!(body.is_none(), "{body:?}");
+            match result {
+                Err(LlmError::UnsupportedParameter { reason, value, .. }) => {
+                    assert_eq!(value, "budget:1000");
+                    assert!(reason.contains("budget"), "{reason}");
+                }
+                other => panic!("expected UnsupportedParameter, got {other:?}"),
+            }
+        }
+
+        async fn stream_body_and_chunks(
+            effort: EffortSupport,
+            request: LlmRequest,
+        ) -> (Option<String>, Result<Vec<StreamingResponse>, LlmError>) {
+            let mut server = mockito::Server::new_async().await;
+            let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let slot = Arc::clone(&captured);
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    concat!(
+                        "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"Hi\"},\"finish_reason\":null}]}\n\n",
+                        "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"\"},\"finish_reason\":\"stop\"}]}\n\n",
+                        "data: [DONE]\n\n",
+                    )
+                    .as_bytes()
+                    .to_vec()
+                })
+                .create_async()
+                .await;
+            let adapter = adapter_over(&server.url(), PRO, effort);
+            let outcome = match adapter.generate_stream(request).await {
+                Err(error) => Err(error),
+                Ok(stream) => {
+                    let mut stream = Box::into_pin(stream);
+                    let mut chunks = Vec::new();
+                    while let Some(item) = stream.next().await {
+                        chunks.push(item.expect("every scripted item is Ok"));
+                    }
+                    Ok(chunks)
+                }
+            };
+            let body = captured.lock().unwrap().take();
+            (body, outcome)
+        }
+
+        #[tokio::test]
+        async fn the_stream_sends_the_same_fields_and_stamps_only_the_terminal_chunk() {
+            let (body, chunks) =
+                stream_body_and_chunks(pro_levels(), request_for(PRO).with_reasoning(High)).await;
+            let body: serde_json::Value = serde_json::from_str(&body.unwrap()).unwrap();
+            assert_eq!(body["reasoning_effort"], "high");
+            assert_eq!(body["thinking"], json!({"type": "enabled"}));
+            assert_eq!(body["stream"], true);
+
+            let chunks = chunks.expect("the stream opens");
+            let (terminal, earlier) = chunks.split_last().expect("a terminal chunk");
+            assert_eq!(terminal.metadata[REASONING_REQUESTED_METADATA_KEY], "high");
+            assert_eq!(terminal.metadata[REASONING_EFFECTIVE_METADATA_KEY], "high");
+            for chunk in earlier {
+                assert!(chunk.metadata.is_empty(), "earlier chunk: {chunk:?}");
+            }
+        }
+
+        #[tokio::test]
+        async fn a_refused_effort_fails_the_stream_before_any_http_call() {
+            let (body, outcome) = stream_body_and_chunks(
+                EffortSupport::Supported(EffortLevels::new([Low])),
+                request_for(PRO).with_reasoning(Max),
+            )
+            .await;
+            assert!(body.is_none(), "{body:?}");
+            assert!(matches!(
+                outcome,
+                Err(LlmError::UnsupportedParameter { .. })
+            ));
+        }
+
+        /// T-51-12: the refusal names provider, model and effort; a prompt never reaches it.
+        #[tokio::test]
+        async fn a_refusal_carries_no_prompt_content() {
+            let request = LlmRequest::new(
+                "deepseek-flash",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "PROMPT-MARKER-7f3a".to_string(),
+                    context: Some("CONTEXT-MARKER-91bc".to_string()),
+                }))
+                .expect("a user prompt must build"),
+            )
+            .with_reasoning(High);
+            let (_, result) = send_raw(Vec::new(), request).await;
+            let error = result.expect_err("refused");
+            let text = format!("{error} | {error:?}");
+            assert!(!text.contains("PROMPT-MARKER-7f3a"), "{text}");
+            assert!(!text.contains("CONTEXT-MARKER-91bc"), "{text}");
+            assert!(!text.contains("test-key"), "{text}");
+        }
+
+        #[test]
+        fn a_budget_cannot_reach_the_wire_so_the_profile_does_not_offer_one() {
+            // Task 1 pin of the masking seam: `model_profile` is what `PaladinBuilder` reads.
+            let adapter = {
+                let over = ModelOverride {
+                    effort: Some(EffortSupport::Supported(
+                        EffortLevels::new([High]).with_budget(
+                            paladin_ports::output::model_profile::BudgetBounds::new(1, 4096),
+                        ),
+                    )),
+                    ..ModelOverride::default()
+                };
+                let config = DeepSeekConfig::new("k".to_string(), "deepseek-flash".to_string())
+                    .with_model_overrides(BTreeMap::from([(PRO.to_string(), over)]));
+                DeepSeekAdapter::new(config).expect("builds")
+            };
+            let EffortSupport::Supported(levels) = adapter.model_profile(PRO).unwrap().effort
+            else {
+                panic!("a level-carrying wire keeps the override Supported");
+            };
+            assert_eq!(levels.budget, None);
+            assert_eq!(levels.levels, [High]);
         }
     }
 

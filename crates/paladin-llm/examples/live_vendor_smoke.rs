@@ -61,6 +61,31 @@
 //! Response content is never printed. `--usage --dry-run` lists the planned calls without network
 //! access or credentials.
 //!
+//! # Effort mode (`--effort`)
+//!
+//! The Phase 51 reasoning-effort probe (D-01): for each `--models` candidate of each configured
+//! provider, calls over the raw vendor wire (not the adapters) that send every
+//! `ReasoningEffort` level through each candidate wire form of that vendor, the off and auto
+//! forms, one out-of-vocabulary value per form, and one `high` + `temperature: 0.5` call. Every
+//! call carries an output cap of [`EFFORT_MAX_TOKENS`] tokens and the [`PROBE_TIMEOUT_SECS`] s
+//! client timeout. Each printed row is numbers and a verdict only -- form, value, HTTP status,
+//! finish reason, reasoning tokens, completion tokens, elapsed milliseconds -- and a rejected
+//! call's body passes the redact-then-bound excerpt first. Response content is never printed.
+//! Only the ids passed with `--models` are probed (no curated defaults), so the spend is exactly
+//! the confirmed candidate set. `--effort --dry-run` prints the plan with no network access and no
+//! credential read.
+//!
+//! # Effort smoke (`--effort-smoke`)
+//!
+//! The adapter-path companion of `--effort` (REASON-03): per `--models` candidate, two requests
+//! through the shipped adapter (`*Config::from_env()`, `generate`) with
+//! `LlmRequest::with_reasoning` at the lowest and the highest level the adapter's own
+//! `model_profile(model).effort` admits, honouring optional `--max-tokens N` and
+//! `--timeout-seconds S` on the config. A model whose profile admits no level sends nothing and
+//! the row says why. Each row prints the outcome (`Ok`, or the `UnsupportedParameter` reason),
+//! finish reason, reasoning tokens and the `paladin.reasoning_requested` /
+//! `paladin.reasoning_effective` metadata values -- never response content.
+//!
 //! # Run commands
 //!
 //! ```text
@@ -73,6 +98,9 @@
 //! has already routed through its redact-then-bound diagnostic excerpt.
 
 use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+use paladin_core::platform::container::reasoning::{
+    REASONING_EFFECTIVE_METADATA_KEY, REASONING_REQUESTED_METADATA_KEY,
+};
 use paladin_llm::anthropic::adapter::ANTHROPIC_DEFAULT_MODEL;
 use paladin_llm::anthropic::{AnthropicAdapter, AnthropicConfig};
 use paladin_llm::deepseek::adapter::DEEPSEEK_DEFAULT_MODEL;
@@ -96,10 +124,13 @@ use paladin_llm::openai_compatible::{OpenAiCompatibleAdapter, OpenAiCompatibleCo
 use paladin_llm::qwen::adapter::{QWEN_DEFAULT_BASE_URL, QWEN_DEFAULT_MODEL, QWEN_FALLBACK_MODELS};
 use paladin_llm::qwen::{QwenAdapter, QwenConfig};
 use paladin_llm::redaction::diagnostic_excerpt;
-use paladin_ports::output::llm_port::{LlmPort, LlmRequest};
+use paladin_ports::output::llm_port::{
+    FinishReason, LlmError, LlmPort, LlmRequest, ReasoningEffort,
+};
+use paladin_ports::output::model_profile::{EffortSupport, ModelProfile};
 use serde_json::{Value, json};
 use std::fmt::Write as _;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Minimal `log::Log` implementation, no dependency (17-22, G-17-4d).
 ///
@@ -571,6 +602,14 @@ struct Options {
     /// `--usage`: send one reasoning-eliciting call per candidate model and record the usage
     /// arithmetic (numbers only).
     usage: bool,
+    /// `--effort`: the Phase 51 raw-wire reasoning-effort probe (numbers and verdicts only).
+    effort: bool,
+    /// `--effort-smoke`: the adapter-path effort smoke (mutually exclusive with the other modes).
+    effort_smoke: bool,
+    /// `--max-tokens <n>` (`--effort-smoke` only): the adapter config's output budget.
+    max_tokens: Option<u32>,
+    /// `--timeout-seconds <s>` (`--effort-smoke` only): the adapter config's request timeout.
+    timeout_seconds: Option<u64>,
     /// `--dry-run`: print the probe plan, touching no network and reading no credential.
     dry_run: bool,
     /// `--models <provider>=<id>[,<id>...]` (repeatable): extra candidate models, keyed by the
@@ -585,7 +624,7 @@ enum Command {
     Run(Options),
 }
 
-const USAGE: &str = "usage: live_vendor_smoke [--probe | --usage] [--dry-run] [--models <provider>=<id>[,<id>...]]... [-h|--help]\n\
+const USAGE: &str = "usage: live_vendor_smoke [--probe | --usage | --effort | --effort-smoke] [--dry-run] [--models <provider>=<id>[,<id>...]]... [--max-tokens <n>] [--timeout-seconds <s>] [-h|--help]\n\
 \n\
   (no flag)   credential-gated smoke probes over all nine providers\n\
   --probe     record, per configured provider, the live models listing and what each candidate\n\
@@ -593,10 +632,25 @@ const USAGE: &str = "usage: live_vendor_smoke [--probe | --usage] [--dry-run] [-
               modes, usage fields, quota-shaped errors); prints a markdown transcript\n\
   --usage     send one reasoning-eliciting call per candidate model and record the usage\n\
               arithmetic, numbers only, with a containment verdict per model; excludes --probe\n\
-  --dry-run   print the probe (or, with --usage, the usage) plan for all nine providers; no\n\
-              network access, no credential read\n\
-  --models    extra candidate model ids for one provider (repeatable); needs --probe, --usage\n\
-              or --dry-run\n\
+  --effort    send, per --models candidate, the default call, every reasoning-effort level\n\
+              through each candidate wire form of its vendor, the off and auto forms, one\n\
+              invalid value per form and one high + temperature call, over the raw wire;\n\
+              numbers and verdicts only (never response content), every call capped at 2048\n\
+              output tokens; probes only the --models ids; excludes --probe and --usage\n\
+  --effort-smoke\n\
+              send, per --models candidate, two requests through the shipped adapter\n\
+              (*Config::from_env(), generate) with LlmRequest::with_reasoning at the lowest and\n\
+              the highest level the adapter's own model_profile admits; prints the outcome, finish\n\
+              reason, reasoning tokens and the paladin.reasoning_* metadata values, never content;\n\
+              excludes --probe, --usage and --effort\n\
+  --max-tokens <n>\n\
+              with --effort-smoke: the adapter config's output budget (optional)\n\
+  --timeout-seconds <s>\n\
+              with --effort-smoke: the adapter config's request timeout (optional)\n\
+  --dry-run   print the probe (or, with --usage, --effort or --effort-smoke, that mode's) plan for\n\
+              all nine providers; no network access, no credential read\n\
+  --models    extra candidate model ids for one provider (repeatable); needs --probe, --usage,\n\
+              --effort, --effort-smoke or --dry-run\n\
 \n\
 providers: OpenAI, Anthropic, DeepSeek, Kimi, Qwen, Grok, Gemini, Ollama, OpenAI-compatible";
 
@@ -622,6 +676,18 @@ fn add_models(options: &mut Options, value: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// A positive integer flag value; anything else is an error naming the flag.
+fn positive<T: std::str::FromStr + PartialEq + Default>(
+    flag: &str,
+    value: &str,
+) -> Result<T, String> {
+    value
+        .parse::<T>()
+        .ok()
+        .filter(|n| *n != T::default())
+        .ok_or_else(|| format!("`{flag}` needs a positive integer, got `{value}`"))
+}
+
 /// Parse the argument list (without the program name). Any argument the harness does not know is
 /// an error naming it -- never a silent smoke run.
 fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Command, String> {
@@ -633,10 +699,20 @@ fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Command, String
             add_models(&mut options, value)?;
             continue;
         }
+        if let Some(value) = arg.strip_prefix("--max-tokens=") {
+            options.max_tokens = Some(positive("--max-tokens", value)?);
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--timeout-seconds=") {
+            options.timeout_seconds = Some(positive("--timeout-seconds", value)?);
+            continue;
+        }
         match arg.as_str() {
             "-h" | "--help" => help = true,
             "--probe" => options.probe = true,
             "--usage" => options.usage = true,
+            "--effort" => options.effort = true,
+            "--effort-smoke" => options.effort_smoke = true,
             "--dry-run" => options.dry_run = true,
             "--models" => {
                 let value = args.next().ok_or_else(|| {
@@ -644,17 +720,50 @@ fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Command, String
                 })?;
                 add_models(&mut options, &value)?;
             }
+            "--max-tokens" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "`--max-tokens` needs a positive integer".to_string())?;
+                options.max_tokens = Some(positive("--max-tokens", &value)?);
+            }
+            "--timeout-seconds" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "`--timeout-seconds` needs a positive integer".to_string())?;
+                options.timeout_seconds = Some(positive("--timeout-seconds", &value)?);
+            }
             other => return Err(format!("unknown argument `{other}`")),
         }
     }
     if help {
         return Ok(Command::Help);
     }
-    if options.usage && options.probe {
-        return Err("`--usage` and `--probe` are mutually exclusive".to_string());
+    let modes: Vec<&str> = [
+        (options.probe, "--probe"),
+        (options.usage, "--usage"),
+        (options.effort, "--effort"),
+        (options.effort_smoke, "--effort-smoke"),
+    ]
+    .into_iter()
+    .filter_map(|(set, flag)| set.then_some(flag))
+    .collect();
+    if let [first, second, ..] = modes.as_slice() {
+        return Err(format!("`{first}` and `{second}` are mutually exclusive"));
     }
-    if !options.models.is_empty() && !options.probe && !options.usage && !options.dry_run {
-        return Err("`--models` has no effect without --probe, --usage or --dry-run".to_string());
+    for (set, flag) in [
+        (options.max_tokens.is_some(), "--max-tokens"),
+        (options.timeout_seconds.is_some(), "--timeout-seconds"),
+    ] {
+        if set && !options.effort_smoke {
+            return Err(format!("`{flag}` has no effect without --effort-smoke"));
+        }
+    }
+    if !options.models.is_empty() && modes.is_empty() && !options.dry_run {
+        return Err(
+            "`--models` has no effect without --probe, --usage, --effort, --effort-smoke or \
+             --dry-run"
+                .to_string(),
+        );
     }
     Ok(Command::Run(options))
 }
@@ -805,6 +914,12 @@ const USAGE_MAX_TOKENS: u64 = 1024;
 /// The `--usage` prompt: a small multi-step calculation a reasoning model reasons about.
 const USAGE_PROMPT: &str =
     "What is 17 multiplied by 23? Work it out, then answer with the number only.";
+/// Output cap of an `--effort` call (research Pitfall 15): bounds the spend of a `max` effort on
+/// the operator's bill. A `length` finish is recorded as data, never an error.
+const EFFORT_MAX_TOKENS: u64 = 2048;
+/// The out-of-vocabulary effort value every form is probed with: a vendor that parses the field
+/// rejects it, one that does not answers 2xx (research A4).
+const EFFORT_INVALID_VALUE: &str = "bogus-effort-51";
 /// The JSON-mode probes name JSON in the prompt: OpenAI-chat `json_object` mode refuses a prompt
 /// that does not, and that refusal would be a prompt artefact rather than a capability finding.
 const PROBE_JSON_PROMPT: &str = "Reply with a JSON object of the form {\"answer\": \"ping\"}.";
@@ -830,6 +945,9 @@ enum ProbeKind {
     /// `--usage` only: the reasoning-eliciting arithmetic prompt under [`USAGE_MAX_TOKENS`], with
     /// no body extras and no sampling parameters.
     Usage,
+    /// `--effort` only: the same prompt as [`ProbeKind::Usage`] under [`EFFORT_MAX_TOKENS`], with
+    /// no acceptance extras; the effort fields are merged in by the caller.
+    Effort,
 }
 
 /// A probe in the ordered per-model list.
@@ -984,7 +1102,10 @@ fn remove_field(body: &mut Value, key: &str) {
 fn extras_for(spec: &ProviderSpec, kind: ProbeKind) -> Option<&'static str> {
     // `--usage` sends no extras: Kimi's `thinking: disabled` would suppress the very tokens
     // being measured (A2-50-22).
-    if matches!(kind, ProbeKind::DefaultThinking | ProbeKind::Usage) {
+    if matches!(
+        kind,
+        ProbeKind::DefaultThinking | ProbeKind::Usage | ProbeKind::Effort
+    ) {
         None
     } else {
         spec.acceptance_extras
@@ -996,13 +1117,13 @@ fn extras_for(spec: &ProviderSpec, kind: ProbeKind) -> Option<&'static str> {
 fn request_body(spec: &ProviderSpec, model: &str, kind: ProbeKind) -> Value {
     let prompt = match kind {
         ProbeKind::JsonObject | ProbeKind::JsonSchema => PROBE_JSON_PROMPT,
-        ProbeKind::Usage => USAGE_PROMPT,
+        ProbeKind::Usage | ProbeKind::Effort => USAGE_PROMPT,
         _ => PROBE_PROMPT,
     };
-    let cap = if kind == ProbeKind::Usage {
-        USAGE_MAX_TOKENS
-    } else {
-        PROBE_MAX_TOKENS
+    let cap = match kind {
+        ProbeKind::Usage => USAGE_MAX_TOKENS,
+        ProbeKind::Effort => EFFORT_MAX_TOKENS,
+        _ => PROBE_MAX_TOKENS,
     };
     let wire = spec.wire;
     let mut body = match wire {
@@ -1040,7 +1161,7 @@ fn request_body(spec: &ProviderSpec, model: &str, kind: ProbeKind) -> Value {
         ),
     };
     match kind {
-        ProbeKind::Default | ProbeKind::DefaultThinking | ProbeKind::Usage => {}
+        ProbeKind::Default | ProbeKind::DefaultThinking | ProbeKind::Usage | ProbeKind::Effort => {}
         ProbeKind::Temperature(value) => set_path(&mut body, temperature, json!(value)),
         ProbeKind::TopP => set_path(&mut body, top_p, json!(0.5)),
         ProbeKind::FrequencyPenalty => set_path(&mut body, &["frequency_penalty"], json!(0.5)),
@@ -2282,6 +2403,1254 @@ async fn run_usage(options: &Options) -> i32 {
     smoke_exit_code(configured, failed)
 }
 
+// ---------------------------------------------------------------------------------------------
+// Effort mode (`--effort`): the Phase 51 raw-wire reasoning-effort probe (D-01)
+// ---------------------------------------------------------------------------------------------
+
+/// The effort levels probed through every level-taking form, lowest first.
+const EFFORT_LEVELS: [&str; 6] = ["minimal", "low", "medium", "high", "xhigh", "max"];
+
+/// What an effort call is for; the summary lines are computed from the roles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EffortRole {
+    /// The baseline: no effort field at all.
+    Default,
+    /// A valid level through a form.
+    Level,
+    /// The off form.
+    Off,
+    /// The auto form (thinking on, vendor's default depth).
+    Auto,
+    /// An out-of-vocabulary value through a form: a parsed field rejects it.
+    Invalid,
+    /// `high` plus `temperature: 0.5`, detecting a sampling-with-effort rejection (Pitfall 13).
+    Sampling,
+    /// An explicit reasoning-token budget (at a bound, or one step outside it).
+    Budget,
+    /// A top-level `reasoning_effort: bogus-effort-51` on a vendor whose candidate form is not
+    /// that field: a 2xx answer means the field is silently ignored (research A4).
+    Detector,
+}
+
+/// One planned effort call: the form name and value label shown in the transcript, and the JSON
+/// object deep-merged into the base chat body.
+#[derive(Clone, Debug, PartialEq)]
+struct EffortCall {
+    /// The wire form: `default`, `top_level_effort`, `thinking_object`, ...
+    form: &'static str,
+    /// The value label: a level, `off`, `auto`, the invalid value, or `-`.
+    value: String,
+    role: EffortRole,
+    /// Merged into the base body; `Value::Null` for the default call.
+    extra: Value,
+}
+
+impl EffortCall {
+    fn new(form: &'static str, value: &str, role: EffortRole, extra: Value) -> Self {
+        Self {
+            form,
+            value: value.to_string(),
+            role,
+            extra,
+        }
+    }
+
+    /// Relabel the call (an invalid numeric budget is shown as its number, not as the string).
+    fn with_value(mut self, value: &str) -> Self {
+        self.value = value.to_string();
+        self
+    }
+}
+
+/// Merge `extra` into `target`: objects merge key by key, anything else replaces.
+fn deep_merge(target: &mut Value, extra: &Value) {
+    match (target, extra) {
+        (Value::Object(into), Value::Object(from)) => {
+            for (key, value) in from {
+                if value.is_object()
+                    && let Some(existing) = into.get_mut(key)
+                    && existing.is_object()
+                {
+                    deep_merge(existing, value);
+                } else {
+                    into.insert(key.clone(), value.clone());
+                }
+            }
+        }
+        (_, Value::Null) => {}
+        (target, extra) => *target = extra.clone(),
+    }
+}
+
+/// OpenAI-style top-level `reasoning_effort`.
+fn top_level_effort(value: &str) -> Value {
+    json!({"reasoning_effort": value})
+}
+
+/// Kimi-style `thinking: {type: enabled, effort}`.
+fn thinking_object_effort(value: &str) -> Value {
+    json!({"thinking": {"type": "enabled", "effort": value}})
+}
+
+/// The call that carries no effort field: the vendor's own default.
+fn default_call() -> EffortCall {
+    EffortCall::new("default", "-", EffortRole::Default, Value::Null)
+}
+
+/// One valid-level call per entry of `levels`, through `form`, each body built by `extra`.
+fn level_calls(
+    form: &'static str,
+    levels: &[&str],
+    extra: impl Fn(&str) -> Value,
+) -> Vec<EffortCall> {
+    levels
+        .iter()
+        .map(|level| EffortCall::new(form, level, EffortRole::Level, extra(level)))
+        .collect()
+}
+
+/// The `high` + `temperature: 0.5` row: `extra` plus a top-level `temperature`.
+fn sampling_call(form: &'static str, value: &str, mut extra: Value) -> EffortCall {
+    deep_merge(&mut extra, &json!({"temperature": 0.5}));
+    EffortCall::new(form, value, EffortRole::Sampling, extra)
+}
+
+/// A call whose label is the invalid value itself.
+fn invalid_call(form: &'static str, extra: Value) -> EffortCall {
+    EffortCall::new(form, EFFORT_INVALID_VALUE, EffortRole::Invalid, extra)
+}
+
+/// The top-level `reasoning_effort: bogus-effort-51` detector for a vendor whose candidate form
+/// is not that field (research A4): a 2xx answer means the field is silently ignored.
+fn detector_call() -> EffortCall {
+    EffortCall::new(
+        "detector",
+        EFFORT_INVALID_VALUE,
+        EffortRole::Detector,
+        top_level_effort(EFFORT_INVALID_VALUE),
+    )
+}
+
+/// The Kimi plan (research Open Question 1 and Pitfall 2): both candidate forms for every level,
+/// so the transcript shows which form changes `reasoning_tokens`, then off, auto, one invalid
+/// value per form and the sampling row. The sampling row uses the `thinking` object, the form the
+/// vendor documents.
+fn kimi_effort_plan() -> Vec<EffortCall> {
+    let mut plan = vec![default_call()];
+    for level in EFFORT_LEVELS {
+        plan.push(EffortCall::new(
+            "top_level_effort",
+            level,
+            EffortRole::Level,
+            top_level_effort(level),
+        ));
+        plan.push(EffortCall::new(
+            "thinking_object",
+            level,
+            EffortRole::Level,
+            thinking_object_effort(level),
+        ));
+    }
+    plan.push(EffortCall::new(
+        "thinking_object",
+        "off",
+        EffortRole::Off,
+        json!({"thinking": {"type": "disabled"}}),
+    ));
+    plan.push(EffortCall::new(
+        "thinking_object",
+        "auto",
+        EffortRole::Auto,
+        json!({"thinking": {"type": "enabled"}}),
+    ));
+    plan.push(invalid_call(
+        "top_level_effort",
+        top_level_effort(EFFORT_INVALID_VALUE),
+    ));
+    plan.push(invalid_call(
+        "thinking_object",
+        thinking_object_effort(EFFORT_INVALID_VALUE),
+    ));
+    plan.push(sampling_call(
+        "thinking_object",
+        "high+temperature=0.5",
+        thinking_object_effort("high"),
+    ));
+    plan
+}
+
+/// The OpenAI plan: `none` is the off form, then every level, one invalid value (which is also
+/// the silent-field detector) and the sampling row. `Auto` is "send nothing", so it has no call.
+fn openai_effort_plan() -> Vec<EffortCall> {
+    let mut plan = vec![default_call()];
+    plan.push(EffortCall::new(
+        "top_level_effort",
+        "none",
+        EffortRole::Off,
+        top_level_effort("none"),
+    ));
+    plan.extend(level_calls(
+        "top_level_effort",
+        &EFFORT_LEVELS,
+        top_level_effort,
+    ));
+    plan.push(invalid_call(
+        "top_level_effort",
+        top_level_effort(EFFORT_INVALID_VALUE),
+    ));
+    plan.push(sampling_call(
+        "top_level_effort",
+        "high+temperature=0.5",
+        top_level_effort("high"),
+    ));
+    plan
+}
+
+/// The DeepSeek plan: every level through `reasoning_effort`, the `thinking` toggle for off and
+/// auto, an invalid value through `reasoning_effort` (also the detector) and through
+/// `thinking.type`, and the sampling row. The valid low and high pair is the effect check the
+/// invalid call alone cannot give (DeepSeek documents coercion of some unknown names, A1-51-02).
+fn deepseek_effort_plan() -> Vec<EffortCall> {
+    let mut plan = vec![default_call()];
+    plan.extend(level_calls(
+        "top_level_effort",
+        &EFFORT_LEVELS,
+        top_level_effort,
+    ));
+    plan.push(EffortCall::new(
+        "thinking_object",
+        "off",
+        EffortRole::Off,
+        json!({"thinking": {"type": "disabled"}}),
+    ));
+    plan.push(EffortCall::new(
+        "thinking_object",
+        "auto",
+        EffortRole::Auto,
+        json!({"thinking": {"type": "enabled"}}),
+    ));
+    plan.push(invalid_call(
+        "top_level_effort",
+        top_level_effort(EFFORT_INVALID_VALUE),
+    ));
+    plan.push(invalid_call(
+        "thinking_object",
+        json!({"thinking": {"type": EFFORT_INVALID_VALUE}}),
+    ));
+    plan.push(sampling_call(
+        "top_level_effort",
+        "high+temperature=0.5",
+        top_level_effort("high"),
+    ));
+    plan
+}
+
+/// The Grok plan: every level through `reasoning_effort`, one invalid value (also the detector)
+/// and the sampling row. The chat-completions field is undocumented, so the plan only asks
+/// whether the OpenAI-style field is parsed and has an effect.
+fn grok_effort_plan() -> Vec<EffortCall> {
+    let mut plan = vec![default_call()];
+    plan.extend(level_calls(
+        "top_level_effort",
+        &EFFORT_LEVELS,
+        top_level_effort,
+    ));
+    plan.push(invalid_call(
+        "top_level_effort",
+        top_level_effort(EFFORT_INVALID_VALUE),
+    ));
+    plan.push(sampling_call(
+        "top_level_effort",
+        "high+temperature=0.5",
+        top_level_effort("high"),
+    ));
+    plan
+}
+
+/// `enable_thinking: true` with an explicit `thinking_budget`.
+fn qwen_budget(budget: i64) -> Value {
+    json!({"enable_thinking": true, "thinking_budget": budget})
+}
+
+/// The Qwen plan: the thinking toggle, the budget at its lower bound (1) and one step outside it
+/// (0), an invalid budget (-1), the silent-field detector (Qwen has no levels) and a sampling row
+/// with thinking on.
+fn qwen_effort_plan() -> Vec<EffortCall> {
+    vec![
+        default_call(),
+        EffortCall::new(
+            "enable_thinking",
+            "off",
+            EffortRole::Off,
+            json!({"enable_thinking": false}),
+        ),
+        EffortCall::new(
+            "enable_thinking",
+            "auto",
+            EffortRole::Auto,
+            json!({"enable_thinking": true}),
+        ),
+        EffortCall::new("thinking_budget", "1", EffortRole::Budget, qwen_budget(1)),
+        EffortCall::new("thinking_budget", "0", EffortRole::Budget, qwen_budget(0)),
+        invalid_call("thinking_budget", qwen_budget(-1)).with_value("-1"),
+        detector_call(),
+        sampling_call(
+            "enable_thinking",
+            "auto+temperature=0.5",
+            json!({"enable_thinking": true}),
+        ),
+    ]
+}
+
+/// `output_config: {effort}`.
+fn output_config_effort(value: &str) -> Value {
+    json!({"output_config": {"effort": value}})
+}
+
+/// `output_config: {effort}` paired with `thinking: {type: adaptive}`.
+fn output_config_adaptive(value: &str) -> Value {
+    let mut body = output_config_effort(value);
+    deep_merge(&mut body, &json!({"thinking": {"type": "adaptive"}}));
+    body
+}
+
+/// `thinking: {type: enabled, budget_tokens}`.
+fn anthropic_budget(tokens: u32) -> Value {
+    json!({"thinking": {"type": "enabled", "budget_tokens": tokens}})
+}
+
+/// The Anthropic plan (research Open Question 3 and Pitfalls 3-4): every level twice, alone and
+/// paired with adaptive thinking, so the transcript shows whether a default-off model needs the
+/// pairing; the thinking toggles; an invalid effort; `budget_tokens` at its documented floor
+/// (1024) and one step below it (1023); and the sampling row.
+fn anthropic_effort_plan() -> Vec<EffortCall> {
+    let levels = ["low", "medium", "high", "xhigh", "max"];
+    let mut plan = vec![default_call()];
+    plan.extend(level_calls("output_config", &levels, output_config_effort));
+    plan.extend(level_calls(
+        "output_config+adaptive",
+        &levels,
+        output_config_adaptive,
+    ));
+    plan.push(EffortCall::new(
+        "thinking_object",
+        "off",
+        EffortRole::Off,
+        json!({"thinking": {"type": "disabled"}}),
+    ));
+    plan.push(EffortCall::new(
+        "thinking_object",
+        "auto",
+        EffortRole::Auto,
+        json!({"thinking": {"type": "adaptive"}}),
+    ));
+    plan.push(invalid_call(
+        "output_config",
+        output_config_effort(EFFORT_INVALID_VALUE),
+    ));
+    plan.push(EffortCall::new(
+        "thinking_budget",
+        "1024",
+        EffortRole::Budget,
+        anthropic_budget(1024),
+    ));
+    plan.push(EffortCall::new(
+        "thinking_budget",
+        "1023",
+        EffortRole::Budget,
+        anthropic_budget(1023),
+    ));
+    plan.push(sampling_call(
+        "output_config",
+        "high+temperature=0.5",
+        output_config_effort("high"),
+    ));
+    plan
+}
+
+/// `generationConfig.thinkingConfig.thinkingLevel`.
+fn gemini_level(value: &str) -> Value {
+    json!({"generationConfig": {"thinkingConfig": {"thinkingLevel": value}}})
+}
+
+/// `generationConfig.thinkingConfig.thinkingBudget`.
+fn gemini_budget(value: i64) -> Value {
+    json!({"generationConfig": {"thinkingConfig": {"thinkingBudget": value}}})
+}
+
+/// The Gemini plan (research A2): the documented lowercase `thinkingLevel` values plus one
+/// uppercase variant, `thinkingBudget: 0` as the off form, an invalid level and an invalid
+/// budget, the budget at 128 and 1, and the sampling row. The temperature lives inside
+/// `generationConfig`, which the deep merge keeps beside the output cap.
+fn gemini_effort_plan() -> Vec<EffortCall> {
+    let mut plan = vec![default_call()];
+    plan.extend(level_calls(
+        "thinking_level",
+        &["minimal", "low", "medium", "high"],
+        gemini_level,
+    ));
+    plan.push(EffortCall::new(
+        "thinking_level",
+        "HIGH",
+        EffortRole::Level,
+        gemini_level("HIGH"),
+    ));
+    plan.push(EffortCall::new(
+        "thinking_budget",
+        "off",
+        EffortRole::Off,
+        gemini_budget(0),
+    ));
+    plan.push(invalid_call(
+        "thinking_level",
+        gemini_level(EFFORT_INVALID_VALUE),
+    ));
+    plan.push(invalid_call("thinking_budget", gemini_budget(-5)).with_value("-5"));
+    plan.push(EffortCall::new(
+        "thinking_budget",
+        "128",
+        EffortRole::Budget,
+        gemini_budget(128),
+    ));
+    plan.push(EffortCall::new(
+        "thinking_budget",
+        "1",
+        EffortRole::Budget,
+        gemini_budget(1),
+    ));
+    let mut sampling = gemini_level("high");
+    deep_merge(
+        &mut sampling,
+        &json!({"generationConfig": {"temperature": 0.5}}),
+    );
+    plan.push(EffortCall::new(
+        "thinking_level",
+        "high+temperature=0.5",
+        EffortRole::Sampling,
+        sampling,
+    ));
+    plan
+}
+
+/// The plan for an `ollama` or `openai_compatible` target (D-10): all four `ReasoningWire`
+/// candidate forms -- the top-level field, the `thinking` object and the `enable_thinking` pair --
+/// each with an invalid value, so an operator can prove which field their endpoint parses. The
+/// top-level invalid value doubles as the silent-field detector.
+fn self_hosted_effort_plan() -> Vec<EffortCall> {
+    let mut plan = kimi_effort_plan();
+    // Replace Kimi's sampling row (it rides on the `thinking` object) with the three
+    // `enable_thinking` forms and a sampling row on the most widely served field.
+    plan.pop();
+    plan.push(EffortCall::new(
+        "enable_thinking",
+        "off",
+        EffortRole::Off,
+        json!({"enable_thinking": false}),
+    ));
+    plan.push(EffortCall::new(
+        "enable_thinking",
+        "auto",
+        EffortRole::Auto,
+        json!({"enable_thinking": true}),
+    ));
+    plan.push(EffortCall::new(
+        "thinking_budget",
+        "1024",
+        EffortRole::Budget,
+        qwen_budget(1024),
+    ));
+    plan.push(invalid_call("thinking_budget", qwen_budget(-1)).with_value("-1"));
+    plan.push(sampling_call(
+        "top_level_effort",
+        "high+temperature=0.5",
+        top_level_effort("high"),
+    ));
+    plan
+}
+
+/// The ordered effort plan for `spec`, identical for every candidate model of the provider.
+fn effort_plan(spec: &ProviderSpec) -> Vec<EffortCall> {
+    match spec.name {
+        "OpenAI" => openai_effort_plan(),
+        "Anthropic" => anthropic_effort_plan(),
+        "DeepSeek" => deepseek_effort_plan(),
+        "Kimi" => kimi_effort_plan(),
+        "Qwen" => qwen_effort_plan(),
+        "Grok" => grok_effort_plan(),
+        "Gemini" => gemini_effort_plan(),
+        "Ollama" | "OpenAI-compatible" => self_hosted_effort_plan(),
+        _ => Vec::new(),
+    }
+}
+
+/// Candidates of an `--effort` run: the `--models` ids only, without duplicates. No curated or
+/// default model is added -- every call costs the operator money, so the spend is exactly the
+/// confirmed candidate set.
+fn effort_candidates(extra: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for model in extra {
+        if !out.contains(model) {
+            out.push(model.clone());
+        }
+    }
+    out
+}
+
+/// The JSON body for one effort call: the baseline chat body under [`EFFORT_MAX_TOKENS`] with no
+/// acceptance extra and no sampling parameter, plus the call's effort fields.
+fn effort_body(spec: &ProviderSpec, model: &str, call: &EffortCall) -> Value {
+    let mut body = request_body(spec, model, ProbeKind::Effort);
+    deep_merge(&mut body, &call.extra);
+    body
+}
+
+/// How an effort call ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EffortVerdict {
+    /// A 2xx answer.
+    Accepted,
+    /// The vendor refused the request body (HTTP 400 or 422): a parsed field with a bad value.
+    Rejected,
+    /// Anything else: a transport failure, a rate limit, an auth failure, a 5xx, a redirect.
+    Error,
+}
+
+impl EffortVerdict {
+    fn label(self) -> &'static str {
+        match self {
+            EffortVerdict::Accepted => "accepted",
+            EffortVerdict::Rejected => "rejected",
+            EffortVerdict::Error => "error",
+        }
+    }
+}
+
+/// One measured effort call: numbers, a verdict and a bounded excerpt of a refusal body. Never the
+/// response content.
+#[derive(Clone, Debug, PartialEq)]
+struct EffortRow {
+    form: &'static str,
+    value: String,
+    role: EffortRole,
+    /// `None` when no HTTP status was received.
+    status: Option<u16>,
+    finish: Option<String>,
+    reasoning_tokens: Option<i64>,
+    completion_tokens: Option<i64>,
+    elapsed_ms: u128,
+    verdict: EffortVerdict,
+    /// A redacted, bounded, table-safe excerpt of a non-2xx body or transport error; `-` otherwise.
+    detail: String,
+}
+
+/// Turn one exchange into a row. A transport error and every vendor-supplied string go through the
+/// redact-then-bound excerpt first; a 2xx answer contributes its finish reason and usage numbers
+/// only.
+fn effort_row_from_reply(
+    call: &EffortCall,
+    wire: Wire,
+    reply: Result<Reply, String>,
+    api_key: &str,
+    elapsed_ms: u128,
+) -> EffortRow {
+    let row = |status: Option<u16>, verdict: EffortVerdict, detail: String| EffortRow {
+        form: call.form,
+        value: call.value.clone(),
+        role: call.role,
+        status,
+        finish: None,
+        reasoning_tokens: None,
+        completion_tokens: None,
+        elapsed_ms,
+        verdict,
+        detail,
+    };
+    match reply {
+        Err(e) => row(None, EffortVerdict::Error, excerpt(&e, api_key)),
+        Ok(reply) if (200..300).contains(&reply.status) => {
+            let parsed = parse_success(wire, &reply.body, api_key);
+            EffortRow {
+                finish: parsed.finish.as_deref().map(|f| excerpt(f, api_key)),
+                reasoning_tokens: parsed.usage.reasoning,
+                completion_tokens: parsed.usage.completion,
+                ..row(
+                    Some(reply.status),
+                    EffortVerdict::Accepted,
+                    parsed.note.unwrap_or_else(|| "-".to_string()),
+                )
+            }
+        }
+        Ok(reply) => {
+            let verdict = if matches!(reply.status, 400 | 422) {
+                EffortVerdict::Rejected
+            } else {
+                EffortVerdict::Error
+            };
+            let mut detail = excerpt(&reply.body, api_key);
+            if (300..400).contains(&reply.status) {
+                detail = format!("redirect not followed {detail}")
+                    .trim_end()
+                    .to_string();
+            }
+            row(Some(reply.status), verdict, detail)
+        }
+    }
+}
+
+/// Send one effort call and time it.
+async fn run_effort_call(
+    client: &reqwest::Client,
+    spec: &ProviderSpec,
+    built: &Built,
+    model: &str,
+    call: &EffortCall,
+) -> EffortRow {
+    let url = chat_url(spec.wire, &built.base_url, model);
+    let body = effort_body(spec, model, call);
+    let request = with_auth(client.post(&url).json(&body), spec.auth, &built.api_key);
+    let started = Instant::now();
+    let reply = exchange(request, &built.api_key).await;
+    effort_row_from_reply(
+        call,
+        spec.wire,
+        reply,
+        &built.api_key,
+        started.elapsed().as_millis(),
+    )
+}
+
+/// A count cell: the integer or the absent marker.
+fn count_cell(n: Option<i64>) -> String {
+    n.map_or_else(|| "-".to_string(), |n| n.to_string())
+}
+
+/// The markdown row of one measured call.
+fn effort_row_line(index: usize, row: &EffortRow) -> String {
+    format!(
+        "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+        index,
+        row.form,
+        cell(&row.value),
+        row.status
+            .map_or_else(|| "-".to_string(), |s| s.to_string()),
+        row.finish.as_deref().map_or_else(|| "-".to_string(), cell),
+        count_cell(row.reasoning_tokens),
+        count_cell(row.completion_tokens),
+        row.elapsed_ms,
+        row.verdict.label(),
+        row.detail
+    )
+}
+
+const EFFORT_TABLE_HEADER: &str = "| # | form | value | status | finish | reasoning tokens | completion tokens | ms | verdict | detail |\n\
+     |---|------|-------|--------|--------|------------------|-------------------|----|---------|--------|";
+
+/// The per-form summary lines of one model's rows: whether the vendor parses the form's field
+/// (its invalid value was refused), the effect check (reasoning tokens at `low` against the
+/// highest level probed, or at each budget), and the detector verdict. Computed from the rows
+/// only. A 2xx answer to the detector's out-of-vocabulary value is `field not parsed (silent)`.
+fn form_summary_lines(rows: &[EffortRow]) -> Vec<String> {
+    let mut forms: Vec<&'static str> = Vec::new();
+    for row in rows {
+        if row.form != "default" && row.form != "detector" && !forms.contains(&row.form) {
+            forms.push(row.form);
+        }
+    }
+    let mut lines: Vec<String> = forms
+        .into_iter()
+        .map(|form| {
+            let in_form = || rows.iter().filter(|r| r.form == form);
+            let parsed = match in_form().find(|r| r.role == EffortRole::Invalid) {
+                Some(r) => match r.verdict {
+                    EffortVerdict::Rejected => "yes",
+                    EffortVerdict::Accepted => "no",
+                    EffortVerdict::Error => "unknown",
+                },
+                None => "unknown",
+            };
+            let tokens_at = |value: &str| {
+                in_form()
+                    .find(|r| r.role == EffortRole::Level && r.value == value)
+                    .and_then(|r| r.reasoning_tokens)
+            };
+            let has_levels = in_form().any(|r| r.role == EffortRole::Level);
+            let budgets: Vec<String> = in_form()
+                .filter(|r| r.role == EffortRole::Budget)
+                .map(|r| format!("{}={}", r.value, count_cell(r.reasoning_tokens)))
+                .collect();
+            let effect = if has_levels {
+                let top = ["max", "xhigh", "high"]
+                    .into_iter()
+                    .find(|v| in_form().any(|r| r.role == EffortRole::Level && r.value == *v))
+                    .unwrap_or("max");
+                format!(
+                    "; effect: low={} {top}={}",
+                    count_cell(tokens_at("low")),
+                    count_cell(tokens_at(top))
+                )
+            } else if budgets.is_empty() {
+                String::new()
+            } else {
+                format!("; budget: {}", budgets.join(" "))
+            };
+            format!("- `{form}`: field parsed: {parsed}{effect}")
+        })
+        .collect();
+    // The detector: its own call where the vendor's candidate form is not the top-level field,
+    // otherwise the top-level form's invalid value.
+    let detector = rows
+        .iter()
+        .find(|r| r.role == EffortRole::Detector)
+        .or_else(|| {
+            rows.iter()
+                .find(|r| r.form == "top_level_effort" && r.role == EffortRole::Invalid)
+        });
+    if let Some(row) = detector {
+        let verdict = match row.verdict {
+            EffortVerdict::Accepted => "field not parsed (silent)",
+            EffortVerdict::Rejected => "field parsed (rejected)",
+            EffortVerdict::Error => "unknown (the call errored)",
+        };
+        lines.push(format!("- detector: {verdict}"));
+    }
+    lines
+}
+
+/// Header facts of a provider's `--effort` section.
+fn write_effort_section_facts(out: &mut String, spec: &ProviderSpec, base_url: &str, model: &str) {
+    let cap = match spec.wire {
+        Wire::OpenAiChat => spec.cap_field,
+        Wire::AnthropicMessages => "max_tokens",
+        Wire::GeminiGenerate => "generationConfig.maxOutputTokens",
+    };
+    let _ = writeln!(out, "\n- base URL: `{}`", redact_url(base_url));
+    let _ = writeln!(
+        out,
+        "- chat endpoint: `POST {}`; credential header `{}` (name only, value never printed)",
+        redact_url(&chat_url(spec.wire, base_url, model)),
+        spec.auth.header_name()
+    );
+    let _ = writeln!(
+        out,
+        "- every call carries `{cap}` = {EFFORT_MAX_TOKENS}, a {PROBE_TIMEOUT_SECS} s timeout, \
+         no acceptance extra; redirects are never followed"
+    );
+}
+
+/// The offline `--effort` plan: every planned call for all nine providers, with no network access
+/// and no credential read. Only the `--models` ids are candidates.
+fn render_effort_dry_run(models: &[(String, Vec<String>)]) -> String {
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "# Live vendor effort probe plan (--effort --dry-run)\n"
+    );
+    let _ = writeln!(
+        out,
+        "- no network access was made and no credential was read"
+    );
+    let _ = writeln!(out, "- prompt: \"{USAGE_PROMPT}\"");
+    let _ = writeln!(
+        out,
+        "- invalid value: `{EFFORT_INVALID_VALUE}`; output cap {EFFORT_MAX_TOKENS} tokens per call"
+    );
+    let mut total_calls = 0usize;
+    for spec in PROVIDERS.iter() {
+        let _ = writeln!(out, "\n## {}", spec.name);
+        let base_url = spec.default_base_url.map_or_else(
+            || "<OPENAI_COMPATIBLE_BASE_URL>".to_string(),
+            str::to_string,
+        );
+        write_effort_section_facts(&mut out, spec, &base_url, spec.default_model);
+        let _ = writeln!(
+            out,
+            "- credential variables required: {}",
+            spec.cred_vars
+                .iter()
+                .map(|v| format!("`{v}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        let plan = effort_plan(spec);
+        let candidates = effort_candidates(&extra_models_for(models, spec));
+        let _ = writeln!(out, "\n### Candidate models\n");
+        if candidates.is_empty() {
+            let _ = writeln!(
+                out,
+                "- none (pass `--models {}=<id>[,<id>...]`; the effort modes probe no default)",
+                spec.name.to_ascii_lowercase()
+            );
+        }
+        for model in &candidates {
+            let _ = writeln!(out, "- `{model}`: {} calls", plan.len());
+            total_calls += plan.len();
+        }
+        let _ = writeln!(out, "\n### Planned calls (run once per candidate model)\n");
+        if plan.is_empty() {
+            let _ = writeln!(out, "- no effort plan is defined for this provider");
+            continue;
+        }
+        let _ = writeln!(
+            out,
+            "| # | form | value | role | body extras |\n|---|------|-------|------|-------------|"
+        );
+        for (i, call) in plan.iter().enumerate() {
+            let _ = writeln!(
+                out,
+                "| {} | {} | {} | {:?} | {} |",
+                i + 1,
+                call.form,
+                cell(&call.value),
+                call.role,
+                if call.extra.is_null() {
+                    "-".to_string()
+                } else {
+                    format!("`{}`", cell(&call.extra.to_string()))
+                }
+            );
+        }
+    }
+    let _ = writeln!(out, "\n- total planned calls: {total_calls}");
+    out
+}
+
+async fn effort_provider(
+    client: &reqwest::Client,
+    spec: &ProviderSpec,
+    options: &Options,
+) -> ProbeEnd {
+    let candidates = effort_candidates(&extra_models_for(&options.models, spec));
+    let plan = effort_plan(spec);
+    if plan.is_empty() {
+        println!("\nNOT MEASURED: no effort plan is defined for this provider");
+        return ProbeEnd::NotBuilt;
+    }
+    let built = match (spec.build)() {
+        Ok(b) => b,
+        Err(e) => {
+            println!(
+                "\nNOT MEASURED: the adapter could not be built from the environment: {}",
+                excerpt(&e, "")
+            );
+            return ProbeEnd::NotBuilt;
+        }
+    };
+    let mut facts = String::new();
+    write_effort_section_facts(&mut facts, spec, &built.base_url, "{model}");
+    print!("{facts}");
+    let mut reached = false;
+    for model in candidates {
+        println!("\n### {model}\n");
+        println!("{EFFORT_TABLE_HEADER}");
+        let mut rows: Vec<EffortRow> = Vec::new();
+        for (i, call) in plan.iter().enumerate() {
+            let row = run_effort_call(client, spec, &built, &model, call).await;
+            if row.status.is_some() {
+                reached = true;
+            }
+            println!("{}", effort_row_line(i + 1, &row));
+            rows.push(row);
+        }
+        println!();
+        for line in form_summary_lines(&rows) {
+            println!("{line}");
+        }
+    }
+    if reached {
+        ProbeEnd::Reached
+    } else {
+        ProbeEnd::Unreachable
+    }
+}
+
+async fn run_effort(options: &Options) -> i32 {
+    let client = match build_probe_client() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
+    let lookup = |name: &str| std::env::var(name).ok();
+    print_run_header("Live vendor effort probe", &lookup);
+    println!(
+        "- prompt: \"{USAGE_PROMPT}\"; every call capped at {EFFORT_MAX_TOKENS} output tokens \
+         (numbers and verdicts are recorded; response content is never printed)"
+    );
+
+    let (mut configured, mut skipped, mut failed) = (0usize, 0usize, 0usize);
+    for spec in PROVIDERS.iter() {
+        println!("\n## {}", spec.name);
+        if let Some(var) = missing_credential(spec, &lookup) {
+            println!("\nSKIPPED ({var} not set)");
+            skipped += 1;
+            continue;
+        }
+        if effort_candidates(&extra_models_for(&options.models, spec)).is_empty() {
+            println!("\nNOT PROBED: no `--models` candidate for this provider");
+            skipped += 1;
+            continue;
+        }
+        configured += 1;
+        match effort_provider(&client, spec, options).await {
+            ProbeEnd::Reached => {}
+            ProbeEnd::Unreachable => {
+                println!("\nUNREACHABLE: no HTTP exchange with this provider completed");
+                failed += 1;
+            }
+            ProbeEnd::NotBuilt => failed += 1,
+        }
+    }
+
+    println!("\n---\n");
+    println!(
+        "{configured} of {} providers probed ({skipped} not configured or without candidates); \
+         {failed} unreachable or not buildable",
+        PROVIDERS.len()
+    );
+    if configured == 0 {
+        eprintln!("no provider was configured with a candidate -- nothing was tested");
+    }
+    smoke_exit_code(configured, failed)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Effort smoke (`--effort-smoke`): the shipped adapters' effort path (REASON-03)
+// ---------------------------------------------------------------------------------------------
+
+/// The optional caps an `--effort-smoke` run applies to each adapter's config.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SmokeKnobs {
+    /// `--max-tokens N`: the config's output budget.
+    max_tokens: Option<u32>,
+    /// `--timeout-seconds S`: the config's request timeout.
+    timeout_seconds: Option<u64>,
+}
+
+/// Build one provider's adapter exactly as a consumer would -- `*Config::from_env()` -- with the
+/// optional caps applied through the shipped `with_max_tokens` / `with_timeout_seconds` builders.
+fn build_smoke_port(name: &str, knobs: SmokeKnobs) -> Result<Box<dyn LlmPort>, String> {
+    macro_rules! smoke_port {
+        ($config:ty, $adapter:ty) => {{
+            let mut config = <$config>::from_env()?;
+            if let Some(max_tokens) = knobs.max_tokens {
+                config = config.with_max_tokens(max_tokens);
+            }
+            if let Some(timeout_seconds) = knobs.timeout_seconds {
+                config = config.with_timeout_seconds(timeout_seconds);
+            }
+            let adapter = <$adapter>::new(config).map_err(|e| e.to_string())?;
+            Ok(Box::new(adapter) as Box<dyn LlmPort>)
+        }};
+    }
+    match name {
+        "OpenAI" => smoke_port!(OpenAIConfig, OpenAIAdapter),
+        "Anthropic" => smoke_port!(AnthropicConfig, AnthropicAdapter),
+        "DeepSeek" => smoke_port!(DeepSeekConfig, DeepSeekAdapter),
+        "Kimi" => smoke_port!(KimiConfig, KimiAdapter),
+        "Qwen" => smoke_port!(QwenConfig, QwenAdapter),
+        "Grok" => smoke_port!(GrokConfig, GrokAdapter),
+        "Gemini" => smoke_port!(GeminiConfig, GeminiAdapter),
+        "Ollama" => smoke_port!(OllamaConfig, OllamaAdapter),
+        "OpenAI-compatible" => smoke_port!(OpenAiCompatibleConfig, OpenAiCompatibleAdapter),
+        other => Err(format!("no adapter builder for provider `{other}`")),
+    }
+}
+
+/// Which levels an adapter's own profile lets the smoke send.
+#[derive(Debug, PartialEq, Eq)]
+enum SmokeSelection {
+    /// The lowest and highest admitted level (one entry when only one level is listed).
+    Send(Vec<ReasoningEffort>),
+    /// Nothing is sent; the text says which state the profile is in.
+    Nothing(String),
+}
+
+/// Pick the levels to send from `profile.effort`: the lowest and the highest level the model
+/// lists. Any other state sends nothing and says so.
+fn smoke_selection(profile: Option<&ModelProfile>) -> SmokeSelection {
+    let Some(profile) = profile else {
+        return SmokeSelection::Nothing("no model profile".to_string());
+    };
+    match &profile.effort {
+        EffortSupport::Supported(levels) => match (levels.levels.first(), levels.levels.last()) {
+            (Some(lowest), Some(highest)) if lowest == highest => {
+                SmokeSelection::Send(vec![*lowest])
+            }
+            (Some(lowest), Some(highest)) => SmokeSelection::Send(vec![*lowest, *highest]),
+            _ => SmokeSelection::Nothing("the profile lists no levels".to_string()),
+        },
+        EffortSupport::Unmeasured => SmokeSelection::Nothing("effort unmeasured".to_string()),
+        EffortSupport::WireUnsupported => {
+            SmokeSelection::Nothing("effort wire unsupported".to_string())
+        }
+        EffortSupport::NoReasoning => SmokeSelection::Nothing("model has no reasoning".to_string()),
+        _ => SmokeSelection::Nothing("effort support state not recognised".to_string()),
+    }
+}
+
+/// One adapter-path request, or the statement that nothing was sent. Numbers, labels and the two
+/// metadata values only -- never the response content.
+#[derive(Clone, Debug, PartialEq)]
+struct SmokeRow {
+    model: String,
+    /// The level sent, or `-` when nothing was sent.
+    requested: String,
+    /// `Ok`, `UnsupportedParameter: <reason>`, `error: <excerpt>` or `not sent: <why>`.
+    outcome: String,
+    finish: Option<String>,
+    reasoning_tokens: Option<u32>,
+    completion_tokens: Option<u32>,
+    /// The `paladin.reasoning_requested` metadata value, `-` when absent.
+    meta_requested: String,
+    /// The `paladin.reasoning_effective` metadata value, `-` when absent.
+    meta_effective: String,
+    elapsed_ms: u128,
+}
+
+/// A finish reason as a fixed label; `Error(text)` never exposes its text.
+fn finish_label(finish: &FinishReason) -> &'static str {
+    match finish {
+        FinishReason::Stop => "stop",
+        FinishReason::Length => "length",
+        FinishReason::ContentFilter => "content_filter",
+        FinishReason::FunctionCall => "function_call",
+        FinishReason::Error(_) => "error",
+    }
+}
+
+/// Send the lowest and highest admitted level through `port` for one model.
+async fn smoke_model(port: &dyn LlmPort, model: &str, api_key: &str) -> Vec<SmokeRow> {
+    let blank = |requested: &str, outcome: String| SmokeRow {
+        model: model.to_string(),
+        requested: requested.to_string(),
+        outcome,
+        finish: None,
+        reasoning_tokens: None,
+        completion_tokens: None,
+        meta_requested: "-".to_string(),
+        meta_effective: "-".to_string(),
+        elapsed_ms: 0,
+    };
+    let profile = port.model_profile(model);
+    let levels = match smoke_selection(profile.as_ref()) {
+        SmokeSelection::Send(levels) => levels,
+        SmokeSelection::Nothing(why) => return vec![blank("-", format!("not sent: {why}"))],
+    };
+    let mut rows = Vec::new();
+    for level in levels {
+        let prompt = match PromptItem::new(PromptType::User(UserPrompt {
+            query: USAGE_PROMPT.to_string(),
+            context: None,
+        })) {
+            Ok(prompt) => prompt,
+            Err(e) => {
+                rows.push(blank(
+                    &level.to_string(),
+                    format!(
+                        "error: could not construct the prompt: {}",
+                        excerpt(&e.to_string(), api_key)
+                    ),
+                ));
+                continue;
+            }
+        };
+        let request = LlmRequest::new(model.to_string(), prompt).with_reasoning(level);
+        let started = Instant::now();
+        let result = port.generate(request).await;
+        let elapsed_ms = started.elapsed().as_millis();
+        let mut row = blank(&level.to_string(), String::new());
+        row.elapsed_ms = elapsed_ms;
+        match result {
+            Ok(response) => {
+                row.outcome = "Ok".to_string();
+                row.finish = Some(finish_label(&response.finish_reason).to_string());
+                row.reasoning_tokens = response.usage.reasoning_tokens;
+                row.completion_tokens = Some(response.usage.completion_tokens);
+                let meta = |key: &str| {
+                    response
+                        .metadata
+                        .get(key)
+                        .map_or_else(|| "-".to_string(), |v| excerpt(v, api_key))
+                };
+                row.meta_requested = meta(REASONING_REQUESTED_METADATA_KEY);
+                row.meta_effective = meta(REASONING_EFFECTIVE_METADATA_KEY);
+            }
+            Err(LlmError::UnsupportedParameter { reason, .. }) => {
+                row.outcome = format!("UnsupportedParameter: {}", excerpt(&reason, api_key));
+            }
+            Err(other) => {
+                row.outcome = format!("error: {}", excerpt(&other.to_string(), api_key));
+            }
+        }
+        rows.push(row);
+    }
+    rows
+}
+
+const SMOKE_TABLE_HEADER: &str = "| model | requested | outcome | finish | reasoning tokens | completion tokens | paladin.reasoning_requested | paladin.reasoning_effective | ms |\n\
+     |-------|-----------|---------|--------|------------------|-------------------|-----------------------------|-----------------------------|----|";
+
+/// The markdown row of one smoke request.
+fn smoke_row_line(model: &str, row: &SmokeRow) -> String {
+    format!(
+        "| {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+        cell(model),
+        cell(&row.requested),
+        cell(&row.outcome),
+        row.finish.as_deref().map_or_else(|| "-".to_string(), cell),
+        count_cell(row.reasoning_tokens.map(i64::from)),
+        count_cell(row.completion_tokens.map(i64::from)),
+        cell(&row.meta_requested),
+        cell(&row.meta_effective),
+        row.elapsed_ms
+    )
+}
+
+/// The offline `--effort-smoke` plan: for every `--models` candidate, the two adapter calls a run
+/// would make. No adapter is built, so no credential is read; the levels themselves come from the
+/// adapter's own profile at run time.
+fn render_effort_smoke_dry_run(
+    models: &[(String, Vec<String>)],
+    max_tokens: Option<u32>,
+    timeout_seconds: Option<u64>,
+) -> String {
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "# Live vendor effort smoke plan (--effort-smoke --dry-run)\n"
+    );
+    let _ = writeln!(
+        out,
+        "- no network access was made and no credential was read"
+    );
+    let _ = writeln!(out, "- prompt: \"{USAGE_PROMPT}\"");
+    let _ = writeln!(
+        out,
+        "- output budget: {}; timeout: {}",
+        max_tokens.map_or_else(
+            || "the adapter's own default".to_string(),
+            |n| format!("{n} tokens")
+        ),
+        timeout_seconds.map_or_else(
+            || "the adapter's own default".to_string(),
+            |s| format!("{s} s")
+        )
+    );
+    let mut total_calls = 0usize;
+    for spec in PROVIDERS.iter() {
+        let _ = writeln!(out, "\n## {}", spec.name);
+        let _ = writeln!(
+            out,
+            "- credential variables required: {}",
+            spec.cred_vars
+                .iter()
+                .map(|v| format!("`{v}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        let candidates = effort_candidates(&extra_models_for(models, spec));
+        let _ = writeln!(out, "\n### Planned adapter calls\n");
+        if candidates.is_empty() {
+            let _ = writeln!(
+                out,
+                "- none (pass `--models {}=<id>[,<id>...]`; the effort modes probe no default)",
+                spec.name.to_ascii_lowercase()
+            );
+        }
+        for model in &candidates {
+            let _ = writeln!(
+                out,
+                "- `{model}`: 2 adapter calls (`generate` through the shipped adapter with \
+                 `LlmRequest::with_reasoning` at the lowest and the highest level \
+                 `model_profile(model).effort` admits, read at run time; a model whose profile \
+                 admits no level sends nothing)"
+            );
+            total_calls += 2;
+        }
+    }
+    let _ = writeln!(out, "\n- total planned adapter calls: {total_calls}");
+    out
+}
+
+async fn effort_smoke_provider(spec: &ProviderSpec, options: &Options) -> ProbeEnd {
+    let knobs = SmokeKnobs {
+        max_tokens: options.max_tokens,
+        timeout_seconds: options.timeout_seconds,
+    };
+    let port = match build_smoke_port(spec.name, knobs) {
+        Ok(port) => port,
+        Err(e) => {
+            println!(
+                "\nNOT MEASURED: the adapter could not be built from the environment: {}",
+                excerpt(&e, "")
+            );
+            return ProbeEnd::NotBuilt;
+        }
+    };
+    // The credential, held only to redact it from any printed text.
+    let api_key = std::env::var(spec.cred_vars[0]).unwrap_or_default();
+    println!("\n{SMOKE_TABLE_HEADER}");
+    let mut reached = false;
+    for model in effort_candidates(&extra_models_for(&options.models, spec)) {
+        for row in smoke_model(port.as_ref(), &model, &api_key).await {
+            if row.outcome == "Ok" || row.outcome.starts_with("UnsupportedParameter") {
+                reached = true;
+            }
+            println!("{}", smoke_row_line(&model, &row));
+        }
+    }
+    if reached {
+        ProbeEnd::Reached
+    } else {
+        ProbeEnd::Unreachable
+    }
+}
+
+async fn run_effort_smoke(options: &Options) -> i32 {
+    let lookup = |name: &str| std::env::var(name).ok();
+    print_run_header("Live vendor effort smoke (adapter path)", &lookup);
+    println!(
+        "- prompt: \"{USAGE_PROMPT}\"; two requests per candidate through the shipped adapter \
+         (numbers and metadata values are recorded; response content is never printed)"
+    );
+
+    let (mut configured, mut skipped, mut failed) = (0usize, 0usize, 0usize);
+    for spec in PROVIDERS.iter() {
+        println!("\n## {}", spec.name);
+        if let Some(var) = missing_credential(spec, &lookup) {
+            println!("\nSKIPPED ({var} not set)");
+            skipped += 1;
+            continue;
+        }
+        if effort_candidates(&extra_models_for(&options.models, spec)).is_empty() {
+            println!("\nNOT PROBED: no `--models` candidate for this provider");
+            skipped += 1;
+            continue;
+        }
+        configured += 1;
+        match effort_smoke_provider(spec, options).await {
+            ProbeEnd::Reached => {}
+            ProbeEnd::Unreachable => {
+                println!("\nNOTHING SENT OR ANSWERED: no request produced an `Ok` or a refusal");
+                failed += 1;
+            }
+            ProbeEnd::NotBuilt => failed += 1,
+        }
+    }
+
+    println!("\n---\n");
+    println!(
+        "{configured} of {} providers smoked ({skipped} not configured or without candidates); \
+         {failed} without an answer or not buildable",
+        PROVIDERS.len()
+    );
+    if configured == 0 {
+        eprintln!("no provider was configured with a candidate -- nothing was tested");
+    }
+    smoke_exit_code(configured, failed)
+}
+
 #[tokio::main]
 async fn main() {
     // `set_logger` (not `set_boxed_logger`) is used deliberately: the latter requires `log`'s
@@ -2300,11 +3669,28 @@ async fn main() {
     };
     match command {
         Command::Help => println!("{USAGE}"),
+        Command::Run(options) if options.dry_run && options.effort_smoke => {
+            print!(
+                "{}",
+                render_effort_smoke_dry_run(
+                    &options.models,
+                    options.max_tokens,
+                    options.timeout_seconds
+                )
+            );
+        }
+        Command::Run(options) if options.dry_run && options.effort => {
+            print!("{}", render_effort_dry_run(&options.models));
+        }
         Command::Run(options) if options.dry_run && options.usage => {
             print!("{}", render_usage_dry_run(&options.models));
         }
         Command::Run(options) if options.dry_run => {
             print!("{}", render_dry_run(&options.models));
+        }
+        Command::Run(options) if options.effort => std::process::exit(run_effort(&options).await),
+        Command::Run(options) if options.effort_smoke => {
+            std::process::exit(run_effort_smoke(&options).await)
         }
         Command::Run(options) if options.usage => std::process::exit(run_usage(&options).await),
         Command::Run(options) if options.probe => std::process::exit(run_probe(&options).await),
@@ -2445,11 +3831,11 @@ mod tests {
             Ok(Command::Run(Options {
                 probe: true,
                 dry_run: true,
-                usage: false,
                 models: vec![
                     ("Kimi".to_string(), vec!["a".to_string(), "b".to_string()]),
                     ("Kimi".to_string(), vec!["c".to_string()]),
                 ],
+                ..Options::default()
             }))
         );
     }
@@ -2905,5 +4291,1004 @@ mod tests {
                 "-"
             ]
         );
+    }
+
+    // ----- `--effort` (Phase 51, D-01) -----
+
+    fn effort_options(list: &[&str]) -> Options {
+        match parse_args(args(list)) {
+            Ok(Command::Run(options)) => options,
+            other => panic!("expected a run, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn effort_flag_parses_with_models_and_dry_run() {
+        let options = effort_options(&["--effort"]);
+        assert!(options.effort && !options.probe && !options.usage && !options.effort_smoke);
+        let options = effort_options(&["--effort", "--dry-run", "--models", "kimi=kimi-k3"]);
+        assert!(options.effort && options.dry_run);
+        assert_eq!(
+            options.models,
+            vec![("Kimi".to_string(), vec!["kimi-k3".to_string()])]
+        );
+    }
+
+    #[test]
+    fn effort_is_mutually_exclusive_with_every_other_mode_and_names_both_flags() {
+        for (list, other) in [
+            (["--effort", "--probe"], "--probe"),
+            (["--probe", "--effort"], "--probe"),
+            (["--effort", "--usage"], "--usage"),
+            (["--usage", "--effort"], "--usage"),
+            (["--effort", "--effort-smoke"], "--effort-smoke"),
+            (["--effort-smoke", "--effort"], "--effort-smoke"),
+        ] {
+            let err = parse_args(args(&list)).unwrap_err();
+            assert!(err.contains("--effort"), "{err}");
+            assert!(err.contains(other), "{err}");
+            assert!(err.contains("mutually exclusive"), "{err}");
+        }
+    }
+
+    #[test]
+    fn models_still_needs_a_mode_or_a_dry_run() {
+        let err = parse_args(args(&["--models", "kimi=a"])).unwrap_err();
+        assert!(err.contains("--effort"), "{err}");
+        assert!(parse_args(args(&["--effort", "--models", "kimi=a"])).is_ok());
+    }
+
+    /// The `(form, value)` pairs of a plan, in order.
+    fn plan_pairs(plan: &[EffortCall]) -> Vec<(&'static str, String)> {
+        plan.iter().map(|c| (c.form, c.value.clone())).collect()
+    }
+
+    #[test]
+    fn the_kimi_effort_plan_probes_both_forms_in_the_documented_order() {
+        let plan = effort_plan(spec("Kimi"));
+        let mut expected: Vec<(&'static str, String)> = vec![("default", "-".to_string())];
+        for level in ["minimal", "low", "medium", "high", "xhigh", "max"] {
+            expected.push(("top_level_effort", level.to_string()));
+            expected.push(("thinking_object", level.to_string()));
+        }
+        expected.push(("thinking_object", "off".to_string()));
+        expected.push(("thinking_object", "auto".to_string()));
+        expected.push(("top_level_effort", EFFORT_INVALID_VALUE.to_string()));
+        expected.push(("thinking_object", EFFORT_INVALID_VALUE.to_string()));
+        expected.push(("thinking_object", "high+temperature=0.5".to_string()));
+        assert_eq!(plan_pairs(&plan), expected);
+    }
+
+    #[test]
+    fn the_kimi_plan_bodies_have_the_documented_shapes() {
+        let kimi = spec("Kimi");
+        let plan = effort_plan(kimi);
+        let body_of = |form: &str, value: &str| {
+            let call = plan
+                .iter()
+                .find(|c| c.form == form && c.value == value)
+                .unwrap_or_else(|| panic!("no {form} {value} call"));
+            effort_body(kimi, "kimi-k3", call)
+        };
+        for level in ["minimal", "low", "medium", "high", "xhigh", "max"] {
+            assert_eq!(
+                body_of("top_level_effort", level)["reasoning_effort"],
+                json!(level)
+            );
+            assert_eq!(
+                body_of("thinking_object", level)["thinking"],
+                json!({"type": "enabled", "effort": level})
+            );
+        }
+        assert_eq!(
+            body_of("thinking_object", "off")["thinking"],
+            json!({"type": "disabled"})
+        );
+        assert_eq!(
+            body_of("thinking_object", "auto")["thinking"],
+            json!({"type": "enabled"})
+        );
+        assert_eq!(
+            body_of("top_level_effort", EFFORT_INVALID_VALUE)["reasoning_effort"],
+            json!("bogus-effort-51")
+        );
+        assert_eq!(
+            body_of("thinking_object", EFFORT_INVALID_VALUE)["thinking"]["effort"],
+            json!("bogus-effort-51")
+        );
+        let sampling = body_of("thinking_object", "high+temperature=0.5");
+        assert_eq!(sampling["thinking"]["effort"], json!("high"));
+        assert_eq!(sampling["temperature"], json!(0.5));
+    }
+
+    #[test]
+    fn an_effort_body_carries_the_cap_and_the_prompt_and_never_the_acceptance_extra() {
+        let kimi = spec("Kimi");
+        assert!(kimi.acceptance_extras.is_some(), "the premise of this test");
+        for call in effort_plan(kimi) {
+            let body = effort_body(kimi, "kimi-k3", &call);
+            assert_eq!(
+                body["max_tokens"],
+                json!(EFFORT_MAX_TOKENS),
+                "{}",
+                call.value
+            );
+            assert!(
+                body.to_string().contains("17 multiplied by 23"),
+                "{}",
+                call.value
+            );
+            // The `--probe` acceptance extra disables thinking; only the planned `off` call may
+            // carry a `disabled` thinking object.
+            let disabled = body["thinking"]["type"] == json!("disabled");
+            assert_eq!(disabled, call.role == EffortRole::Off, "{}", call.value);
+        }
+        assert_eq!(EFFORT_MAX_TOKENS, 2048);
+        let default = effort_body(kimi, "kimi-k3", &effort_plan(kimi)[0]);
+        assert!(default.get("thinking").is_none() && default.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn deep_merge_merges_objects_and_replaces_scalars() {
+        let mut body = json!({"a": {"x": 1, "y": 2}, "b": 1});
+        deep_merge(&mut body, &json!({"a": {"y": 3, "z": 4}, "b": {"c": 1}}));
+        assert_eq!(body, json!({"a": {"x": 1, "y": 3, "z": 4}, "b": {"c": 1}}));
+        deep_merge(&mut body, &Value::Null);
+        assert_eq!(body["a"]["x"], json!(1));
+    }
+
+    fn kimi_call(form: &str, value: &str) -> EffortCall {
+        effort_plan(spec("Kimi"))
+            .into_iter()
+            .find(|c| c.form == form && c.value == value)
+            .expect("planned call")
+    }
+
+    #[test]
+    fn a_canned_kimi_200_yields_reasoning_tokens_and_the_finish_reason() {
+        let body = r#"{"choices":[{"finish_reason":"length","message":{"content":"","reasoning_content":"hidden chain of thought"}}],
+            "usage":{"prompt_tokens":20,"completion_tokens":2048,"total_tokens":2068,
+                     "completion_tokens_details":{"reasoning_tokens":2040}}}"#;
+        let row = effort_row_from_reply(
+            &kimi_call("thinking_object", "max"),
+            Wire::OpenAiChat,
+            Ok(Reply {
+                status: 200,
+                body: body.to_string(),
+            }),
+            "k",
+            1234,
+        );
+        assert_eq!(row.status, Some(200));
+        assert_eq!(row.verdict, EffortVerdict::Accepted);
+        assert_eq!(row.finish.as_deref(), Some("length"));
+        assert_eq!(row.reasoning_tokens, Some(2040));
+        assert_eq!(row.completion_tokens, Some(2048));
+        assert_eq!(row.elapsed_ms, 1234);
+        let line = effort_row_line(3, &row);
+        assert!(!line.contains("hidden chain of thought"), "{line}");
+        assert!(line.contains("accepted") && line.contains("2040"), "{line}");
+    }
+
+    #[test]
+    fn a_canned_kimi_400_is_rejected_with_an_excerpt_that_has_passed_the_redactor() {
+        let key = "zzSECRETKEYVALUE123456";
+        let body = format!(
+            "{{\"message\":\"Invalid request: invalid value for thinking effort level: \
+             bogus-effort-51 (key {key})\",\"type\":\"invalid_request_error\"}}"
+        );
+        let row = effort_row_from_reply(
+            &kimi_call("thinking_object", EFFORT_INVALID_VALUE),
+            Wire::OpenAiChat,
+            Ok(Reply { status: 400, body }),
+            key,
+            7,
+        );
+        assert_eq!(row.verdict, EffortVerdict::Rejected);
+        assert_eq!(row.status, Some(400));
+        assert!(row.detail.contains("invalid value for thinking effort"));
+        assert!(!row.detail.contains(key), "{}", row.detail);
+        assert!(row.detail.contains("[REDACTED]"), "{}", row.detail);
+        assert_eq!(row.reasoning_tokens, None);
+    }
+
+    #[test]
+    fn only_a_400_or_422_is_a_rejection_other_failures_are_errors() {
+        let call = kimi_call("thinking_object", "low");
+        for (status, verdict) in [
+            (400, EffortVerdict::Rejected),
+            (422, EffortVerdict::Rejected),
+            (401, EffortVerdict::Error),
+            (429, EffortVerdict::Error),
+            (500, EffortVerdict::Error),
+            (302, EffortVerdict::Error),
+        ] {
+            let row = effort_row_from_reply(
+                &call,
+                Wire::OpenAiChat,
+                Ok(Reply {
+                    status,
+                    body: "x".to_string(),
+                }),
+                "k",
+                0,
+            );
+            assert_eq!(row.verdict, verdict, "{status}");
+        }
+        let down = effort_row_from_reply(
+            &call,
+            Wire::OpenAiChat,
+            Err("timed out".to_string()),
+            "k",
+            0,
+        );
+        assert_eq!((down.verdict, down.status), (EffortVerdict::Error, None));
+    }
+
+    #[test]
+    fn the_form_summary_reports_parsed_and_effect_from_the_rows() {
+        let row = |form: &'static str, value: &str, role, verdict, reasoning| EffortRow {
+            form,
+            value: value.to_string(),
+            role,
+            status: Some(200),
+            finish: None,
+            reasoning_tokens: reasoning,
+            completion_tokens: None,
+            elapsed_ms: 1,
+            verdict,
+            detail: "-".to_string(),
+        };
+        let rows = vec![
+            row(
+                "default",
+                "-",
+                EffortRole::Default,
+                EffortVerdict::Accepted,
+                Some(9),
+            ),
+            row(
+                "top_level_effort",
+                "low",
+                EffortRole::Level,
+                EffortVerdict::Accepted,
+                Some(40),
+            ),
+            row(
+                "top_level_effort",
+                "max",
+                EffortRole::Level,
+                EffortVerdict::Accepted,
+                Some(41),
+            ),
+            row(
+                "top_level_effort",
+                EFFORT_INVALID_VALUE,
+                EffortRole::Invalid,
+                EffortVerdict::Accepted,
+                Some(40),
+            ),
+            row(
+                "thinking_object",
+                "low",
+                EffortRole::Level,
+                EffortVerdict::Accepted,
+                Some(60),
+            ),
+            row(
+                "thinking_object",
+                "max",
+                EffortRole::Level,
+                EffortVerdict::Accepted,
+                Some(1900),
+            ),
+            row(
+                "thinking_object",
+                EFFORT_INVALID_VALUE,
+                EffortRole::Invalid,
+                EffortVerdict::Rejected,
+                None,
+            ),
+        ];
+        let lines = form_summary_lines(&rows);
+        assert_eq!(
+            lines,
+            vec![
+                "- `top_level_effort`: field parsed: no; effect: low=40 max=41".to_string(),
+                "- `thinking_object`: field parsed: yes; effect: low=60 max=1900".to_string(),
+                "- detector: field not parsed (silent)".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_effort_dry_run_lists_every_planned_kimi_call_with_no_credential() {
+        let plan = render_effort_dry_run(&[("Kimi".to_string(), vec!["kimi-k3".to_string()])]);
+        assert_eq!(plan.lines().filter(|l| l.starts_with("## ")).count(), 9);
+        assert!(plan.contains("no network access"));
+        assert!(plan.contains("`kimi-k3`: 18 calls"), "{plan}");
+        for planned in effort_plan(spec("Kimi")) {
+            assert!(
+                plan.contains(&format!("| {} | {} |", planned.form, planned.value)),
+                "{} {}",
+                planned.form,
+                planned.value
+            );
+        }
+        for level in ["low", "max"] {
+            assert!(plan.contains(&thinking_object_effort(level).to_string()));
+            assert!(plan.contains(&top_level_effort(level).to_string()));
+        }
+        assert!(plan.contains("bogus-effort-51"));
+        // No candidate means no probe: nothing is added from the curated lists.
+        let none = render_effort_dry_run(&[]);
+        assert!(none.contains("probe no default"), "{none}");
+        assert!(!none.contains("kimi-k2.6"), "{none}");
+    }
+
+    #[test]
+    fn effort_candidates_are_the_models_ids_only_without_duplicates() {
+        assert_eq!(
+            effort_candidates(&["a".into(), "b".into(), "a".into()]),
+            vec!["a".to_string(), "b".to_string()]
+        );
+        assert!(effort_candidates(&[]).is_empty());
+    }
+
+    // ----- every vendor's effort plan (Phase 51 Task 2) -----
+
+    /// Plan entries keyed by `(form, value)`, panicking with a readable message when absent.
+    fn planned<'a>(plan: &'a [EffortCall], form: &str, value: &str) -> &'a EffortCall {
+        plan.iter()
+            .find(|c| c.form == form && c.value == value)
+            .unwrap_or_else(|| panic!("no planned call {form} / {value}"))
+    }
+
+    fn forms_of(plan: &[EffortCall]) -> Vec<&'static str> {
+        let mut forms: Vec<&'static str> = Vec::new();
+        for call in plan {
+            if !forms.contains(&call.form) {
+                forms.push(call.form);
+            }
+        }
+        forms
+    }
+
+    #[test]
+    fn the_openai_plan_sends_none_through_max_an_invalid_value_and_the_sampling_row() {
+        let openai = spec("OpenAI");
+        let plan = effort_plan(openai);
+        assert_eq!(plan[0].form, "default");
+        for level in ["none", "minimal", "low", "medium", "high", "xhigh", "max"] {
+            assert_eq!(
+                planned(&plan, "top_level_effort", level).extra,
+                json!({"reasoning_effort": level})
+            );
+        }
+        assert_eq!(
+            planned(&plan, "top_level_effort", "none").role,
+            EffortRole::Off
+        );
+        let invalid = planned(&plan, "top_level_effort", EFFORT_INVALID_VALUE);
+        assert_eq!(invalid.role, EffortRole::Invalid);
+        let sampling = planned(&plan, "top_level_effort", "high+temperature=0.5");
+        assert_eq!(
+            sampling.extra,
+            json!({"reasoning_effort": "high", "temperature": 0.5})
+        );
+        assert_eq!(plan.len(), 10);
+        // The cap field is the one OpenAI requires, never `max_tokens`.
+        let body = effort_body(openai, "gpt-5.4-nano", &plan[0]);
+        assert_eq!(body["max_completion_tokens"], json!(EFFORT_MAX_TOKENS));
+        assert!(body.get("max_tokens").is_none());
+    }
+
+    #[test]
+    fn the_deepseek_plan_probes_levels_off_auto_and_both_invalid_forms() {
+        let plan = effort_plan(spec("DeepSeek"));
+        for level in ["minimal", "low", "medium", "high", "xhigh", "max"] {
+            assert_eq!(
+                planned(&plan, "top_level_effort", level).extra,
+                json!({"reasoning_effort": level})
+            );
+        }
+        assert_eq!(
+            planned(&plan, "thinking_object", "off").extra,
+            json!({"thinking": {"type": "disabled"}})
+        );
+        assert_eq!(
+            planned(&plan, "thinking_object", "auto").extra,
+            json!({"thinking": {"type": "enabled"}})
+        );
+        assert_eq!(
+            planned(&plan, "top_level_effort", EFFORT_INVALID_VALUE).extra,
+            json!({"reasoning_effort": "bogus-effort-51"})
+        );
+        assert_eq!(
+            planned(&plan, "thinking_object", EFFORT_INVALID_VALUE).extra,
+            json!({"thinking": {"type": "bogus-effort-51"}})
+        );
+        assert!(plan.iter().any(|c| c.role == EffortRole::Sampling));
+        assert_eq!(plan.len(), 12);
+    }
+
+    #[test]
+    fn the_grok_plan_probes_each_level_an_invalid_value_and_the_sampling_row() {
+        let plan = effort_plan(spec("Grok"));
+        assert_eq!(forms_of(&plan), vec!["default", "top_level_effort"]);
+        for level in ["minimal", "low", "medium", "high", "xhigh", "max"] {
+            assert_eq!(
+                planned(&plan, "top_level_effort", level).extra,
+                json!({"reasoning_effort": level})
+            );
+        }
+        assert!(plan.iter().any(|c| c.role == EffortRole::Invalid));
+        assert!(plan.iter().any(|c| c.role == EffortRole::Sampling));
+        assert_eq!(plan.len(), 9);
+    }
+
+    #[test]
+    fn the_qwen_plan_probes_the_toggle_the_budget_bounds_and_a_detector() {
+        let plan = effort_plan(spec("Qwen"));
+        assert_eq!(
+            planned(&plan, "enable_thinking", "off").extra,
+            json!({"enable_thinking": false})
+        );
+        assert_eq!(
+            planned(&plan, "enable_thinking", "auto").extra,
+            json!({"enable_thinking": true})
+        );
+        assert_eq!(
+            planned(&plan, "thinking_budget", "1").extra,
+            json!({"enable_thinking": true, "thinking_budget": 1})
+        );
+        assert_eq!(
+            planned(&plan, "thinking_budget", "0").extra,
+            json!({"enable_thinking": true, "thinking_budget": 0})
+        );
+        let invalid = planned(&plan, "thinking_budget", "-1");
+        assert_eq!(invalid.role, EffortRole::Invalid);
+        assert_eq!(
+            invalid.extra,
+            json!({"enable_thinking": true, "thinking_budget": -1})
+        );
+        // Qwen has no levels, so the silent-field detector is its own call.
+        let detector = planned(&plan, "detector", EFFORT_INVALID_VALUE);
+        assert_eq!(detector.role, EffortRole::Detector);
+        assert_eq!(
+            detector.extra,
+            json!({"reasoning_effort": "bogus-effort-51"})
+        );
+        assert!(plan.iter().any(|c| c.role == EffortRole::Sampling));
+    }
+
+    #[test]
+    fn the_anthropic_plan_probes_each_level_alone_and_paired_with_adaptive_thinking() {
+        let anthropic = spec("Anthropic");
+        let plan = effort_plan(anthropic);
+        for level in ["low", "medium", "high", "xhigh", "max"] {
+            assert_eq!(
+                planned(&plan, "output_config", level).extra,
+                json!({"output_config": {"effort": level}})
+            );
+            assert_eq!(
+                planned(&plan, "output_config+adaptive", level).extra,
+                json!({"output_config": {"effort": level}, "thinking": {"type": "adaptive"}})
+            );
+        }
+        assert_eq!(
+            planned(&plan, "thinking_object", "off").extra,
+            json!({"thinking": {"type": "disabled"}})
+        );
+        assert_eq!(
+            planned(&plan, "thinking_object", "auto").extra,
+            json!({"thinking": {"type": "adaptive"}})
+        );
+        assert_eq!(
+            planned(&plan, "output_config", EFFORT_INVALID_VALUE).extra,
+            json!({"output_config": {"effort": "bogus-effort-51"}})
+        );
+        assert_eq!(
+            planned(&plan, "thinking_budget", "1024").extra,
+            json!({"thinking": {"type": "enabled", "budget_tokens": 1024}})
+        );
+        assert_eq!(
+            planned(&plan, "thinking_budget", "1023").extra,
+            json!({"thinking": {"type": "enabled", "budget_tokens": 1023}})
+        );
+        assert!(plan.iter().any(|c| c.role == EffortRole::Sampling));
+        // No detector: the Anthropic wire is not the OpenAI chat wire.
+        assert!(!plan.iter().any(|c| c.role == EffortRole::Detector));
+        let body = effort_body(anthropic, "claude-opus-4-8", &plan[0]);
+        assert_eq!(body["max_tokens"], json!(EFFORT_MAX_TOKENS));
+    }
+
+    #[test]
+    fn the_gemini_plan_probes_lowercase_levels_one_uppercase_variant_and_budgets() {
+        let gemini = spec("Gemini");
+        let plan = effort_plan(gemini);
+        let level =
+            |value: &str| json!({"generationConfig": {"thinkingConfig": {"thinkingLevel": value}}});
+        for value in ["minimal", "low", "medium", "high", "HIGH"] {
+            assert_eq!(planned(&plan, "thinking_level", value).extra, level(value));
+        }
+        assert_eq!(
+            planned(&plan, "thinking_level", EFFORT_INVALID_VALUE).extra,
+            level("bogus-effort-51")
+        );
+        let budget =
+            |value: i64| json!({"generationConfig": {"thinkingConfig": {"thinkingBudget": value}}});
+        assert_eq!(planned(&plan, "thinking_budget", "off").extra, budget(0));
+        assert_eq!(planned(&plan, "thinking_budget", "128").extra, budget(128));
+        assert_eq!(planned(&plan, "thinking_budget", "1").extra, budget(1));
+        assert_eq!(planned(&plan, "thinking_budget", "-5").extra, budget(-5));
+        assert_eq!(
+            planned(&plan, "thinking_budget", "-5").role,
+            EffortRole::Invalid
+        );
+        // The merged body keeps the output cap beside the thinking config.
+        let body = effort_body(
+            gemini,
+            "gemini-3.6-flash",
+            planned(&plan, "thinking_level", "low"),
+        );
+        assert_eq!(
+            body["generationConfig"]["maxOutputTokens"],
+            json!(EFFORT_MAX_TOKENS)
+        );
+        assert_eq!(
+            body["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+            json!("low")
+        );
+        let sampling = plan
+            .iter()
+            .find(|c| c.role == EffortRole::Sampling)
+            .expect("sampling row");
+        let body = effort_body(gemini, "gemini-3.6-flash", sampling);
+        assert_eq!(body["generationConfig"]["temperature"], json!(0.5));
+        assert_eq!(
+            body["generationConfig"]["maxOutputTokens"],
+            json!(EFFORT_MAX_TOKENS)
+        );
+    }
+
+    #[test]
+    fn a_self_hosted_target_is_probed_through_all_four_forms() {
+        for name in ["Ollama", "OpenAI-compatible"] {
+            let plan = effort_plan(spec(name));
+            let forms = forms_of(&plan);
+            for form in ["top_level_effort", "thinking_object", "enable_thinking"] {
+                assert!(forms.contains(&form), "{name}: {forms:?}");
+            }
+            assert!(
+                plan.iter()
+                    .any(|c| c.extra.get("reasoning_effort") == Some(&json!(EFFORT_INVALID_VALUE))),
+                "{name}: no detector"
+            );
+            assert!(
+                plan.iter().any(|c| c.role == EffortRole::Sampling),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_openai_chat_vendor_gets_the_silent_field_detector() {
+        for p in PROVIDERS.iter().filter(|p| p.wire == Wire::OpenAiChat) {
+            let plan = effort_plan(p);
+            assert!(
+                plan.iter()
+                    .any(|c| c.extra.get("reasoning_effort") == Some(&json!(EFFORT_INVALID_VALUE))),
+                "{} has no top-level reasoning_effort detector",
+                p.name
+            );
+        }
+    }
+
+    #[test]
+    fn every_provider_has_a_plan_and_every_body_is_capped_and_free_of_the_acceptance_extra() {
+        for p in PROVIDERS.iter() {
+            let plan = effort_plan(p);
+            assert!(!plan.is_empty(), "{} has no plan", p.name);
+            assert_eq!(plan[0].role, EffortRole::Default, "{}", p.name);
+            for call in &plan {
+                let body = effort_body(p, "m", call);
+                let cap = match p.wire {
+                    Wire::OpenAiChat => body[p.cap_field].clone(),
+                    Wire::AnthropicMessages => body["max_tokens"].clone(),
+                    Wire::GeminiGenerate => body["generationConfig"]["maxOutputTokens"].clone(),
+                };
+                assert_eq!(cap, json!(EFFORT_MAX_TOKENS), "{} {}", p.name, call.value);
+                if p.name == "Kimi" && call.role != EffortRole::Off {
+                    assert_ne!(
+                        body["thinking"]["type"],
+                        json!("disabled"),
+                        "{}",
+                        call.value
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_summary_adds_a_detector_line_and_prints_the_silent_phrase_on_a_2xx() {
+        let row = |form: &'static str, role, verdict| EffortRow {
+            form,
+            value: EFFORT_INVALID_VALUE.to_string(),
+            role,
+            status: Some(200),
+            finish: None,
+            reasoning_tokens: None,
+            completion_tokens: None,
+            elapsed_ms: 1,
+            verdict,
+            detail: "-".to_string(),
+        };
+        let silent = form_summary_lines(&[row(
+            "detector",
+            EffortRole::Detector,
+            EffortVerdict::Accepted,
+        )]);
+        assert_eq!(
+            silent,
+            vec!["- detector: field not parsed (silent)".to_string()]
+        );
+        let parsed = form_summary_lines(&[row(
+            "detector",
+            EffortRole::Detector,
+            EffortVerdict::Rejected,
+        )]);
+        assert_eq!(
+            parsed,
+            vec!["- detector: field parsed (rejected)".to_string()]
+        );
+        // A top-level invalid value doubles as the detector.
+        let lines = form_summary_lines(&[row(
+            "top_level_effort",
+            EffortRole::Invalid,
+            EffortVerdict::Accepted,
+        )]);
+        assert!(
+            lines.contains(&"- detector: field not parsed (silent)".to_string()),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn budget_forms_report_their_reasoning_tokens_in_the_summary() {
+        let row = |value: &str, role, verdict, reasoning| EffortRow {
+            form: "thinking_budget",
+            value: value.to_string(),
+            role,
+            status: Some(200),
+            finish: None,
+            reasoning_tokens: reasoning,
+            completion_tokens: None,
+            elapsed_ms: 1,
+            verdict,
+            detail: "-".to_string(),
+        };
+        let lines = form_summary_lines(&[
+            row(
+                "1024",
+                EffortRole::Budget,
+                EffortVerdict::Accepted,
+                Some(900),
+            ),
+            row("1023", EffortRole::Budget, EffortVerdict::Rejected, None),
+        ]);
+        assert_eq!(
+            lines,
+            vec!["- `thinking_budget`: field parsed: unknown; budget: 1024=900 1023=-".to_string()]
+        );
+    }
+
+    // ----- `--effort-smoke`: the adapter path (Phase 51 Task 2, REASON-03) -----
+
+    use paladin_ports::output::llm_port::{
+        FinishReason, LlmError, LlmResponse, ProviderCapabilities, ReasoningEffort,
+        StreamingResponse, TokenUsage,
+    };
+    use paladin_ports::output::model_profile::{EffortLevels, EffortSupport, ModelProfile};
+    use std::sync::Mutex;
+
+    /// An adapter double: reports the given effort support and answers every `generate` with the
+    /// canned result, recording the effort each request carried.
+    struct MockPort {
+        effort: Option<EffortSupport>,
+        answer: fn(&LlmRequest) -> Result<LlmResponse, LlmError>,
+        seen: Mutex<Vec<Option<ReasoningEffort>>>,
+    }
+
+    impl MockPort {
+        fn new(
+            effort: Option<EffortSupport>,
+            answer: fn(&LlmRequest) -> Result<LlmResponse, LlmError>,
+        ) -> Self {
+            Self {
+                effort,
+                answer,
+                seen: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn efforts_sent(&self) -> Vec<Option<ReasoningEffort>> {
+            self.seen.lock().expect("lock").clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LlmPort for MockPort {
+        async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
+            self.seen.lock().expect("lock").push(request.reasoning);
+            (self.answer)(&request)
+        }
+
+        async fn generate_stream(
+            &self,
+            _request: LlmRequest,
+        ) -> Result<
+            Box<dyn futures::Stream<Item = Result<StreamingResponse, LlmError>> + Send>,
+            LlmError,
+        > {
+            Err(LlmError::ProcessingError("unused".to_string()))
+        }
+
+        async fn validate_model(&self, _model: &str) -> Result<bool, LlmError> {
+            Ok(true)
+        }
+
+        async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
+            Ok(Vec::new())
+        }
+
+        fn get_provider_name(&self) -> &'static str {
+            "mock"
+        }
+
+        fn get_capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities::default()
+        }
+
+        fn model_profile(&self, _model: &str) -> Option<ModelProfile> {
+            self.effort
+                .clone()
+                .map(|effort| ModelProfile::new().with_effort(effort))
+        }
+    }
+
+    fn supported(levels: &[ReasoningEffort]) -> Option<EffortSupport> {
+        Some(EffortSupport::Supported(EffortLevels::new(
+            levels.iter().copied(),
+        )))
+    }
+
+    fn run_smoke_model(port: &MockPort, key: &str) -> Vec<SmokeRow> {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime")
+            .block_on(smoke_model(port, "some-model", key))
+    }
+
+    fn canned_ok(request: &LlmRequest) -> Result<LlmResponse, LlmError> {
+        let mut response = LlmResponse::new(
+            request.id,
+            "some-model",
+            "SECRET-ANSWER-TEXT 391",
+            FinishReason::Length,
+            TokenUsage::new(20, 2048).with_reasoning(2040),
+        );
+        if let Some(effort) = request.reasoning {
+            response.metadata.insert(
+                REASONING_REQUESTED_METADATA_KEY.to_string(),
+                effort.to_string(),
+            );
+            response.metadata.insert(
+                REASONING_EFFECTIVE_METADATA_KEY.to_string(),
+                "low".to_string(),
+            );
+        }
+        Ok(response)
+    }
+
+    fn canned_refusal(request: &LlmRequest) -> Result<LlmResponse, LlmError> {
+        Err(LlmError::unsupported_parameter(
+            "reasoning_effort",
+            request
+                .reasoning
+                .map_or_else(|| "-".to_string(), |e| e.to_string()),
+            "mock",
+            "some-model",
+            "the model does not offer that effort level",
+        ))
+    }
+
+    #[test]
+    fn effort_smoke_flags_parse_with_the_optional_caps() {
+        let options = effort_options(&[
+            "--effort-smoke",
+            "--max-tokens",
+            "512",
+            "--timeout-seconds",
+            "30",
+            "--models",
+            "deepseek=deepseek-v4-pro",
+        ]);
+        assert!(options.effort_smoke && !options.effort && !options.probe && !options.usage);
+        assert_eq!(options.max_tokens, Some(512));
+        assert_eq!(options.timeout_seconds, Some(30));
+        let plain = effort_options(&["--effort-smoke", "--dry-run"]);
+        assert_eq!((plain.max_tokens, plain.timeout_seconds), (None, None));
+    }
+
+    #[test]
+    fn the_caps_are_parsed_only_with_effort_smoke_and_must_be_positive_integers() {
+        for list in [
+            ["--max-tokens", "10", "--effort"],
+            ["--timeout-seconds", "10", "--probe"],
+            ["--max-tokens", "10", "--dry-run"],
+        ] {
+            let err = parse_args(args(&list)).unwrap_err();
+            assert!(err.contains("--effort-smoke"), "{err}");
+        }
+        for list in [
+            ["--effort-smoke", "--max-tokens", "0"],
+            ["--effort-smoke", "--max-tokens", "lots"],
+            ["--effort-smoke", "--timeout-seconds", "-3"],
+            ["--effort-smoke", "--timeout-seconds", "0"],
+        ] {
+            let err = parse_args(args(&list)).unwrap_err();
+            assert!(err.contains("positive integer"), "{err}");
+        }
+        assert!(parse_args(args(&["--effort-smoke", "--max-tokens"])).is_err());
+    }
+
+    #[test]
+    fn the_help_text_names_every_effort_flag() {
+        for flag in [
+            "--effort",
+            "--effort-smoke",
+            "--max-tokens",
+            "--timeout-seconds",
+        ] {
+            assert!(USAGE.contains(flag), "USAGE does not name {flag}");
+        }
+    }
+
+    #[test]
+    fn the_effort_smoke_dry_run_lists_two_adapter_calls_per_candidate_and_reads_no_credential() {
+        let plan = render_effort_smoke_dry_run(
+            &[("DeepSeek".to_string(), vec!["deepseek-v4-pro".to_string()])],
+            Some(512),
+            Some(30),
+        );
+        assert_eq!(plan.lines().filter(|l| l.starts_with("## ")).count(), 9);
+        assert!(plan.contains("no network access"));
+        assert!(
+            plan.contains("`deepseek-v4-pro`: 2 adapter calls"),
+            "{plan}"
+        );
+        assert!(plan.contains("512") && plan.contains("30 s"), "{plan}");
+        // Nothing is planned for a provider with no `--models` candidate.
+        assert!(plan.contains("none (pass `--models openai="), "{plan}");
+    }
+
+    #[test]
+    fn the_smoke_sends_the_lowest_and_the_highest_admitted_level() {
+        use ReasoningEffort::{High, Low, Max, Minimal};
+        let port = MockPort::new(supported(&[Low, Minimal, Max, High]), canned_ok);
+        let rows = run_smoke_model(&port, "k");
+        assert_eq!(port.efforts_sent(), vec![Some(Minimal), Some(Max)]);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].requested, "minimal");
+        assert_eq!(rows[1].requested, "max");
+        // One admitted level is one request, not the same level twice.
+        let single = MockPort::new(supported(&[High]), canned_ok);
+        assert_eq!(run_smoke_model(&single, "k").len(), 1);
+        assert_eq!(single.efforts_sent(), vec![Some(High)]);
+    }
+
+    #[test]
+    fn an_ok_row_shows_tokens_finish_and_the_two_metadata_values_never_content() {
+        use ReasoningEffort::{High, Low};
+        let port = MockPort::new(supported(&[Low, High]), canned_ok);
+        let rows = run_smoke_model(&port, "k");
+        let row = &rows[1];
+        assert_eq!(row.outcome, "Ok");
+        assert_eq!(row.finish.as_deref(), Some("length"));
+        assert_eq!(row.reasoning_tokens, Some(2040));
+        assert_eq!(row.completion_tokens, Some(2048));
+        assert_eq!(row.meta_requested, "high");
+        assert_eq!(row.meta_effective, "low");
+        let line = smoke_row_line(&row.model, row);
+        for forbidden in ["SECRET", "391"] {
+            assert!(!line.contains(forbidden), "{line}");
+        }
+        assert!(line.contains("2040") && line.contains("high"), "{line}");
+    }
+
+    #[test]
+    fn a_refusal_row_shows_the_unsupported_parameter_reason() {
+        use ReasoningEffort::{High, Low};
+        let port = MockPort::new(supported(&[Low, High]), canned_refusal);
+        let rows = run_smoke_model(&port, "k");
+        assert_eq!(rows.len(), 2);
+        for row in &rows {
+            assert!(
+                row.outcome.starts_with("UnsupportedParameter"),
+                "{}",
+                row.outcome
+            );
+            assert!(
+                row.outcome
+                    .contains("the model does not offer that effort level"),
+                "{}",
+                row.outcome
+            );
+            assert_eq!(row.reasoning_tokens, None);
+            assert_eq!(row.meta_requested, "-");
+        }
+    }
+
+    #[test]
+    fn a_state_that_is_not_supported_sends_nothing_and_says_why() {
+        for (effort, why) in [
+            (Some(EffortSupport::Unmeasured), "unmeasured"),
+            (Some(EffortSupport::WireUnsupported), "wire unsupported"),
+            (Some(EffortSupport::NoReasoning), "no reasoning"),
+            (None, "no model profile"),
+        ] {
+            let port = MockPort::new(effort, canned_ok);
+            let rows = run_smoke_model(&port, "k");
+            assert!(port.efforts_sent().is_empty(), "{why}: a request was sent");
+            assert_eq!(rows.len(), 1, "{why}");
+            assert!(
+                rows[0].outcome.starts_with("not sent"),
+                "{}",
+                rows[0].outcome
+            );
+            assert!(rows[0].outcome.contains(why), "{}", rows[0].outcome);
+            assert_eq!(rows[0].requested, "-");
+        }
+        // A Supported profile that lists no level has nothing to send either.
+        let empty = MockPort::new(supported(&[]), canned_ok);
+        let rows = run_smoke_model(&empty, "k");
+        assert!(empty.efforts_sent().is_empty());
+        assert!(rows[0].outcome.contains("no levels"), "{}", rows[0].outcome);
+    }
+
+    #[test]
+    fn a_key_shaped_string_in_an_error_never_reaches_a_printed_smoke_row() {
+        fn leaky(_request: &LlmRequest) -> Result<LlmResponse, LlmError> {
+            Err(LlmError::ProcessingError(
+                "upstream said: bad request for key zzSECRETKEYVALUE123456".to_string(),
+            ))
+        }
+        use ReasoningEffort::{High, Low};
+        let port = MockPort::new(supported(&[Low, High]), leaky);
+        let key = "zzSECRETKEYVALUE123456";
+        let rows = run_smoke_model(&port, key);
+        for row in &rows {
+            let line = smoke_row_line(&row.model, row);
+            assert!(!line.contains(key), "{line}");
+            assert!(!line.contains("zzSECRET"), "{line}");
+            assert!(line.contains("[REDACTED]"), "{line}");
+            assert!(row.outcome.starts_with("error"), "{}", row.outcome);
+        }
+    }
+
+    #[test]
+    fn every_provider_has_a_smoke_port_builder_and_an_unknown_one_is_an_error() {
+        // The environment decides whether a build succeeds (Ollama needs no key), so only the
+        // contract is pinned: no builder panics, and a name outside the table is an error.
+        let knobs = SmokeKnobs {
+            max_tokens: Some(64),
+            timeout_seconds: Some(5),
+        };
+        for p in PROVIDERS.iter() {
+            let _ = build_smoke_port(p.name, knobs);
+        }
+        assert!(build_smoke_port("Nope", knobs).is_err());
     }
 }

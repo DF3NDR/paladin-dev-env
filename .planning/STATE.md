@@ -5,8 +5,8 @@ milestone_name: Crate Release
 current_phase: 51
 current_phase_name: Adjustable Reasoning Effort
 status: planning
-stopped_at: Phase 50.1 complete, ready to plan Phase 51
-last_updated: "2026-10-20T21:13:45.076Z"
+stopped_at: Phase 51 context gathered
+last_updated: "2026-10-21T00:09:40.953Z"
 last_activity: 2026-10-20
 last_activity_desc: Phase 50.1 complete, transitioned to Phase 51
 progress:
@@ -820,9 +820,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-20T21:20:00.000Z
-**Stopped at:** Phase 50.1 complete, ready to plan Phase 51
-**Resume file:** None
+**Last session:** 2026-10-21T00:09:40.505Z
+**Stopped at:** Phase 51 context gathered
+**Resume file:** .planning/phases/51-adjustable-reasoning-effort/51-CONTEXT.md
 
 ## Operator Next Steps
 

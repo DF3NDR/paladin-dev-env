@@ -15,6 +15,11 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- Phase 51 (REASON-05; plan 51-09): `TraceEvent::NodeFinished.reasoning_requested` and
+  `.reasoning_effective` (`Option<String>`, `#[serde(default, skip_serializing_if =
+  "Option::is_none")]`), the attempt's own requested and effective reasoning effort. A `None` pair
+  serialises byte-identically to before and a row without the keys reads back with both `None`.
+
 - Phase 51 (REASON-01; plan 51-01): `platform::container::reasoning` -- `ReasoningEffort`
   (`Off`, `Auto`, `Minimal`, `Low`, `Medium`, `High`, `XHigh`, `Max`, `Budget(u32)`; `level_rank`,
   `is_level`, `LEVELS`, `Display`, serde spellings `off auto minimal low medium high xhigh max`
@@ -82,6 +87,10 @@ and this project follows lockstep workspace versioning.
   principal to a ledger scope; `None` yields the `unattributed` sentinel (TENANT-02).
 
 ### Changed
+
+- **BREAKING:** `TraceEvent::NodeFinished` gains `reasoning_requested: Option<String>` and
+  `reasoning_effective: Option<String>` (REASON-05, D-00b, D-11; Phase 51 plan 09). Migration: name
+  both as `None` in a constructing struct-variant literal, or match with `..`.
 
 - **BREAKING:** `PaladinData` (`platform::container::paladin`) gains `reasoning_effort:
   Option<ReasoningEffort>` and `reasoning_fallback: Option<ReasoningFallback>` (REASON-01, D-00e;

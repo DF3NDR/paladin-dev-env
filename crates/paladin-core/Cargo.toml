@@ -116,6 +116,14 @@ rand = { workspace = true }
 # container) and plan 51-14 measures it. The MIGRATION.md section 9.2 row and the
 # `.cargo/semver-checks-allowlist.toml` entry are registered in the same commit
 # as the fields; every in-tree full literal named both fields in that commit.
+#
+# REASON-05 (D-00b, D-11, Phase 51 plan 51-09): `TraceEvent::NodeFinished`
+# gained the `reasoning_requested` and `reasoning_effective` struct-variant
+# fields. The expected lint on the published 0.10.1 is
+# `enum_struct_variant_field_added`, which is NOT allowed in this table, so no
+# line is added or removed here: the break is registered in MIGRATION.md
+# section 9.2 and `.cargo/semver-checks-allowlist.toml` (UNMEASURED, plan
+# 51-14 measures it; `TraceEvent` postdates the CI-pinned v0.9.0 baseline).
 [package.metadata.cargo-semver-checks.lints]
 enum_marked_non_exhaustive = "allow"
 constructible_struct_adds_field = "allow"

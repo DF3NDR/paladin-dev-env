@@ -732,6 +732,8 @@ mod tests {
             duration_ms: 1,
             usage,
             cost,
+            reasoning_requested: None,
+            reasoning_effective: None,
             cache_hit: false,
         }
     }
@@ -1323,6 +1325,8 @@ mod tests {
                             duration_ms: 0,
                             usage: TokenUsage::default(),
                             cost: None,
+                            reasoning_requested: None,
+                            reasoning_effective: None,
                             cache_hit: false,
                         });
                     }

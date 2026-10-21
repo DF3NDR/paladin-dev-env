@@ -495,6 +495,7 @@ type RecordedOutput = (String, TokenUsage, Option<Cost>);
 #[derive(Default)]
 pub struct RecordingPaladinPort {
     outputs: Mutex<HashMap<String, RecordedOutput>>,
+    run_metadata: Mutex<HashMap<String, std::collections::BTreeMap<String, String>>>,
     calls: Mutex<Vec<(String, String)>>,
 }
 
@@ -554,6 +555,22 @@ impl RecordingPaladinPort {
             .insert(name.into(), (output.into(), usage, cost));
     }
 
+    /// Configure the `PaladinResult.run_metadata` a Paladin named `name`
+    /// returns (D-11): what an adapter-stamped `paladin.reasoning_requested`
+    /// / `paladin.reasoning_effective` pair looks like after it has been
+    /// merged into the run's metadata. An unconfigured Paladin returns an
+    /// empty map.
+    pub fn set_run_metadata(
+        &self,
+        name: impl Into<String>,
+        metadata: std::collections::BTreeMap<String, String>,
+    ) {
+        self.run_metadata
+            .lock()
+            .unwrap()
+            .insert(name.into(), metadata);
+    }
+
     /// The ordered call log: one `(paladin_name, input)` entry per `execute`
     /// call so far, in invocation order.
     pub fn call_log(&self) -> Vec<(String, String)> {
@@ -583,6 +600,13 @@ impl PaladinPort for RecordingPaladinPort {
             .get(&name)
             .cloned()
             .unwrap_or_default();
+        let run_metadata = self
+            .run_metadata
+            .lock()
+            .unwrap()
+            .get(&name)
+            .cloned()
+            .unwrap_or_default();
 
         Ok(PaladinResult {
             output,
@@ -594,7 +618,7 @@ impl PaladinPort for RecordingPaladinPort {
             plan: None,
             handoff_history: Vec::new(),
             served_by: None,
-            run_metadata: std::collections::BTreeMap::new(),
+            run_metadata,
         })
     }
 
@@ -769,6 +793,7 @@ pub struct SpendRecordingStructuredExecutor {
     calls: Vec<(TokenUsage, Option<Cost>)>,
     records: bool,
     ending: StructuredEnding,
+    raw_run_metadata: std::collections::BTreeMap<String, String>,
 }
 
 impl SpendRecordingStructuredExecutor {
@@ -782,6 +807,23 @@ impl SpendRecordingStructuredExecutor {
             calls,
             records: true,
             ending,
+            raw_run_metadata: std::collections::BTreeMap::new(),
+        })
+    }
+
+    /// Like [`Self::recording`], with the `run_metadata` the successful
+    /// run's `raw` result carries (D-11: the adapter-stamped
+    /// `paladin.reasoning_*` keys of the last call).
+    pub fn recording_with_run_metadata(
+        calls: Vec<(TokenUsage, Option<Cost>)>,
+        ending: StructuredEnding,
+        raw_run_metadata: std::collections::BTreeMap<String, String>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            calls,
+            records: true,
+            ending,
+            raw_run_metadata,
         })
     }
 
@@ -792,6 +834,7 @@ impl SpendRecordingStructuredExecutor {
             calls,
             records: false,
             ending,
+            raw_run_metadata: std::collections::BTreeMap::new(),
         })
     }
 }
@@ -824,6 +867,7 @@ impl StructuredExecutorPort for SpendRecordingStructuredExecutor {
                     usage: last_usage,
                     cost: last_cost,
                     loop_count: attempts,
+                    run_metadata: self.raw_run_metadata.clone(),
                     ..Default::default()
                 },
             }),

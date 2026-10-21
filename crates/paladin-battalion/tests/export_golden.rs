@@ -367,6 +367,8 @@ fn branch_join_trace_records() -> Vec<TraceRecord> {
             duration_ms: 120,
             usage: TokenUsage::new(45, 0),
             cost: None,
+            reasoning_requested: None,
+            reasoning_effective: None,
             cache_hit: false,
         },
         TraceEvent::EdgeEvaluated {
@@ -389,6 +391,8 @@ fn branch_join_trace_records() -> Vec<TraceRecord> {
             duration_ms: 80,
             usage: TokenUsage::new(30, 0),
             cost: None,
+            reasoning_requested: None,
+            reasoning_effective: None,
             cache_hit: false,
         },
         TraceEvent::EdgeEvaluated {
@@ -405,6 +409,8 @@ fn branch_join_trace_records() -> Vec<TraceRecord> {
             duration_ms: 60,
             usage: TokenUsage::new(20, 0),
             cost: None,
+            reasoning_requested: None,
+            reasoning_effective: None,
             cache_hit: false,
         },
     ];

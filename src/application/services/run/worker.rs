@@ -1723,6 +1723,8 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                     duration_ms,
                     usage: result.usage.clone(),
                     cost: result.cost.clone(),
+                    reasoning_requested: None,
+                    reasoning_effective: None,
                     cache_hit: false,
                 });
                 // D-12: a crossed derived budget is a halt, not a completion. The partial output
@@ -1788,6 +1790,8 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                     duration_ms,
                     usage: TokenUsage::default(),
                     cost: None,
+                    reasoning_requested: None,
+                    reasoning_effective: None,
                     cache_hit: false,
                 });
                 emit_agent_run_finished(&dispatcher, RunFinishStatus::Failed, None, duration_ms);

@@ -3965,6 +3965,209 @@ mod tests {
         assert_eq!(run_cost, Some(Cost::new(42_500, usd)));
     }
 
+    /// The `(requested, effective)` reasoning pair a `NodeFinished` for
+    /// `node` carried (D-11), for the emission tests below.
+    fn finished_reasoning_for(
+        events: &[paladin_ports::output::trace_sink_port::TraceRecord],
+        node: &NodeId,
+    ) -> (Option<String>, Option<String>) {
+        events
+            .iter()
+            .find_map(|r| match &r.event {
+                TraceEvent::NodeFinished {
+                    node_id,
+                    reasoning_requested,
+                    reasoning_effective,
+                    ..
+                } if node_id == node => {
+                    Some((reasoning_requested.clone(), reasoning_effective.clone()))
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("NodeFinished for {node:?} present"))
+    }
+
+    fn reasoning_metadata(
+        requested: &str,
+        effective: &str,
+    ) -> std::collections::BTreeMap<String, String> {
+        use paladin_core::platform::container::reasoning::{
+            REASONING_EFFECTIVE_METADATA_KEY, REASONING_REQUESTED_METADATA_KEY,
+        };
+        std::collections::BTreeMap::from([
+            (
+                REASONING_REQUESTED_METADATA_KEY.to_string(),
+                requested.to_string(),
+            ),
+            (
+                REASONING_EFFECTIVE_METADATA_KEY.to_string(),
+                effective.to_string(),
+            ),
+        ])
+    }
+
+    /// D-11 (REASON-05): a Paladin attempt whose result carries the two
+    /// adapter-stamped `paladin.reasoning_*` metadata keys emits a
+    /// `NodeFinished` naming that attempt's own requested and effective
+    /// effort (a substitution shows as two different values); a Paladin that
+    /// stamped nothing, and a `Function` node, emit both `None`.
+    #[tokio::test]
+    async fn node_finished_carries_the_attempts_own_reasoning_metadata() {
+        let out = FieldName::new("out").unwrap();
+        let fn_out = FieldName::new("fn_out").unwrap();
+        let schema = BattlefieldSchema::new(vec![
+            FieldSpec::new(out.clone(), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(fn_out.clone(), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let n1 = NodeId::new("first");
+        let n2 = NodeId::new("second");
+        let n3 = NodeId::new("third");
+        let fn_node = NodeId::new("func");
+        for (id, name) in [(&n1, "first"), (&n2, "second"), (&n3, "third")] {
+            graph.add_node(
+                id.clone(),
+                NodeSpec::paladin(make_paladin(name), InputMapping::new("go"), out.clone()),
+            );
+        }
+        graph.add_node(
+            fn_node.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(fn_out, serde_json::json!("v"))),
+        );
+        graph.add_edge(EdgeSpec {
+            from: n1.clone(),
+            to: n2.clone(),
+            condition: None,
+        });
+        graph.add_edge(EdgeSpec {
+            from: n2.clone(),
+            to: n3.clone(),
+            condition: None,
+        });
+        graph.add_entry(n1.clone());
+        graph.add_entry(fn_node.clone());
+
+        let port = Arc::new(RecordingPaladinPort::new());
+        port.set_run_metadata("first", reasoning_metadata("high", "high"));
+        port.set_run_metadata("second", reasoning_metadata("xhigh", "high"));
+        let sink = RecordingTraceSink::new();
+        let engine = WarEngine::new(port, Arc::new(RecordingWaypointStore::new()))
+            .with_trace_sink(sink.clone());
+        let outcome = engine
+            .start(
+                &graph,
+                ThreadId::new("node-finished-reasoning").unwrap(),
+                StateDelta::new(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let events = sink.events().await;
+        assert_eq!(
+            finished_reasoning_for(&events, &n1),
+            (Some("high".to_string()), Some("high".to_string()))
+        );
+        assert_eq!(
+            finished_reasoning_for(&events, &n2),
+            (Some("xhigh".to_string()), Some("high".to_string())),
+            "a substitution is visible as two different values"
+        );
+        assert_eq!(finished_reasoning_for(&events, &n3), (None, None));
+        assert_eq!(finished_reasoning_for(&events, &fn_node), (None, None));
+    }
+
+    /// REASON-05 prohibition: the trace never shows an effort the attempt did
+    /// not run with. An agent CONFIGURED with an effort whose response carried
+    /// no reasoning metadata (an adapter that did not apply one) emits `None`,
+    /// not the configured value.
+    #[tokio::test]
+    async fn node_finished_never_reads_the_agents_configured_effort() {
+        use paladin_core::platform::container::reasoning::ReasoningEffort;
+        let out = FieldName::new("out").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let node = NodeId::new("configured");
+        let mut paladin = make_paladin("configured");
+        paladin.data.reasoning_effort = Some(ReasoningEffort::High);
+        graph.add_node(
+            node.clone(),
+            NodeSpec::paladin(paladin, InputMapping::new("go"), out),
+        );
+        graph.add_entry(node.clone());
+
+        let sink = RecordingTraceSink::new();
+        let engine = WarEngine::new(
+            Arc::new(RecordingPaladinPort::new()),
+            Arc::new(RecordingWaypointStore::new()),
+        )
+        .with_trace_sink(sink.clone());
+        engine
+            .start(
+                &graph,
+                ThreadId::new("node-finished-configured").unwrap(),
+                StateDelta::new(),
+            )
+            .await
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(
+            finished_reasoning_for(&sink.events().await, &node),
+            (None, None)
+        );
+    }
+
+    /// D-11: a failed Paladin attempt emits both fields `None`.
+    #[tokio::test]
+    async fn a_failed_attempt_emits_no_reasoning_fields() {
+        let out = FieldName::new("out").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let node = NodeId::new("failing");
+        graph.add_node(
+            node.clone(),
+            NodeSpec::paladin(make_paladin("failing"), InputMapping::new("go"), out),
+        );
+        graph.add_entry(node.clone());
+        // Single-attempt retry policy: policy-governed, so the failure is
+        // recorded, without any actual retry.
+        graph.set_aegis(node.clone(), retrying_aegis(1));
+
+        let sink = RecordingTraceSink::new();
+        let engine = WarEngine::new(
+            FailingPaladinPort::new(|| PaladinError::ExecutionError("paladin down".into())),
+            Arc::new(RecordingWaypointStore::new()),
+        )
+        .with_trace_sink(sink.clone());
+        let outcome = engine
+            .start(
+                &graph,
+                ThreadId::new("node-finished-failed").unwrap(),
+                StateDelta::new(),
+            )
+            .await
+            .unwrap();
+        assert!(outcome.node_error().is_some());
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(
+            finished_reasoning_for(&sink.events().await, &node),
+            (None, None)
+        );
+    }
+
     /// Plan 38-07 (D-10, D-00c): when one of two Paladin nodes reports usage
     /// but no cost, the run's `RunFinished.cost` is `None`, never a partial
     /// sum of just the priced node.
@@ -4730,6 +4933,94 @@ mod tests {
         assert!(outcome.node_error().is_some());
         assert_eq!(finished, vec![(TokenUsage::default(), None)]);
         assert_eq!(settled_for(&ledger, &run_id).await, None);
+    }
+
+    /// D-11: a structured-output attempt reads the pair from
+    /// `structured.raw.run_metadata`; an executor whose `raw` stamped nothing
+    /// emits `None`, and so does a failed structured attempt.
+    #[tokio::test]
+    async fn a_structured_attempt_reads_reasoning_from_the_raw_result() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let with_effort = SpendRecordingStructuredExecutor::recording_with_run_metadata(
+            three_structured_calls(&usd),
+            StructuredEnding::Succeed(serde_json::json!({"ok": true})),
+            reasoning_metadata("medium", "low"),
+        );
+        let (outcome, sink) =
+            run_structured_scout_with_sink("structured-reasoning-stamped", with_effort).await;
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+        assert_eq!(
+            finished_reasoning_for(&sink.events().await, &NodeId::new("scout")),
+            (Some("medium".to_string()), Some("low".to_string()))
+        );
+
+        let unstamped = SpendRecordingStructuredExecutor::recording(
+            three_structured_calls(&usd),
+            StructuredEnding::Succeed(serde_json::json!({"ok": true})),
+        );
+        let (outcome, sink) =
+            run_structured_scout_with_sink("structured-reasoning-unstamped", unstamped).await;
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+        assert_eq!(
+            finished_reasoning_for(&sink.events().await, &NodeId::new("scout")),
+            (None, None)
+        );
+
+        let failed = SpendRecordingStructuredExecutor::recording_with_run_metadata(
+            three_structured_calls(&usd),
+            StructuredEnding::Invalid,
+            reasoning_metadata("medium", "low"),
+        );
+        let (outcome, sink) =
+            run_structured_scout_with_sink("structured-reasoning-failed", failed).await;
+        assert!(outcome.node_error().is_some());
+        assert_eq!(
+            finished_reasoning_for(&sink.events().await, &NodeId::new("scout")),
+            (None, None),
+            "a failed attempt emits no effort"
+        );
+    }
+
+    /// Runs the single structured `scout` node through `executor` and returns
+    /// the outcome with the recording trace sink.
+    async fn run_structured_scout_with_sink(
+        thread: &str,
+        executor: Arc<dyn StructuredExecutorPort>,
+    ) -> (RunOutcome, Arc<RecordingTraceSink>) {
+        use paladin_core::platform::container::structured::SchemaRef;
+        let out = FieldName::new("out").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let node_id = NodeId::new("scout");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::paladin(
+                make_paladin_with_model("scout", "gpt-4"),
+                InputMapping::new("go"),
+                out,
+            )
+            .with_output_schema(SchemaRef::Inline(serde_json::json!({"type": "object"}))),
+        );
+        graph.add_entry(node_id.clone());
+        graph.set_aegis(node_id, retrying_aegis(1));
+        let sink = RecordingTraceSink::new();
+        let engine = WarEngine::new(
+            Arc::new(RecordingPaladinPort::new()),
+            Arc::new(RecordingWaypointStore::new()),
+        )
+        .with_structured_executor(executor)
+        .with_trace_sink(sink.clone());
+        let outcome = engine
+            .start(&graph, ThreadId::new(thread).unwrap(), StateDelta::new())
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        (outcome, sink)
     }
 
     // --- Plan 39-04 Task 2: nested Battalion roll-up, the retry invariant,

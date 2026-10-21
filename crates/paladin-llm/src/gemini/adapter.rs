@@ -80,12 +80,15 @@ use uuid::Uuid;
 use paladin_core::platform::container::prompt::{PromptRole, PromptType};
 use paladin_ports::output::llm_port::{
     FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ModelProfile, ParamSupport,
-    ProviderCapabilities, ResponseFormat, StopSupport, StreamingResponse, TokenUsage,
+    ProviderCapabilities, ReasoningEffort, ResponseFormat, StopSupport, StreamingResponse,
+    TokenUsage,
 };
+use paladin_ports::output::model_profile::ResolvedEffort;
 use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
 use crate::http_status::map_http_status_with_hints;
 use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
+use crate::reasoning::{self, SubstitutionLog, WireCaps, mask_effort};
 use crate::redaction::{
     RESPONSE_EXCERPT_CHAR_BUDGET, RedactedKey, bounded_excerpt, diagnostic_excerpt,
     redact_credentials,
@@ -395,6 +398,9 @@ pub struct GeminiAdapter {
     model_registry: ModelRegistry,
     /// Which (model, parameter) omissions this instance has already warned about.
     omissions: OmissionLog,
+    /// Which (model, requested, effective) reasoning-effort substitutions this instance has
+    /// already warned about (Phase 51, D-06).
+    substitutions: SubstitutionLog,
     /// Which (model, adjustment) `response_format` changes this instance has already warned
     /// about.
     format_log: FormatLog,
@@ -509,9 +515,19 @@ impl GeminiAdapter {
             models_cache: OnceCell::new(),
             model_registry,
             omissions: OmissionLog::new(),
+            substitutions: SubstitutionLog::new(),
             format_log: FormatLog::new(),
             usage_log: UsageLog::new(),
         })
+    }
+
+    /// The request model's profile as this adapter's wire can honour it: the effort data has
+    /// whatever Gemini's body cannot carry removed ([`GEMINI_REASONING_WIRE`]), so a caller
+    /// reading [`LlmPort::model_profile`] judges exactly what [`Self::build_request`] will send.
+    fn wire_profile(&self, model: &str) -> ModelProfile {
+        let mut profile = self.model_registry.profile(model);
+        profile.effort = mask_effort(std::mem::take(&mut profile.effort), GEMINI_REASONING_WIRE);
+        profile
     }
 
     /// Build the outgoing request body from a port-level [`LlmRequest`], plus the notes the
@@ -605,12 +621,29 @@ impl GeminiAdapter {
         }
 
         let params = &request.prompt.entity.data.parameters;
-        let profile = self.model_registry.profile(&request.model);
+        let profile = self.wire_profile(&request.model);
 
         // The caller's value, else the configured default; either is held to the model's
         // maximum output before anything is sent.
         let max_tokens = params.max_tokens.or(self.config.max_tokens);
         sampling::check_max_tokens(GEMINI_PROVIDER, &request.model, &profile, max_tokens)?;
+
+        // Phase 51 (REASON-02, REASON-06): an explicit effort is sent in the form the model's
+        // profile states or refused here, before any HTTP call and before any retry loop. The
+        // cap a budget is held below is `maxOutputTokens` when one is set.
+        let resolved = reasoning::admit(
+            GEMINI_PROVIDER,
+            &request.model,
+            &profile,
+            request.reasoning,
+            request.reasoning_fallback,
+            max_tokens,
+            &self.substitutions,
+        )?;
+        let thinking_config = match &resolved {
+            Some(resolved) => map_reasoning(&request.model, resolved)?,
+            None => None,
+        };
 
         let applied = sampling::apply(&profile, params);
         let params_omitted = self
@@ -650,12 +683,14 @@ impl GeminiAdapter {
             candidate_count: None,
             response_mime_type,
             response_schema,
+            thinking_config,
         };
         let generation_config = if generation_config.temperature.is_some()
             || generation_config.max_output_tokens.is_some()
             || generation_config.top_p.is_some()
             || generation_config.stop_sequences.is_some()
             || generation_config.response_mime_type.is_some()
+            || generation_config.thinking_config.is_some()
         {
             Some(generation_config)
         } else {
@@ -671,7 +706,8 @@ impl GeminiAdapter {
             params_omitted,
             format_adjusted,
             unprofiled_model,
-            ..RequestNotes::default()
+            reasoning_requested: resolved.map(|r| r.requested.to_string()),
+            reasoning_effective: resolved.map(|r| r.effective.to_string()),
         };
         Ok((body, notes))
     }
@@ -1303,7 +1339,7 @@ impl LlmPort for GeminiAdapter {
     }
 
     fn model_profile(&self, model: &str) -> Option<ModelProfile> {
-        Some(self.model_registry.profile(model))
+        Some(self.wire_profile(model))
     }
 }
 
@@ -1363,6 +1399,84 @@ struct GeminiGenerationConfig {
     /// absent entirely when the caller sets no hint.
     #[serde(rename = "responseSchema", skip_serializing_if = "Option::is_none")]
     response_schema: Option<serde_json::Value>,
+    /// `LlmRequest.reasoning` on the wire (Phase 51): a `thinkingLevel` or a `thinkingBudget`,
+    /// never both. Omitted when no effort is set or the effort is `Auto`, keeping an unset
+    /// request's body byte-identical (D-00i). Placed last so the existing field order is
+    /// untouched. Never carries `includeThoughts` (D-00g).
+    #[serde(rename = "thinkingConfig", skip_serializing_if = "Option::is_none")]
+    thinking_config: Option<GeminiThinkingConfig>,
+}
+
+/// `generationConfig.thinkingConfig`: exactly one of the two members is set.
+#[derive(Debug, Serialize)]
+struct GeminiThinkingConfig {
+    #[serde(rename = "thinkingLevel", skip_serializing_if = "Option::is_none")]
+    thinking_level: Option<&'static str>,
+    #[serde(rename = "thinkingBudget", skip_serializing_if = "Option::is_none")]
+    thinking_budget: Option<u32>,
+}
+
+/// What Gemini's `generateContent` body can carry of a profile's effort data (Phase 51): a
+/// `thinkingLevel`, a `thinkingBudget` (and `0` for `off`), and `auto` as the absence of both.
+/// Plan 51-12 confirms each form against the dated probe or sets this to [`WireCaps::NONE`]
+/// (D-04).
+const GEMINI_REASONING_WIRE: WireCaps = WireCaps {
+    levels: true,
+    off: true,
+    auto: true,
+    budget: true,
+};
+
+/// The `thinkingLevel` spelling of a level, kept in one place so the probe (plan 51-12) can
+/// change it for the whole adapter. Lower-case per the vendor documentation (research A2): the
+/// REST spelling is unconfirmed until the dated probe reads the lower-case versus upper-case
+/// rows.
+fn thinking_level_spelling(effort: ReasoningEffort) -> Option<&'static str> {
+    reasoning::level_spelling(effort)
+}
+
+/// Turn an admitted effort into Gemini's `thinkingConfig`, or `None` when nothing is sent
+/// (`Auto`, or `Off` on a model that does not reason).
+///
+/// A level and a budget never appear together. `Off` is a zero budget.
+///
+/// # Errors
+///
+/// [`LlmError::UnsupportedParameter`] for an effort this wire cannot carry. The profile masking
+/// and `admit` already refuse those, so this is the last line of defence: it can never put a
+/// field on the wire that the request did not ask for.
+fn map_reasoning(
+    model: &str,
+    resolved: &ResolvedEffort,
+) -> Result<Option<GeminiThinkingConfig>, LlmError> {
+    if !resolved.on_wire {
+        return Ok(None);
+    }
+    if let Some(level) = thinking_level_spelling(resolved.effective) {
+        return Ok(Some(GeminiThinkingConfig {
+            thinking_level: Some(level),
+            thinking_budget: None,
+        }));
+    }
+    match resolved.effective {
+        ReasoningEffort::Off => Ok(Some(GeminiThinkingConfig {
+            thinking_level: None,
+            thinking_budget: Some(0),
+        })),
+        // The vendor's own default depth: nothing to send.
+        ReasoningEffort::Auto => Ok(None),
+        ReasoningEffort::Budget(tokens) => Ok(Some(GeminiThinkingConfig {
+            thinking_level: None,
+            thinking_budget: Some(tokens),
+        })),
+        other => Err(LlmError::unsupported_parameter(
+            "reasoning_effort",
+            other.to_string(),
+            GEMINI_PROVIDER,
+            model,
+            "this adapter has no wire form for that effort",
+        )),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -4719,6 +4833,536 @@ mod tests {
                 }
                 other => panic!("expected InvalidPrompt, got {other:?}"),
             }
+        }
+    }
+
+    /// Phase 51 (REASON-02, REASON-03, REASON-06): an explicit effort reaches `generationConfig`
+    /// as `thinkingLevel` or `thinkingBudget` exactly as the model's profile states, or is
+    /// refused before any HTTP call.
+    mod reasoning_effort {
+        use super::*;
+        use crate::reasoning::{
+            REASONING_EFFECTIVE_METADATA_KEY, REASONING_REQUESTED_METADATA_KEY,
+        };
+        use paladin_core::platform::container::prompt::PromptParameters;
+        use paladin_core::platform::container::transience::Transience;
+        use paladin_ports::output::llm_port::ReasoningEffort::{High, Low, Medium};
+        use paladin_ports::output::llm_port::{ReasoningEffort, ReasoningFallback};
+        use paladin_ports::output::model_profile::{BudgetBounds, EffortLevels, EffortSupport};
+        use serde_json::Value;
+        use std::sync::Mutex;
+
+        const LEVELS_MODEL: &str = "gemini-3.8-flash";
+        const BUDGET_MODEL: &str = "gemini-2.5-flash";
+        const UNMEASURED_MODEL: &str = "gemini-4-argon";
+
+        fn request_for(model: &str) -> LlmRequest {
+            build_request(
+                model,
+                PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }),
+            )
+        }
+
+        fn with_max_tokens(mut request: LlmRequest, max_tokens: u32) -> LlmRequest {
+            request.prompt.entity.data.parameters.max_tokens = Some(max_tokens);
+            request
+        }
+
+        /// The levels shape of the 3.x line: three levels and `auto`, no `off`, no budget.
+        fn levels_shape() -> EffortSupport {
+            EffortSupport::Supported(EffortLevels::new([Low, Medium, High]).with_auto(true))
+        }
+
+        /// The budget shape of the 2.5 line: no levels, `off`, `auto` and a budget span.
+        fn budget_shape() -> EffortSupport {
+            EffortSupport::Supported(
+                EffortLevels::new([])
+                    .with_off(true)
+                    .with_auto(true)
+                    .with_budget(BudgetBounds::new(1, 24_576)),
+            )
+        }
+
+        fn adapter_over(base_url: &str, overrides: Vec<(&str, EffortSupport)>) -> GeminiAdapter {
+            let map: BTreeMap<String, ModelOverride> = overrides
+                .into_iter()
+                .map(|(model, effort)| {
+                    (
+                        model.to_string(),
+                        ModelOverride {
+                            effort: Some(effort),
+                            ..ModelOverride::default()
+                        },
+                    )
+                })
+                .collect();
+            GeminiAdapter::new(test_config(base_url).with_model_overrides(map))
+                .expect("a valid override builds")
+        }
+
+        fn ok_body() -> Vec<u8> {
+            json!({
+                "candidates": [{
+                    "content": {"role": "model", "parts": [{"text": "ok"}]},
+                    "finishReason": "STOP"
+                }],
+                "usageMetadata": {
+                    "promptTokenCount": 1,
+                    "candidatesTokenCount": 1,
+                    "totalTokenCount": 2
+                }
+            })
+            .to_string()
+            .into_bytes()
+        }
+
+        /// Send `request` through an adapter carrying `overrides`; returns the raw request body
+        /// (`None` when no HTTP call was made) and the result.
+        async fn send_raw(
+            overrides: Vec<(&str, EffortSupport)>,
+            request: LlmRequest,
+        ) -> (Option<String>, Result<LlmResponse, LlmError>) {
+            let mut server = Server::new_async().await;
+            let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let slot = Arc::clone(&captured);
+            server
+                .mock(
+                    "POST",
+                    Matcher::Regex(r"^/models/[^:/]+:generateContent$".to_string()),
+                )
+                .with_status(200)
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    ok_body()
+                })
+                .create_async()
+                .await;
+            let adapter = adapter_over(&server.url(), overrides);
+            let result = adapter.generate(request).await;
+            let body = captured.lock().unwrap().take();
+            (body, result)
+        }
+
+        /// Run a streaming call whose body is `sse`; returns the raw request body and the outcome.
+        async fn stream_raw(
+            overrides: Vec<(&str, EffortSupport)>,
+            request: LlmRequest,
+            sse: &'static str,
+        ) -> (
+            Option<String>,
+            Result<Vec<Result<StreamingResponse, LlmError>>, LlmError>,
+        ) {
+            let mut server = Server::new_async().await;
+            let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let slot = Arc::clone(&captured);
+            server
+                .mock(
+                    "POST",
+                    Matcher::Regex(r"^/models/[^:/]+:streamGenerateContent".to_string()),
+                )
+                .match_query(Matcher::Any)
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    sse.as_bytes().to_vec()
+                })
+                .create_async()
+                .await;
+            let adapter = adapter_over(&server.url(), overrides);
+            let outcome = match adapter.generate_stream(request).await {
+                Err(error) => Err(error),
+                Ok(stream) => {
+                    let mut stream = Box::into_pin(stream);
+                    let mut items = Vec::new();
+                    while let Some(item) = stream.next().await {
+                        items.push(item);
+                    }
+                    Ok(items)
+                }
+            };
+            let body = captured.lock().unwrap().take();
+            (body, outcome)
+        }
+
+        fn json_of(body: Option<String>) -> Value {
+            serde_json::from_str(&body.expect("the request reached the wire"))
+                .expect("the body must be JSON")
+        }
+
+        async fn refused_before_http(
+            overrides: Vec<(&str, EffortSupport)>,
+            request: LlmRequest,
+        ) -> String {
+            let (body, result) = send_raw(overrides, request).await;
+            assert!(
+                body.is_none(),
+                "no request may reach the endpoint: {body:?}"
+            );
+            match result {
+                Err(LlmError::UnsupportedParameter { reason, .. }) => reason,
+                other => panic!("expected UnsupportedParameter, got {other:?}"),
+            }
+        }
+
+        #[tokio::test]
+        async fn a_level_sends_thinking_level_and_no_budget() {
+            let (body, result) = send_raw(
+                vec![(LEVELS_MODEL, levels_shape())],
+                request_for(LEVELS_MODEL).with_reasoning(Medium),
+            )
+            .await;
+            let metadata = result.expect("a listed level is accepted").metadata;
+            let body = json_of(body);
+            assert_eq!(
+                body["generationConfig"]["thinkingConfig"],
+                json!({"thinkingLevel": "medium"})
+            );
+            assert_eq!(metadata[REASONING_REQUESTED_METADATA_KEY], "medium");
+            assert_eq!(metadata[REASONING_EFFECTIVE_METADATA_KEY], "medium");
+        }
+
+        #[tokio::test]
+        async fn an_effort_alone_still_produces_a_generation_config_object() {
+            // No max_tokens, no sampling: the effort is the only reason `generationConfig` exists.
+            let mut request = request_for(LEVELS_MODEL).with_reasoning(High);
+            request.prompt.entity.data.parameters = PromptParameters {
+                max_tokens: None,
+                temperature: None,
+                top_p: None,
+                frequency_penalty: None,
+                presence_penalty: None,
+                stop_sequences: None,
+            };
+            let (body, result) = send_raw(vec![(LEVELS_MODEL, levels_shape())], request).await;
+            result.expect("accepted");
+            assert_eq!(
+                json_of(body)["generationConfig"],
+                json!({"thinkingConfig": {"thinkingLevel": "high"}})
+            );
+        }
+
+        #[tokio::test]
+        async fn the_effort_body_adds_only_the_thinking_config() {
+            let (unset, _) = send_raw(
+                vec![(LEVELS_MODEL, levels_shape())],
+                with_max_tokens(request_for(LEVELS_MODEL), 2048),
+            )
+            .await;
+            let (set, _) = send_raw(
+                vec![(LEVELS_MODEL, levels_shape())],
+                with_max_tokens(request_for(LEVELS_MODEL).with_reasoning(Low), 2048),
+            )
+            .await;
+            let unset = unset.expect("reached the wire");
+            let prefix = unset
+                .strip_suffix("}}")
+                .expect("generationConfig closes the object");
+            assert_eq!(
+                set.expect("reached the wire"),
+                format!("{prefix},\"thinkingConfig\":{{\"thinkingLevel\":\"low\"}}}}}}")
+            );
+        }
+
+        #[tokio::test]
+        async fn auto_sends_no_thinking_config_but_is_still_recorded() {
+            let (body, result) = send_raw(
+                vec![(LEVELS_MODEL, levels_shape())],
+                with_max_tokens(
+                    request_for(LEVELS_MODEL).with_reasoning(ReasoningEffort::Auto),
+                    2048,
+                ),
+            )
+            .await;
+            let metadata = result.expect("auto is accepted").metadata;
+            let body = json_of(body);
+            assert!(
+                body["generationConfig"].get("thinkingConfig").is_none(),
+                "{body}"
+            );
+            assert_eq!(metadata[REASONING_REQUESTED_METADATA_KEY], "auto");
+            assert_eq!(metadata[REASONING_EFFECTIVE_METADATA_KEY], "auto");
+        }
+
+        #[tokio::test]
+        async fn off_on_a_levels_only_profile_is_refused_before_http() {
+            refused_before_http(
+                vec![(LEVELS_MODEL, levels_shape())],
+                request_for(LEVELS_MODEL).with_reasoning(ReasoningEffort::Off),
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn a_budget_inside_the_bounds_sends_thinking_budget_and_no_level() {
+            let (body, result) = send_raw(
+                vec![(BUDGET_MODEL, budget_shape())],
+                with_max_tokens(
+                    request_for(BUDGET_MODEL).with_reasoning(ReasoningEffort::Budget(1024)),
+                    2048,
+                ),
+            )
+            .await;
+            result.expect("a budget inside the bounds is accepted");
+            let body = json_of(body);
+            assert_eq!(
+                body["generationConfig"]["thinkingConfig"],
+                json!({"thinkingBudget": 1024})
+            );
+            assert_eq!(body["generationConfig"]["maxOutputTokens"], 2048);
+        }
+
+        #[tokio::test]
+        async fn on_wire_off_sends_a_zero_budget() {
+            let (body, result) = send_raw(
+                vec![(BUDGET_MODEL, budget_shape())],
+                request_for(BUDGET_MODEL).with_reasoning(ReasoningEffort::Off),
+            )
+            .await;
+            result.expect("off is accepted");
+            assert_eq!(
+                json_of(body)["generationConfig"]["thinkingConfig"],
+                json!({"thinkingBudget": 0})
+            );
+        }
+
+        #[tokio::test]
+        async fn a_budget_that_leaves_no_output_room_is_refused_and_never_raises_the_cap() {
+            let reason = refused_before_http(
+                vec![(BUDGET_MODEL, budget_shape())],
+                with_max_tokens(
+                    request_for(BUDGET_MODEL).with_reasoning(ReasoningEffort::Budget(2048)),
+                    2048,
+                ),
+            )
+            .await;
+            assert!(reason.contains("max_tokens"), "{reason}");
+        }
+
+        #[tokio::test]
+        async fn a_budget_outside_the_bounds_is_refused_before_http() {
+            for budget in [0, 24_577] {
+                refused_before_http(
+                    vec![(BUDGET_MODEL, budget_shape())],
+                    with_max_tokens(
+                        request_for(BUDGET_MODEL).with_reasoning(ReasoningEffort::Budget(budget)),
+                        32_000,
+                    ),
+                )
+                .await;
+            }
+        }
+
+        #[tokio::test]
+        async fn a_budget_on_a_levels_only_profile_is_refused_and_a_level_on_a_budget_only_one() {
+            refused_before_http(
+                vec![(LEVELS_MODEL, levels_shape())],
+                with_max_tokens(
+                    request_for(LEVELS_MODEL).with_reasoning(ReasoningEffort::Budget(1024)),
+                    2048,
+                ),
+            )
+            .await;
+            // No conversion between the two forms (REASON-06): a level is not turned into a budget.
+            refused_before_http(
+                vec![(BUDGET_MODEL, budget_shape())],
+                request_for(BUDGET_MODEL).with_reasoning(High),
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn an_unmeasured_model_is_refused_naming_the_override() {
+            let (body, result) = send_raw(
+                Vec::new(),
+                request_for(UNMEASURED_MODEL).with_reasoning(High),
+            )
+            .await;
+            assert!(body.is_none(), "{body:?}");
+            let error = result.expect_err("an unmeasured model refuses an explicit effort");
+            assert_eq!(error.transience(), Transience::Permanent);
+            match error {
+                LlmError::UnsupportedParameter {
+                    reason,
+                    provider,
+                    model,
+                    ..
+                } => {
+                    assert_eq!(provider, "gemini");
+                    assert_eq!(model, UNMEASURED_MODEL);
+                    assert!(
+                        reason.contains("llm.gemini.models.gemini-4-argon.effort"),
+                        "{reason}"
+                    );
+                }
+                other => panic!("expected UnsupportedParameter, got {other:?}"),
+            }
+        }
+
+        #[tokio::test]
+        async fn a_substituting_fallback_sends_the_nearest_lower_level_and_records_both() {
+            let two = EffortSupport::Supported(EffortLevels::new([Low, High]));
+            let (body, result) = send_raw(
+                vec![(LEVELS_MODEL, two)],
+                request_for(LEVELS_MODEL)
+                    .with_reasoning(Medium)
+                    .with_reasoning_fallback(ReasoningFallback::NearestLower),
+            )
+            .await;
+            let metadata = result.expect("a substitution is accepted").metadata;
+            assert_eq!(
+                json_of(body)["generationConfig"]["thinkingConfig"],
+                json!({"thinkingLevel": "low"})
+            );
+            assert_eq!(metadata[REASONING_REQUESTED_METADATA_KEY], "medium");
+            assert_eq!(metadata[REASONING_EFFECTIVE_METADATA_KEY], "low");
+        }
+
+        #[tokio::test]
+        async fn an_unset_effort_sends_no_thinking_config_and_stamps_nothing() {
+            let (body, result) = send_raw(
+                vec![(LEVELS_MODEL, levels_shape())],
+                request_for(LEVELS_MODEL),
+            )
+            .await;
+            let metadata = result.expect("accepted").metadata;
+            assert!(!metadata.contains_key(REASONING_REQUESTED_METADATA_KEY));
+            assert!(!metadata.contains_key(REASONING_EFFECTIVE_METADATA_KEY));
+            assert!(!body.expect("reached the wire").contains("thinkingConfig"));
+        }
+
+        #[tokio::test]
+        async fn no_body_asks_for_thought_text() {
+            // D-00g: `includeThoughts` is never sent; the Phase 50 typed fields are the surface.
+            for (model, shape, effort) in [
+                (LEVELS_MODEL, levels_shape(), High),
+                (BUDGET_MODEL, budget_shape(), ReasoningEffort::Off),
+                (BUDGET_MODEL, budget_shape(), ReasoningEffort::Budget(512)),
+            ] {
+                let (body, result) = send_raw(
+                    vec![(model, shape)],
+                    with_max_tokens(request_for(model).with_reasoning(effort), 2048),
+                )
+                .await;
+                result.expect("accepted");
+                assert!(
+                    !body.expect("reached the wire").contains("includeThoughts"),
+                    "{effort}"
+                );
+            }
+        }
+
+        const STREAM_BODY: &str = concat!(
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hel\"}]}}]}\n\n",
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"lo\"}],\"role\":\"model\"},",
+            "\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":10,",
+            "\"candidatesTokenCount\":8,\"thoughtsTokenCount\":41,\"totalTokenCount\":59}}\n\n",
+        );
+
+        #[tokio::test]
+        async fn the_stream_sends_the_same_thinking_config_and_stamps_only_the_terminal_chunk() {
+            let (body, outcome) = stream_raw(
+                vec![(LEVELS_MODEL, levels_shape())],
+                request_for(LEVELS_MODEL).with_reasoning(High),
+                STREAM_BODY,
+            )
+            .await;
+            assert_eq!(
+                json_of(body)["generationConfig"]["thinkingConfig"],
+                json!({"thinkingLevel": "high"})
+            );
+            let items = outcome.expect("the stream opens");
+            let chunks: Vec<&StreamingResponse> = items
+                .iter()
+                .map(|i| i.as_ref().expect("every item is Ok"))
+                .collect();
+            let (terminal, earlier) = chunks.split_last().expect("a terminal chunk");
+            assert_eq!(terminal.metadata[REASONING_REQUESTED_METADATA_KEY], "high");
+            assert_eq!(terminal.metadata[REASONING_EFFECTIVE_METADATA_KEY], "high");
+            for chunk in earlier {
+                assert!(chunk.metadata.is_empty(), "earlier chunk: {chunk:?}");
+            }
+            // REASON-05: thoughts tokens still reach the typed usage field.
+            let usage = terminal
+                .usage
+                .as_ref()
+                .expect("usage rides the terminal chunk");
+            assert_eq!(usage.reasoning_tokens, Some(41));
+        }
+
+        #[tokio::test]
+        async fn the_stream_sends_a_budget_and_a_zero_budget_like_the_buffered_path() {
+            let (budget, _) = stream_raw(
+                vec![(BUDGET_MODEL, budget_shape())],
+                with_max_tokens(
+                    request_for(BUDGET_MODEL).with_reasoning(ReasoningEffort::Budget(1024)),
+                    2048,
+                ),
+                STREAM_BODY,
+            )
+            .await;
+            assert_eq!(
+                json_of(budget)["generationConfig"]["thinkingConfig"],
+                json!({"thinkingBudget": 1024})
+            );
+            let (off, _) = stream_raw(
+                vec![(BUDGET_MODEL, budget_shape())],
+                request_for(BUDGET_MODEL).with_reasoning(ReasoningEffort::Off),
+                STREAM_BODY,
+            )
+            .await;
+            assert_eq!(
+                json_of(off)["generationConfig"]["thinkingConfig"],
+                json!({"thinkingBudget": 0})
+            );
+        }
+
+        #[tokio::test]
+        async fn a_refused_effort_fails_the_stream_before_any_http_call() {
+            let (body, outcome) = stream_raw(
+                vec![(LEVELS_MODEL, levels_shape())],
+                request_for(LEVELS_MODEL).with_reasoning(ReasoningEffort::Off),
+                STREAM_BODY,
+            )
+            .await;
+            assert!(body.is_none(), "{body:?}");
+            assert!(matches!(
+                outcome,
+                Err(LlmError::UnsupportedParameter { .. })
+            ));
+        }
+
+        #[test]
+        fn the_reported_profile_keeps_levels_auto_off_and_budget() {
+            let adapter = adapter_over(
+                "http://localhost:1",
+                vec![
+                    (BUDGET_MODEL, budget_shape()),
+                    (LEVELS_MODEL, levels_shape()),
+                ],
+            );
+            let EffortSupport::Supported(budget) =
+                adapter.model_profile(BUDGET_MODEL).unwrap().effort
+            else {
+                panic!("a wire that carries every form keeps the override Supported");
+            };
+            assert!(budget.off && budget.auto);
+            assert_eq!(budget.budget, Some(BudgetBounds::new(1, 24_576)));
+            let EffortSupport::Supported(levels) =
+                adapter.model_profile(LEVELS_MODEL).unwrap().effort
+            else {
+                panic!("Supported");
+            };
+            assert_eq!(levels.levels, [Low, Medium, High]);
+            assert_eq!(
+                adapter.model_profile(UNMEASURED_MODEL).unwrap().effort,
+                EffortSupport::Unmeasured
+            );
         }
     }
 

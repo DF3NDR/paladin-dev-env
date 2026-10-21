@@ -1798,7 +1798,7 @@ temperature probes.
 Plans:
 **Wave 1**
 
-- [ ] 51-01-PLAN.md — `ReasoningEffort` / `ReasoningFallback`, `LlmRequest` fields, `LlmError::UnsupportedParameter`, `EffortSupport::resolve` / `intersect` on `ModelProfile`, nine unset-body goldens (wave 1)
+- [x] 51-01-PLAN.md — `ReasoningEffort` / `ReasoningFallback`, `LlmRequest` fields, `LlmError::UnsupportedParameter`, `EffortSupport::resolve` / `intersect` on `ModelProfile`, nine unset-body goldens (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

@@ -730,6 +730,45 @@ fn phase_51_request_surface(
     (built, refused, profile)
 }
 
+// ---- Phase 51 (REASON-01, D-00e, D-05, D-10) ----
+// The provider-level default beneath a request's own effort: chainable builders on every
+// `*Config` (one macro arm) and on the `llm.<provider>` block. Both types are `#[non_exhaustive]`
+// and the change is additive.
+
+/// D-00e / D-05 / D-10: `with_reasoning_effort` and `with_reasoning_fallback` on `DeepSeekConfig`
+/// and `AnthropicConfig`, and the three builders on `LlmProviderConfig` (`with_reasoning_wire`
+/// takes the closed `ReasoningWire` enum). The fields are public `Option`s, read not assigned.
+/// NEVER CALLED: building an adapter would create an HTTP client, and every credential-shaped
+/// argument is an empty string.
+fn phase_51_provider_defaults() -> (DeepSeekConfig, AnthropicConfig, LlmProviderConfig) {
+    use paladin::core::platform::container::reasoning::{ReasoningEffort, ReasoningFallback};
+    use paladin_llm::reasoning::ReasoningWire;
+
+    let deepseek = DeepSeekConfig::new(String::new(), String::new())
+        .with_reasoning_effort(ReasoningEffort::High)
+        .with_reasoning_fallback(ReasoningFallback::NearestLower);
+    let anthropic = AnthropicConfig::new(String::new(), String::new())
+        .with_reasoning_effort(ReasoningEffort::Budget(1))
+        .with_reasoning_fallback(ReasoningFallback::Refuse);
+    let block = LlmProviderConfig::new(String::new())
+        .with_reasoning_effort(ReasoningEffort::Low)
+        .with_reasoning_fallback(ReasoningFallback::NearestHigher)
+        .with_reasoning_wire(ReasoningWire::TopLevelEffort);
+
+    let _read: (
+        Option<ReasoningEffort>,
+        Option<ReasoningFallback>,
+        Option<ReasoningWire>,
+    ) = (
+        block.reasoning_effort,
+        block.reasoning_fallback,
+        block.reasoning_wire,
+    );
+    let _config_read: (Option<ReasoningEffort>, Option<ReasoningFallback>) =
+        (deepseek.reasoning_effort, deepseek.reasoning_fallback);
+    (deepseek, anthropic, block)
+}
+
 #[test]
 fn the_consumer_surface_still_resolves() {
     // Reaching this point means every `use`, fn-pointer, literal and trait-impl pin above

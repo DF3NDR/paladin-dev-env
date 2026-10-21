@@ -115,6 +115,7 @@ use std::env;
 use paladin_ports::output::llm_port::{
     LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities, StreamingResponse,
 };
+use paladin_ports::output::llm_port::{ReasoningEffort, ReasoningFallback};
 
 use paladin_ports::output::model_profile::{ModelProfile, StopSupport};
 
@@ -195,6 +196,17 @@ pub struct QwenConfig {
     /// entry field by field. Empty by default. Validated at construction; an invalid override
     /// fails it with an error naming the provider and the model.
     pub model_overrides: BTreeMap<String, ModelOverride>,
+    /// The provider-level default reasoning effort (Phase 51, D-00e): sent for a request that
+    /// sets none of its own, resolved per request against that request's own model. A request's
+    /// (or an agent's) own effort always wins. `None` (the default, and the only compiled-in
+    /// value, D-00i) sends nothing. Set it only where every model this provider serves supports
+    /// it, or those requests are refused before any HTTP call naming this setting.
+    /// Set with [`with_reasoning_effort`](Self::with_reasoning_effort).
+    pub reasoning_effort: Option<ReasoningEffort>,
+    /// The provider-level default fallback (Phase 51, D-05) applied when the effort in force is
+    /// not one the request's model accepts; a request's own fallback wins. `None` (the default)
+    /// means refuse. Set with [`with_reasoning_fallback`](Self::with_reasoning_fallback).
+    pub reasoning_fallback: Option<ReasoningFallback>,
 }
 
 /// Prints every field except the API key, which is shown as `<redacted>` (D-00a): the key is a
@@ -211,6 +223,8 @@ impl std::fmt::Debug for QwenConfig {
             .field("max_retries", &self.max_retries)
             .field("context_window", &self.context_window)
             .field("model_overrides", &self.model_overrides)
+            .field("reasoning_effort", &self.reasoning_effort)
+            .field("reasoning_fallback", &self.reasoning_fallback)
             .finish()
     }
 }
@@ -269,6 +283,8 @@ impl QwenConfig {
             max_retries: DEFAULT_MAX_RETRIES,
             context_window: None,
             model_overrides: BTreeMap::new(),
+            reasoning_effort: None,
+            reasoning_fallback: None,
         };
 
         config.validate()?;
@@ -310,6 +326,8 @@ impl QwenConfig {
             max_retries: DEFAULT_MAX_RETRIES,
             context_window: None,
             model_overrides: BTreeMap::new(),
+            reasoning_effort: None,
+            reasoning_fallback: None,
         }
     }
 
@@ -453,6 +471,7 @@ impl QwenAdapter {
             engine: CompatEngine::new(engine_config)?
                 .with_provider_name(QWEN_PROVIDER)
                 .with_default_max_tokens(config.max_tokens)
+                .with_default_reasoning(config.reasoning_effort, config.reasoning_fallback)
                 // G-50-5a (plan 50-24): no `with_usage_semantics` -- Qwen keeps the engine default
                 // `CompatUsageSemantics::ReasoningInsideCompletion`. Live-measured 2026-10-18
                 // (`50-USAGE-PROBE.md`, operator run on the raw DashScope wire): qwen3.8-flash

@@ -15,11 +15,11 @@ use std::env;
 use std::time::{Duration, SystemTime};
 
 use paladin_core::platform::container::prompt::{PromptItem, PromptType};
-use paladin_ports::output::llm_port::ReasoningEffort;
 use paladin_ports::output::llm_port::{
     FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ModelProfile, ParamSupport,
     ProviderCapabilities, StopSupport, StreamingResponse, TokenUsage,
 };
+use paladin_ports::output::llm_port::{ReasoningEffort, ReasoningFallback};
 use paladin_ports::output::model_profile::{EffortLevels, EffortSupport, ResolvedEffort};
 use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
@@ -125,6 +125,17 @@ pub struct DeepSeekConfig {
     /// entry field by field. Empty by default. Validated at construction; an invalid override
     /// fails it with an error naming the provider and the model.
     pub model_overrides: BTreeMap<String, ModelOverride>,
+    /// The provider-level default reasoning effort (Phase 51, D-00e): sent for a request that
+    /// sets none of its own, resolved per request against that request's own model. A request's
+    /// (or an agent's) own effort always wins. `None` (the default, and the only compiled-in
+    /// value, D-00i) sends nothing. Set it only where every model this provider serves supports
+    /// it, or those requests are refused before any HTTP call naming this setting.
+    /// Set with [`with_reasoning_effort`](Self::with_reasoning_effort).
+    pub reasoning_effort: Option<ReasoningEffort>,
+    /// The provider-level default fallback (Phase 51, D-05) applied when the effort in force is
+    /// not one the request's model accepts; a request's own fallback wins. `None` (the default)
+    /// means refuse. Set with [`with_reasoning_fallback`](Self::with_reasoning_fallback).
+    pub reasoning_fallback: Option<ReasoningFallback>,
 }
 
 /// Prints every field except the API key, which is shown as `<redacted>` (D-00a): the key is a
@@ -141,6 +152,8 @@ impl std::fmt::Debug for DeepSeekConfig {
             .field("max_retries", &self.max_retries)
             .field("context_window", &self.context_window)
             .field("model_overrides", &self.model_overrides)
+            .field("reasoning_effort", &self.reasoning_effort)
+            .field("reasoning_fallback", &self.reasoning_fallback)
             .finish()
     }
 }
@@ -185,6 +198,8 @@ impl DeepSeekConfig {
             max_retries: DEFAULT_MAX_RETRIES,
             context_window: None,
             model_overrides: BTreeMap::new(),
+            reasoning_effort: None,
+            reasoning_fallback: None,
         };
 
         config.validate()?;
@@ -226,6 +241,8 @@ impl DeepSeekConfig {
             max_retries: DEFAULT_MAX_RETRIES,
             context_window: None,
             model_overrides: BTreeMap::new(),
+            reasoning_effort: None,
+            reasoning_fallback: None,
         }
     }
 
@@ -687,13 +704,23 @@ impl DeepSeekAdapter {
 
         // Phase 51 (D-00f): an explicit effort is sent exactly or refused here, before any HTTP
         // call and before any retry loop -- never routed through the omit-and-log path below.
+        // The request's own effort and fallback win; otherwise the provider-level default applies
+        // (D-00e), judged here against this request's own model.
+        let in_force = reasoning::in_force(
+            DEEPSEEK_PROVIDER,
+            request.reasoning,
+            request.reasoning_fallback,
+            self.config.reasoning_effort,
+            self.config.reasoning_fallback,
+        );
         let resolved = reasoning::admit(
             DEEPSEEK_PROVIDER,
             &request.model,
             &profile,
-            request.reasoning,
-            request.reasoning_fallback,
+            in_force.effort,
+            in_force.fallback,
             max_tokens,
+            in_force.source_key.as_deref(),
             &self.substitutions,
         )?;
         let (reasoning_effort, thinking) = match &resolved {

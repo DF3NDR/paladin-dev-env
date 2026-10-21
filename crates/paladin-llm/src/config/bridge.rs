@@ -160,6 +160,8 @@ fn openai_config(layered: Layered, organization: Option<String>) -> OpenAIConfig
         max_tokens: layered.max_tokens,
         context_window: layered.context_window,
         model_overrides: layered.model_overrides,
+        reasoning_effort: layered.reasoning_effort,
+        reasoning_fallback: layered.reasoning_fallback,
     }
 }
 
@@ -239,6 +241,8 @@ fn anthropic_config(layered: Layered) -> AnthropicConfig {
         max_retries: layered.max_retries,
         context_window: layered.context_window,
         model_overrides: layered.model_overrides,
+        reasoning_effort: layered.reasoning_effort,
+        reasoning_fallback: layered.reasoning_fallback,
     }
 }
 
@@ -338,6 +342,8 @@ fn deepseek_config(layered: Layered) -> DeepSeekConfig {
         max_retries: layered.max_retries,
         context_window: layered.context_window,
         model_overrides: layered.model_overrides,
+        reasoning_effort: layered.reasoning_effort,
+        reasoning_fallback: layered.reasoning_fallback,
     }
 }
 
@@ -418,6 +424,8 @@ fn kimi_config(layered: Layered) -> KimiConfig {
         max_retries: layered.max_retries,
         context_window: layered.context_window,
         model_overrides: layered.model_overrides,
+        reasoning_effort: layered.reasoning_effort,
+        reasoning_fallback: layered.reasoning_fallback,
     }
 }
 
@@ -486,6 +494,8 @@ fn qwen_config(layered: Layered) -> QwenConfig {
         max_retries: layered.max_retries,
         context_window: layered.context_window,
         model_overrides: layered.model_overrides,
+        reasoning_effort: layered.reasoning_effort,
+        reasoning_fallback: layered.reasoning_fallback,
     }
 }
 
@@ -554,6 +564,8 @@ fn grok_config(layered: Layered) -> GrokConfig {
         max_retries: layered.max_retries,
         context_window: layered.context_window,
         model_overrides: layered.model_overrides,
+        reasoning_effort: layered.reasoning_effort,
+        reasoning_fallback: layered.reasoning_fallback,
     }
 }
 
@@ -622,6 +634,8 @@ fn gemini_config(layered: Layered) -> GeminiConfig {
         max_retries: layered.max_retries,
         context_window: layered.context_window,
         model_overrides: layered.model_overrides,
+        reasoning_effort: layered.reasoning_effort,
+        reasoning_fallback: layered.reasoning_fallback,
     }
 }
 
@@ -698,8 +712,12 @@ fn ollama_config(layered: Layered) -> OllamaConfig {
         max_retries: layered.max_retries,
         context_window: layered.context_window,
         model_overrides: layered.model_overrides,
-        // Plan 51-06 wires the `llm.ollama.reasoning_wire` key; until then the default stands.
-        reasoning_wire: crate::reasoning::ReasoningWire::Unsupported,
+        reasoning_effort: layered.reasoning_effort,
+        reasoning_fallback: layered.reasoning_fallback,
+        // `llm.ollama.reasoning_wire` (D-10): the operator's declaration, `Unsupported` unless set.
+        reasoning_wire: layered
+            .reasoning_wire
+            .unwrap_or(crate::reasoning::ReasoningWire::Unsupported),
     }
 }
 
@@ -816,9 +834,13 @@ pub(crate) fn openai_compatible_from_layers(
         max_retries: layered.max_retries,
         context_window: layered.context_window,
         model_overrides: layered.model_overrides,
-        // Plan 51-06 wires the `llm.openai-compatible.reasoning_wire` key; until then the
-        // default stands.
-        reasoning_wire: crate::reasoning::ReasoningWire::Unsupported,
+        reasoning_effort: layered.reasoning_effort,
+        reasoning_fallback: layered.reasoning_fallback,
+        // `llm.openai-compatible.reasoning_wire` (D-10): the operator's declaration,
+        // `Unsupported` unless set.
+        reasoning_wire: layered
+            .reasoning_wire
+            .unwrap_or(crate::reasoning::ReasoningWire::Unsupported),
     })
 }
 

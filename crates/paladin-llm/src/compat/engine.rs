@@ -26,7 +26,7 @@ use tokio::sync::OnceCell;
 use paladin_core::platform::container::prompt::{PromptItem, PromptType};
 use paladin_ports::output::llm_port::{
     FinishReason, LlmError, LlmRequest, LlmResponse, ProviderCapabilities, ReasoningEffort,
-    StreamingResponse, TokenUsage,
+    ReasoningFallback, StreamingResponse, TokenUsage,
 };
 use paladin_ports::output::model_profile::{ModelProfile, ResolvedEffort, StopSupport};
 use paladin_ports::output::rate_limit_hints::RateLimitHints;
@@ -479,6 +479,10 @@ pub struct CompatEngine {
     /// [`CompatEngineConfig`], which stays constructible exactly as before. `None` sends no
     /// `max_tokens` key (the engine's behaviour before PARITY-03).
     default_max_tokens: Option<u32>,
+    /// The provider-level default reasoning effort and fallback from the preset's config
+    /// ([`CompatEngine::with_default_reasoning`], Phase 51 D-00e). Private and **not** a field of
+    /// the public [`CompatEngineConfig`]. `None` sends nothing for a request that sets none.
+    default_reasoning: (Option<ReasoningEffort>, Option<ReasoningFallback>),
     /// Which (model, parameter) omissions this instance has already warned about.
     omissions: OmissionLog,
     /// Which (model, adjustment) `response_format` changes this instance has already warned
@@ -662,6 +666,7 @@ impl CompatEngine {
             provider_name: DEFAULT_PROVIDER_NAME,
             model_registry: None,
             default_max_tokens: None,
+            default_reasoning: (None, None),
             omissions: OmissionLog::new(),
             format_log: FormatLog::new(),
             usage_semantics: CompatUsageSemantics::default(),
@@ -699,6 +704,23 @@ impl CompatEngine {
     #[must_use]
     pub(crate) fn with_default_max_tokens(mut self, max_tokens: Option<u32>) -> Self {
         self.default_max_tokens = max_tokens;
+        self
+    }
+
+    /// Set the provider-level default reasoning effort and fallback (Phase 51, D-00e), from the
+    /// preset config's `reasoning_effort` / `reasoning_fallback`.
+    ///
+    /// Applied per request, below the request's own value and against the request's own model: a
+    /// request that sets an effort (or a fallback) always wins field by field, and with both
+    /// unset here and on the request nothing changes. A refusal of the default names
+    /// `llm.<provider>.reasoning_effort`.
+    #[must_use]
+    pub(crate) fn with_default_reasoning(
+        mut self,
+        effort: Option<ReasoningEffort>,
+        fallback: Option<ReasoningFallback>,
+    ) -> Self {
+        self.default_reasoning = (effort, fallback);
         self
     }
 
@@ -804,13 +826,21 @@ impl CompatEngine {
         // Phase 51 (D-00f): an explicit effort is sent exactly or refused here, before any HTTP
         // call and before any retry loop -- never routed through the omit-and-log path below.
         // `profile` is already masked by this preset's declared wire.
+        let in_force = reasoning::in_force(
+            self.provider_name,
+            request.reasoning,
+            request.reasoning_fallback,
+            self.default_reasoning.0,
+            self.default_reasoning.1,
+        );
         let resolved = reasoning::admit(
             self.provider_name,
             &request.model,
             &profile,
-            request.reasoning,
-            request.reasoning_fallback,
+            in_force.effort,
+            in_force.fallback,
             max_tokens,
+            in_force.source_key.as_deref(),
             &self.substitutions,
         )?;
         let fields = match &resolved {

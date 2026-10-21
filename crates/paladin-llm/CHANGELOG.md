@@ -9,6 +9,16 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- Phase 51 (REASON-01, REASON-02, REASON-04; plan 51-06): all nine adapters honour
+  `LlmRequest.reasoning` exactly or refuse it before HTTP (plans 51-03 to 51-05). Provider-level
+  default: `reasoning_effort` / `reasoning_fallback` fields and `with_reasoning_effort` /
+  `with_reasoning_fallback` builders on the nine `*Config` types (generated once in
+  `config_knob_builders!`), and `LlmProviderConfig.reasoning_effort`, `.reasoning_fallback`,
+  `.reasoning_wire` with `with_*` builders (YAML `llm.<provider>.reasoning_effort`,
+  `reasoning_fallback`, `reasoning_wire`). Resolved per request below the request's own value; a
+  refused default names `llm.<provider>.reasoning_effort`. `reasoning_wire` is accepted for
+  `ollama` and `openai-compatible` only. No compiled-in default, no environment variable.
+
 - Phase 51 (REASON-02 to REASON-04; plan 51-04): `compat::CompatRequestParameters.reasoning`
   (`ReasoningWire`), `OllamaConfig.reasoning_wire` / `OpenAiCompatibleConfig.reasoning_wire` with
   `with_reasoning_wire(ReasoningWire)`, and the shared compat engine's exact mapping for

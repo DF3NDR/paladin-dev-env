@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Reasoning effort: a provider-level default beneath every request, and the self-hosted wire in
+  YAML (REASON-01, REASON-02, REASON-04; Phase 51 plan 06).** All nine adapters now honour
+  `LlmRequest.reasoning` either exactly or by refusing before any HTTP call with
+  `LlmError::UnsupportedParameter` (plans 51-03 to 51-05: OpenAI and DeepSeek `reasoning_effort`,
+  Anthropic `output_config.effort` with the profile-gated `thinking` budget form, Gemini
+  `thinkingConfig`, and the five compat presets). New: `llm.<provider>.reasoning_effort` (a level,
+  `off`, `auto` or `{budget: N}`) and `llm.<provider>.reasoning_fallback` (`refuse`,
+  `nearest_lower`, `nearest_higher`), also `with_reasoning_effort` / `with_reasoning_fallback` on
+  all nine `*Config` types (and the public `reasoning_effort` / `reasoning_fallback` fields) and on
+  `LlmProviderConfig`. The default is applied per request against that request's own model and
+  always yields to the request's own effort; with neither set the wire body is unchanged, and no
+  provider has a compiled-in default. A refused default names `llm.<provider>.reasoning_effort`.
+  `llm.<provider>.reasoning_wire` (`LlmProviderConfig::with_reasoning_wire`) declares the wire of
+  `ollama` and `openai-compatible` endpoints; every other provider refuses it at construction
+  (named vendors change their wire only through a Paladin release). There is no environment
+  variable for any of the three keys. Additive: every touched type is `#[non_exhaustive]`.
+
 - **Reasoning effort: the five OpenAI-compatible presets declare their wire and map it exactly
   (REASON-02, REASON-03, REASON-04; Phase 51 plan 04).** Kimi, Qwen, Grok, Ollama and the generic
   OpenAI-compatible adapter share one engine that now sends `LlmRequest.reasoning` in exactly the

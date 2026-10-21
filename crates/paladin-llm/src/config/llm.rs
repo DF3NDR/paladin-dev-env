@@ -4,7 +4,10 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use paladin_ports::output::llm_port::{ReasoningEffort, ReasoningFallback};
+
 use crate::provider_factory::provider_names;
+use crate::reasoning::ReasoningWire;
 use crate::redaction::RedactedKey;
 use crate::registry::ModelOverride;
 
@@ -63,6 +66,33 @@ pub struct LlmProviderConfig {
     /// field by field, so a model Paladin has never seen can be described without a release.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub models: BTreeMap<String, ModelOverride>,
+    /// The provider-level default reasoning effort (Phase 51, D-00e). YAML key
+    /// `reasoning_effort`: a level (`low`, `medium`, `high`, `xhigh`, ...), `off`, `auto` or
+    /// `{budget: 2048}`.
+    ///
+    /// Sent for every request of this provider that sets no effort of its own, resolved per
+    /// request against that request's own model; a request's (or an agent's) own effort always
+    /// wins. Set it only where every model this provider serves supports it: a request on a
+    /// model that cannot honour it is refused before any HTTP call, with a reason naming this
+    /// key. No provider has a compiled-in default (D-00i), and there is no environment variable
+    /// for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
+    /// The provider-level default fallback (Phase 51, D-05). YAML key `reasoning_fallback`:
+    /// `refuse`, `nearest_lower` or `nearest_higher`. Applies when the effort in force is not
+    /// one the model accepts; a request's own fallback wins. Unset means refuse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_fallback: Option<ReasoningFallback>,
+    /// Where a self-hosted endpoint parses a reasoning effort in the request body (Phase 51,
+    /// D-10). YAML key `reasoning_wire`: `top_level_effort`, `thinking_object`,
+    /// `enable_thinking` or `unsupported`.
+    ///
+    /// Accepted only for `ollama` and `openai-compatible`, the endpoints whose wire only the
+    /// operator can know. On any named vendor (OpenAI, Anthropic, DeepSeek, Gemini, Kimi, Qwen,
+    /// Grok) the block is refused when the provider is built: those wires change only through a
+    /// Paladin release, after the dated probe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_wire: Option<ReasoningWire>,
 }
 
 impl std::fmt::Debug for LlmProviderConfig {
@@ -77,6 +107,9 @@ impl std::fmt::Debug for LlmProviderConfig {
             .field("max_tokens", &self.max_tokens)
             .field("context_window", &self.context_window)
             .field("models", &self.models)
+            .field("reasoning_effort", &self.reasoning_effort)
+            .field("reasoning_fallback", &self.reasoning_fallback)
+            .field("reasoning_wire", &self.reasoning_wire)
             .finish()
     }
 }
@@ -96,6 +129,9 @@ impl LlmProviderConfig {
             max_tokens: None,
             context_window: None,
             models: BTreeMap::new(),
+            reasoning_effort: None,
+            reasoning_fallback: None,
+            reasoning_wire: None,
         }
     }
 
@@ -152,6 +188,44 @@ impl LlmProviderConfig {
     #[must_use]
     pub fn with_models(mut self, models: BTreeMap<String, ModelOverride>) -> Self {
         self.models = models;
+        self
+    }
+
+    /// Set the provider-level default reasoning effort (`reasoning_effort`, Phase 51 D-00e).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_llm::config::LlmProviderConfig;
+    /// use paladin_ports::output::llm_port::{ReasoningEffort, ReasoningFallback};
+    ///
+    /// let block = LlmProviderConfig::new("")
+    ///     .with_reasoning_effort(ReasoningEffort::High)
+    ///     .with_reasoning_fallback(ReasoningFallback::NearestLower);
+    /// assert_eq!(block.reasoning_effort, Some(ReasoningEffort::High));
+    /// assert_eq!(block.reasoning_fallback, Some(ReasoningFallback::NearestLower));
+    /// ```
+    #[must_use]
+    pub fn with_reasoning_effort(mut self, effort: ReasoningEffort) -> Self {
+        self.reasoning_effort = Some(effort);
+        self
+    }
+
+    /// Set the provider-level default reasoning fallback (`reasoning_fallback`, Phase 51 D-05).
+    #[must_use]
+    pub fn with_reasoning_fallback(mut self, fallback: ReasoningFallback) -> Self {
+        self.reasoning_fallback = Some(fallback);
+        self
+    }
+
+    /// Declare the wire a self-hosted endpoint reads a reasoning effort from
+    /// (`reasoning_wire`, Phase 51 D-10).
+    ///
+    /// Honoured for `ollama` and `openai-compatible` only; any other provider refuses a block
+    /// that sets it when the provider is built.
+    #[must_use]
+    pub fn with_reasoning_wire(mut self, wire: ReasoningWire) -> Self {
+        self.reasoning_wire = Some(wire);
         self
     }
 }
@@ -867,5 +941,87 @@ llm:
         assert_eq!(block.max_tokens, Some(100));
         assert_eq!(block.context_window, Some(200));
         assert!(block.models.is_empty());
+    }
+
+    // ── Phase 51: the provider-level reasoning keys (D-00e, D-05, D-10) ──────────────────────
+
+    #[test]
+    fn reasoning_keys_deserialise_in_every_spelling() {
+        let level: LlmProviderConfig =
+            serde_json::from_str(r#"{"reasoning_effort": "high"}"#).expect("a level");
+        assert_eq!(level.reasoning_effort, Some(ReasoningEffort::High));
+        let budget: LlmProviderConfig =
+            serde_json::from_str(r#"{"reasoning_effort": {"budget": 2048}}"#).expect("a budget");
+        assert_eq!(budget.reasoning_effort, Some(ReasoningEffort::Budget(2048)));
+        let full: LlmProviderConfig = serde_json::from_str(
+            r#"{"reasoning_effort": "xhigh", "reasoning_fallback": "nearest_lower",
+                "reasoning_wire": "top_level_effort"}"#,
+        )
+        .expect("all three keys");
+        assert_eq!(full.reasoning_effort, Some(ReasoningEffort::XHigh));
+        assert_eq!(
+            full.reasoning_fallback,
+            Some(ReasoningFallback::NearestLower)
+        );
+        assert_eq!(full.reasoning_wire, Some(ReasoningWire::TopLevelEffort));
+    }
+
+    #[test]
+    fn reasoning_keys_reach_a_block_through_the_yaml_loader() {
+        let yaml = "api_key: ''\nreasoning_effort: high\nreasoning_fallback: nearest_higher\n";
+        let block: LlmProviderConfig = config::Config::builder()
+            .add_source(config::File::from_str(yaml, config::FileFormat::Yaml))
+            .build()
+            .expect("yaml loads")
+            .try_deserialize()
+            .expect("the block deserialises");
+        assert_eq!(block.reasoning_effort, Some(ReasoningEffort::High));
+        assert_eq!(
+            block.reasoning_fallback,
+            Some(ReasoningFallback::NearestHigher)
+        );
+        assert_eq!(block.reasoning_wire, None);
+    }
+
+    #[test]
+    fn a_block_setting_no_reasoning_key_serialises_none_of_them() {
+        let value = serde_json::to_value(LlmProviderConfig::new("k")).expect("serialize");
+        for key in ["reasoning_effort", "reasoning_fallback", "reasoning_wire"] {
+            assert!(value.get(key).is_none(), "{key} must be omitted when unset");
+        }
+        let set = LlmProviderConfig::new("k")
+            .with_reasoning_effort(ReasoningEffort::Medium)
+            .with_reasoning_fallback(ReasoningFallback::Refuse)
+            .with_reasoning_wire(ReasoningWire::EnableThinking);
+        let value = serde_json::to_value(set).expect("serialize");
+        assert_eq!(value["reasoning_effort"], "medium");
+        assert_eq!(value["reasoning_fallback"], "refuse");
+        assert_eq!(value["reasoning_wire"], "enable_thinking");
+    }
+
+    #[test]
+    fn an_unknown_reasoning_value_is_refused_at_load() {
+        for bad in [
+            r#"{"reasoning_effort": "extreme"}"#,
+            r#"{"reasoning_fallback": "nearest"}"#,
+            r#"{"reasoning_wire": "custom"}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<LlmProviderConfig>(bad).is_err(),
+                "{bad} must not load"
+            );
+        }
+    }
+
+    #[test]
+    fn debug_names_the_reasoning_keys_and_still_redacts_the_key() {
+        let block = LlmProviderConfig::new("secret-key-value")
+            .with_reasoning_effort(ReasoningEffort::Low)
+            .with_reasoning_wire(ReasoningWire::ThinkingObject);
+        let debug = format!("{block:?}");
+        assert!(debug.contains("reasoning_effort: Some(Low)"), "{debug}");
+        assert!(debug.contains("reasoning_fallback"), "{debug}");
+        assert!(debug.contains("reasoning_wire"), "{debug}");
+        assert!(!debug.contains("secret-key-value"), "{debug}");
     }
 }

@@ -22,6 +22,7 @@ use std::time::{Duration, SystemTime};
 use crate::backoff::exponential_backoff;
 use crate::http_status::map_http_status_with_hints;
 use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
+use crate::reasoning::{self, SubstitutionLog, WireCaps, mask_effort};
 use crate::redaction::RedactedKey;
 use crate::registry::{
     DEFAULT_MAX_RETRIES, ModelOverride, ModelRegistry, config_knob_builders, is_http_url, seeded,
@@ -30,6 +31,8 @@ use crate::response_guards::{StreamCompletion, bill, classify_completion};
 use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
 use crate::sse::SseLines;
 use crate::usage_reconcile::{USAGE_UNRECONCILED_METADATA_KEY, UsageLog};
+use paladin_ports::output::llm_port::ReasoningEffort;
+use paladin_ports::output::model_profile::ResolvedEffort;
 use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
 /// The provider name this adapter reports through [`LlmPort::get_provider_name`]
@@ -321,6 +324,55 @@ struct OpenAIRequest {
     /// a pre-0.10 request (X-03).
     #[serde(skip_serializing_if = "Option::is_none")]
     stream_options: Option<OpenAIStreamOptions>,
+    /// `LlmRequest.reasoning` as a listed level (`minimal` ... `xhigh`), or `none` for `Off`, on
+    /// the wire as the top-level `reasoning_effort` (Phase 51, D-00f). Omitted entirely when no
+    /// effort is set and for `Auto` (the vendor's own default needs no field), keeping an unset
+    /// request's body byte-identical (D-00i). Placed last so the existing field order is
+    /// untouched.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<&'static str>,
+}
+
+/// What OpenAI Chat Completions' request body can carry of a profile's effort data (Phase 51,
+/// D-00f): a listed level and `off` (spelled `none`) through `reasoning_effort`, and `auto` as the
+/// absence of the field. It has no field for a reasoning-token budget, so a budget is masked out
+/// of the profile this adapter reports and is never sent. Plan 51-12 confirms each form against
+/// the dated probe or sets this to [`WireCaps::NONE`] (D-04).
+const OPENAI_REASONING_WIRE: WireCaps = WireCaps {
+    levels: true,
+    off: true,
+    auto: true,
+    budget: false,
+};
+
+/// Turn an admitted effort into OpenAI's single `reasoning_effort` value.
+///
+/// A level is its own spelling, an on-wire `Off` is `none`, and `Auto` is no field at all (the
+/// vendor's default depth). An effort this wire cannot carry is refused; profile masking and
+/// `admit` already stop those, so this is the last line of defence and can never put an
+/// unrequested value on the wire.
+///
+/// # Errors
+///
+/// [`LlmError::UnsupportedParameter`] for an effort with no wire form here (a budget).
+fn map_reasoning(model: &str, resolved: &ResolvedEffort) -> Result<Option<&'static str>, LlmError> {
+    if !resolved.on_wire {
+        return Ok(None);
+    }
+    if let Some(level) = reasoning::level_spelling(resolved.effective) {
+        return Ok(Some(level));
+    }
+    match resolved.effective {
+        ReasoningEffort::Off => Ok(Some("none")),
+        ReasoningEffort::Auto => Ok(None),
+        other => Err(LlmError::unsupported_parameter(
+            "reasoning_effort",
+            other.to_string(),
+            OPENAI_PROVIDER,
+            model,
+            "this adapter has no wire form for that effort",
+        )),
+    }
 }
 
 /// `OpenAIRequest.stream_options`'s only shape this adapter sends (D-15).
@@ -502,6 +554,9 @@ pub struct OpenAIAdapter {
     format_log: FormatLog,
     /// Which (model, check) usage findings this instance has already warned about (G-50-5a).
     usage_log: UsageLog,
+    /// Which (model, requested, effective) effort substitutions this instance has already warned
+    /// about (Phase 51, D-06).
+    substitutions: SubstitutionLog,
 }
 
 /// What this adapter's request builder carries today, stated once so [`OpenAIAdapter::new`]'s
@@ -590,7 +645,17 @@ impl OpenAIAdapter {
             omissions: OmissionLog::new(),
             format_log: FormatLog::new(),
             usage_log: UsageLog::new(),
+            substitutions: SubstitutionLog::new(),
         })
+    }
+
+    /// The request model's profile as this adapter's wire can honour it: the effort data has
+    /// whatever OpenAI's body cannot carry removed ([`OPENAI_REASONING_WIRE`]), so a caller
+    /// reading [`LlmPort::model_profile`] judges exactly what [`Self::build_request`] will send.
+    fn wire_profile(&self, model: &str) -> ModelProfile {
+        let mut profile = self.model_registry.profile(model);
+        profile.effort = mask_effort(std::mem::take(&mut profile.effort), OPENAI_REASONING_WIRE);
+        profile
     }
 
     /// Build the outgoing request body for `request`, plus the notes the buffered path records
@@ -618,13 +683,29 @@ impl OpenAIAdapter {
     ) -> Result<(OpenAIRequest, RequestNotes), LlmError> {
         let messages = self.convert_to_messages(&request.prompt, &request.attachments)?;
         let params = &request.prompt.entity.data.parameters;
-        let profile = self.model_registry.profile(&request.model);
+        let profile = self.wire_profile(&request.model);
 
         // The caller's value, else the configured default (`Some(4096)` from `new`/`from_env`);
         // `None` sends no output-cap key. Either is held to the model's maximum output. The wire
         // name is `max_completion_tokens` (the `OpenAIRequest` field's serde rename).
         let max_tokens = params.max_tokens.or(self.config.max_tokens);
         sampling::check_max_tokens(OPENAI_PROVIDER, &request.model, &profile, max_tokens)?;
+
+        // Phase 51 (D-00f): an explicit effort is sent exactly or refused here, before any HTTP
+        // call and before any retry loop -- never routed through the omit-and-log path below.
+        let resolved = reasoning::admit(
+            OPENAI_PROVIDER,
+            &request.model,
+            &profile,
+            request.reasoning,
+            request.reasoning_fallback,
+            max_tokens,
+            &self.substitutions,
+        )?;
+        let reasoning_effort = match &resolved {
+            Some(resolved) => map_reasoning(&request.model, resolved)?,
+            None => None,
+        };
 
         let applied = sampling::apply(&profile, params);
         let params_omitted = self
@@ -654,12 +735,14 @@ impl OpenAIAdapter {
             stream_options: stream.then_some(OpenAIStreamOptions {
                 include_usage: true,
             }),
+            reasoning_effort,
         };
         let notes = RequestNotes {
             params_omitted,
             format_adjusted,
             unprofiled_model,
-            ..RequestNotes::default()
+            reasoning_requested: resolved.map(|r| r.requested.to_string()),
+            reasoning_effective: resolved.map(|r| r.effective.to_string()),
         };
         Ok((body, notes))
     }
@@ -1273,7 +1356,7 @@ impl LlmPort for OpenAIAdapter {
     }
 
     fn model_profile(&self, model: &str) -> Option<ModelProfile> {
-        Some(self.model_registry.profile(model))
+        Some(self.wire_profile(model))
     }
 }
 
@@ -2903,6 +2986,291 @@ mod tests {
             // The streaming path refuses it too.
             let streamed = adapter.generate_stream(request_with(unset())).await;
             assert!(matches!(streamed, Err(LlmError::InvalidPrompt(_))));
+        }
+    }
+
+    // ── Phase 51 (REASON-02, REASON-03, D-00f): an explicit effort reaches the wire or is refused ──
+
+    mod reasoning_effort {
+        use super::*;
+        use crate::reasoning::{
+            REASONING_EFFECTIVE_METADATA_KEY, REASONING_REQUESTED_METADATA_KEY,
+        };
+        use crate::registry::ModelOverride;
+        use mockito::Server;
+        use paladin_core::platform::container::prompt::UserPrompt;
+        use paladin_core::platform::container::transience::Transience;
+        use paladin_ports::output::llm_port::ReasoningEffort::{
+            Auto, High, Low, Max, Medium, Minimal, Off, XHigh,
+        };
+        use paladin_ports::output::llm_port::ReasoningFallback;
+        use paladin_ports::output::model_profile::{BudgetBounds, EffortLevels, EffortSupport};
+        use serde_json::json;
+        use std::sync::{Arc, Mutex};
+
+        const ASTRA: &str = "gpt-6-astra";
+
+        fn request_for(model: &str) -> LlmRequest {
+            LlmRequest::new(
+                model,
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))
+                .expect("a user prompt must build"),
+            )
+        }
+
+        fn ok_body() -> Vec<u8> {
+            json!({
+                "id": "cmpl-1",
+                "model": ASTRA,
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop"
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            })
+            .to_string()
+            .into_bytes()
+        }
+
+        /// Five levels, `auto`, and `off` exactly as `off` says.
+        fn astra(off: bool) -> EffortSupport {
+            EffortSupport::Supported(
+                EffortLevels::new([Minimal, Low, Medium, High, XHigh])
+                    .with_auto(true)
+                    .with_off(off),
+            )
+        }
+
+        fn adapter_over(base_url: &str, effort: EffortSupport) -> OpenAIAdapter {
+            let over = ModelOverride {
+                effort: Some(effort),
+                ..ModelOverride::default()
+            };
+            let config =
+                OpenAIConfig::new("test-key".to_string(), OPENAI_DEFAULT_MODEL.to_string())
+                    .with_base_url(base_url)
+                    .with_model_overrides(BTreeMap::from([(ASTRA.to_string(), over)]));
+            OpenAIAdapter::new(config).expect("a valid override builds")
+        }
+
+        /// Send `request` through an adapter over a fresh mock; returns the raw request body
+        /// (`None` when no HTTP call was made) and the result.
+        async fn send_raw(
+            effort: EffortSupport,
+            request: LlmRequest,
+        ) -> (Option<String>, Result<LlmResponse, LlmError>) {
+            let mut server = Server::new_async().await;
+            let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let slot = Arc::clone(&captured);
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    ok_body()
+                })
+                .create_async()
+                .await;
+            let result = adapter_over(&server.url(), effort).generate(request).await;
+            let body = captured.lock().unwrap().take();
+            (body, result)
+        }
+
+        fn json_of(body: Option<String>) -> serde_json::Value {
+            serde_json::from_str(&body.expect("a request reached the wire")).unwrap()
+        }
+
+        #[tokio::test]
+        async fn a_listed_level_adds_exactly_the_top_level_effort_field() {
+            let (unset, _) = send_raw(astra(false), request_for(ASTRA)).await;
+            let (set, result) =
+                send_raw(astra(false), request_for(ASTRA).with_reasoning(High)).await;
+            let metadata = result.expect("a listed level is accepted").metadata;
+
+            let unset = unset.unwrap();
+            let prefix = unset.strip_suffix('}').expect("a JSON object");
+            assert_eq!(
+                set.unwrap(),
+                format!("{prefix},\"reasoning_effort\":\"high\"}}")
+            );
+            assert_eq!(metadata[REASONING_REQUESTED_METADATA_KEY], "high");
+            assert_eq!(metadata[REASONING_EFFECTIVE_METADATA_KEY], "high");
+        }
+
+        #[tokio::test]
+        async fn an_unset_effort_sends_no_field_and_stamps_nothing() {
+            let (body, result) = send_raw(astra(true), request_for(ASTRA)).await;
+            let metadata = result.expect("accepted").metadata;
+            assert!(!body.unwrap().contains("reasoning_effort"));
+            assert!(!metadata.contains_key(REASONING_REQUESTED_METADATA_KEY));
+            assert!(!metadata.contains_key(REASONING_EFFECTIVE_METADATA_KEY));
+        }
+
+        #[tokio::test]
+        async fn off_is_refused_before_http_when_the_model_cannot_turn_reasoning_off() {
+            let (body, result) =
+                send_raw(astra(false), request_for(ASTRA).with_reasoning(Off)).await;
+            assert!(body.is_none(), "no HTTP call: {body:?}");
+            let error = result.expect_err("off is not offered");
+            assert_eq!(error.transience(), Transience::Permanent);
+            assert!(matches!(error, LlmError::UnsupportedParameter { .. }));
+        }
+
+        #[tokio::test]
+        async fn off_sends_none_when_the_model_can_turn_reasoning_off() {
+            let (body, result) =
+                send_raw(astra(true), request_for(ASTRA).with_reasoning(Off)).await;
+            let metadata = result.expect("accepted").metadata;
+            assert_eq!(json_of(body)["reasoning_effort"], "none");
+            assert_eq!(metadata[REASONING_REQUESTED_METADATA_KEY], "off");
+            assert_eq!(metadata[REASONING_EFFECTIVE_METADATA_KEY], "off");
+        }
+
+        #[tokio::test]
+        async fn auto_sends_no_field_but_is_stamped() {
+            let (body, result) =
+                send_raw(astra(false), request_for(ASTRA).with_reasoning(Auto)).await;
+            let metadata = result.expect("accepted").metadata;
+            assert!(json_of(body).get("reasoning_effort").is_none());
+            assert_eq!(metadata[REASONING_REQUESTED_METADATA_KEY], "auto");
+            assert_eq!(metadata[REASONING_EFFECTIVE_METADATA_KEY], "auto");
+        }
+
+        #[tokio::test]
+        async fn a_substituting_fallback_sends_the_nearest_level_and_records_both() {
+            let (body, result) = send_raw(
+                astra(false),
+                request_for(ASTRA)
+                    .with_reasoning(Max)
+                    .with_reasoning_fallback(ReasoningFallback::NearestLower),
+            )
+            .await;
+            let metadata = result.expect("substituted").metadata;
+            assert_eq!(json_of(body)["reasoning_effort"], "xhigh");
+            assert_eq!(metadata[REASONING_REQUESTED_METADATA_KEY], "max");
+            assert_eq!(metadata[REASONING_EFFECTIVE_METADATA_KEY], "xhigh");
+        }
+
+        #[tokio::test]
+        async fn a_missing_level_without_a_fallback_and_a_budget_are_refused_before_http() {
+            let with_budget = EffortSupport::Supported(
+                EffortLevels::new([High]).with_budget(BudgetBounds::new(1, 4096)),
+            );
+            let (body, result) = send_raw(
+                with_budget,
+                request_for(ASTRA).with_reasoning(
+                    paladin_ports::output::llm_port::ReasoningEffort::Budget(1000),
+                ),
+            )
+            .await;
+            assert!(body.is_none());
+            assert!(matches!(result, Err(LlmError::UnsupportedParameter { .. })));
+
+            let (body, result) =
+                send_raw(astra(false), request_for(ASTRA).with_reasoning(Max)).await;
+            assert!(body.is_none());
+            assert!(matches!(result, Err(LlmError::UnsupportedParameter { .. })));
+        }
+
+        #[tokio::test]
+        async fn an_unmeasured_model_names_the_override_key() {
+            let (body, result) =
+                send_raw(astra(false), request_for("gpt-other").with_reasoning(High)).await;
+            assert!(body.is_none());
+            match result {
+                Err(LlmError::UnsupportedParameter { reason, .. }) => {
+                    assert!(
+                        reason.contains("llm.openai.models.gpt-other.effort"),
+                        "{reason}"
+                    );
+                }
+                other => panic!("expected UnsupportedParameter, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn the_reported_profile_offers_no_budget() {
+            let with_budget = EffortSupport::Supported(
+                EffortLevels::new([High]).with_budget(BudgetBounds::new(1, 4096)),
+            );
+            let adapter = adapter_over("http://localhost:1", with_budget);
+            let EffortSupport::Supported(levels) = adapter.model_profile(ASTRA).unwrap().effort
+            else {
+                panic!("a level-carrying wire keeps the override Supported");
+            };
+            assert_eq!(levels.budget, None);
+        }
+
+        async fn stream_body_and_chunks(
+            request: LlmRequest,
+        ) -> (Option<String>, Result<Vec<StreamingResponse>, LlmError>) {
+            let mut server = Server::new_async().await;
+            let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let slot = Arc::clone(&captured);
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    concat!(
+                        "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"},\"finish_reason\":null}]}\n\n",
+                        "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\"},\"finish_reason\":\"stop\"}]}\n\n",
+                        "data: [DONE]\n\n",
+                    )
+                    .as_bytes()
+                    .to_vec()
+                })
+                .create_async()
+                .await;
+            let adapter = adapter_over(&server.url(), astra(false));
+            let outcome = match adapter.generate_stream(request).await {
+                Err(error) => Err(error),
+                Ok(stream) => {
+                    let mut stream = Box::into_pin(stream);
+                    let mut chunks = Vec::new();
+                    while let Some(item) = stream.next().await {
+                        chunks.push(item.expect("every scripted item is Ok"));
+                    }
+                    Ok(chunks)
+                }
+            };
+            let body = captured.lock().unwrap().take();
+            (body, outcome)
+        }
+
+        #[tokio::test]
+        async fn the_stream_sends_the_same_field_and_stamps_only_the_terminal_chunk() {
+            let (body, chunks) =
+                stream_body_and_chunks(request_for(ASTRA).with_reasoning(High)).await;
+            let body = json_of(body);
+            assert_eq!(body["reasoning_effort"], "high");
+            assert_eq!(body["stream"], true);
+
+            let chunks = chunks.expect("the stream opens");
+            let (terminal, earlier) = chunks.split_last().expect("a terminal chunk");
+            assert_eq!(terminal.metadata[REASONING_REQUESTED_METADATA_KEY], "high");
+            assert_eq!(terminal.metadata[REASONING_EFFECTIVE_METADATA_KEY], "high");
+            for chunk in earlier {
+                assert!(chunk.metadata.is_empty(), "earlier chunk: {chunk:?}");
+            }
+        }
+
+        #[tokio::test]
+        async fn a_refused_effort_fails_the_stream_before_any_http_call() {
+            let (body, outcome) =
+                stream_body_and_chunks(request_for(ASTRA).with_reasoning(Max)).await;
+            assert!(body.is_none());
+            assert!(matches!(
+                outcome,
+                Err(LlmError::UnsupportedParameter { .. })
+            ));
         }
     }
 

@@ -643,10 +643,7 @@ mod tests {
             )
         };
         let reason = reason_of(run(Some(2048)).unwrap_err());
-        assert!(
-            reason.contains("budget must be below max"),
-            "{reason}"
-        );
+        assert!(reason.contains("budget must be below max"), "{reason}");
         assert!(reason.contains("2048"), "{reason}");
         assert!(
             run(Some(2049)).unwrap().is_some(),

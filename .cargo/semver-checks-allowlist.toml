@@ -753,3 +753,15 @@ lint = "method_parameter_count_changed"
 migration_row = "paladin-llm | AnthropicConfig"
 requirement_id = "SURFACE-02"
 justification = "AnthropicConfig::new(api_key, base_url, model, max_tokens) became new(api_key, model) (Phase 50.1, plan 50.1-06, D-05, D-07). A clean break with no alias (ADR-0060): new(k, url, m, n) becomes new(k, m).with_base_url(url).with_max_tokens(n). The endpoint defaults to ANTHROPIC_DEFAULT_BASE_URL (the one copy, used by new, from_env() and the layered path) and is set with the with_base_url builder, the timeout with with_timeout_seconds. With the owner's compiled-default answer (plan 50.1-06 checkpoint, 2026-10-20) max_tokens is 4,096 for every model, the same value from_env() and the layered path use; the model's seeded maximum output is reachable only through with_max_tokens. from_env() reads the same variables. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+# Plan 51-04 (D-00b, REASON-02), registered 2026-10-21 in the SAME commit that adds the field:
+# cargo-semver-checks is absent in this container (`cargo semver-checks --version` fails), so the
+# lint ids below are UNMEASURED. Plan 51-14 measures them against the published `paladin-llm` 0.10.1
+# (`--release-type minor`, lint table removed and restored byte-for-byte) and corrects this entry.
+
+[[entry]]
+crate = "paladin-llm"
+lint = "register-only (unmeasured: cargo-semver-checks absent on 2026-10-21; measured in plan 51-14)"
+migration_row = "paladin-llm | CompatRequestParameters"
+requirement_id = "REASON-02"
+justification = "CompatRequestParameters gained the public field reasoning: ReasoningWire and its constructor all() became all(reasoning) (Phase 51, plan 51-04, D-04, D-10). The type has no Default by design, so the reasoning wire is stated at every construction site and no preset can be built without a stated position (REASON-02). A clean break with no alias and no deprecated all() (ADR-0060): state reasoning in the literal, or pass the wire to all(..). Registered without a measured lint id; plan 51-14 measures and corrects it."

@@ -41,6 +41,33 @@ pub(crate) struct CompatRequest {
     /// that request body stays byte-identical to a pre-0.10 one (X-03).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream_options: Option<CompatStreamOptions>,
+    /// `LlmRequest.reasoning` as a listed level on the `TopLevelEffort` wire (Phase 51, D-00f):
+    /// the level's spelling, or `"none"` for an on-wire `Off`. Absent unless that wire is
+    /// declared and an effort was admitted, so an unset request's body stays byte-identical
+    /// (D-00i). The last four fields are the reasoning wires, one per declared `ReasoningWire`;
+    /// no wire sets a field of another.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<&'static str>,
+    /// The `ThinkingObject` wire: `{"type": "enabled" | "disabled", "effort": "L"}`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<CompatThinking>,
+    /// The `EnableThinking` wire's switch: `false` for `Off`, `true` for `Auto` and a budget.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_thinking: Option<bool>,
+    /// The `EnableThinking` wire's token budget, sent beside `enable_thinking: true`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_budget: Option<u32>,
+}
+
+/// `CompatRequest.thinking`'s shape on the `ThinkingObject` wire: `type` is `enabled` or
+/// `disabled`; `effort` is the level's spelling and is absent for `disabled` and for an
+/// unspecified-depth `enabled`.
+#[derive(Debug, Serialize)]
+pub(crate) struct CompatThinking {
+    #[serde(rename = "type")]
+    pub kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<&'static str>,
 }
 
 /// The `stream_options` request field's only shape this engine sends

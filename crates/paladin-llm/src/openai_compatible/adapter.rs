@@ -104,7 +104,7 @@ use paladin_ports::output::llm_port::{
 use paladin_ports::output::model_profile::{ModelProfile, StopSupport};
 
 use crate::compat::{
-    CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters,
+    CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters, ReasoningWire,
 };
 use crate::redaction::RedactedKey;
 use crate::registry::{
@@ -651,7 +651,9 @@ impl OpenAiCompatibleAdapter {
             // section) — it widens D-04's operator-declared surface and its
             // env-var contract, and is not taken here without a concrete
             // report of a self-hosted endpoint rejecting a parameter.
-            request_parameters: CompatRequestParameters::all(),
+            // Phase 51 (D-10): no reasoning wire is verified for an arbitrary endpoint, so none
+            // is assumed; an explicit effort is refused until the operator declares one.
+            request_parameters: CompatRequestParameters::all(ReasoningWire::Unsupported),
             // No vendor-curated fallback list exists for an arbitrary
             // operator-configured endpoint (unlike the named presets, which
             // each ship a curated list per D-13). An empty live `/models`
@@ -1729,5 +1731,16 @@ mod tests {
         ] {
             assert!(debug.contains(needle), "'{needle}' missing from {debug}");
         }
+    }
+    // ── Phase 51 (REASON-02, D-10): the declared reasoning wire ──
+
+    #[test]
+    fn openai_compatible_declares_no_reasoning_wire_by_default() {
+        let adapter =
+            OpenAiCompatibleAdapter::new(knob_config("http://localhost:1/v1", "m")).unwrap();
+        assert_eq!(
+            adapter.engine.request_parameters().reasoning,
+            ReasoningWire::Unsupported
+        );
     }
 }

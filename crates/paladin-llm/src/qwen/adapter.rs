@@ -119,7 +119,7 @@ use paladin_ports::output::llm_port::{
 use paladin_ports::output::model_profile::{ModelProfile, StopSupport};
 
 use crate::compat::{
-    CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters,
+    CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters, ReasoningWire,
 };
 use crate::redaction::RedactedKey;
 use crate::registry::{
@@ -404,7 +404,9 @@ impl QwenAdapter {
             // individually, returned HTTP 200 with a real completion on both
             // models. No rejection observed — `all()` is the measured
             // declaration, not an unmeasured default.
-            request_parameters: CompatRequestParameters::all(),
+            // Phase 51 (D-04, REASON-02): Qwen's documented form is `enable_thinking` with an
+            // optional `thinking_budget`. Plan 51-11 restates it from `51-EFFORT-PROBE.md`.
+            request_parameters: CompatRequestParameters::all(ReasoningWire::EnableThinking),
             fallback_models: QWEN_FALLBACK_MODELS.iter().map(|s| s.to_string()).collect(),
             // No usage-cap (quota) mapping for qwen: its quota-exhaustion body was never captured
             // (50-SEED-PROBE.md, owner reading R-2: accepted unverified 2026-10-16, plan 50-17),
@@ -1222,5 +1224,16 @@ mod tests {
         ] {
             assert!(debug.contains(needle), "'{needle}' missing from {debug}");
         }
+    }
+    // ── Phase 51 (REASON-02, D-04): the declared reasoning wire ──
+
+    #[test]
+    fn qwen_declares_the_enable_thinking_wire() {
+        let adapter =
+            QwenAdapter::new(QwenConfig::new("k".to_string(), "qwen-plus".to_string())).unwrap();
+        assert_eq!(
+            adapter.engine.request_parameters().reasoning,
+            ReasoningWire::EnableThinking
+        );
     }
 }

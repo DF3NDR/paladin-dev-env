@@ -21,7 +21,7 @@ use paladin_ports::output::model_profile::{ModelProfile, StopSupport};
 
 use crate::compat::engine::CompatUsageSemantics;
 use crate::compat::{
-    CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters,
+    CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters, ReasoningWire,
 };
 use crate::redaction::RedactedKey;
 use crate::registry::{
@@ -301,6 +301,11 @@ impl GrokAdapter {
                 top_p: true,
                 frequency_penalty: false,
                 presence_penalty: false,
+                // Phase 51 (D-04, REASON-02): the xAI chat-completions field that carries a
+                // reasoning effort is unconfirmed for this endpoint, so no effort is sent: every
+                // explicit effort is refused before HTTP. Plan 51-11 restates this from
+                // `51-EFFORT-PROBE.md` (a confirmed form lifts it).
+                reasoning: ReasoningWire::Unsupported,
             },
             fallback_models: GROK_FALLBACK_MODELS.iter().map(|s| s.to_string()).collect(),
             // No usage-cap (quota) mapping for grok: its quota-exhaustion body was never captured
@@ -1426,5 +1431,16 @@ mod tests {
         ] {
             assert!(debug.contains(needle), "'{needle}' missing from {debug}");
         }
+    }
+    // ── Phase 51 (REASON-02, D-04): the declared reasoning wire ──
+
+    #[test]
+    fn grok_declares_no_reasoning_wire_until_the_probe_confirms_one() {
+        let adapter =
+            GrokAdapter::new(GrokConfig::new("k".to_string(), "grok-4.3".to_string())).unwrap();
+        assert_eq!(
+            adapter.engine.request_parameters().reasoning,
+            ReasoningWire::Unsupported
+        );
     }
 }

@@ -37,7 +37,7 @@ use paladin_ports::output::llm_port::{
 use paladin_ports::output::model_profile::{ModelProfile, StopSupport};
 
 use crate::compat::{
-    CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters,
+    CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters, ReasoningWire,
 };
 use crate::registry::{
     DEFAULT_MAX_RETRIES, ModelOverride, ModelRegistry, config_knob_builders,
@@ -237,7 +237,9 @@ impl OllamaAdapter {
             },
             // Unchanged pre-existing behaviour (17-18): no vendor-specific
             // sampling-parameter restriction has been measured for Ollama.
-            request_parameters: CompatRequestParameters::all(),
+            // Phase 51 (D-10): no reasoning wire is verified for a self-hosted endpoint, so none
+            // is assumed; an explicit effort is refused until the operator declares one.
+            request_parameters: CompatRequestParameters::all(ReasoningWire::Unsupported),
             fallback_models: OLLAMA_FALLBACK_MODELS
                 .iter()
                 .map(|s| s.to_string())
@@ -899,5 +901,19 @@ mod tests {
             .unwrap();
             assert_eq!(config.timeout_seconds.to_string(), explicit);
         }
+    }
+    // ── Phase 51 (REASON-02, D-10): the declared reasoning wire ──
+
+    #[test]
+    fn ollama_declares_no_reasoning_wire_by_default() {
+        let adapter = OllamaAdapter::new(OllamaConfig::new(
+            "http://localhost:11434/v1".to_string(),
+            "llama3".to_string(),
+        ))
+        .unwrap();
+        assert_eq!(
+            adapter.engine.request_parameters().reasoning,
+            ReasoningWire::Unsupported
+        );
     }
 }

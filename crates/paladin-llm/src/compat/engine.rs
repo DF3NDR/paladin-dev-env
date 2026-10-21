@@ -25,19 +25,20 @@ use tokio::sync::OnceCell;
 
 use paladin_core::platform::container::prompt::{PromptItem, PromptType};
 use paladin_ports::output::llm_port::{
-    FinishReason, LlmError, LlmRequest, LlmResponse, ProviderCapabilities, StreamingResponse,
-    TokenUsage,
+    FinishReason, LlmError, LlmRequest, LlmResponse, ProviderCapabilities, ReasoningEffort,
+    StreamingResponse, TokenUsage,
 };
-use paladin_ports::output::model_profile::{ModelProfile, StopSupport};
+use paladin_ports::output::model_profile::{ModelProfile, ResolvedEffort, StopSupport};
 use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
 use super::types::{
     CompatMessage, CompatModelsResponse, CompatRequest, CompatResponse, CompatResponseFormat,
-    CompatStreamOptions, CompatUsage,
+    CompatStreamOptions, CompatThinking, CompatUsage,
 };
 use crate::backoff::exponential_backoff;
 use crate::http_status::map_http_status_with_hints;
 use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
+use crate::reasoning::{self, ReasoningWire, SubstitutionLog, WireCaps, mask_effort};
 use crate::redaction::diagnostic_excerpt as redact_and_bound;
 use crate::registry::{ModelRegistry, fallback_from_compat};
 use crate::response_guards::{StreamCompletion, bill, classify_completion};
@@ -129,6 +130,11 @@ impl From<CompatCapabilities> for ProviderCapabilities {
 /// author states a position for every field, one at a time. Silent
 /// inheritance of "everything is supported" is exactly how the shipped
 /// Grok preset came to send a parameter xAI rejects.
+///
+/// The same rule now covers reasoning effort (Phase 51, REASON-02): the
+/// non-`bool` [`reasoning`](Self::reasoning) field names the one request
+/// field this preset's vendor parses an effort in, so a preset cannot be built
+/// without stating it, and no wire is ever inherited from another preset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompatRequestParameters {
     /// Whether this preset's request path carries `temperature`.
@@ -163,19 +169,46 @@ pub struct CompatRequestParameters {
     pub frequency_penalty: bool,
     /// Whether this preset's request path carries `presence_penalty`.
     pub presence_penalty: bool,
+    /// Where this preset's vendor parses a reasoning effort in the request body (Phase 51,
+    /// REASON-02, D-04).
+    ///
+    /// The wire is vendor-wide and lives here on the preset; which levels a given model accepts
+    /// is per model and lives on that model's profile (`ModelProfile::effort`). It is a closed
+    /// enum, never a bool and never a free-form field name: [`ReasoningWire::Unsupported`] makes
+    /// every explicit effort fail before any HTTP call, and no wire ever sends a second effort
+    /// field beside its own. A preset with no verified form declares `Unsupported` (ADR-0061,
+    /// handoff section 5: a shared default of top-level `reasoning_effort` is the silent no-op
+    /// this field exists to prevent).
+    pub reasoning: ReasoningWire,
 }
 
 impl CompatRequestParameters {
     /// Every optional sampling parameter carried — the OpenAI-compatible
     /// baseline every preset except Grok's xAI preset declares in this
-    /// plan (T-17-75's behaviour-preservation requirement).
-    pub const fn all() -> Self {
+    /// plan (T-17-75's behaviour-preservation requirement) — with the
+    /// reasoning wire the caller states.
+    ///
+    /// The wire has no default on purpose (REASON-02): passing it here is how a preset that
+    /// takes the baseline still states its reasoning position.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_llm::compat::CompatRequestParameters;
+    /// use paladin_llm::reasoning::ReasoningWire;
+    ///
+    /// let parameters = CompatRequestParameters::all(ReasoningWire::Unsupported);
+    /// assert!(parameters.temperature && parameters.max_tokens);
+    /// assert_eq!(parameters.reasoning, ReasoningWire::Unsupported);
+    /// ```
+    pub const fn all(reasoning: ReasoningWire) -> Self {
         Self {
             temperature: true,
             max_tokens: true,
             top_p: true,
             frequency_penalty: true,
             presence_penalty: true,
+            reasoning,
         }
     }
 }
@@ -454,6 +487,98 @@ pub struct CompatEngine {
     usage_semantics: CompatUsageSemantics,
     /// Which (model, check) usage findings this instance has already warned about (G-50-5a).
     usage_log: UsageLog,
+    /// Which (model, requested, effective) reasoning substitutions this instance has already
+    /// warned about (Phase 51, D-06).
+    substitutions: SubstitutionLog,
+}
+
+/// What each reasoning wire's request body can carry of a profile's effort data (Phase 51,
+/// D-00f). The profile an engine reports is masked by this, and `reasoning::admit` then refuses
+/// before HTTP whatever the masked profile does not admit.
+///
+/// - [`ReasoningWire::TopLevelEffort`]: a level (`reasoning_effort: "L"`) and `off`
+///   (`reasoning_effort: "none"`), plus `auto` (nothing sent). No budget field.
+/// - [`ReasoningWire::ThinkingObject`]: a level (`thinking.effort`), `off` (`type: disabled`) and
+///   `auto` (`type: enabled`). No budget field.
+/// - [`ReasoningWire::EnableThinking`]: `off`, `auto` and a budget (`enable_thinking` with
+///   `thinking_budget`). It has no level field, so levels and the coerced list are masked away.
+/// - anything else, [`ReasoningWire::Unsupported`] included: [`WireCaps::NONE`], so every explicit
+///   effort is refused with `WireUnsupported`. `ReasoningWire` is `#[non_exhaustive]`: a wire this
+///   engine does not know carries nothing rather than something wrong.
+fn wire_caps(wire: ReasoningWire) -> WireCaps {
+    match wire {
+        ReasoningWire::TopLevelEffort | ReasoningWire::ThinkingObject => WireCaps {
+            levels: true,
+            off: true,
+            auto: true,
+            budget: false,
+        },
+        ReasoningWire::EnableThinking => WireCaps {
+            levels: false,
+            off: true,
+            auto: true,
+            budget: true,
+        },
+        _ => WireCaps::NONE,
+    }
+}
+
+/// The four request fields an admitted reasoning effort can set; each is absent unless the
+/// declared wire names it, and no wire sets a field of another.
+#[derive(Debug, Default)]
+struct CompatReasoningFields {
+    reasoning_effort: Option<&'static str>,
+    thinking: Option<CompatThinking>,
+    enable_thinking: Option<bool>,
+    thinking_budget: Option<u32>,
+}
+
+/// Turn an admitted effort into the one wire form `wire` names.
+///
+/// # Errors
+///
+/// [`LlmError::UnsupportedParameter`] for a (wire, effort) pair this engine has no mapping for.
+/// Masking and `admit` already refuse those, so this is the last line of defence: it fails closed
+/// and can never put a field on the wire that the request did not ask for.
+fn map_reasoning(
+    provider: &'static str,
+    model: &str,
+    wire: ReasoningWire,
+    resolved: &ResolvedEffort,
+) -> Result<CompatReasoningFields, LlmError> {
+    if !resolved.on_wire {
+        return Ok(CompatReasoningFields::default());
+    }
+    if wire == ReasoningWire::ThinkingObject {
+        if let Some(level) = reasoning::level_spelling(resolved.effective) {
+            return Ok(CompatReasoningFields {
+                thinking: Some(CompatThinking {
+                    kind: "enabled",
+                    effort: Some(level),
+                }),
+                ..CompatReasoningFields::default()
+            });
+        }
+        let kind = match resolved.effective {
+            ReasoningEffort::Off => Some("disabled"),
+            ReasoningEffort::Auto => Some("enabled"),
+            _ => None,
+        };
+        if let Some(kind) = kind {
+            return Ok(CompatReasoningFields {
+                thinking: Some(CompatThinking { kind, effort: None }),
+                ..CompatReasoningFields::default()
+            });
+        }
+    }
+    // Every other (wire, effort) pair has no mapping yet: fail closed, no field is sent.
+    Err(LlmError::unsupported_parameter(
+        "reasoning_effort",
+        resolved.effective.to_string(),
+        provider,
+        model,
+        format!("the '{wire}' wire has no form for that effort"),
+    ))
 }
 
 /// The provider name a [`CompatEngine`] reports until a preset names it via
@@ -499,6 +624,7 @@ impl CompatEngine {
             format_log: FormatLog::new(),
             usage_semantics: CompatUsageSemantics::default(),
             usage_log: UsageLog::new(),
+            substitutions: SubstitutionLog::new(),
         })
     }
 
@@ -549,15 +675,30 @@ impl CompatEngine {
     /// The profile that decides what reaches the wire for `model`: the registry's (override over
     /// seeded entry over adapter-wide fallback), or, when no registry was attached, one derived
     /// from this config's own capabilities and `request_parameters` with stop sequences not sent.
+    ///
+    /// Its `effort` data is masked by this preset's declared [`ReasoningWire`] (Phase 51, D-00f):
+    /// whatever the wire has no field for is removed, so a caller reading this profile (the
+    /// builder, the fallback chain) judges exactly what [`CompatEngine::build_request`] will send.
     pub(crate) fn model_profile(&self, model: &str) -> ModelProfile {
-        match &self.model_registry {
+        let mut profile = match &self.model_registry {
             Some(registry) => registry.profile(model),
             None => fallback_from_compat(
                 &self.capabilities(),
                 &self.config.request_parameters,
                 StopSupport::NotSent,
             ),
-        }
+        };
+        profile.effort = mask_effort(
+            std::mem::take(&mut profile.effort),
+            wire_caps(self.config.request_parameters.reasoning),
+        );
+        profile
+    }
+
+    /// The preset's declared request parameters, for a preset's own position test.
+    #[cfg(test)]
+    pub(crate) fn request_parameters(&self) -> CompatRequestParameters {
+        self.config.request_parameters
     }
 
     /// The name this engine stamps on its [`LlmError::ProviderError`]s.
@@ -618,6 +759,28 @@ impl CompatEngine {
             );
         }
 
+        // Phase 51 (D-00f): an explicit effort is sent exactly or refused here, before any HTTP
+        // call and before any retry loop -- never routed through the omit-and-log path below.
+        // `profile` is already masked by this preset's declared wire.
+        let resolved = reasoning::admit(
+            self.provider_name,
+            &request.model,
+            &profile,
+            request.reasoning,
+            request.reasoning_fallback,
+            max_tokens,
+            &self.substitutions,
+        )?;
+        let fields = match &resolved {
+            Some(resolved) => map_reasoning(
+                self.provider_name,
+                &request.model,
+                self.config.request_parameters.reasoning,
+                resolved,
+            )?,
+            None => CompatReasoningFields::default(),
+        };
+
         let applied = sampling::apply(&profile, params);
         let params_omitted = self
             .omissions
@@ -665,12 +828,17 @@ impl CompatEngine {
             // the `LlmRequest` and only decide to call `generate_stream`
             // afterward.
             stream_options: None,
+            reasoning_effort: fields.reasoning_effort,
+            thinking: fields.thinking,
+            enable_thinking: fields.enable_thinking,
+            thinking_budget: fields.thinking_budget,
         };
         let notes = RequestNotes {
             params_omitted,
             format_adjusted,
             unprofiled_model,
-            ..RequestNotes::default()
+            reasoning_requested: resolved.map(|r| r.requested.to_string()),
+            reasoning_effective: resolved.map(|r| r.effective.to_string()),
         };
         Ok((body, notes))
     }
@@ -1476,7 +1644,7 @@ mod tests {
             // Unchanged pre-existing behaviour: no vendor-specific
             // restriction has been measured for this synthetic test
             // preset, so it declares full support (17-18).
-            request_parameters: CompatRequestParameters::all(),
+            request_parameters: CompatRequestParameters::all(ReasoningWire::Unsupported),
             fallback_models: vec!["fallback-model".to_string()],
             error_override: None,
             redirect_policy: None,
@@ -2202,7 +2370,7 @@ mod tests {
     // that key while carrying the caller's values for the rest.
     #[tokio::test]
     async fn build_request_omits_exactly_the_declared_unsupported_parameter() {
-        let mut request_parameters = CompatRequestParameters::all();
+        let mut request_parameters = CompatRequestParameters::all(ReasoningWire::Unsupported);
         request_parameters.presence_penalty = false;
 
         let config =
@@ -2240,7 +2408,7 @@ mod tests {
     async fn build_request_with_all_declared_carries_every_caller_value_unchanged() {
         let config = test_config_with_request_parameters(
             "https://example.invalid/v1",
-            CompatRequestParameters::all(),
+            CompatRequestParameters::all(ReasoningWire::Unsupported),
         );
         let request = build_request_with_parameters("test-model", fully_specified_parameters());
 
@@ -2268,7 +2436,7 @@ mod tests {
     // "present with a null value that happened to parse oddly".
     #[tokio::test]
     async fn build_request_omission_is_absence_never_a_null_value() {
-        let mut request_parameters = CompatRequestParameters::all();
+        let mut request_parameters = CompatRequestParameters::all(ReasoningWire::Unsupported);
         request_parameters.presence_penalty = false;
 
         let config =
@@ -2288,7 +2456,7 @@ mod tests {
     // protocol, not about whether the caller happened to supply a value.
     #[tokio::test]
     async fn build_request_declared_unsupported_wins_even_when_caller_sets_a_value() {
-        let mut request_parameters = CompatRequestParameters::all();
+        let mut request_parameters = CompatRequestParameters::all(ReasoningWire::Unsupported);
         request_parameters.presence_penalty = false;
 
         let config =
@@ -2322,7 +2490,7 @@ mod tests {
     async fn build_request_carried_but_caller_unset_parameter_stays_omitted() {
         let config = test_config_with_request_parameters(
             "https://example.invalid/v1",
-            CompatRequestParameters::all(),
+            CompatRequestParameters::all(ReasoningWire::Unsupported),
         );
         let mut parameters = fully_specified_parameters();
         parameters.presence_penalty = None;
@@ -2357,7 +2525,7 @@ mod tests {
     // without generalizing to `temperature` would be caught here.
     #[tokio::test]
     async fn build_request_omits_exactly_a_declared_absent_temperature() {
-        let mut request_parameters = CompatRequestParameters::all();
+        let mut request_parameters = CompatRequestParameters::all(ReasoningWire::Unsupported);
         request_parameters.temperature = false;
 
         let config =

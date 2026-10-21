@@ -1802,8 +1802,8 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 51-02-PLAN.md — `live_vendor_smoke --effort` / `--effort-smoke` harness modes and the D-02 candidate list (wave 2)
-- [ ] 51-03-PLAN.md — shared admission (`paladin_llm::reasoning`), `ModelOverride.effort`, metadata keys, DeepSeek and OpenAI mappings (wave 2)
+- [x] 51-02-PLAN.md — `live_vendor_smoke --effort` / `--effort-smoke` harness modes and the D-02 candidate list (wave 2)
+- [x] 51-03-PLAN.md — shared admission (`paladin_llm::reasoning`), `ModelOverride.effort`, metadata keys, DeepSeek and OpenAI mappings (wave 2)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

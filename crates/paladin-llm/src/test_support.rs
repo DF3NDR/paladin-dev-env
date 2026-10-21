@@ -106,6 +106,45 @@ pub(crate) async fn send_with_max_tokens(
         .expect("the mock endpoint received a request"))
 }
 
+/// A plain one-line user request for `model`, with no effort and no sampling parameter set
+/// (Phase 51: the base the reasoning-effort tests add `with_reasoning` to).
+pub(crate) fn plain_request(model: &str) -> paladin_ports::output::llm_port::LlmRequest {
+    use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+
+    paladin_ports::output::llm_port::LlmRequest::new(
+        model,
+        PromptItem::new(PromptType::User(UserPrompt {
+            query: "Hello".to_string(),
+            context: None,
+        }))
+        .unwrap(),
+    )
+}
+
+/// Send `request` through `port` and return the JSON body the mock endpoint captured in
+/// `captured` together with the response (`None` for the body when no HTTP call was made).
+///
+/// # Errors
+///
+/// Whatever `port.generate` returns, so a test can assert a refusal before any HTTP call.
+pub(crate) async fn send_capturing(
+    port: &dyn paladin_ports::output::llm_port::LlmPort,
+    captured: &Arc<Mutex<Option<Value>>>,
+    request: paladin_ports::output::llm_port::LlmRequest,
+) -> Result<
+    (Value, paladin_ports::output::llm_port::LlmResponse),
+    paladin_ports::output::llm_port::LlmError,
+> {
+    *captured.lock().unwrap() = None;
+    let response = port.generate(request).await?;
+    let body = captured
+        .lock()
+        .unwrap()
+        .take()
+        .expect("the mock endpoint received a request");
+    Ok((body, response))
+}
+
 /// How many times `port` hits a mock endpoint that answers every request with HTTP 500,
 /// for one `generate` call. Asserts nothing about the error beyond it being one.
 pub(crate) async fn attempts_against_a_failing_endpoint(

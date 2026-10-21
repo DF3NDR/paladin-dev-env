@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Reasoning effort: the five OpenAI-compatible presets declare their wire and map it exactly
+  (REASON-02, REASON-03, REASON-04; Phase 51 plan 04).** Kimi, Qwen, Grok, Ollama and the generic
+  OpenAI-compatible adapter share one engine that now sends `LlmRequest.reasoning` in exactly the
+  field the preset declares, or refuses with `LlmError::UnsupportedParameter` before any HTTP call.
+  `top_level_effort`: a level as `reasoning_effort`, `off` as `"none"`, `auto` sends nothing.
+  `thinking_object`: `thinking: {type, effort}` (`disabled` for `off`, `enabled` for `auto`).
+  `enable_thinking`: the switch plus `thinking_budget`, bounded by the model's budget span. No wire
+  ever sends a second wire's field. Starting positions: Kimi `thinking_object` (the handoff's
+  measured form, restated by the dated probe), Qwen `enable_thinking`, Grok, Ollama and
+  OpenAI-compatible `unsupported`. `OllamaConfig` and `OpenAiCompatibleConfig` gain
+  `reasoning_wire` and `with_reasoning_wire(ReasoningWire)` so an operator can declare the field a
+  self-hosted endpoint parses (default `unsupported`; an explicit effort also needs the model's
+  `effort` override). A refused effort is a configuration statement, never a model-list fetch
+  condition. An unset effort leaves every wire body byte-identical.
 - **Reasoning effort: DeepSeek and OpenAI honour it exactly or refuse before HTTP
   (REASON-02 to REASON-06; Phase 51 plan 03).** New module `paladin_llm::reasoning` with
   `ReasoningWire` (`unsupported`, `top_level_effort`, `thinking_object`, `enable_thinking`) and the
@@ -882,6 +896,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (`paladin-llm`): `CompatRequestParameters` gains the field `reasoning:
+  ReasoningWire`, and `CompatRequestParameters::all()` becomes `all(reasoning: ReasoningWire)`
+  (REASON-02, D-00b; Phase 51 plan 04; `MIGRATION.md` 9.2).** The type has no `Default` by design,
+  so every construction site states where its vendor parses a reasoning effort. Migration: add
+  `reasoning: ReasoningWire::Unsupported` to the literal, or pass the wire to `all(..)`
+  (`CompatRequestParameters::all(ReasoningWire::Unsupported)` keeps today's behaviour). There is no
+  deprecated alias.
 - **A base URL must start with `http://` or `https://` on all nine adapters (WR-03; Phase 50.1
   review fix `5ebd315b`; `MIGRATION.md` 9.8).** The OpenAI, DeepSeek, Kimi, Qwen, Grok, Ollama and
   OpenAI-compatible configs used to accept any `base_url` that began with `http`, so `httpx://host`

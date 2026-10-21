@@ -25,19 +25,20 @@ use tokio::sync::OnceCell;
 
 use paladin_core::platform::container::prompt::{PromptItem, PromptType};
 use paladin_ports::output::llm_port::{
-    FinishReason, LlmError, LlmRequest, LlmResponse, ProviderCapabilities, StreamingResponse,
-    TokenUsage,
+    FinishReason, LlmError, LlmRequest, LlmResponse, ProviderCapabilities, ReasoningEffort,
+    StreamingResponse, TokenUsage,
 };
-use paladin_ports::output::model_profile::{ModelProfile, StopSupport};
+use paladin_ports::output::model_profile::{ModelProfile, ResolvedEffort, StopSupport};
 use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
 use super::types::{
     CompatMessage, CompatModelsResponse, CompatRequest, CompatResponse, CompatResponseFormat,
-    CompatStreamOptions, CompatUsage,
+    CompatStreamOptions, CompatThinking, CompatUsage,
 };
 use crate::backoff::exponential_backoff;
 use crate::http_status::map_http_status_with_hints;
 use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
+use crate::reasoning::{self, ReasoningWire, SubstitutionLog, WireCaps, mask_effort};
 use crate::redaction::diagnostic_excerpt as redact_and_bound;
 use crate::registry::{ModelRegistry, fallback_from_compat};
 use crate::response_guards::{StreamCompletion, bill, classify_completion};
@@ -129,6 +130,11 @@ impl From<CompatCapabilities> for ProviderCapabilities {
 /// author states a position for every field, one at a time. Silent
 /// inheritance of "everything is supported" is exactly how the shipped
 /// Grok preset came to send a parameter xAI rejects.
+///
+/// The same rule now covers reasoning effort (Phase 51, REASON-02): the
+/// non-`bool` [`reasoning`](Self::reasoning) field names the one request
+/// field this preset's vendor parses an effort in, so a preset cannot be built
+/// without stating it, and no wire is ever inherited from another preset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompatRequestParameters {
     /// Whether this preset's request path carries `temperature`.
@@ -163,19 +169,46 @@ pub struct CompatRequestParameters {
     pub frequency_penalty: bool,
     /// Whether this preset's request path carries `presence_penalty`.
     pub presence_penalty: bool,
+    /// Where this preset's vendor parses a reasoning effort in the request body (Phase 51,
+    /// REASON-02, D-04).
+    ///
+    /// The wire is vendor-wide and lives here on the preset; which levels a given model accepts
+    /// is per model and lives on that model's profile (`ModelProfile::effort`). It is a closed
+    /// enum, never a bool and never a free-form field name: [`ReasoningWire::Unsupported`] makes
+    /// every explicit effort fail before any HTTP call, and no wire ever sends a second effort
+    /// field beside its own. A preset with no verified form declares `Unsupported` (ADR-0061,
+    /// handoff section 5: a shared default of top-level `reasoning_effort` is the silent no-op
+    /// this field exists to prevent).
+    pub reasoning: ReasoningWire,
 }
 
 impl CompatRequestParameters {
     /// Every optional sampling parameter carried — the OpenAI-compatible
     /// baseline every preset except Grok's xAI preset declares in this
-    /// plan (T-17-75's behaviour-preservation requirement).
-    pub const fn all() -> Self {
+    /// plan (T-17-75's behaviour-preservation requirement) — with the
+    /// reasoning wire the caller states.
+    ///
+    /// The wire has no default on purpose (REASON-02): passing it here is how a preset that
+    /// takes the baseline still states its reasoning position.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_llm::compat::CompatRequestParameters;
+    /// use paladin_llm::reasoning::ReasoningWire;
+    ///
+    /// let parameters = CompatRequestParameters::all(ReasoningWire::Unsupported);
+    /// assert!(parameters.temperature && parameters.max_tokens);
+    /// assert_eq!(parameters.reasoning, ReasoningWire::Unsupported);
+    /// ```
+    pub const fn all(reasoning: ReasoningWire) -> Self {
         Self {
             temperature: true,
             max_tokens: true,
             top_p: true,
             frequency_penalty: true,
             presence_penalty: true,
+            reasoning,
         }
     }
 }
@@ -331,6 +364,9 @@ fn classify_fetch_failure(error: &LlmError) -> FetchFailureClass {
         // exhausted fallback chain is classified the same way.
         LlmError::ProviderError { .. } => FetchFailureClass::Supported,
         LlmError::AllProvidersFailed { .. } => FetchFailureClass::Supported,
+        // A refused reasoning effort is a statement about the request's configuration, never a
+        // fetch condition; a model-list fetch sends no effort, so this is never produced by one.
+        LlmError::UnsupportedParameter { .. } => FetchFailureClass::Misconfiguration,
         // X-10.2 (D-04): `LlmError` is `#[non_exhaustive]`; required by the
         // compiler, not reachable by any variant known today. See the
         // rustdoc above for why this stays `Supported` rather than a panic.
@@ -454,6 +490,137 @@ pub struct CompatEngine {
     usage_semantics: CompatUsageSemantics,
     /// Which (model, check) usage findings this instance has already warned about (G-50-5a).
     usage_log: UsageLog,
+    /// Which (model, requested, effective) reasoning substitutions this instance has already
+    /// warned about (Phase 51, D-06).
+    substitutions: SubstitutionLog,
+}
+
+/// What each reasoning wire's request body can carry of a profile's effort data (Phase 51,
+/// D-00f). The profile an engine reports is masked by this, and `reasoning::admit` then refuses
+/// before HTTP whatever the masked profile does not admit.
+///
+/// - [`ReasoningWire::TopLevelEffort`]: a level (`reasoning_effort: "L"`) and `off`
+///   (`reasoning_effort: "none"`), plus `auto` (nothing sent). No budget field.
+/// - [`ReasoningWire::ThinkingObject`]: a level (`thinking.effort`), `off` (`type: disabled`) and
+///   `auto` (`type: enabled`). No budget field.
+/// - [`ReasoningWire::EnableThinking`]: `off`, `auto` and a budget (`enable_thinking` with
+///   `thinking_budget`). It has no level field, so levels and the coerced list are masked away.
+/// - anything else, [`ReasoningWire::Unsupported`] included: [`WireCaps::NONE`], so every explicit
+///   effort is refused with `WireUnsupported`. `ReasoningWire` is `#[non_exhaustive]`: a wire this
+///   engine does not know carries nothing rather than something wrong.
+fn wire_caps(wire: ReasoningWire) -> WireCaps {
+    match wire {
+        ReasoningWire::TopLevelEffort | ReasoningWire::ThinkingObject => WireCaps {
+            levels: true,
+            off: true,
+            auto: true,
+            budget: false,
+        },
+        ReasoningWire::EnableThinking => WireCaps {
+            levels: false,
+            off: true,
+            auto: true,
+            budget: true,
+        },
+        _ => WireCaps::NONE,
+    }
+}
+
+/// The four request fields an admitted reasoning effort can set; each is absent unless the
+/// declared wire names it, and no wire sets a field of another.
+#[derive(Debug, Default)]
+struct CompatReasoningFields {
+    reasoning_effort: Option<&'static str>,
+    thinking: Option<CompatThinking>,
+    enable_thinking: Option<bool>,
+    thinking_budget: Option<u32>,
+}
+
+/// Turn an admitted effort into the one wire form `wire` names.
+///
+/// # Errors
+///
+/// [`LlmError::UnsupportedParameter`] for a (wire, effort) pair this engine has no mapping for.
+/// Masking and `admit` already refuse those, so this is the last line of defence: it fails closed
+/// and can never put a field on the wire that the request did not ask for.
+fn map_reasoning(
+    provider: &'static str,
+    model: &str,
+    wire: ReasoningWire,
+    resolved: &ResolvedEffort,
+) -> Result<CompatReasoningFields, LlmError> {
+    if !resolved.on_wire {
+        return Ok(CompatReasoningFields::default());
+    }
+    let level = reasoning::level_spelling(resolved.effective);
+    let fields = match wire {
+        // `reasoning_effort: "L"`; `Off` is the vendor's `"none"`; `Auto` sends nothing (the
+        // vendor's own default depth) but is still stamped on the response.
+        ReasoningWire::TopLevelEffort => match (level, resolved.effective) {
+            (Some(level), _) => Some(CompatReasoningFields {
+                reasoning_effort: Some(level),
+                ..CompatReasoningFields::default()
+            }),
+            (None, ReasoningEffort::Off) => Some(CompatReasoningFields {
+                reasoning_effort: Some("none"),
+                ..CompatReasoningFields::default()
+            }),
+            (None, ReasoningEffort::Auto) => Some(CompatReasoningFields::default()),
+            _ => None,
+        },
+        // `thinking: {type, effort}`: a level enables thinking at that effort, `Off` disables
+        // it, `Auto` enables it with no effort.
+        ReasoningWire::ThinkingObject => match (level, resolved.effective) {
+            (Some(level), _) => Some(CompatThinking {
+                kind: "enabled",
+                effort: Some(level),
+            }),
+            (None, ReasoningEffort::Off) => Some(CompatThinking {
+                kind: "disabled",
+                effort: None,
+            }),
+            (None, ReasoningEffort::Auto) => Some(CompatThinking {
+                kind: "enabled",
+                effort: None,
+            }),
+            _ => None,
+        }
+        .map(|thinking| CompatReasoningFields {
+            thinking: Some(thinking),
+            ..CompatReasoningFields::default()
+        }),
+        // `enable_thinking` switch plus an optional `thinking_budget`; the wire has no level
+        // field, so a level never reaches this arm (masked out of the profile).
+        ReasoningWire::EnableThinking => match resolved.effective {
+            ReasoningEffort::Off => Some(CompatReasoningFields {
+                enable_thinking: Some(false),
+                ..CompatReasoningFields::default()
+            }),
+            ReasoningEffort::Auto => Some(CompatReasoningFields {
+                enable_thinking: Some(true),
+                ..CompatReasoningFields::default()
+            }),
+            ReasoningEffort::Budget(budget) => Some(CompatReasoningFields {
+                enable_thinking: Some(true),
+                thinking_budget: Some(budget),
+                ..CompatReasoningFields::default()
+            }),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(fields) = fields {
+        return Ok(fields);
+    }
+    // `Unsupported` (masked away upstream) and any pair without a mapping: fail closed, no field
+    // is sent.
+    Err(LlmError::unsupported_parameter(
+        "reasoning_effort",
+        resolved.effective.to_string(),
+        provider,
+        model,
+        format!("the '{wire}' wire has no form for that effort"),
+    ))
 }
 
 /// The provider name a [`CompatEngine`] reports until a preset names it via
@@ -499,6 +666,7 @@ impl CompatEngine {
             format_log: FormatLog::new(),
             usage_semantics: CompatUsageSemantics::default(),
             usage_log: UsageLog::new(),
+            substitutions: SubstitutionLog::new(),
         })
     }
 
@@ -549,15 +717,30 @@ impl CompatEngine {
     /// The profile that decides what reaches the wire for `model`: the registry's (override over
     /// seeded entry over adapter-wide fallback), or, when no registry was attached, one derived
     /// from this config's own capabilities and `request_parameters` with stop sequences not sent.
+    ///
+    /// Its `effort` data is masked by this preset's declared [`ReasoningWire`] (Phase 51, D-00f):
+    /// whatever the wire has no field for is removed, so a caller reading this profile (the
+    /// builder, the fallback chain) judges exactly what [`CompatEngine::build_request`] will send.
     pub(crate) fn model_profile(&self, model: &str) -> ModelProfile {
-        match &self.model_registry {
+        let mut profile = match &self.model_registry {
             Some(registry) => registry.profile(model),
             None => fallback_from_compat(
                 &self.capabilities(),
                 &self.config.request_parameters,
                 StopSupport::NotSent,
             ),
-        }
+        };
+        profile.effort = mask_effort(
+            std::mem::take(&mut profile.effort),
+            wire_caps(self.config.request_parameters.reasoning),
+        );
+        profile
+    }
+
+    /// The preset's declared request parameters, for a preset's own position test.
+    #[cfg(test)]
+    pub(crate) fn request_parameters(&self) -> CompatRequestParameters {
+        self.config.request_parameters
     }
 
     /// The name this engine stamps on its [`LlmError::ProviderError`]s.
@@ -618,6 +801,28 @@ impl CompatEngine {
             );
         }
 
+        // Phase 51 (D-00f): an explicit effort is sent exactly or refused here, before any HTTP
+        // call and before any retry loop -- never routed through the omit-and-log path below.
+        // `profile` is already masked by this preset's declared wire.
+        let resolved = reasoning::admit(
+            self.provider_name,
+            &request.model,
+            &profile,
+            request.reasoning,
+            request.reasoning_fallback,
+            max_tokens,
+            &self.substitutions,
+        )?;
+        let fields = match &resolved {
+            Some(resolved) => map_reasoning(
+                self.provider_name,
+                &request.model,
+                self.config.request_parameters.reasoning,
+                resolved,
+            )?,
+            None => CompatReasoningFields::default(),
+        };
+
         let applied = sampling::apply(&profile, params);
         let params_omitted = self
             .omissions
@@ -665,12 +870,17 @@ impl CompatEngine {
             // the `LlmRequest` and only decide to call `generate_stream`
             // afterward.
             stream_options: None,
+            reasoning_effort: fields.reasoning_effort,
+            thinking: fields.thinking,
+            enable_thinking: fields.enable_thinking,
+            thinking_budget: fields.thinking_budget,
         };
         let notes = RequestNotes {
             params_omitted,
             format_adjusted,
             unprofiled_model,
-            ..RequestNotes::default()
+            reasoning_requested: resolved.map(|r| r.requested.to_string()),
+            reasoning_effective: resolved.map(|r| r.effective.to_string()),
         };
         Ok((body, notes))
     }
@@ -1476,7 +1686,7 @@ mod tests {
             // Unchanged pre-existing behaviour: no vendor-specific
             // restriction has been measured for this synthetic test
             // preset, so it declares full support (17-18).
-            request_parameters: CompatRequestParameters::all(),
+            request_parameters: CompatRequestParameters::all(ReasoningWire::Unsupported),
             fallback_models: vec!["fallback-model".to_string()],
             error_override: None,
             redirect_policy: None,
@@ -2202,7 +2412,7 @@ mod tests {
     // that key while carrying the caller's values for the rest.
     #[tokio::test]
     async fn build_request_omits_exactly_the_declared_unsupported_parameter() {
-        let mut request_parameters = CompatRequestParameters::all();
+        let mut request_parameters = CompatRequestParameters::all(ReasoningWire::Unsupported);
         request_parameters.presence_penalty = false;
 
         let config =
@@ -2240,7 +2450,7 @@ mod tests {
     async fn build_request_with_all_declared_carries_every_caller_value_unchanged() {
         let config = test_config_with_request_parameters(
             "https://example.invalid/v1",
-            CompatRequestParameters::all(),
+            CompatRequestParameters::all(ReasoningWire::Unsupported),
         );
         let request = build_request_with_parameters("test-model", fully_specified_parameters());
 
@@ -2268,7 +2478,7 @@ mod tests {
     // "present with a null value that happened to parse oddly".
     #[tokio::test]
     async fn build_request_omission_is_absence_never_a_null_value() {
-        let mut request_parameters = CompatRequestParameters::all();
+        let mut request_parameters = CompatRequestParameters::all(ReasoningWire::Unsupported);
         request_parameters.presence_penalty = false;
 
         let config =
@@ -2288,7 +2498,7 @@ mod tests {
     // protocol, not about whether the caller happened to supply a value.
     #[tokio::test]
     async fn build_request_declared_unsupported_wins_even_when_caller_sets_a_value() {
-        let mut request_parameters = CompatRequestParameters::all();
+        let mut request_parameters = CompatRequestParameters::all(ReasoningWire::Unsupported);
         request_parameters.presence_penalty = false;
 
         let config =
@@ -2322,7 +2532,7 @@ mod tests {
     async fn build_request_carried_but_caller_unset_parameter_stays_omitted() {
         let config = test_config_with_request_parameters(
             "https://example.invalid/v1",
-            CompatRequestParameters::all(),
+            CompatRequestParameters::all(ReasoningWire::Unsupported),
         );
         let mut parameters = fully_specified_parameters();
         parameters.presence_penalty = None;
@@ -2357,7 +2567,7 @@ mod tests {
     // without generalizing to `temperature` would be caught here.
     #[tokio::test]
     async fn build_request_omits_exactly_a_declared_absent_temperature() {
-        let mut request_parameters = CompatRequestParameters::all();
+        let mut request_parameters = CompatRequestParameters::all(ReasoningWire::Unsupported);
         request_parameters.temperature = false;
 
         let config =
@@ -3694,5 +3904,437 @@ mod tests {
             "Sure, ",
             "partial content already yielded stays yielded"
         );
+    }
+    // ── Phase 51 (REASON-02, REASON-03, D-00f): the reasoning wires, exactly or refused ──
+    //
+    // One set of cases for every preset that shares this engine, against a synthetic preset that
+    // declares each wire in turn. The wire is the only difference between the three accepted
+    // cases, so a body that carries another wire's field fails them.
+
+    mod reasoning_wires {
+        use super::*;
+        use crate::reasoning::{
+            REASONING_EFFECTIVE_METADATA_KEY, REASONING_REQUESTED_METADATA_KEY,
+        };
+        use crate::registry::ModelOverride;
+        use paladin_ports::output::llm_port::ReasoningEffort::{
+            Auto, Budget, High, Low, Max, Medium, Minimal, Off, XHigh,
+        };
+        use paladin_ports::output::model_profile::{BudgetBounds, EffortLevels, EffortSupport};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        /// The four request fields an effort can set; every other key is outside this module's
+        /// business.
+        const REASONING_KEYS: [&str; 4] = [
+            "reasoning_effort",
+            "thinking",
+            "enable_thinking",
+            "thinking_budget",
+        ];
+
+        fn engine_for(
+            wire: ReasoningWire,
+            effort: EffortSupport,
+        ) -> impl FnOnce(String) -> CompatEngine {
+            move |url| {
+                let mut config = test_config_at(&url);
+                config.request_parameters = CompatRequestParameters::all(wire);
+                let registry = test_registry(vec![(
+                    "test-model",
+                    ModelOverride {
+                        effort: Some(effort),
+                        ..ModelOverride::default()
+                    },
+                )]);
+                CompatEngine::new(config)
+                    .unwrap()
+                    .with_provider_name("test-preset")
+                    .with_model_registry(registry)
+            }
+        }
+
+        fn levels() -> EffortSupport {
+            EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High])
+                    .with_off(true)
+                    .with_auto(true)
+                    .with_budget(BudgetBounds::new(1, 32_768)),
+            )
+        }
+
+        fn budget_only() -> EffortSupport {
+            EffortSupport::Supported(
+                EffortLevels::new([])
+                    .with_off(true)
+                    .with_auto(true)
+                    .with_budget(BudgetBounds::new(1, 32_768)),
+            )
+        }
+
+        async fn send(
+            wire: ReasoningWire,
+            effort: EffortSupport,
+            requested: paladin_ports::output::llm_port::ReasoningEffort,
+        ) -> (Result<LlmResponse, LlmError>, Option<Value>, usize) {
+            generate_through(
+                engine_for(wire, effort),
+                build_request("test-model").with_reasoning(requested),
+            )
+            .await
+        }
+
+        fn reasoning_keys(body: &Value) -> Vec<&'static str> {
+            REASONING_KEYS
+                .into_iter()
+                .filter(|key| body.get(key).is_some())
+                .collect()
+        }
+
+        #[tokio::test]
+        async fn top_level_effort_sends_the_level_and_nothing_else() {
+            let (result, body, _) = send(ReasoningWire::TopLevelEffort, levels(), Medium).await;
+            let metadata = result.expect("a listed level is accepted").metadata;
+            let body = body.unwrap();
+            assert_eq!(body["reasoning_effort"], "medium", "{body}");
+            assert_eq!(reasoning_keys(&body), ["reasoning_effort"], "{body}");
+            assert_eq!(metadata[REASONING_REQUESTED_METADATA_KEY], "medium");
+            assert_eq!(metadata[REASONING_EFFECTIVE_METADATA_KEY], "medium");
+        }
+
+        #[tokio::test]
+        async fn top_level_effort_off_is_none_and_auto_sends_nothing() {
+            let (result, body, _) = send(ReasoningWire::TopLevelEffort, levels(), Off).await;
+            result.expect("off is accepted");
+            assert_eq!(body.unwrap()["reasoning_effort"], "none");
+
+            let (result, body, hits) = send(ReasoningWire::TopLevelEffort, levels(), Auto).await;
+            let metadata = result.expect("auto is accepted").metadata;
+            assert_eq!(hits, 1);
+            assert_eq!(reasoning_keys(&body.unwrap()), Vec::<&str>::new());
+            assert_eq!(metadata[REASONING_REQUESTED_METADATA_KEY], "auto");
+            assert_eq!(metadata[REASONING_EFFECTIVE_METADATA_KEY], "auto");
+        }
+
+        #[tokio::test]
+        async fn top_level_effort_has_no_budget_field_so_a_budget_is_refused() {
+            let (result, body, hits) =
+                send(ReasoningWire::TopLevelEffort, levels(), Budget(100)).await;
+            assert!(matches!(result, Err(LlmError::UnsupportedParameter { .. })));
+            assert_eq!((hits, body), (0, None));
+        }
+
+        #[tokio::test]
+        async fn thinking_object_sends_level_off_and_auto_in_its_own_field() {
+            for (requested, expected) in [
+                (High, json!({"type": "enabled", "effort": "high"})),
+                (Off, json!({"type": "disabled"})),
+                (Auto, json!({"type": "enabled"})),
+            ] {
+                let (result, body, _) =
+                    send(ReasoningWire::ThinkingObject, levels(), requested).await;
+                result.expect("accepted");
+                let body = body.unwrap();
+                assert_eq!(body["thinking"], expected, "{requested}: {body}");
+                assert_eq!(reasoning_keys(&body), ["thinking"], "{requested}: {body}");
+            }
+            let (result, _, hits) =
+                send(ReasoningWire::ThinkingObject, levels(), Budget(100)).await;
+            assert!(matches!(result, Err(LlmError::UnsupportedParameter { .. })));
+            assert_eq!(hits, 0);
+        }
+
+        #[tokio::test]
+        async fn enable_thinking_sends_the_switch_and_a_bounded_budget() {
+            let (result, body, _) =
+                send(ReasoningWire::EnableThinking, budget_only(), Budget(512)).await;
+            result.expect("an in-bounds budget is accepted");
+            let body = body.unwrap();
+            assert_eq!(body["enable_thinking"], true, "{body}");
+            assert_eq!(body["thinking_budget"], 512, "{body}");
+            assert_eq!(
+                reasoning_keys(&body),
+                ["enable_thinking", "thinking_budget"],
+                "{body}"
+            );
+
+            let (result, body, _) = send(ReasoningWire::EnableThinking, budget_only(), Off).await;
+            result.expect("off is accepted");
+            let body = body.unwrap();
+            assert_eq!(body["enable_thinking"], false, "{body}");
+            assert_eq!(reasoning_keys(&body), ["enable_thinking"], "{body}");
+
+            let (result, body, _) = send(ReasoningWire::EnableThinking, budget_only(), Auto).await;
+            result.expect("auto is accepted");
+            let body = body.unwrap();
+            assert_eq!(body["enable_thinking"], true, "{body}");
+            assert_eq!(reasoning_keys(&body), ["enable_thinking"], "{body}");
+        }
+
+        #[tokio::test]
+        async fn enable_thinking_refuses_an_out_of_bounds_budget_and_every_level() {
+            let (result, _, hits) =
+                send(ReasoningWire::EnableThinking, budget_only(), Budget(32_769)).await;
+            assert!(matches!(result, Err(LlmError::UnsupportedParameter { .. })));
+            assert_eq!(hits, 0);
+
+            // The wire has no level field, so even an override listing levels cannot unlock one.
+            let (result, _, hits) = send(ReasoningWire::EnableThinking, levels(), Low).await;
+            assert!(matches!(result, Err(LlmError::UnsupportedParameter { .. })));
+            assert_eq!(hits, 0);
+        }
+
+        #[tokio::test]
+        async fn a_budget_not_below_max_tokens_is_refused_before_http() {
+            // The synthetic request carries a 1000-token output cap; a 2048-token budget leaves
+            // the model no room to answer.
+            let (result, _, hits) =
+                send(ReasoningWire::EnableThinking, budget_only(), Budget(2048)).await;
+            match result {
+                Err(LlmError::UnsupportedParameter { reason, .. }) => {
+                    assert!(reason.contains("below max_tokens"), "{reason}");
+                }
+                other => panic!("expected UnsupportedParameter, got {other:?}"),
+            }
+            assert_eq!(hits, 0);
+        }
+
+        #[tokio::test]
+        async fn the_budget_bound_comes_from_the_profile_not_a_constant() {
+            let narrow = EffortSupport::Supported(
+                EffortLevels::new([]).with_budget(BudgetBounds::new(10, 20)),
+            );
+            let (result, _, _) =
+                send(ReasoningWire::EnableThinking, narrow.clone(), Budget(20)).await;
+            result.expect("the profile's upper bound is inclusive");
+            let (result, _, hits) = send(ReasoningWire::EnableThinking, narrow, Budget(21)).await;
+            assert!(matches!(result, Err(LlmError::UnsupportedParameter { .. })));
+            assert_eq!(hits, 0);
+        }
+
+        #[tokio::test]
+        async fn an_unsupported_wire_refuses_all_nine_values_with_zero_http_hits() {
+            for requested in [
+                Off,
+                Auto,
+                Minimal,
+                Low,
+                Medium,
+                High,
+                XHigh,
+                Max,
+                Budget(1024),
+            ] {
+                // An override that lists everything still cannot unlock a wire with no form.
+                let (result, body, hits) =
+                    send(ReasoningWire::Unsupported, levels(), requested).await;
+                match result {
+                    Err(LlmError::UnsupportedParameter { reason, .. }) => {
+                        assert!(reason.contains("not verified"), "{requested}: {reason}");
+                    }
+                    other => panic!("{requested}: expected UnsupportedParameter, got {other:?}"),
+                }
+                assert_eq!((hits, body), (0, None), "{requested}");
+            }
+        }
+
+        #[tokio::test]
+        async fn an_unsupported_wire_with_no_effort_set_sends_and_stamps_nothing() {
+            let (result, body, hits) = generate_through(
+                engine_for(ReasoningWire::Unsupported, levels()),
+                build_request("test-model"),
+            )
+            .await;
+            let metadata = result.expect("an unset effort is untouched").metadata;
+            assert_eq!(hits, 1);
+            assert_eq!(reasoning_keys(&body.unwrap()), Vec::<&str>::new());
+            assert!(!metadata.contains_key(REASONING_REQUESTED_METADATA_KEY));
+            assert!(!metadata.contains_key(REASONING_EFFECTIVE_METADATA_KEY));
+        }
+
+        /// REASON-03 / T-51-13: no body ever carries a field of a wire the preset did not
+        /// declare, for any effort that wire admits.
+        #[tokio::test]
+        async fn no_wire_ever_sends_a_second_wires_field() {
+            let cases: [(ReasoningWire, EffortSupport, &[&str]); 3] = [
+                (
+                    ReasoningWire::TopLevelEffort,
+                    levels(),
+                    &["reasoning_effort"],
+                ),
+                (ReasoningWire::ThinkingObject, levels(), &["thinking"]),
+                (
+                    ReasoningWire::EnableThinking,
+                    budget_only(),
+                    &["enable_thinking", "thinking_budget"],
+                ),
+            ];
+            for (wire, effort, own) in cases {
+                for requested in [Off, Auto, Low, Medium, High, Budget(512)] {
+                    let (result, body, _) = send(wire, effort.clone(), requested).await;
+                    if result.is_err() {
+                        continue; // refused: nothing was sent at all
+                    }
+                    for key in reasoning_keys(&body.unwrap()) {
+                        assert!(
+                            own.contains(&key),
+                            "{wire} sent '{key}' for {requested}, which is not its own field"
+                        );
+                    }
+                }
+            }
+        }
+
+        /// Run `generate_stream` against a mock SSE endpoint, capturing the request body.
+        async fn stream_capture(
+            wire: ReasoningWire,
+            effort: EffortSupport,
+            requested: paladin_ports::output::llm_port::ReasoningEffort,
+        ) -> (
+            Option<Value>,
+            usize,
+            Result<Vec<StreamingResponse>, LlmError>,
+        ) {
+            let mut server = Server::new_async().await;
+            let captured: Arc<Mutex<Option<Value>>> = Arc::new(Mutex::new(None));
+            let hits = Arc::new(AtomicUsize::new(0));
+            let (slot, counter) = (Arc::clone(&captured), Arc::clone(&hits));
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body_from_request(move |req| {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    let text = req.utf8_lossy_body().unwrap_or_default().into_owned();
+                    *slot.lock().unwrap() = serde_json::from_str(&text).ok();
+                    sse_body_with_usage_frame().into_bytes()
+                })
+                .expect_at_least(0)
+                .create_async()
+                .await;
+            let engine = engine_for(wire, effort)(server.url());
+            let outcome = match engine
+                .generate_stream(build_request("test-model").with_reasoning(requested))
+                .await
+            {
+                Ok(stream) => {
+                    let mut stream = Box::into_pin(stream);
+                    let mut chunks = Vec::new();
+                    while let Some(item) = stream.next().await {
+                        chunks.push(item.expect("every scripted item is Ok"));
+                    }
+                    Ok(chunks)
+                }
+                Err(error) => Err(error),
+            };
+            let body = captured.lock().unwrap().take();
+            (body, hits.load(Ordering::SeqCst), outcome)
+        }
+
+        #[tokio::test]
+        async fn the_stream_sends_the_same_fields_as_generate_for_each_wire() {
+            let cases: [(ReasoningWire, EffortSupport, _, &str); 3] = [
+                (
+                    ReasoningWire::TopLevelEffort,
+                    levels(),
+                    High,
+                    "reasoning_effort",
+                ),
+                (ReasoningWire::ThinkingObject, levels(), High, "thinking"),
+                (
+                    ReasoningWire::EnableThinking,
+                    budget_only(),
+                    Budget(512),
+                    "thinking_budget",
+                ),
+            ];
+            for (wire, effort, requested, key) in cases {
+                let (buffered, buffered_body, _) = send(wire, effort.clone(), requested).await;
+                buffered.expect("accepted");
+                let buffered_body = buffered_body.unwrap();
+
+                let (body, hits, outcome) = stream_capture(wire, effort, requested).await;
+                let body = body.expect("the stream request reached the wire");
+                assert_eq!(hits, 1, "{wire}");
+                assert_eq!(body[key], buffered_body[key], "{wire}: {body}");
+                assert_eq!(
+                    reasoning_keys(&body),
+                    reasoning_keys(&buffered_body),
+                    "{wire}"
+                );
+
+                let chunks = outcome.expect("the stream opens");
+                let (terminal, earlier) = chunks.split_last().expect("a terminal chunk");
+                assert_eq!(
+                    terminal.metadata[REASONING_REQUESTED_METADATA_KEY],
+                    requested.to_string(),
+                    "{wire}"
+                );
+                assert_eq!(
+                    terminal.metadata[REASONING_EFFECTIVE_METADATA_KEY],
+                    requested.to_string(),
+                    "{wire}"
+                );
+                for chunk in earlier {
+                    assert!(
+                        !chunk
+                            .metadata
+                            .contains_key(REASONING_REQUESTED_METADATA_KEY),
+                        "{wire}: only the terminal chunk is stamped: {chunk:?}"
+                    );
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn a_refused_effort_fails_the_stream_before_any_http_call() {
+            let (body, hits, outcome) =
+                stream_capture(ReasoningWire::Unsupported, levels(), High).await;
+            assert!(matches!(
+                outcome,
+                Err(LlmError::UnsupportedParameter { .. })
+            ));
+            assert_eq!((hits, body), (0, None));
+        }
+
+        #[test]
+        fn the_masked_profile_carries_only_what_each_wire_can_send() {
+            let profile_for = |wire: ReasoningWire, effort: EffortSupport| {
+                let engine = engine_for(wire, effort)("https://example.invalid/v1".to_string());
+                engine.model_profile("test-model").effort
+            };
+            match profile_for(ReasoningWire::TopLevelEffort, levels()) {
+                EffortSupport::Supported(l) => {
+                    assert_eq!(l.levels, vec![Low, Medium, High]);
+                    assert_eq!(l.budget, None);
+                }
+                other => panic!("expected Supported, got {other:?}"),
+            }
+            match profile_for(ReasoningWire::EnableThinking, levels()) {
+                EffortSupport::Supported(l) => {
+                    assert!(l.levels.is_empty() && l.coerced.is_empty());
+                    assert!(l.budget.is_some() && l.off && l.auto);
+                }
+                other => panic!("expected Supported, got {other:?}"),
+            }
+            assert_eq!(
+                profile_for(ReasoningWire::Unsupported, levels()),
+                EffortSupport::WireUnsupported
+            );
+        }
+
+        #[test]
+        fn a_refused_effort_is_a_configuration_statement_not_a_fetch_condition() {
+            let error = LlmError::unsupported_parameter(
+                "reasoning_effort",
+                "high",
+                "test-preset",
+                "test-model",
+                "reason",
+            );
+            assert_eq!(
+                classify_fetch_failure(&error),
+                FetchFailureClass::Misconfiguration
+            );
+        }
     }
 }

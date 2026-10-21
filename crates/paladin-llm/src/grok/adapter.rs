@@ -21,7 +21,7 @@ use paladin_ports::output::model_profile::{ModelProfile, StopSupport};
 
 use crate::compat::engine::CompatUsageSemantics;
 use crate::compat::{
-    CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters,
+    CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters, ReasoningWire,
 };
 use crate::redaction::RedactedKey;
 use crate::registry::{
@@ -301,6 +301,11 @@ impl GrokAdapter {
                 top_p: true,
                 frequency_penalty: false,
                 presence_penalty: false,
+                // Phase 51 (D-04, REASON-02): the xAI chat-completions field that carries a
+                // reasoning effort is unconfirmed for this endpoint, so no effort is sent: every
+                // explicit effort is refused before HTTP. Plan 51-11 restates this from
+                // `51-EFFORT-PROBE.md` (a confirmed form lifts it).
+                reasoning: ReasoningWire::Unsupported,
             },
             fallback_models: GROK_FALLBACK_MODELS.iter().map(|s| s.to_string()).collect(),
             // No usage-cap (quota) mapping for grok: its quota-exhaustion body was never captured
@@ -1425,6 +1430,91 @@ mod tests {
             "max_retries",
         ] {
             assert!(debug.contains(needle), "'{needle}' missing from {debug}");
+        }
+    }
+    // ── Phase 51 (REASON-02, D-04): the declared reasoning wire ──
+
+    #[test]
+    fn grok_declares_no_reasoning_wire_until_the_probe_confirms_one() {
+        let adapter =
+            GrokAdapter::new(GrokConfig::new("k".to_string(), "grok-4.3".to_string())).unwrap();
+        assert_eq!(
+            adapter.engine.request_parameters().reasoning,
+            ReasoningWire::Unsupported
+        );
+    }
+    #[tokio::test]
+    async fn grok_refuses_every_explicit_effort_even_with_an_override_and_never_hits_the_wire() {
+        use crate::compat::test_support::{mock_completion, plain_request, send_capturing, server};
+        use paladin_ports::output::llm_port::ReasoningEffort::{
+            Auto, Budget, High, Low, Max, Medium, Minimal, Off, XHigh,
+        };
+        use paladin_ports::output::model_profile::{EffortLevels, EffortSupport};
+
+        let mut server = server().await;
+        let captured = mock_completion(&mut server).await;
+        let over = registry::ModelOverride {
+            effort: Some(EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High])
+                    .with_off(true)
+                    .with_auto(true),
+            )),
+            ..registry::ModelOverride::default()
+        };
+        let adapter = GrokAdapter::new(
+            GrokConfig::new("test-key".to_string(), "grok-4.3".to_string())
+                .with_base_url(server.url())
+                .with_model_overrides(std::collections::BTreeMap::from([(
+                    "grok-4.3".to_string(),
+                    over,
+                )])),
+        )
+        .unwrap();
+
+        for requested in [
+            Off,
+            Auto,
+            Minimal,
+            Low,
+            Medium,
+            High,
+            XHigh,
+            Max,
+            Budget(512),
+        ] {
+            let error = send_capturing(
+                &adapter,
+                &captured,
+                plain_request("grok-4.3").with_reasoning(requested),
+            )
+            .await
+            .expect_err("every explicit effort is refused on an unconfirmed wire");
+            match error {
+                LlmError::UnsupportedParameter {
+                    reason, provider, ..
+                } => {
+                    assert_eq!(provider, "grok");
+                    assert!(reason.contains("not verified"), "{requested}: {reason}");
+                }
+                other => panic!("{requested}: expected UnsupportedParameter, got {other:?}"),
+            }
+            assert!(
+                captured.lock().unwrap().is_none(),
+                "{requested}: no HTTP hit"
+            );
+        }
+
+        // An unset effort is untouched.
+        let (body, _) = send_capturing(&adapter, &captured, plain_request("grok-4.3"))
+            .await
+            .unwrap();
+        for key in [
+            "reasoning_effort",
+            "thinking",
+            "enable_thinking",
+            "thinking_budget",
+        ] {
+            assert!(body.get(key).is_none(), "{key} in {body}");
         }
     }
 }

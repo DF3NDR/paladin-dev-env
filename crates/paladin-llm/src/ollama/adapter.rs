@@ -37,7 +37,7 @@ use paladin_ports::output::llm_port::{
 use paladin_ports::output::model_profile::{ModelProfile, StopSupport};
 
 use crate::compat::{
-    CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters,
+    CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters, ReasoningWire,
 };
 use crate::registry::{
     DEFAULT_MAX_RETRIES, ModelOverride, ModelRegistry, config_knob_builders,
@@ -103,6 +103,15 @@ pub struct OllamaConfig {
     /// entry field by field. Empty by default. Validated at construction; an invalid override
     /// fails it with an error naming the provider and the model.
     pub model_overrides: BTreeMap<String, ModelOverride>,
+    /// Where this endpoint parses a reasoning effort in the request body (Phase 51, D-10).
+    ///
+    /// Declared by the operator, who proves it with `live_vendor_smoke --effort` against the
+    /// endpoint: the "invalid value rejected" row of that probe is the proof the field is read.
+    /// Defaults to [`ReasoningWire::Unsupported`], which sends nothing and refuses every explicit
+    /// effort before any HTTP call. An explicit effort needs both a wire other than
+    /// `Unsupported` and the model's `effort` override
+    /// ([`model_overrides`](Self::model_overrides)); no network call happens at construction.
+    pub reasoning_wire: ReasoningWire,
 }
 
 impl OllamaConfig {
@@ -156,6 +165,7 @@ impl OllamaConfig {
             max_retries: DEFAULT_MAX_RETRIES,
             context_window: None,
             model_overrides: BTreeMap::new(),
+            reasoning_wire: ReasoningWire::Unsupported,
         };
 
         config.validate()?;
@@ -173,7 +183,30 @@ impl OllamaConfig {
             max_retries: DEFAULT_MAX_RETRIES,
             context_window: None,
             model_overrides: BTreeMap::new(),
+            reasoning_wire: ReasoningWire::Unsupported,
         }
+    }
+
+    /// Declare where this endpoint parses a reasoning effort (Phase 51, D-10).
+    ///
+    /// The default is [`ReasoningWire::Unsupported`]: no effort is sent and every explicit effort
+    /// is refused before any HTTP call. Declaring a wire is the operator's statement that the
+    /// endpoint reads that field; the model's levels still come from its `effort` override.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_llm::reasoning::ReasoningWire;
+    /// use paladin_llm::ollama::OllamaConfig;
+    ///
+    /// let config = OllamaConfig::new("http://localhost:11434/v1".to_string(), "llama3".to_string())
+    ///     .with_reasoning_wire(ReasoningWire::TopLevelEffort);
+    /// assert_eq!(config.reasoning_wire, ReasoningWire::TopLevelEffort);
+    /// ```
+    #[must_use]
+    pub fn with_reasoning_wire(mut self, wire: ReasoningWire) -> Self {
+        self.reasoning_wire = wire;
+        self
     }
 
     /// Validate the configuration.
@@ -237,7 +270,10 @@ impl OllamaAdapter {
             },
             // Unchanged pre-existing behaviour (17-18): no vendor-specific
             // sampling-parameter restriction has been measured for Ollama.
-            request_parameters: CompatRequestParameters::all(),
+            // Phase 51 (D-10): no reasoning wire is verified for a self-hosted endpoint, so
+            // the default is `Unsupported` and an explicit effort is refused until the operator
+            // declares the field the endpoint parses (`OllamaConfig::reasoning_wire`).
+            request_parameters: CompatRequestParameters::all(config.reasoning_wire),
             fallback_models: OLLAMA_FALLBACK_MODELS
                 .iter()
                 .map(|s| s.to_string())
@@ -899,5 +935,90 @@ mod tests {
             .unwrap();
             assert_eq!(config.timeout_seconds.to_string(), explicit);
         }
+    }
+    // ── Phase 51 (REASON-02, D-10): the declared reasoning wire ──
+
+    #[test]
+    fn ollama_declares_no_reasoning_wire_by_default() {
+        let adapter = OllamaAdapter::new(OllamaConfig::new(
+            "http://localhost:11434/v1".to_string(),
+            "llama3".to_string(),
+        ))
+        .unwrap();
+        assert_eq!(
+            adapter.engine.request_parameters().reasoning,
+            ReasoningWire::Unsupported
+        );
+    }
+    #[test]
+    fn ollama_config_reasoning_wire_defaults_to_unsupported_and_is_set_by_the_builder() {
+        let config = OllamaConfig::new("http://localhost:11434/v1".to_string(), "m".to_string());
+        assert_eq!(config.reasoning_wire, ReasoningWire::Unsupported);
+        assert!(format!("{config:?}").contains("reasoning_wire"));
+        let config = config.with_reasoning_wire(ReasoningWire::TopLevelEffort);
+        assert_eq!(config.reasoning_wire, ReasoningWire::TopLevelEffort);
+        assert!(format!("{config:?}").contains("TopLevelEffort"));
+        // `from_env` leaves the same default.
+        let from_env = OllamaConfig::from_parts(None, None, None).unwrap();
+        assert_eq!(from_env.reasoning_wire, ReasoningWire::Unsupported);
+    }
+
+    #[tokio::test]
+    async fn an_operator_declared_wire_and_override_send_thinking_effort() {
+        use crate::compat::test_support::{mock_completion, plain_request, send_capturing, server};
+        use paladin_ports::output::llm_port::ReasoningEffort::{High, Low};
+        use paladin_ports::output::model_profile::{EffortLevels, EffortSupport};
+
+        let mut server = server().await;
+        let captured = mock_completion(&mut server).await;
+        let over = ModelOverride {
+            effort: Some(EffortSupport::Supported(EffortLevels::new([Low, High]))),
+            ..ModelOverride::default()
+        };
+        let adapter = OllamaAdapter::new(
+            knob_config(&server.url(), "llama3")
+                .with_reasoning_wire(ReasoningWire::ThinkingObject)
+                .with_model_overrides(BTreeMap::from([("llama3".to_string(), over)])),
+        )
+        .unwrap();
+        // Construction made no network call.
+        assert!(captured.lock().unwrap().is_none());
+
+        let (body, _) = send_capturing(
+            &adapter,
+            &captured,
+            plain_request("llama3").with_reasoning(High),
+        )
+        .await
+        .expect("a declared wire and a listed level are accepted");
+        assert_eq!(
+            body["thinking"],
+            json!({"type": "enabled", "effort": "high"})
+        );
+        assert!(body.get("reasoning_effort").is_none(), "{body}");
+    }
+
+    #[tokio::test]
+    async fn the_default_wire_refuses_an_effort_and_names_the_wire_key() {
+        use crate::compat::test_support::{mock_completion, plain_request, send_capturing, server};
+        use paladin_ports::output::llm_port::ReasoningEffort::High;
+
+        let mut server = server().await;
+        let captured = mock_completion(&mut server).await;
+        let adapter = OllamaAdapter::new(knob_config(&server.url(), "llama3")).unwrap();
+        let error = send_capturing(
+            &adapter,
+            &captured,
+            plain_request("llama3").with_reasoning(High),
+        )
+        .await
+        .expect_err("an undeclared wire refuses");
+        match error {
+            LlmError::UnsupportedParameter { reason, .. } => {
+                assert!(reason.contains("llm.ollama.reasoning_wire"), "{reason}");
+            }
+            other => panic!("expected UnsupportedParameter, got {other:?}"),
+        }
+        assert!(captured.lock().unwrap().is_none());
     }
 }

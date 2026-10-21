@@ -30,7 +30,7 @@ use paladin_ports::output::llm_port::{
 use paladin_ports::output::model_profile::{ModelProfile, StopSupport};
 
 use crate::compat::{
-    CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters,
+    CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters, ReasoningWire,
 };
 use crate::redaction::RedactedKey;
 use crate::registry::{
@@ -310,7 +310,7 @@ impl KimiAdapter {
             // contradicted by the 2026-10-15 probe. `max_tokens` stays carried, so the
             // configured default output cap still reaches the wire.
             //
-            // WR-02: every field stated explicitly. `..CompatRequestParameters::all()`
+            // WR-02: every field stated explicitly. Spreading `CompatRequestParameters::all(..)`
             // was a struct-update spread, which the type's own invariant
             // (`compat/engine.rs`) and plan 17-18's prohibition both forbid: the
             // point of having no `Default` and no spread is that a sixth
@@ -324,6 +324,14 @@ impl KimiAdapter {
                 max_tokens: true,
                 frequency_penalty: false,
                 presence_penalty: false,
+                // Phase 51 (D-04, REASON-02), A1-51-04: Kimi's reasoning effort travels in a
+                // `thinking` object, `{"type": "enabled", "effort": "L"}` -- the form the
+                // handoff (section 4.1 / Appendix A) measured live. The vendor's current docs
+                // say K3 takes a top-level `reasoning_effort` instead (research Pitfall 2), so
+                // this is a pre-probe position: plan 51-11 restates it from `51-EFFORT-PROBE.md`'s
+                // verdict table. A top-level `reasoning_effort` is the silent no-op the handoff
+                // section 5 measured on this endpoint and is never sent from this preset.
+                reasoning: ReasoningWire::ThinkingObject,
             },
             fallback_models: KIMI_FALLBACK_MODELS.iter().map(|s| s.to_string()).collect(),
             // No usage-cap (quota) mapping for kimi: its quota-exhaustion body was never captured
@@ -2002,5 +2010,168 @@ mod tests {
             KimiConfig::new(String::new(), "m".into()).with_base_url("https://x")
         );
         assert!(!empty.contains("<redacted>"), "{empty}");
+    }
+    // ── Phase 51 (REASON-02, REASON-03, D-04): Kimi's reasoning wire ──
+    //
+    // Every Kimi test below is a PRE-PROBE position (A1-51-04): it pins the handoff's measured
+    // `thinking` object form, which plan 51-11 restates or rewrites from `51-EFFORT-PROBE.md`'s
+    // verdict table. It is a starting position, not the silent-no-op regression.
+
+    mod pre_probe_reasoning {
+        use super::*;
+        use crate::compat::test_support::{mock_completion, plain_request, send_capturing, server};
+        use crate::reasoning::{
+            REASONING_EFFECTIVE_METADATA_KEY, REASONING_REQUESTED_METADATA_KEY,
+        };
+        use paladin_ports::output::llm_port::ReasoningEffort;
+        use paladin_ports::output::llm_port::ReasoningEffort::{High, Low, Max};
+        use paladin_ports::output::model_profile::{BudgetBounds, EffortLevels, EffortSupport};
+
+        fn effort_override(effort: EffortSupport) -> ModelOverride {
+            ModelOverride {
+                effort: Some(effort),
+                ..ModelOverride::default()
+            }
+        }
+
+        fn k3_levels() -> EffortSupport {
+            EffortSupport::Supported(
+                EffortLevels::new([Low, High, Max])
+                    .with_off(true)
+                    .with_auto(true),
+            )
+        }
+
+        fn k3_adapter(base_url: &str, effort: EffortSupport) -> KimiAdapter {
+            KimiAdapter::new(
+                kimi_config(base_url, "kimi-k3").with_model_overrides(BTreeMap::from([(
+                    "kimi-k3".to_string(),
+                    effort_override(effort),
+                )])),
+            )
+            .unwrap()
+        }
+
+        // Pre-probe position (A1-51-04): superseded by plan 51-11.
+        #[test]
+        fn kimi_pre_probe_declares_the_thinking_object_wire() {
+            let adapter =
+                KimiAdapter::new(kimi_config("https://example.invalid/v1", "kimi-k3")).unwrap();
+            assert_eq!(
+                adapter.engine.request_parameters().reasoning,
+                ReasoningWire::ThinkingObject
+            );
+        }
+
+        // Pre-probe position (A1-51-04): superseded by plan 51-11.
+        #[tokio::test]
+        async fn kimi_pre_probe_high_sends_thinking_effort_and_no_top_level_effort() {
+            let mut server = server().await;
+            let captured = mock_completion(&mut server).await;
+            let adapter = k3_adapter(&server.url(), k3_levels());
+
+            let (body, response) = send_capturing(
+                &adapter,
+                &captured,
+                plain_request("kimi-k3").with_reasoning(High),
+            )
+            .await
+            .expect("a listed level is accepted");
+            assert_eq!(
+                body["thinking"],
+                json!({"type": "enabled", "effort": "high"}),
+                "{body}"
+            );
+            assert!(body.get("reasoning_effort").is_none(), "{body}");
+            assert!(body.get("enable_thinking").is_none(), "{body}");
+            assert!(body.get("thinking_budget").is_none(), "{body}");
+            assert_eq!(response.metadata[REASONING_REQUESTED_METADATA_KEY], "high");
+            assert_eq!(response.metadata[REASONING_EFFECTIVE_METADATA_KEY], "high");
+        }
+
+        // Pre-probe position (A1-51-04): superseded by plan 51-11.
+        #[tokio::test]
+        async fn kimi_pre_probe_off_and_auto_ride_the_thinking_type() {
+            let mut server = server().await;
+            let captured = mock_completion(&mut server).await;
+            let adapter = k3_adapter(&server.url(), k3_levels());
+
+            let (off, _) = send_capturing(
+                &adapter,
+                &captured,
+                plain_request("kimi-k3").with_reasoning(ReasoningEffort::Off),
+            )
+            .await
+            .unwrap();
+            assert_eq!(off["thinking"], json!({"type": "disabled"}), "{off}");
+            let (auto, response) = send_capturing(
+                &adapter,
+                &captured,
+                plain_request("kimi-k3").with_reasoning(ReasoningEffort::Auto),
+            )
+            .await
+            .unwrap();
+            assert_eq!(auto["thinking"], json!({"type": "enabled"}), "{auto}");
+            assert_eq!(response.metadata[REASONING_EFFECTIVE_METADATA_KEY], "auto");
+        }
+
+        // Pre-probe position (A1-51-04): superseded by plan 51-11.
+        #[tokio::test]
+        async fn kimi_pre_probe_unmeasured_model_refuses_naming_its_override_before_http() {
+            let mut server = server().await;
+            let captured = mock_completion(&mut server).await;
+            let adapter = KimiAdapter::new(kimi_config(&server.url(), "kimi-k2.6")).unwrap();
+
+            let error = send_capturing(
+                &adapter,
+                &captured,
+                plain_request("kimi-k2.6").with_reasoning(High),
+            )
+            .await
+            .expect_err("a model with no effort data refuses an explicit effort");
+            match error {
+                LlmError::UnsupportedParameter {
+                    reason,
+                    provider,
+                    model,
+                    ..
+                } => {
+                    assert_eq!(provider, "kimi");
+                    assert_eq!(model, "kimi-k2.6");
+                    assert!(
+                        reason.contains("llm.kimi.models.kimi-k2.6.effort"),
+                        "{reason}"
+                    );
+                }
+                other => panic!("expected UnsupportedParameter, got {other:?}"),
+            }
+            assert!(
+                captured.lock().unwrap().is_none(),
+                "nothing may reach the endpoint"
+            );
+        }
+
+        // Pre-probe position (A1-51-04): superseded by plan 51-11.
+        #[test]
+        fn kimi_pre_probe_model_profile_reports_only_what_the_wire_carries() {
+            let with_budget = EffortSupport::Supported(
+                EffortLevels::new([Low, High])
+                    .with_off(true)
+                    .with_budget(BudgetBounds::new(1024, 32_000)),
+            );
+            let adapter = k3_adapter("https://example.invalid/v1", with_budget);
+            let profile = adapter.model_profile("kimi-k3").unwrap();
+            match profile.effort {
+                EffortSupport::Supported(levels) => {
+                    assert_eq!(levels.levels, vec![Low, High]);
+                    assert!(levels.off);
+                    assert_eq!(
+                        levels.budget, None,
+                        "the thinking object has no budget field"
+                    );
+                }
+                other => panic!("expected Supported, got {other:?}"),
+            }
+        }
     }
 }

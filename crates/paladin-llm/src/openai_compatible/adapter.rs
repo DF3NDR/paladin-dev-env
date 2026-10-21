@@ -104,7 +104,7 @@ use paladin_ports::output::llm_port::{
 use paladin_ports::output::model_profile::{ModelProfile, StopSupport};
 
 use crate::compat::{
-    CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters,
+    CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters, ReasoningWire,
 };
 use crate::redaction::RedactedKey;
 use crate::registry::{
@@ -418,6 +418,15 @@ pub struct OpenAiCompatibleConfig {
     /// entry field by field. Empty by default. Validated at construction; an invalid override
     /// fails it with an error naming the provider and the model.
     pub model_overrides: BTreeMap<String, ModelOverride>,
+    /// Where this endpoint parses a reasoning effort in the request body (Phase 51, D-10).
+    ///
+    /// Declared by the operator, who proves it with `live_vendor_smoke --effort` against the
+    /// endpoint: the "invalid value rejected" row of that probe is the proof the field is read.
+    /// Defaults to [`ReasoningWire::Unsupported`], which sends nothing and refuses every explicit
+    /// effort before any HTTP call. An explicit effort needs both a wire other than
+    /// `Unsupported` and the model's `effort` override
+    /// ([`model_overrides`](Self::model_overrides)); no network call happens at construction.
+    pub reasoning_wire: ReasoningWire,
 }
 
 /// Prints every field except the API key, which is shown as `<redacted>` (D-00a): the key is a
@@ -435,6 +444,7 @@ impl std::fmt::Debug for OpenAiCompatibleConfig {
             .field("max_retries", &self.max_retries)
             .field("context_window", &self.context_window)
             .field("model_overrides", &self.model_overrides)
+            .field("reasoning_wire", &self.reasoning_wire)
             .finish()
     }
 }
@@ -503,6 +513,7 @@ impl OpenAiCompatibleConfig {
             max_retries: DEFAULT_MAX_RETRIES,
             context_window: None,
             model_overrides: BTreeMap::new(),
+            reasoning_wire: ReasoningWire::Unsupported,
         };
 
         config.validate()?;
@@ -531,7 +542,37 @@ impl OpenAiCompatibleConfig {
             max_retries: DEFAULT_MAX_RETRIES,
             context_window: None,
             model_overrides: BTreeMap::new(),
+            reasoning_wire: ReasoningWire::Unsupported,
         }
+    }
+
+    /// Declare where this endpoint parses a reasoning effort (Phase 51, D-10).
+    ///
+    /// The default is [`ReasoningWire::Unsupported`]: no effort is sent and every explicit effort
+    /// is refused before any HTTP call. Declaring a wire is the operator's statement that the
+    /// endpoint reads that field; the model's levels still come from its `effort` override.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_llm::openai_compatible::{OpenAiCompatibleCapabilitiesConfig, OpenAiCompatibleConfig};
+    /// use paladin_llm::reasoning::ReasoningWire;
+    ///
+    /// let capabilities: OpenAiCompatibleCapabilitiesConfig = serde_json::from_str("{}")?;
+    /// let config = OpenAiCompatibleConfig::new(
+    ///     "example-key".to_string(),
+    ///     "http://localhost:8000/v1".to_string(),
+    ///     "my-model".to_string(),
+    ///     capabilities,
+    /// )
+    /// .with_reasoning_wire(ReasoningWire::TopLevelEffort);
+    /// assert_eq!(config.reasoning_wire, ReasoningWire::TopLevelEffort);
+    /// # Ok::<(), serde_json::Error>(())
+    /// ```
+    #[must_use]
+    pub fn with_reasoning_wire(mut self, wire: ReasoningWire) -> Self {
+        self.reasoning_wire = wire;
+        self
     }
 
     /// Validate the configuration.
@@ -651,7 +692,11 @@ impl OpenAiCompatibleAdapter {
             // section) — it widens D-04's operator-declared surface and its
             // env-var contract, and is not taken here without a concrete
             // report of a self-hosted endpoint rejecting a parameter.
-            request_parameters: CompatRequestParameters::all(),
+            // Phase 51 (D-10): no reasoning wire is verified for an arbitrary endpoint, so the
+            // default is `Unsupported` and an explicit effort is refused until the operator
+            // declares the field the endpoint parses
+            // (`OpenAiCompatibleConfig::reasoning_wire`).
+            request_parameters: CompatRequestParameters::all(config.reasoning_wire),
             // No vendor-curated fallback list exists for an arbitrary
             // operator-configured endpoint (unlike the named presets, which
             // each ship a curated list per D-13). An empty live `/models`
@@ -1728,6 +1773,113 @@ mod tests {
             "max_retries",
         ] {
             assert!(debug.contains(needle), "'{needle}' missing from {debug}");
+        }
+    }
+    // ── Phase 51 (REASON-02, D-10): the declared reasoning wire ──
+
+    #[test]
+    fn openai_compatible_declares_no_reasoning_wire_by_default() {
+        let adapter =
+            OpenAiCompatibleAdapter::new(knob_config("http://localhost:1/v1", "m")).unwrap();
+        assert_eq!(
+            adapter.engine.request_parameters().reasoning,
+            ReasoningWire::Unsupported
+        );
+    }
+    #[test]
+    fn openai_compatible_config_reasoning_wire_defaults_to_unsupported_and_is_set_by_the_builder() {
+        let config = knob_config("http://localhost:1/v1", "m");
+        assert_eq!(config.reasoning_wire, ReasoningWire::Unsupported);
+        assert!(format!("{config:?}").contains("reasoning_wire"));
+        let config = config.with_reasoning_wire(ReasoningWire::TopLevelEffort);
+        assert_eq!(config.reasoning_wire, ReasoningWire::TopLevelEffort);
+        assert!(format!("{config:?}").contains("TopLevelEffort"));
+    }
+
+    mod reasoning_effort {
+        use super::*;
+        use crate::compat::test_support::{mock_completion, plain_request, send_capturing, server};
+        use paladin_ports::output::llm_port::ReasoningEffort::{High, Low};
+        use paladin_ports::output::model_profile::{EffortLevels, EffortSupport};
+
+        fn levels_override() -> BTreeMap<String, ModelOverride> {
+            BTreeMap::from([(
+                "m".to_string(),
+                ModelOverride {
+                    effort: Some(EffortSupport::Supported(EffortLevels::new([Low, High]))),
+                    ..ModelOverride::default()
+                },
+            )])
+        }
+
+        fn reason_of(error: LlmError) -> String {
+            match error {
+                LlmError::UnsupportedParameter { reason, .. } => reason,
+                other => panic!("expected UnsupportedParameter, got {other:?}"),
+            }
+        }
+
+        #[tokio::test]
+        async fn a_declared_wire_and_an_override_send_top_level_reasoning_effort() {
+            let mut server = server().await;
+            let captured = mock_completion(&mut server).await;
+            let adapter = OpenAiCompatibleAdapter::new(
+                knob_config(&server.url(), "m")
+                    .with_reasoning_wire(ReasoningWire::TopLevelEffort)
+                    .with_model_overrides(levels_override()),
+            )
+            .unwrap();
+            assert!(
+                captured.lock().unwrap().is_none(),
+                "construction makes no network call"
+            );
+
+            let (body, _) =
+                send_capturing(&adapter, &captured, plain_request("m").with_reasoning(High))
+                    .await
+                    .expect("accepted");
+            assert_eq!(body["reasoning_effort"], "high", "{body}");
+            assert!(body.get("thinking").is_none(), "{body}");
+        }
+
+        #[tokio::test]
+        async fn the_default_wire_refuses_and_names_the_wire_key() {
+            let mut server = server().await;
+            let captured = mock_completion(&mut server).await;
+            let adapter = OpenAiCompatibleAdapter::new(
+                knob_config(&server.url(), "m").with_model_overrides(levels_override()),
+            )
+            .unwrap();
+            let error =
+                send_capturing(&adapter, &captured, plain_request("m").with_reasoning(High))
+                    .await
+                    .expect_err("an undeclared wire refuses");
+            let reason = reason_of(error);
+            assert!(
+                reason.contains("llm.openai-compatible.reasoning_wire"),
+                "{reason}"
+            );
+            assert!(captured.lock().unwrap().is_none());
+        }
+
+        #[tokio::test]
+        async fn a_declared_wire_without_an_override_names_the_effort_key() {
+            let mut server = server().await;
+            let captured = mock_completion(&mut server).await;
+            let adapter = OpenAiCompatibleAdapter::new(
+                knob_config(&server.url(), "m").with_reasoning_wire(ReasoningWire::TopLevelEffort),
+            )
+            .unwrap();
+            let error =
+                send_capturing(&adapter, &captured, plain_request("m").with_reasoning(High))
+                    .await
+                    .expect_err("an unmeasured model refuses");
+            let reason = reason_of(error);
+            assert!(
+                reason.contains("llm.openai-compatible.models.m.effort"),
+                "{reason}"
+            );
+            assert!(captured.lock().unwrap().is_none());
         }
     }
 }

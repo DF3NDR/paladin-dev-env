@@ -1169,7 +1169,7 @@ mod tests {
     ))]
     #[test]
     fn fallback_from_compat_restates_the_declaration_as_a_profile() {
-        use crate::compat::CompatRequestParameters;
+        use crate::compat::{CompatRequestParameters, ReasoningWire};
         use paladin_ports::output::llm_port::ProviderCapabilities;
 
         let caps = ProviderCapabilities {
@@ -1177,7 +1177,7 @@ mod tests {
             temperature_range: Some((0.0, 1.99)),
             ..ProviderCapabilities::default()
         };
-        let mut params = CompatRequestParameters::all();
+        let mut params = CompatRequestParameters::all(ReasoningWire::Unsupported);
         params.presence_penalty = false;
 
         let profile = fallback_from_compat(&caps, &params, StopSupport::Supported { max: None });

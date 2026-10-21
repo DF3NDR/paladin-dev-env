@@ -13,6 +13,7 @@ pub mod types;
 /// mapping, credential redaction and memoized model-list resolution.
 pub mod engine;
 
+pub use crate::reasoning::ReasoningWire;
 pub use engine::{CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters};
 
 /// Test-only plumbing shared by the five presets' wire tests; the helpers themselves live in

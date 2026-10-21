@@ -698,6 +698,8 @@ fn ollama_config(layered: Layered) -> OllamaConfig {
         max_retries: layered.max_retries,
         context_window: layered.context_window,
         model_overrides: layered.model_overrides,
+        // Plan 51-06 wires the `llm.ollama.reasoning_wire` key; until then the default stands.
+        reasoning_wire: crate::reasoning::ReasoningWire::Unsupported,
     }
 }
 
@@ -814,6 +816,9 @@ pub(crate) fn openai_compatible_from_layers(
         max_retries: layered.max_retries,
         context_window: layered.context_window,
         model_overrides: layered.model_overrides,
+        // Plan 51-06 wires the `llm.openai-compatible.reasoning_wire` key; until then the
+        // default stands.
+        reasoning_wire: crate::reasoning::ReasoningWire::Unsupported,
     })
 }
 

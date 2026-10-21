@@ -561,7 +561,7 @@ All rows below are desk research from vendor docs fetched today; **none has been
 | A8 | serde `snake_case` yields `x_high` for `XHigh` | Pitfall 9 | None if tested in plan 1. |
 | A9 | `cargo-semver-checks` can be installed/run by the executor (absent locally) | Environment | Allowlist rows cannot be "measured" (D-00b) without it. |
 
-## Open Questions
+## Open Questions (RESOLVED — see 51-PLAN resolutions: OQ1→51-11 checkpoint, OQ2→51-10 checkpoint, OQ3→A1-51-05, OQ4→A1-51-01, OQ5→A1-51-09, OQ6→COVERAGE.md, OQ7→A1-51-08)
 
 1. **Which Kimi k3 wire form is real?** (blocks REASON-03's regression test and the Kimi preset.)
    - Known: vendor docs = top-level `reasoning_effort`; handoff live = `thinking.effort` validated (400 on bogus), `thinking:{type:"disabled"}` -> no reasoning.

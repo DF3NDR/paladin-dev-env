@@ -74,7 +74,7 @@ endpoints, the OpenAI Responses API wire, and every web3sec-side change.
   timeout; Cadence (ADR-0058) is keyed on `(provider, model)`. Phase 50 D-15: `FallbackStep
   { port, model }` / `FallbackLlmAdapter::from_steps` rewrite `request.model` per hop; this phase
   resolves effort against that per-hop model (REASON-04).
-- **D-00k:** The handoff's §8 five-plan shape (red tests → types and plumbing → compat presets →
+- **D-00k [informational]:** The handoff's §8 five-plan shape (red tests → types and plumbing → compat presets →
   native adapters → live conformance, docs and ADR) is the starting point for planning, not a
   constraint. The handoff's §4 vendor table and §6.5 mapping table are **inputs to re-verify**, not
   data to encode (see D-01).

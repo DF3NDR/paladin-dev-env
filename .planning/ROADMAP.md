@@ -1793,7 +1793,55 @@ temperature probes.
      type, field, variant and config key with `make api-surface-update`; and `make clean-code`,
      `make check-gates`, `make api-surface`, `make security`, the 82 % coverage floor and the
      doc tests stay green, with no `unwrap`/`expect`/`panic!` added to library code.
-**Plans**: TBD
+**Plans**: 14 plans in 11 waves
+
+Plans:
+**Wave 1**
+
+- [ ] 51-01-PLAN.md — `ReasoningEffort` / `ReasoningFallback`, `LlmRequest` fields, `LlmError::UnsupportedParameter`, `EffortSupport::resolve` / `intersect` on `ModelProfile`, nine unset-body goldens (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 51-02-PLAN.md — `live_vendor_smoke --effort` / `--effort-smoke` harness modes and the D-02 candidate list (wave 2)
+- [ ] 51-03-PLAN.md — shared admission (`paladin_llm::reasoning`), `ModelOverride.effort`, metadata keys, DeepSeek and OpenAI mappings (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 51-04-PLAN.md — compile-enforced `ReasoningWire` on every compat preset, per-wire mapping, self-hosted `with_reasoning_wire`, `CompatRequestParameters` break registered (wave 3)
+- [ ] 51-05-PLAN.md — Anthropic `output_config.effort` / profile-gated budget and Gemini `thinkingConfig` mappings (wave 3)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 51-06-PLAN.md — provider-level defaults on the nine configs and `llm.<provider>` YAML, self-hosted `reasoning_wire` key (wave 4)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 51-07-PLAN.md — `PaladinData` / `PaladinBuilder` agent level, execution-service threading, D-09 build check, D-08 fallback pre-flight (wave 5)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] 51-08-PLAN.md — `AgentDefinition` YAML fields and agent-host key naming for build-time refusals (wave 6)
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [ ] 51-09-PLAN.md — `NodeFinished` requested/effective fields and an effort-aware node-cache key (wave 7)
+- [ ] 51-10-PLAN.md — owner-approved live effort probe and `51-EFFORT-PROBE.md` (checkpoint, wave 7)
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
+- [ ] 51-11-PLAN.md — owner-confirmed wire decisions; Kimi, Qwen, Grok seeds and the Kimi silent-no-op regression (checkpoint, wave 8)
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
+- [ ] 51-12-PLAN.md — Anthropic, OpenAI, DeepSeek, Gemini seeds and nine-adapter conformance cases (wave 9)
+
+**Wave 10** *(blocked on Wave 9 completion)*
+
+- [ ] 51-13-PLAN.md — mdBook "Reasoning Effort" page with drift test, ADR-0062 amending ADR-0004 (wave 10)
+
+**Wave 11** *(blocked on Wave 10 completion)*
+
+- [ ] 51-14-PLAN.md — adapter-path live smoke, MIGRATION / CHANGELOG close-out, measured semver register, phase gates (checkpoint, wave 11)
 
 ---
 *Roadmap created: 2026-07-30 (ingest run 1 of 5 — `.project/Milestone_1-MVP`, 36 docs)*

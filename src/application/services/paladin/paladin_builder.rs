@@ -46,7 +46,7 @@ use paladin_ports::output::embedding_port::EmbeddingPort;
 use paladin_ports::output::garrison_port::GarrisonPort;
 use paladin_ports::output::llm_port::LlmPort;
 use paladin_ports::output::model_profile::{
-    ModelProfile, ParamSupport, SamplingParam, StopSupport,
+    EffortRefusal, ModelProfile, ParamSupport, SamplingParam, StopSupport,
 };
 use paladin_ports::output::sanctum_port::SanctumPort;
 use std::path::PathBuf;
@@ -1182,6 +1182,20 @@ impl PaladinBuilder {
         ))
     }
 
+    /// The one refusal message for an explicit agent-level reasoning effort the model cannot
+    /// honour (D-09): same shape as [`Self::parameter_refusal`] -- model, provider, the
+    /// `reasoning_effort` parameter and the value, then why. Built from names and the effort
+    /// only; nothing credential-shaped or request-derived is rendered.
+    fn effort_refusal(&self, value: ReasoningEffort, reason: &str) -> PaladinError {
+        PaladinError::ConfigurationError(format!(
+            "model '{}' on provider '{}' does not accept parameter 'reasoning_effort' = {}: {}",
+            self.data.model,
+            self.llm_port.get_provider_name(),
+            value,
+            reason
+        ))
+    }
+
     /// Why a numeric parameter's support rejected a value.
     fn support_reason(support: ParamSupport) -> String {
         match support {
@@ -1250,6 +1264,15 @@ impl PaladinBuilder {
     ///   A2):** [`Self::build`] logs a warning when the model's profile does not admit it, and
     ///   the value is omitted from requests by the adapter's wire filter, visibly -- recorded
     ///   as `paladin.params_omitted` on the response.
+    /// - **An agent-level reasoning effort the caller expressed** ([`Self::reasoning_effort`]) must
+    ///   be one the selected model can honour (D-09): the builder resolves it against
+    ///   `llm_port.model_profile(model)` with [`Self::reasoning_fallback`] (`Refuse` when unset)
+    ///   through the same `EffortSupport::resolve` rule the adapters use. A refusal is a
+    ///   [`PaladinError::ConfigurationError`] naming the provider, the model, `reasoning_effort`,
+    ///   the value and the reason; a port that reports no profile refuses an explicit effort
+    ///   (D-03: nothing was measured). For a `FallbackLlmAdapter` the profile is the chain's
+    ///   intersection, so a level must be usable on every hop. Nothing is judged when no effort
+    ///   was expressed.
     /// - `max_loops` must be in range [1, 100]
     /// - If `autosave_enabled` is true, `state_dir` must be set or Citadel must be configured
     /// - If `sanctum_port` is set, `embedding_port` must also be set (required for RAG)
@@ -1326,6 +1349,40 @@ impl PaladinBuilder {
                     &format!("{count} stop sequence(s)"),
                     &Self::stop_reason(profile.stop_sequences),
                 ));
+            }
+        }
+
+        // D-09: an EXPLICIT agent-level reasoning effort must be one the model can honour (or,
+        // with a substituting fallback, substitute), or the build is refused by name. The
+        // profile's `EffortSupport::resolve` is the one admission rule the adapters use too, so
+        // the build-time answer and the send-time answer cannot drift. A port with no profile
+        // refuses an explicit effort (D-03: nothing was measured). For a fallback chain the
+        // profile is the chain's intersection (AND semantics): a level must be usable on every
+        // hop here, while at send time each hop resolves against its own model (D-08, A1-51-07).
+        // Nothing is judged when the agent expressed no effort.
+        if let Some(effort) = self.data.reasoning_effort {
+            let fallback = self.data.reasoning_fallback.unwrap_or_default();
+            match &profile {
+                Some(profile) => {
+                    if let Err(refusal) = profile.effort.resolve(effort, fallback) {
+                        let mut reason = refusal.to_string();
+                        if fallback == ReasoningFallback::Refuse
+                            && matches!(refusal, EffortRefusal::LevelUnsupported)
+                        {
+                            reason.push_str(
+                                "; set a reasoning_fallback to substitute the nearest level",
+                            );
+                        }
+                        return Err(self.effort_refusal(effort, &reason));
+                    }
+                }
+                None => {
+                    return Err(self.effort_refusal(
+                        effort,
+                        "it reports no model profile, so an explicit reasoning effort cannot be \
+                         checked",
+                    ));
+                }
             }
         }
 
@@ -1748,6 +1805,105 @@ mod tests {
             .unwrap();
         assert_eq!(paladin.data.reasoning_effort, None);
         assert_eq!(paladin.data.reasoning_fallback, None);
+    }
+
+    #[tokio::test]
+    async fn an_effort_the_model_does_not_list_is_refused_at_build_by_name() {
+        let message = configuration_error(
+            PaladinBuilder::new(effort_port([ReasoningEffort::Low, ReasoningEffort::High]))
+                .system_prompt("Test")
+                .model("m")
+                .reasoning_effort(ReasoningEffort::Medium)
+                .build()
+                .await,
+        );
+        for needle in [
+            "MockWithProfile",
+            "'m'",
+            "reasoning_effort",
+            "medium",
+            "does not offer that effort level",
+        ] {
+            assert!(
+                message.contains(needle),
+                "'{needle}' missing from: {message}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_nearest_lower_fallback_builds_and_keeps_the_requested_effort() {
+        let paladin =
+            PaladinBuilder::new(effort_port([ReasoningEffort::Low, ReasoningEffort::High]))
+                .system_prompt("Test")
+                .model("m")
+                .reasoning_effort(ReasoningEffort::Medium)
+                .reasoning_fallback(ReasoningFallback::NearestLower)
+                .build()
+                .await
+                .expect("a substitutable effort builds");
+        // Substitution happens per request at the adapter; the agent keeps what it asked for.
+        assert_eq!(paladin.data.reasoning_effort, Some(ReasoningEffort::Medium));
+        assert_eq!(
+            paladin.data.reasoning_fallback,
+            Some(ReasoningFallback::NearestLower)
+        );
+    }
+
+    #[tokio::test]
+    async fn an_effort_on_a_port_with_no_profile_is_refused_as_unmeasured() {
+        let message = configuration_error(
+            PaladinBuilder::new(Arc::new(MockLlmPort))
+                .system_prompt("Test")
+                .reasoning_effort(ReasoningEffort::High)
+                .build()
+                .await,
+        );
+        for needle in ["reports no model profile", "reasoning_effort", "high"] {
+            assert!(
+                message.contains(needle),
+                "'{needle}' missing from: {message}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_builder_that_sets_no_effort_still_builds_against_a_profileless_port() {
+        PaladinBuilder::new(Arc::new(MockLlmPort))
+            .system_prompt("Test")
+            .build()
+            .await
+            .expect("nothing expressed, nothing judged");
+    }
+
+    fn two_hop_chain() -> Arc<dyn LlmPort> {
+        let chain: Vec<Arc<dyn LlmPort>> = vec![
+            effort_port([ReasoningEffort::Low, ReasoningEffort::High]),
+            effort_port([ReasoningEffort::High, ReasoningEffort::Max]),
+        ];
+        Arc::new(paladin_llm::fallback::FallbackLlmAdapter::new(chain).expect("two hops"))
+    }
+
+    #[tokio::test]
+    async fn a_chain_builds_an_effort_every_hop_lists_and_refuses_one_a_hop_lacks() {
+        PaladinBuilder::new(two_hop_chain())
+            .system_prompt("Test")
+            .model("m")
+            .reasoning_effort(ReasoningEffort::High)
+            .build()
+            .await
+            .expect("High is on both hops");
+
+        let message = configuration_error(
+            PaladinBuilder::new(two_hop_chain())
+                .system_prompt("Test")
+                .model("m")
+                .reasoning_effort(ReasoningEffort::Low)
+                .build()
+                .await,
+        );
+        assert!(message.contains("reasoning_effort"), "{message}");
+        assert!(message.contains("low"), "{message}");
     }
 
     #[tokio::test]

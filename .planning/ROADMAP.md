@@ -1824,7 +1824,7 @@ Plans:
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
-- [ ] 51-09-PLAN.md — `NodeFinished` requested/effective fields and an effort-aware node-cache key (wave 7)
+- [x] 51-09-PLAN.md — `NodeFinished` requested/effective fields and an effort-aware node-cache key (wave 7)
 - [ ] 51-10-PLAN.md — owner-approved live effort probe and `51-EFFORT-PROBE.md` (checkpoint, wave 7)
 
 **Wave 8** *(blocked on Wave 7 completion)*

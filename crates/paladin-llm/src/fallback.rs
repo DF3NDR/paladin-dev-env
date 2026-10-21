@@ -334,6 +334,18 @@ type StreamItem = Result<StreamingResponse, LlmError>;
 /// `Unknown` errors only (FT-FR-16). See the module documentation for the
 /// hop rule, the streaming first-chunk rule and the observability contract.
 ///
+/// # Reasoning effort pre-flight (D-08)
+///
+/// A request that carries a `reasoning` effort is resolved against **every** hop's own
+/// `model_profile` (the step's model, else the request's) before the first call. The first hop,
+/// in chain order, that cannot honour the effort -- or substitute it under the request's
+/// `reasoning_fallback` -- fails the whole request with `LlmError::UnsupportedParameter` naming
+/// that hop's provider and model; no hop is called. A chain therefore never discovers an
+/// incompatible hop only during an outage of an earlier one. A hop that is reached re-admits the
+/// request itself and sends its own resolution, recorded as `paladin.reasoning_requested` /
+/// `paladin.reasoning_effective` on the served response beside `paladin.served_by`. A request
+/// with no effort skips the pre-flight entirely.
+///
 /// # Example
 ///
 /// ```rust
@@ -685,6 +697,53 @@ impl FallbackLlmAdapter {
         hop_request
     }
 
+    /// D-08: resolve the request's reasoning effort against **every** hop's own profile before
+    /// the first call, so a chain never discovers an incompatible hop only during an outage of an
+    /// earlier one (REASON-04).
+    ///
+    /// A request with no effort skips this entirely. Otherwise each hop is visited in chain order
+    /// with the model it will be sent (the step's model, else the request's) and its own
+    /// [`LlmPort::model_profile`]; a hop with no profile, or whose profile cannot honour the
+    /// effort (or substitute it under the request's fallback), fails the whole request with
+    /// [`LlmError::unsupported_parameter`] naming that hop's provider and model and its zero-based
+    /// chain index. The lowest-index refusing hop is the one named, and no hop is called. A hop
+    /// that is later reached re-admits the request itself, so each hop sends its own resolution
+    /// (A2-51-07: a hop adapter's provider-level default is resolved by that adapter at send time).
+    ///
+    /// # Errors
+    ///
+    /// [`LlmError::UnsupportedParameter`] for the first hop that cannot honour the effort.
+    fn preflight_reasoning(&self, request: &LlmRequest) -> Result<(), LlmError> {
+        let Some(effort) = request.reasoning else {
+            return Ok(());
+        };
+        let fallback = request.reasoning_fallback.unwrap_or_default();
+        for (index, port) in self.chain.iter().enumerate() {
+            let model = self
+                .models
+                .get(index)
+                .and_then(Option::as_deref)
+                .unwrap_or(request.model.as_str());
+            let reason = match port.model_profile(model) {
+                Some(profile) => match profile.effort.resolve(effort, fallback) {
+                    Ok(_) => continue,
+                    Err(refusal) => refusal.to_string(),
+                },
+                None => "it reports no model profile, so an explicit reasoning effort cannot be \
+                         checked"
+                    .to_string(),
+            };
+            return Err(LlmError::unsupported_parameter(
+                "reasoning_effort",
+                effort.to_string(),
+                port.get_provider_name(),
+                model,
+                format!("fallback hop {index}: {reason}"),
+            ));
+        }
+        Ok(())
+    }
+
     /// The error returned when every element of the chain has been asked
     /// and none answered — only reachable if the chain were empty, which
     /// `new` forbids.
@@ -699,6 +758,8 @@ impl LlmPort for FallbackLlmAdapter {
     /// `Unknown` errors only. The served response is stamped with the
     /// provider's name under [`SERVED_BY_METADATA_KEY`].
     async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
+        // D-08: refuse up front, naming the hop, before any hop is called.
+        self.preflight_reasoning(&request)?;
         let mut attempts: Vec<(String, String)> = Vec::new();
         for (index, provider) in self.chain.iter().enumerate() {
             let name = provider.get_provider_name();
@@ -750,6 +811,8 @@ impl LlmPort for FallbackLlmAdapter {
         &self,
         request: LlmRequest,
     ) -> Result<Box<dyn Stream<Item = StreamItem> + Send>, LlmError> {
+        // D-08: the same up-front refusal as `generate`, before any hop is called.
+        self.preflight_reasoning(&request)?;
         let mut attempts: Vec<(String, String)> = Vec::new();
         for (index, provider) in self.chain.iter().enumerate() {
             let name = provider.get_provider_name();
@@ -2718,5 +2781,371 @@ mod tests {
         assert!(recorded);
         assert!(fresh.should_warn("anthropic", "m1"), "no warning was spent");
         assert_eq!(bills.take(), vec![bill]);
+    }
+}
+
+/// Phase 51 (plan 51-07, D-08, Pitfall 11): the chain resolves a request's reasoning effort
+/// against every hop's own profile before the first call, and the serving hop's effort keys
+/// survive the chain's own stamping.
+#[cfg(all(test, feature = "mock"))]
+mod reasoning_preflight_tests {
+    use super::*;
+    use crate::mock::MockLlmAdapter;
+    use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+    use paladin_core::platform::container::reasoning::{
+        REASONING_EFFECTIVE_METADATA_KEY, REASONING_REQUESTED_METADATA_KEY, ReasoningEffort,
+        ReasoningFallback,
+    };
+    use paladin_ports::output::model_profile::{EffortLevels, EffortSupport};
+
+    /// A hop that reports a scripted effort profile for every model, counts its calls through
+    /// the wrapped mock, and -- like a real adapter -- stamps the requested and effective effort
+    /// on what it serves.
+    struct EffortHop {
+        inner: MockLlmAdapter,
+        profile: Option<ModelProfile>,
+    }
+
+    impl EffortHop {
+        fn new(inner: MockLlmAdapter, support: Option<EffortSupport>) -> Arc<Self> {
+            Arc::new(Self {
+                inner,
+                profile: support.map(|support| ModelProfile::new().with_effort(support)),
+            })
+        }
+
+        fn stamps(&self, request: &LlmRequest) -> Vec<(&'static str, String)> {
+            let (Some(requested), Some(profile)) = (request.reasoning, &self.profile) else {
+                return Vec::new();
+            };
+            let fallback = request.reasoning_fallback.unwrap_or_default();
+            match profile.effort.resolve(requested, fallback) {
+                Ok(resolved) => vec![
+                    (
+                        REASONING_REQUESTED_METADATA_KEY,
+                        resolved.requested.to_string(),
+                    ),
+                    (
+                        REASONING_EFFECTIVE_METADATA_KEY,
+                        resolved.effective.to_string(),
+                    ),
+                ],
+                Err(_) => Vec::new(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl LlmPort for EffortHop {
+        async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
+            let stamps = self.stamps(&request);
+            let mut response = self.inner.generate(request).await?;
+            for (key, value) in stamps {
+                response.metadata.insert(key.to_string(), value);
+            }
+            Ok(response)
+        }
+
+        async fn generate_stream(
+            &self,
+            request: LlmRequest,
+        ) -> Result<Box<dyn Stream<Item = StreamItem> + Send>, LlmError> {
+            let stamps = self.stamps(&request);
+            let raw = self.inner.generate_stream(request).await?;
+            Ok(Box::new(Box::into_pin(raw).map(move |item| {
+                item.map(|chunk| {
+                    if chunk.finish_reason.is_none() {
+                        return chunk;
+                    }
+                    stamps.iter().fold(chunk, |chunk, (key, value)| {
+                        chunk.with_metadata(*key, value.as_str())
+                    })
+                })
+            })))
+        }
+
+        async fn validate_model(&self, model: &str) -> Result<bool, LlmError> {
+            self.inner.validate_model(model).await
+        }
+
+        async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
+            self.inner.get_available_models().await
+        }
+
+        fn get_provider_name(&self) -> &'static str {
+            self.inner.get_provider_name()
+        }
+
+        fn get_capabilities(&self) -> ProviderCapabilities {
+            self.inner.get_capabilities()
+        }
+
+        fn model_profile(&self, _model: &str) -> Option<ModelProfile> {
+            self.profile.clone()
+        }
+    }
+
+    fn levels(listed: impl IntoIterator<Item = ReasoningEffort>) -> Option<EffortSupport> {
+        Some(EffortSupport::Supported(EffortLevels::new(listed)))
+    }
+
+    fn serving(name: &'static str) -> MockLlmAdapter {
+        MockLlmAdapter::new()
+            .with_provider_name(name)
+            .with_response(format!("answer from {name}"))
+    }
+
+    fn down(name: &'static str) -> MockLlmAdapter {
+        MockLlmAdapter::new()
+            .with_provider_name(name)
+            .with_error(LlmError::ProviderError {
+                provider: name.to_string(),
+                status: 503,
+                message: "upstream unavailable".to_string(),
+            })
+    }
+
+    fn chain(hops: Vec<Arc<EffortHop>>) -> FallbackLlmAdapter {
+        FallbackLlmAdapter::new(hops.into_iter().map(|h| h as Arc<dyn LlmPort>).collect())
+            .expect("a non-empty chain")
+    }
+
+    fn request(effort: Option<ReasoningEffort>) -> LlmRequest {
+        let prompt = PromptItem::new(PromptType::User(UserPrompt {
+            query: "quest".to_string(),
+            context: None,
+        }))
+        .unwrap();
+        let request = LlmRequest::new("mock-model", prompt);
+        match effort {
+            Some(effort) => request.with_reasoning(effort),
+            None => request,
+        }
+    }
+
+    /// (param, value, provider, "model|reason") of an `UnsupportedParameter`.
+    fn refusal(error: LlmError) -> (String, String, String, String) {
+        match error {
+            LlmError::UnsupportedParameter {
+                param,
+                value,
+                provider,
+                model,
+                reason,
+                ..
+            } => (param, value, provider, format!("{model}|{reason}")),
+            other => panic!("expected UnsupportedParameter, got {other:?}"),
+        }
+    }
+
+    async fn collect_terminal(
+        stream: Box<dyn Stream<Item = StreamItem> + Send>,
+    ) -> StreamingResponse {
+        let mut stream = Box::into_pin(stream);
+        while let Some(item) = stream.next().await {
+            let chunk = item.expect("a healthy stream");
+            if chunk.finish_reason.is_some() {
+                return chunk;
+            }
+        }
+        panic!("the stream ended without a terminal chunk");
+    }
+
+    #[tokio::test]
+    async fn an_unmeasured_hop_refuses_the_whole_request_before_any_call() {
+        let first = serving("hop-a");
+        let second = serving("hop-b");
+        let adapter = chain(vec![
+            EffortHop::new(first.clone(), levels([ReasoningEffort::High])),
+            EffortHop::new(second.clone(), Some(EffortSupport::Unmeasured)),
+        ]);
+
+        let error = adapter
+            .generate(request(Some(ReasoningEffort::High)))
+            .await
+            .expect_err("hop-b cannot honour the effort");
+        let (param, value, provider, rest) = refusal(error);
+        assert_eq!(param, "reasoning_effort");
+        assert_eq!(value, "high");
+        assert_eq!(provider, "hop-b");
+        assert!(rest.starts_with("mock-model|"), "{rest}");
+        assert!(rest.contains("fallback hop 1"), "{rest}");
+        assert_eq!((first.call_count(), second.call_count()), (0, 0));
+
+        let error = match adapter
+            .generate_stream(request(Some(ReasoningEffort::High)))
+            .await
+        {
+            Err(error) => error,
+            Ok(_) => panic!("the streaming path must refuse too"),
+        };
+        assert_eq!(refusal(error).2, "hop-b");
+        assert_eq!((first.call_count(), second.call_count()), (0, 0));
+    }
+
+    #[tokio::test]
+    async fn a_hop_with_no_profile_at_all_refuses_an_explicit_effort() {
+        let first = serving("hop-a");
+        let second = serving("hop-b");
+        let adapter = chain(vec![
+            EffortHop::new(first.clone(), levels([ReasoningEffort::High])),
+            EffortHop::new(second.clone(), None),
+        ]);
+
+        let error = adapter
+            .generate(request(Some(ReasoningEffort::High)))
+            .await
+            .expect_err("nothing was measured for hop-b");
+        assert_eq!(refusal(error).2, "hop-b");
+        assert_eq!((first.call_count(), second.call_count()), (0, 0));
+    }
+
+    #[tokio::test]
+    async fn the_lowest_index_refusing_hop_is_named() {
+        let adapter = chain(vec![
+            EffortHop::new(serving("hop-a"), levels([ReasoningEffort::Low])),
+            EffortHop::new(serving("hop-b"), levels([ReasoningEffort::Low])),
+        ]);
+        let error = adapter
+            .generate(request(Some(ReasoningEffort::High)))
+            .await
+            .expect_err("neither hop lists high");
+        let (_, _, provider, rest) = refusal(error);
+        assert_eq!(provider, "hop-a");
+        assert!(rest.contains("fallback hop 0"), "{rest}");
+    }
+
+    #[tokio::test]
+    async fn a_later_hop_that_cannot_honour_the_effort_refuses_even_when_the_first_would_serve() {
+        let first = serving("hop-a");
+        let adapter = chain(vec![
+            EffortHop::new(first.clone(), levels([ReasoningEffort::High])),
+            EffortHop::new(serving("hop-b"), levels([ReasoningEffort::Low])),
+        ]);
+        let error = adapter
+            .generate(request(Some(ReasoningEffort::High)))
+            .await
+            .expect_err("hop-b lacks high");
+        assert_eq!(refusal(error).2, "hop-b");
+        assert_eq!(first.call_count(), 0, "the first hop must never be called");
+    }
+
+    #[tokio::test]
+    async fn a_nearest_lower_request_passes_and_each_reached_hop_sends_its_own_resolution() {
+        let first = down("hop-a");
+        let second = serving("hop-b");
+        let adapter = chain(vec![
+            EffortHop::new(first.clone(), levels([ReasoningEffort::High])),
+            EffortHop::new(second.clone(), levels([ReasoningEffort::Medium])),
+        ]);
+        let high = request(Some(ReasoningEffort::High))
+            .with_reasoning_fallback(ReasoningFallback::NearestLower);
+
+        let response = adapter.generate(high).await.expect("hop-b serves");
+
+        assert_eq!(first.call_count(), 1);
+        assert_eq!(second.call_count(), 1);
+        let meta = &response.metadata;
+        assert_eq!(
+            meta.get(SERVED_BY_METADATA_KEY).map(String::as_str),
+            Some("hop-b")
+        );
+        assert_eq!(
+            meta.get(SERVED_MODEL_METADATA_KEY).map(String::as_str),
+            Some("mock-model")
+        );
+        assert_eq!(
+            meta.get(REASONING_REQUESTED_METADATA_KEY)
+                .map(String::as_str),
+            Some("high")
+        );
+        assert_eq!(
+            meta.get(REASONING_EFFECTIVE_METADATA_KEY)
+                .map(String::as_str),
+            Some("medium")
+        );
+        // The chain forwards the caller's request untouched; each hop re-admits it.
+        assert_eq!(
+            second.last_request().unwrap().reasoning,
+            Some(ReasoningEffort::High)
+        );
+    }
+
+    #[tokio::test]
+    async fn the_streamed_terminal_chunk_keeps_the_effort_keys_beside_the_served_keys() {
+        let adapter = chain(vec![
+            EffortHop::new(down("hop-a"), levels([ReasoningEffort::High])),
+            EffortHop::new(serving("hop-b"), levels([ReasoningEffort::Medium])),
+        ]);
+        let high = request(Some(ReasoningEffort::High))
+            .with_reasoning_fallback(ReasoningFallback::NearestLower);
+
+        let stream = adapter.generate_stream(high).await.expect("hop-b streams");
+        let terminal = collect_terminal(stream).await;
+
+        let meta = &terminal.metadata;
+        assert_eq!(
+            meta.get(SERVED_BY_METADATA_KEY).map(String::as_str),
+            Some("hop-b")
+        );
+        assert!(meta.contains_key(SERVED_MODEL_METADATA_KEY));
+        assert_eq!(
+            meta.get(REASONING_REQUESTED_METADATA_KEY)
+                .map(String::as_str),
+            Some("high")
+        );
+        assert_eq!(
+            meta.get(REASONING_EFFECTIVE_METADATA_KEY)
+                .map(String::as_str),
+            Some("medium")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_request_with_no_effort_skips_the_pre_flight_entirely() {
+        let first = serving("hop-a");
+        let adapter = chain(vec![
+            EffortHop::new(first.clone(), None),
+            EffortHop::new(serving("hop-b"), Some(EffortSupport::Unmeasured)),
+        ]);
+        let response = adapter.generate(request(None)).await.expect("served");
+        assert_eq!(
+            response
+                .metadata
+                .get(SERVED_BY_METADATA_KEY)
+                .map(String::as_str),
+            Some("hop-a")
+        );
+        assert!(
+            !response
+                .metadata
+                .contains_key(REASONING_REQUESTED_METADATA_KEY)
+        );
+        assert_eq!(first.call_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_step_chain_resolves_each_hop_against_its_own_step_model() {
+        // The profile is looked up through the step's model, not the request's.
+        let first = serving("hop-a");
+        let adapter = FallbackLlmAdapter::from_steps(vec![
+            FallbackStep::new(
+                EffortHop::new(first.clone(), levels([ReasoningEffort::High])),
+                "step-model-a",
+            ),
+            FallbackStep::new(
+                EffortHop::new(serving("hop-b"), Some(EffortSupport::Unmeasured)),
+                "step-model-b",
+            ),
+        ])
+        .expect("steps");
+        let error = adapter
+            .generate(request(Some(ReasoningEffort::High)))
+            .await
+            .expect_err("hop-b is unmeasured");
+        let (_, _, provider, rest) = refusal(error);
+        assert_eq!(provider, "hop-b");
+        assert!(rest.starts_with("step-model-b|"), "{rest}");
+        assert_eq!(first.call_count(), 0);
     }
 }

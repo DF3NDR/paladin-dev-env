@@ -47,6 +47,8 @@ fn test_paladin_data_constructs_without_cli() {
         autonomous_prompts: false,
         agent_description: String::new(),
         dynamic_temperature: false,
+        reasoning_effort: None,
+        reasoning_fallback: None,
     };
 
     assert_eq!(data.name, "TestPaladin");
@@ -118,6 +120,8 @@ fn test_node_pattern_accessible_without_cli() {
         autonomous_prompts: false,
         agent_description: String::new(),
         dynamic_temperature: false,
+        reasoning_effort: None,
+        reasoning_fallback: None,
     };
     // Paladin is Entity<PaladinData>; constructing it exercises the Entity pattern.
     let paladin = Entity::new(data, Some("NodeTest".to_string()));

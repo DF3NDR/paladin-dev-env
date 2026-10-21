@@ -83,6 +83,12 @@ and this project follows lockstep workspace versioning.
 
 ### Changed
 
+- **BREAKING:** `PaladinData` (`platform::container::paladin`) gains `reasoning_effort:
+  Option<ReasoningEffort>` and `reasoning_fallback: Option<ReasoningFallback>` (REASON-01, D-00e;
+  Phase 51 plan 07). Both are `#[serde(default, skip_serializing_if = "Option::is_none")]` and
+  `None` in `Default`; stored snapshots still load. Migration: name both fields in a full struct
+  literal, or spread `..PaladinData::default()`.
+
 - Phase 48 (base entity rename, ENTITY-03; ADR-0060): `base::service::node_version_service`
   becomes `entity_version_service` and its family becomes `EntityVersion`,
   `EntityVersionMetadata`, `EntityVersionRepository`, `EntityVersionService` and

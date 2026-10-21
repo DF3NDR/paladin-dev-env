@@ -201,7 +201,7 @@ fn insulated_result_literal() -> PaladinResult {
     }
 }
 
-/// DR-3: `Paladin` is `Entity<PaladinData>`; the payload has thirteen fields, all named here.
+/// DR-3: `Paladin` is `Entity<PaladinData>`; the payload has fifteen fields, all named here (the last two, `reasoning_effort` and `reasoning_fallback`, are Phase 51 additions).
 fn paladin_literal() -> Paladin {
     let data = PaladinData {
         system_prompt: String::new(),
@@ -217,6 +217,8 @@ fn paladin_literal() -> Paladin {
         autonomous_prompts: false,
         agent_description: String::new(),
         dynamic_temperature: false,
+        reasoning_effort: None,
+        reasoning_fallback: None,
     };
     Entity::new(data, Some("n".to_string()))
 }
@@ -643,11 +645,32 @@ fn mock_builder_pins() -> Vec<Arc<dyn LlmPort>> {
 /// HTTP connect takes an empty URI, `None` for the bearer token and `None` for the header map,
 /// and `invoke_tool` takes a tool name and an argument map.
 async fn builder_and_mcp_http_pins(llm: Arc<dyn LlmPort>) {
-    let _built: Result<Paladin, PaladinError> = PaladinBuilder::new(llm)
+    let _built: Result<Paladin, PaladinError> = PaladinBuilder::new(Arc::clone(&llm))
         .name("n")
         .system_prompt("s")
         .build()
         .await;
+
+    // Phase 51 (D-00e, D-05): the agent's effort and fallback are chainable builder setters and
+    // are read back as public `Option` fields of the payload.
+    let with_effort: Result<Paladin, PaladinError> = PaladinBuilder::new(Arc::clone(&llm))
+        .name("n")
+        .system_prompt("s")
+        .reasoning_effort(paladin::core::platform::container::reasoning::ReasoningEffort::High)
+        .reasoning_fallback(
+            paladin::core::platform::container::reasoning::ReasoningFallback::NearestLower,
+        )
+        .build()
+        .await;
+    if let Ok(paladin) = with_effort {
+        let _read: (
+            Option<paladin::core::platform::container::reasoning::ReasoningEffort>,
+            Option<paladin::core::platform::container::reasoning::ReasoningFallback>,
+        ) = (
+            paladin.data.reasoning_effort,
+            paladin.data.reasoning_fallback,
+        );
+    }
 
     let connected: Result<MCPClient, ArsenalError> =
         MCPClient::connect_streamable_http("", None, None).await;

@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Reasoning effort: the agent level, a build-time refusal and a fallback-chain pre-flight
+  (REASON-01, REASON-04, REASON-05; Phase 51 plan 07).** `PaladinBuilder::reasoning_effort` and
+  `reasoning_fallback` set a per-agent default that rides on every model call the Paladin makes: it
+  beats `llm.<provider>.reasoning_effort` and yields only to an effort a request carries itself
+  (request, agent, provider default, vendor default). `PaladinBuilder::build` refuses an effort
+  the model cannot honour with a `ConfigurationError` naming the provider, the model,
+  `reasoning_effort`, the value and the reason, and refuses an explicit effort on a port that
+  reports no model profile (nothing was measured); for a `FallbackLlmAdapter` the check runs
+  against the chain's intersected profile, so a level must be usable on every hop. At send time
+  `FallbackLlmAdapter::generate` / `generate_stream` resolve the request's effort against every
+  hop's own profile before the first call: the first hop, in chain order, that cannot honour or
+  substitute it fails the whole request with `LlmError::UnsupportedParameter` naming that hop, and
+  no hop is called. A reached hop sends its own resolution, and `paladin.reasoning_requested` /
+  `paladin.reasoning_effective` survive the chain's `served_by` / `served_model` stamping on both
+  paths and reach `PaladinResult.run_metadata` (latest call wins). An agent that sets nothing
+  builds today's request.
+
 - **Reasoning effort: a provider-level default beneath every request, and the self-hosted wire in
   YAML (REASON-01, REASON-02, REASON-04; Phase 51 plan 06).** All nine adapters now honour
   `LlmRequest.reasoning` either exactly or by refusing before any HTTP call with
@@ -912,6 +929,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only; no public API change.
 
 ### Changed
+
+- **BREAKING (`paladin-ai-core`): `PaladinData` gains the fields `reasoning_effort:
+  Option<ReasoningEffort>` and `reasoning_fallback: Option<ReasoningFallback>` (REASON-01, D-00b,
+  D-00e; Phase 51 plan 07; `MIGRATION.md` 9.2).** The agent is the second level of the
+  reasoning-effort precedence (request, agent, provider default, vendor default). Both fields are
+  `#[serde(default, skip_serializing_if = "Option::is_none")]` and `None` in `Default`, so a stored
+  Citadel snapshot still loads and a Paladin that sets neither serialises byte-identically. Only
+  full struct literals break. Migration: add `reasoning_effort: None, reasoning_fallback: None` to
+  the literal, or spread `..PaladinData::default()`. There is no deprecated alias.
 
 - **BREAKING (`paladin-llm`): `CompatRequestParameters` gains the field `reasoning:
   ReasoningWire`, and `CompatRequestParameters::all()` becomes `all(reasoning: ReasoningWire)`

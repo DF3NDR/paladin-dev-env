@@ -36,7 +36,14 @@
 //! - **Paladin configuration fingerprint** (Paladin nodes only): model,
 //!   system prompt, temperature, max loops and stop words -- a prompt or
 //!   model change invalidates the entry naturally with no explicit
-//!   eviction (FT-FR-20).
+//!   eviction (FT-FR-20) -- plus, only when the agent sets them, its
+//!   reasoning effort and effort fallback (Phase 51, REASON-01), so an
+//!   answer produced at one effort is never served to the same agent at
+//!   another. An agent that sets neither appends nothing, so every key
+//!   composed before the effort existed is unchanged and
+//!   [`NODE_CACHE_KEY_VERSION`] stays `k1`. A provider-level default effort
+//!   (`llm.<provider>.reasoning_effort`) is not on the agent and is NOT part
+//!   of the key: changing it needs a new cache namespace or a version bump.
 //!
 //! # Rendered form
 //!
@@ -232,10 +239,27 @@ fn push_snapshot_field(buf: &mut Vec<u8>, snapshot: &Battlefield, field: &FieldN
     }
 }
 
+/// Tag byte introducing the agent's reasoning effort in the fingerprint.
+const REASONING_EFFORT_TAG: u8 = 0xE1;
+
+/// Tag byte introducing the agent's reasoning fallback in the fingerprint.
+/// Distinct from [`REASONING_EFFORT_TAG`] so an effort alone and a fallback
+/// alone never produce the same bytes.
+const REASONING_FALLBACK_TAG: u8 = 0xE2;
+
 /// Write the Paladin configuration fingerprint's inputs (FT-FR-20, D-28):
 /// model, system prompt, temperature (its exact `f32` bits, never a
 /// rounded rendering), max loops (serde-canonical, so `Fixed(3)` and
 /// `Auto { .. }` never collide) and stop words (count-prefixed).
+///
+/// Then, ONLY when the agent set them (Phase 51, REASON-01, research
+/// Pitfall 7), its reasoning effort and its fallback, each behind its own
+/// tag byte and as serde-canonical JSON (so `Budget(2048)` and `High` never
+/// collide). An unset effort or fallback appends nothing: the stream, and so
+/// the key, of an agent that sets neither is byte-for-byte what it was
+/// before this input existed, which is why [`NODE_CACHE_KEY_VERSION`] does
+/// not change. Nothing follows these inputs, so the optional tail cannot be
+/// reinterpreted as part of another field.
 fn push_paladin_config(buf: &mut Vec<u8>, paladin: &Paladin) {
     let data = &paladin.data;
     push_field(buf, data.model.as_bytes());
@@ -246,6 +270,16 @@ fn push_paladin_config(buf: &mut Vec<u8>, paladin: &Paladin) {
     buf.extend_from_slice(&(data.stop_words.len() as u64).to_le_bytes());
     for word in &data.stop_words {
         push_field(buf, word.as_bytes());
+    }
+    if let Some(effort) = &data.reasoning_effort {
+        buf.push(REASONING_EFFORT_TAG);
+        let json = serde_json::to_string(effort).unwrap_or_default();
+        push_field(buf, json.as_bytes());
+    }
+    if let Some(fallback) = &data.reasoning_fallback {
+        buf.push(REASONING_FALLBACK_TAG);
+        let json = serde_json::to_string(fallback).unwrap_or_default();
+        push_field(buf, json.as_bytes());
     }
 }
 
@@ -515,6 +549,107 @@ mod tests {
         let prefix_for_a = node_prefix(&fp, &NodeId::new("a"));
         assert!(!key_for_a_colon_b.starts_with(&prefix_for_a));
         assert!(key_for_a_colon_b.starts_with(&node_prefix(&fp, &NodeId::new("a:b"))));
+    }
+
+    /// The fixed Paladin node the pinned-key test and the effort cases share:
+    /// a fixed fingerprint, node id, input and `PaladinData::default()` plus a
+    /// model and prompt.
+    fn pinned_paladin_data() -> PaladinData {
+        PaladinData {
+            model: "gpt-4".to_string(),
+            system_prompt: "be brief".to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn pinned_key(data: PaladinData) -> NodeCacheKey {
+        let fp = GraphFingerprint::from_canonical_bytes(b"pinned-graph");
+        paladin_key(
+            &fp,
+            "pinned",
+            "input",
+            &snapshot("x", "y"),
+            &make_paladin(data),
+        )
+    }
+
+    /// Research Pitfall 7 / REASON-01: the key of a Paladin with no effort and
+    /// no fallback is a committed literal. It was captured from the code
+    /// BEFORE the effort input was added and must never move: an unset pair
+    /// appends nothing, so no existing cache entry is invalidated and
+    /// `NODE_CACHE_KEY_VERSION` stays `k1`.
+    #[test]
+    fn unset_effort_key_is_the_pinned_literal() {
+        assert_eq!(NODE_CACHE_KEY_VERSION, "k1");
+        assert_eq!(
+            pinned_key(pinned_paladin_data()).as_str(),
+            "k1:v6:1dd224dbea3091bd4619fb7d30eeefdcbbbca61d212248d3e8553464d1ab8e49:6:pinned:7b4e505e588bbc1e39d1fbe266d5d3607f8b886cccd20cac30fd060745c7dc30"
+        );
+    }
+
+    /// REASON-01: the same agent at `Low` and at `High` addresses two
+    /// different entries, both different from the unset key, so an A/B run at
+    /// two efforts never reads the other's cached answer.
+    #[test]
+    fn key_changes_when_the_agents_effort_changes() {
+        use paladin_core::platform::container::reasoning::ReasoningEffort;
+        let unset = pinned_key(pinned_paladin_data());
+        let low = pinned_key(PaladinData {
+            reasoning_effort: Some(ReasoningEffort::Low),
+            ..pinned_paladin_data()
+        });
+        let high = pinned_key(PaladinData {
+            reasoning_effort: Some(ReasoningEffort::High),
+            ..pinned_paladin_data()
+        });
+        let budget = pinned_key(PaladinData {
+            reasoning_effort: Some(ReasoningEffort::Budget(2048)),
+            ..pinned_paladin_data()
+        });
+        assert_ne!(low, high);
+        assert_ne!(unset, low);
+        assert_ne!(unset, high);
+        assert_ne!(budget, high);
+        assert_ne!(budget, unset);
+        // Deterministic: the same effort composes the same key.
+        assert_eq!(
+            low,
+            pinned_key(PaladinData {
+                reasoning_effort: Some(ReasoningEffort::Low),
+                ..pinned_paladin_data()
+            })
+        );
+    }
+
+    /// An effort with no fallback and a fallback with no effort carry
+    /// distinct tag bytes, so neither can be mistaken for the other; a changed
+    /// fallback changes the key too.
+    #[test]
+    fn effort_only_and_fallback_only_keys_never_collide() {
+        use paladin_core::platform::container::reasoning::{ReasoningEffort, ReasoningFallback};
+        let effort_only = pinned_key(PaladinData {
+            reasoning_effort: Some(ReasoningEffort::Low),
+            ..pinned_paladin_data()
+        });
+        let fallback_only = pinned_key(PaladinData {
+            reasoning_fallback: Some(ReasoningFallback::NearestLower),
+            ..pinned_paladin_data()
+        });
+        let unset = pinned_key(pinned_paladin_data());
+        assert_ne!(effort_only, fallback_only);
+        assert_ne!(fallback_only, unset);
+        let other_fallback = pinned_key(PaladinData {
+            reasoning_fallback: Some(ReasoningFallback::NearestHigher),
+            ..pinned_paladin_data()
+        });
+        assert_ne!(fallback_only, other_fallback);
+        let both = pinned_key(PaladinData {
+            reasoning_effort: Some(ReasoningEffort::Low),
+            reasoning_fallback: Some(ReasoningFallback::NearestLower),
+            ..pinned_paladin_data()
+        });
+        assert_ne!(both, effort_only);
+        assert_ne!(both, fallback_only);
     }
 
     /// The Paladin/Function distinction and the rendered/snapshot

@@ -9,6 +9,12 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- Phase 51 (REASON-05; plan 51-09): the superstep engine fills `TraceEvent::NodeFinished`'s
+  `reasoning_requested` and `reasoning_effective` from the attempt's own `run_metadata`
+  (`paladin.reasoning_requested` / `paladin.reasoning_effective`) on a Paladin attempt and, from
+  `structured.raw.run_metadata`, on a structured-output attempt. A function or battalion node, a
+  cache hit and a failed attempt leave both `None`.
+
 - Phase 50 (G-50-5a remainder (b), PARITY-05; plan 50-29): the superstep engine counts the spend of
   an attempt however it ends. `race_attempt` runs every attempt inside a fresh
   `paladin_ports::output::spend_scope::ATTEMPT_SPEND` scope held outside the attempt future; an
@@ -65,6 +71,11 @@ and this project follows lockstep workspace versioning.
   (Phase 42 review CR-1).
 
 ### Changed
+
+- Phase 51 (REASON-01; plan 51-09): the node-cache key of a Paladin node appends the agent's
+  `reasoning_effort` and `reasoning_fallback` when set (research Pitfall 7), so an answer produced
+  at one effort is never served at another. An agent that sets neither composes the same key as
+  before; `NODE_CACHE_KEY_VERSION` is still `k1`.
 
 - Phase 50 (PARITY-05; ADR-0061): the LLM failure classifiers handle the new `LlmError::Refusal`
   variant. `llm_failure` converts it to a `PaladinError::LlmFailure` that names its provider by

@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Requested and effective reasoning effort on the trace (REASON-05, D-11; Phase 51 plan 09).**
+  `TraceEvent::NodeFinished` carries `reasoning_requested` and `reasoning_effective`, the effort one
+  Paladin or structured-output attempt asked for and the effort it actually ran with (they differ
+  when a `reasoning_fallback` substituted a neighbouring level), as `ReasoningEffort` spellings.
+  The engine reads both from that attempt's own response metadata (`paladin.reasoning_requested`,
+  `paladin.reasoning_effective`), never from the agent's configured value. Both are `None` for a
+  function or battalion node, a cache hit, a failed attempt and any run with no effort in force;
+  a `None` pair is not serialised, so the JSON of an event with no effort is byte-identical to
+  before and a stored `run_traces` row or SSE frame that predates the fields loads with both
+  `None`.
+
 - **Reasoning effort per agent in YAML (REASON-01, REASON-04; Phase 51 plan 08).** An agent in the
   `agents:` list takes `reasoning_effort` (a level, `off`, `auto` or `{budget: N}`) and
   `reasoning_fallback` (`refuse`, `nearest_lower`, `nearest_higher`). The agent host passes both to
@@ -946,6 +957,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only; no public API change.
 
 ### Changed
+
+- **BREAKING (`paladin-ai-core`): `TraceEvent::NodeFinished` gains the fields
+  `reasoning_requested: Option<String>` and `reasoning_effective: Option<String>` (REASON-05, D-00b,
+  D-11; Phase 51 plan 09; `MIGRATION.md` 9.2).** Both are `#[serde(default, skip_serializing_if =
+  "Option::is_none")]`, the `cost` precedent. Only a constructing struct-variant literal or an
+  exhaustive destructure of `NodeFinished` breaks. Migration: add `reasoning_requested: None,
+  reasoning_effective: None` to the literal, or match with `..`. There is no deprecated alias.
+
+- **Node-cache keys of Paladin nodes include the agent's reasoning effort when one is set
+  (REASON-01; Phase 51 plan 09).** The Paladin configuration fingerprint appends the agent's
+  `reasoning_effort` and `reasoning_fallback` (each behind its own tag byte) only when they are set,
+  so the same agent at two efforts never shares a cached answer. An agent that sets neither
+  composes exactly the key it did before, so no existing cache entry is invalidated and
+  `NODE_CACHE_KEY_VERSION` stays `k1`. A provider-level default (`llm.<provider>.reasoning_effort`)
+  is not part of the key; changing it needs a new cache namespace or a version bump.
 
 - **BREAKING (`paladin-ai`): `AgentDefinition` gains the fields `reasoning_effort:
   Option<ReasoningEffort>` and `reasoning_fallback: Option<ReasoningFallback>` (REASON-01, D-00b,

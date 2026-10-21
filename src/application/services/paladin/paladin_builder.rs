@@ -38,6 +38,7 @@ use crate::core::platform::container::herald::Herald;
 use crate::core::platform::container::paladin::MaxLoops;
 use crate::core::platform::container::paladin::{Paladin, PaladinData};
 use crate::core::platform::container::paladin_config::{OutputFormat, PaladinConfig};
+use crate::core::platform::container::reasoning::{ReasoningEffort, ReasoningFallback};
 use crate::infrastructure::adapters::citadel::file_citadel::FileCitadel;
 use paladin_ports::output::arsenal_port::ArsenalRegistry;
 use paladin_ports::output::citadel_port::CitadelPort;
@@ -287,6 +288,82 @@ impl PaladinBuilder {
     /// ```
     pub fn max_loops(mut self, max_loops: u32) -> Self {
         self.data.max_loops = MaxLoops::Fixed(max_loops);
+        self
+    }
+
+    /// Sets the agent's default reasoning effort (REASON-01, D-00e, D-05)
+    ///
+    /// The effort rides on every model call the Paladin makes. It beats the provider-level
+    /// default (`llm.<provider>.reasoning_effort`) and is beaten only by an effort a request
+    /// carries itself. A Paladin that never calls this builds a request with no effort of its
+    /// own, so the provider default applies, and with neither the wire body is unchanged.
+    ///
+    /// # Validation
+    ///
+    /// [`Self::build`] refuses an effort the selected model cannot honour (D-09) with a
+    /// [`PaladinError::ConfigurationError`] naming the provider, the model, `reasoning_effort`,
+    /// the value and the reason. The refusal consults the model's profile with this builder's
+    /// [`Self::reasoning_fallback`] (`Refuse` when unset); a port that reports no profile
+    /// refuses an explicit effort, because nothing was measured (D-03).
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use paladin::application::services::paladin::paladin_builder::PaladinBuilder;
+    /// # use paladin::core::platform::container::reasoning::ReasoningEffort;
+    /// # use paladin_ports::output::llm_port::LlmPort;
+    /// # use std::sync::Arc;
+    /// # async fn example(llm_port: Arc<dyn LlmPort>) -> Result<(), Box<dyn std::error::Error>> {
+    /// let paladin = PaladinBuilder::new(llm_port)
+    ///     .system_prompt("You are a careful reviewer")
+    ///     .model("deepseek-v4-pro")
+    ///     .reasoning_effort(ReasoningEffort::High)
+    ///     .build()
+    ///     .await?;
+    /// assert_eq!(paladin.data.reasoning_effort, Some(ReasoningEffort::High));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn reasoning_effort(mut self, effort: ReasoningEffort) -> Self {
+        self.data.reasoning_effort = Some(effort);
+        self
+    }
+
+    /// Sets how the agent's reasoning effort is substituted when the model lacks the exact
+    /// level (REASON-01, D-00e, D-05)
+    ///
+    /// Without this the policy is [`ReasoningFallback::Refuse`]: an effort the model does not
+    /// list fails loudly. `NearestLower` / `NearestHigher` substitute the closest listed level in
+    /// that direction at each request, and the substitution is recorded on the response
+    /// (`paladin.reasoning_requested` / `paladin.reasoning_effective`). Only meaningful beside
+    /// [`Self::reasoning_effort`].
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use paladin::application::services::paladin::paladin_builder::PaladinBuilder;
+    /// # use paladin::core::platform::container::reasoning::{ReasoningEffort, ReasoningFallback};
+    /// # use paladin_ports::output::llm_port::LlmPort;
+    /// # use std::sync::Arc;
+    /// # async fn example(llm_port: Arc<dyn LlmPort>) -> Result<(), Box<dyn std::error::Error>> {
+    /// let paladin = PaladinBuilder::new(llm_port)
+    ///     .system_prompt("You are a careful reviewer")
+    ///     .model("deepseek-v4-pro")
+    ///     .reasoning_effort(ReasoningEffort::Max)
+    ///     .reasoning_fallback(ReasoningFallback::NearestLower)
+    ///     .build()
+    ///     .await?;
+    /// assert_eq!(
+    ///     paladin.data.reasoning_fallback,
+    ///     Some(ReasoningFallback::NearestLower)
+    /// );
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn reasoning_fallback(mut self, fallback: ReasoningFallback) -> Self {
+        self.data.reasoning_fallback = Some(fallback);
         self
     }
 
@@ -1637,6 +1714,40 @@ mod tests {
             Err(PaladinError::ConfigurationError(message)) => message,
             other => panic!("expected a ConfigurationError, got {other:?}"),
         }
+    }
+
+    // ── Phase 51 (plan 51-07): the agent level of the reasoning-effort precedence ──
+
+    fn effort_port(levels: impl IntoIterator<Item = ReasoningEffort>) -> Arc<dyn LlmPort> {
+        use paladin_ports::output::model_profile::{EffortLevels, EffortSupport};
+        Arc::new(MockLlmPortWithProfile(ModelProfile::new().with_effort(
+            EffortSupport::Supported(EffortLevels::new(levels)),
+        )))
+    }
+
+    #[tokio::test]
+    async fn reasoning_effort_setter_lands_on_paladin_data() {
+        let paladin = PaladinBuilder::new(effort_port([ReasoningEffort::High]))
+            .system_prompt("Test")
+            .model("m")
+            .reasoning_effort(ReasoningEffort::High)
+            .build()
+            .await
+            .expect("a level the model lists must build");
+        assert_eq!(paladin.data.reasoning_effort, Some(ReasoningEffort::High));
+        assert_eq!(paladin.data.reasoning_fallback, None);
+    }
+
+    #[tokio::test]
+    async fn a_builder_that_sets_no_effort_leaves_the_field_unset() {
+        let paladin = PaladinBuilder::new(effort_port([ReasoningEffort::High]))
+            .system_prompt("Test")
+            .model("m")
+            .build()
+            .await
+            .unwrap();
+        assert_eq!(paladin.data.reasoning_effort, None);
+        assert_eq!(paladin.data.reasoning_fallback, None);
     }
 
     #[tokio::test]

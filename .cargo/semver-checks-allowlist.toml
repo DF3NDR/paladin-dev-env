@@ -765,3 +765,17 @@ lint = "register-only (unmeasured: cargo-semver-checks absent on 2026-10-21; mea
 migration_row = "paladin-llm | CompatRequestParameters"
 requirement_id = "REASON-02"
 justification = "CompatRequestParameters gained the public field reasoning: ReasoningWire and its constructor all() became all(reasoning) (Phase 51, plan 51-04, D-04, D-10). The type has no Default by design, so the reasoning wire is stated at every construction site and no preset can be built without a stated position (REASON-02). A clean break with no alias and no deprecated all() (ADR-0060): state reasoning in the literal, or pass the wire to all(..). Registered without a measured lint id; plan 51-14 measures and corrects it."
+
+# Plan 51-07 (D-00b, D-00e, REASON-01), registered 2026-10-21 in the SAME commit that adds the fields:
+# cargo-semver-checks is absent in this container (`cargo semver-checks --version` fails), so the lint
+# id below is UNMEASURED. Plan 51-14 measures it against the published `paladin-ai-core` 0.10.1
+# (`--release-type minor`, lint table removed and restored byte-for-byte) and corrects this entry.
+# The pair `paladin-ai-core | PaladinData` already has an entry (the removed Citadel placeholder,
+# ENTITY-03); the row-level set-equality gate is deduplicated, so this is one further entry on it.
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "register-only (unmeasured: cargo-semver-checks absent on 2026-10-21; measured in plan 51-14)"
+migration_row = "paladin-ai-core | PaladinData"
+requirement_id = "REASON-01"
+justification = "PaladinData gained the public fields reasoning_effort: Option<ReasoningEffort> and reasoning_fallback: Option<ReasoningFallback> (Phase 51, plan 51-07, D-00e, D-05): the agent level of the reasoning-effort precedence. The struct stays constructible and is not #[non_exhaustive], so only full struct literals break; every in-tree one named both fields in the same commit. #[serde(default, skip_serializing_if = \"Option::is_none\")] keeps stored snapshots loading and an agent that sets neither serialises byte-identically. Migration: name both fields in the literal or spread ..PaladinData::default(). Registered without a measured lint id; plan 51-14 measures and corrects it."

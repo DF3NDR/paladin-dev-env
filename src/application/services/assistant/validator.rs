@@ -218,6 +218,8 @@ impl AssistantValidator {
             autonomous_prompts: false,
             agent_description: String::new(),
             dynamic_temperature: false,
+            reasoning_effort: None,
+            reasoning_fallback: None,
         };
         let paladin: Paladin = Entity::new(data, Some(def.name.clone()));
         Ok(Validated::Agent(Arc::new(paladin), def.allowed_roles))

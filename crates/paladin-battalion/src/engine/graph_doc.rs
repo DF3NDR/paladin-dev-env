@@ -1074,6 +1074,8 @@ fn compile_node(
                 autonomous_prompts: false,
                 agent_description: String::new(),
                 dynamic_temperature: false,
+                reasoning_effort: None,
+                reasoning_fallback: None,
             };
             let paladin: Paladin = Entity::new(data, Some(p.name.clone()));
             let input_template = InputMapping::new(p.input_template.clone());

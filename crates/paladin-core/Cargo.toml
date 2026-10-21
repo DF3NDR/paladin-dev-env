@@ -106,6 +106,16 @@ rand = { workspace = true }
 # Each Phase 48 lint has a matching MIGRATION.md section 9.2 row and
 # `.cargo/semver-checks-allowlist.toml` entry, kept set-equal by CI's
 # `semver` job; every in-tree site migrated in plans 48-03, 48-04 and 48-05.
+#
+# REASON-01 (D-00b, D-00e, Phase 51 plan 51-07): `PaladinData` gained the
+# per-agent `reasoning_effort` and `reasoning_fallback` fields
+# (`#[serde(default, skip_serializing_if = "Option::is_none")]`) and stays
+# constructible and NOT `#[non_exhaustive]`, so cross-crate `..Default::default()`
+# keeps working. The expected lint is `constructible_struct_adds_field`, already
+# allowed above; it is UNMEASURED here (cargo-semver-checks is absent in this
+# container) and plan 51-14 measures it. The MIGRATION.md section 9.2 row and the
+# `.cargo/semver-checks-allowlist.toml` entry are registered in the same commit
+# as the fields; every in-tree full literal named both fields in that commit.
 [package.metadata.cargo-semver-checks.lints]
 enum_marked_non_exhaustive = "allow"
 constructible_struct_adds_field = "allow"

@@ -913,6 +913,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING (`paladin-ai-core`): `PaladinData` gains the fields `reasoning_effort:
+  Option<ReasoningEffort>` and `reasoning_fallback: Option<ReasoningFallback>` (REASON-01, D-00b,
+  D-00e; Phase 51 plan 07; `MIGRATION.md` 9.2).** The agent is the second level of the
+  reasoning-effort precedence (request, agent, provider default, vendor default). Both fields are
+  `#[serde(default, skip_serializing_if = "Option::is_none")]` and `None` in `Default`, so a stored
+  Citadel snapshot still loads and a Paladin that sets neither serialises byte-identically. Only
+  full struct literals break. Migration: add `reasoning_effort: None, reasoning_fallback: None` to
+  the literal, or spread `..PaladinData::default()`. There is no deprecated alias.
+
 - **BREAKING (`paladin-llm`): `CompatRequestParameters` gains the field `reasoning:
   ReasoningWire`, and `CompatRequestParameters::all()` becomes `all(reasoning: ReasoningWire)`
   (REASON-02, D-00b; Phase 51 plan 04; `MIGRATION.md` 9.2).** The type has no `Default` by design,

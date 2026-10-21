@@ -3141,6 +3141,18 @@ impl PaladinExecutionService {
             if let Some(response_format) = cx.response_format.clone() {
                 request = request.with_response_format(response_format);
             }
+            // D-00e: the agent is the second level of the reasoning-effort
+            // precedence (request, agent, provider default, vendor default).
+            // Set only when the agent set it, so an agent that sets neither
+            // builds exactly the request it built before the knob existed;
+            // the adapter then applies the provider default to a request that
+            // carries none (plan 51-06).
+            if let Some(effort) = paladin.data.reasoning_effort {
+                request = request.with_reasoning(effort);
+            }
+            if let Some(fallback) = paladin.data.reasoning_fallback {
+                request = request.with_reasoning_fallback(fallback);
+            }
 
             // Wrap LLM call with circuit breaker (async version). Uses the
             // resolved `llm_port` (D-11's single resolution point), not
@@ -10669,5 +10681,68 @@ mod allowance_warning_tests {
             .filter(|r| AllowanceWarning::from_trace_event(&r.event).is_some())
             .count();
         assert_eq!(count, 1, "{events:?}");
+    }
+}
+
+/// Phase 51 (plan 51-07, D-00e): the agent's reasoning effort and fallback ride on every
+/// request the execution service builds, and nothing is set when the agent set nothing.
+#[cfg(test)]
+mod reasoning_wiring_tests {
+    use super::*;
+    use crate::core::base::entity::Entity;
+    use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
+    use crate::core::platform::container::reasoning::{ReasoningEffort, ReasoningFallback};
+    use paladin_llm::mock::MockLlmAdapter;
+
+    fn paladin(effort: Option<ReasoningEffort>, fallback: Option<ReasoningFallback>) -> Paladin {
+        let data = PaladinData {
+            system_prompt: "You are a helpful assistant".to_string(),
+            max_loops: MaxLoops::Fixed(1),
+            reasoning_effort: effort,
+            reasoning_fallback: fallback,
+            ..Default::default()
+        };
+        Entity::new(data, Some("ReasoningPaladin".to_string()))
+    }
+
+    fn service(llm: Arc<MockLlmAdapter>) -> PaladinExecutionService {
+        PaladinExecutionService::new(
+            llm,
+            Arc::new(CircuitBreaker::new(5, 3, Duration::from_secs(60))),
+            None,
+            None,
+        )
+    }
+
+    #[tokio::test]
+    async fn the_loop_request_carries_the_agents_effort_and_fallback() {
+        let llm = Arc::new(MockLlmAdapter::new().with_response("ack"));
+        let agent = paladin(
+            Some(ReasoningEffort::High),
+            Some(ReasoningFallback::NearestLower),
+        );
+
+        service(llm.clone()).execute(&agent, "hi").await.unwrap();
+
+        let request = llm.last_request().expect("the model was called");
+        assert_eq!(request.reasoning, Some(ReasoningEffort::High));
+        assert_eq!(
+            request.reasoning_fallback,
+            Some(ReasoningFallback::NearestLower)
+        );
+    }
+
+    #[tokio::test]
+    async fn an_agent_with_no_effort_builds_a_request_with_none() {
+        let llm = Arc::new(MockLlmAdapter::new().with_response("ack"));
+
+        service(llm.clone())
+            .execute(&paladin(None, None), "hi")
+            .await
+            .unwrap();
+
+        let request = llm.last_request().expect("the model was called");
+        assert_eq!(request.reasoning, None);
+        assert_eq!(request.reasoning_fallback, None);
     }
 }

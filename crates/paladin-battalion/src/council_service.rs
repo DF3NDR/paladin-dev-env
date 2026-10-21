@@ -824,6 +824,8 @@ mod tests {
                     autonomous_prompts: false,
                     agent_description: String::new(),
                     dynamic_temperature: false,
+                    reasoning_effort: None,
+                    reasoning_fallback: None,
                 };
                 let paladin = Entity::new(data, Some(format!("paladin_{}", i)));
                 paladins.insert(format!("paladin_{}", i), Arc::new(paladin));

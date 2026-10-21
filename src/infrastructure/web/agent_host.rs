@@ -17,11 +17,13 @@ use std::time::Duration;
 use paladin_core::platform::container::cost::PriceTable;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
+use paladin_core::platform::container::reasoning::{ReasoningEffort, ReasoningFallback};
 use paladin_core::platform::container::user::UserRole;
 use paladin_llm::cadence::CadenceWiring;
 use paladin_llm::config::llm::LlmConfig;
 use paladin_llm::provider_factory::{LlmProviderFactory, ProviderFactoryError, provider_names};
 use paladin_ports::output::llm_port::LlmPort;
+use paladin_ports::output::model_profile::EffortRefusal;
 use paladin_ports::output::paladin_executor_port::PaladinExecutorPort;
 use paladin_ports::output::streaming_executor_port::StreamingExecutorPort;
 use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
@@ -154,6 +156,7 @@ pub(crate) async fn build_agent_with_llm(
         treasury_ledger,
         token_budget,
         None,
+        None,
     )
     .await
 }
@@ -167,6 +170,67 @@ struct BlockTemperature {
     key: String,
 }
 
+/// A provider block's default reasoning effort, its own fallback and the YAML key that carries
+/// the effort (Phase 51, D-09, research Pitfall 6).
+///
+/// Unlike [`BlockTemperature`] this is never handed to the [`PaladinBuilder`]: the provider
+/// default stays a provider-level value the adapter applies below the agent's own, so the
+/// precedence request, then agent, then provider holds. It is only *checked* against the agent's
+/// model at build time, so a default that would refuse every call of the agent is found at load.
+struct BlockReasoning {
+    /// The value from `llm.<provider>.reasoning_effort`.
+    effort: ReasoningEffort,
+    /// The value from `llm.<provider>.reasoning_fallback`, which wins over the agent's own.
+    fallback: Option<ReasoningFallback>,
+    /// The key that set the effort, named in a refusal (`llm.<provider>.reasoning_effort`).
+    key: String,
+}
+
+/// Check a provider block's default effort against the agent's own model (Pitfall 6).
+///
+/// Resolved through `EffortSupport::resolve` -- the one admission rule the adapter applies at send
+/// time -- with the block's fallback, else the agent's, else `Refuse`. A model that reports no
+/// profile refuses (D-03: nothing was measured). A refusal is a [`HostBuildError::Build`] naming
+/// provider, model, `reasoning_effort`, the value, the reason and the block's YAML key. Text is
+/// built from names and the effort only; no credential is rendered.
+fn check_block_reasoning(
+    def: &AgentDefinition,
+    llm: &dyn LlmPort,
+    block: &BlockReasoning,
+) -> Result<(), HostBuildError> {
+    let fallback = block
+        .fallback
+        .or(def.reasoning_fallback)
+        .unwrap_or_default();
+    let reason = match llm.model_profile(&def.model) {
+        Some(profile) => match profile.effort.resolve(block.effort, fallback) {
+            Ok(_) => return Ok(()),
+            Err(refusal) => {
+                let mut reason = refusal.to_string();
+                if fallback == ReasoningFallback::Refuse
+                    && matches!(refusal, EffortRefusal::LevelUnsupported)
+                {
+                    reason.push_str("; set a reasoning_fallback to substitute the nearest level");
+                }
+                reason
+            }
+        },
+        None => "it reports no model profile, so a reasoning effort cannot be checked".to_string(),
+    };
+    Err(HostBuildError::Build {
+        id: def.id.clone(),
+        source: PaladinError::ConfigurationError(format!(
+            "model '{}' on provider '{}' does not accept parameter 'reasoning_effort' = {}: \
+             {} (set by `{}`)",
+            def.model,
+            llm.get_provider_name(),
+            block.effort,
+            reason,
+            block.key
+        )),
+    })
+}
+
 /// `build_agent_with_llm` plus the provider block's default temperature (D-02).
 ///
 /// When the definition sets no `temperature` of its own and `block_temperature` is `Some`, the
@@ -175,6 +239,13 @@ struct BlockTemperature {
 /// temperature then also names the YAML key that set it: `agents[<id>].temperature` or the
 /// block's `llm.<provider>.default_temperature`. An agent that sets none, under a block that sets
 /// none, expresses nothing and nothing is judged (ADR-0004 A1).
+///
+/// The same holds for reasoning effort (Phase 51, D-09). The definition's own
+/// `reasoning_effort` / `reasoning_fallback` go to the builder, and a refusal of the effort ends
+/// with ``(set by `agents[<id>].reasoning_effort`)``. When the definition sets no effort but
+/// `block_reasoning` does, the block's value is only *checked* against the agent's model profile
+/// (never passed to the builder or copied onto the Paladin): a refusal is a
+/// [`HostBuildError::Build`] naming `llm.<provider>.reasoning_effort`.
 async fn build_agent_with_llm_and_block_temperature(
     def: &AgentDefinition,
     llm: Arc<dyn LlmPort>,
@@ -182,7 +253,17 @@ async fn build_agent_with_llm_and_block_temperature(
     treasury_ledger: Option<Arc<dyn TreasuryLedgerPort>>,
     token_budget: TokenBudgetConfig,
     block_temperature: Option<BlockTemperature>,
+    block_reasoning: Option<BlockReasoning>,
 ) -> Result<BuiltAgent, HostBuildError> {
+    // Pitfall 6: a provider default effort the agent's model cannot honour would refuse every call
+    // of an agent that set none of its own. Check it now, by key. An agent that set its own effort
+    // is judged on that value alone (below), and the block's value is never copied onto it.
+    if def.reasoning_effort.is_none()
+        && let Some(block) = &block_reasoning
+    {
+        check_block_reasoning(def, llm.as_ref(), block)?;
+    }
+
     // One execution service backs both the buffered and streaming handles
     // (`PaladinExecutionService` implements both `PaladinExecutorPort` and
     // `StreamingExecutorPort`).
@@ -215,6 +296,10 @@ async fn build_agent_with_llm_and_block_temperature(
     };
     // D-00e: the agent's own effort and fallback are *expressed* values, judged by the builder
     // against the model's profile exactly like a temperature the agent wrote (D-09).
+    // The YAML key a refusal of the agent's own effort is attributed to.
+    let effort_key = def
+        .reasoning_effort
+        .map(|_| format!("agents[{}].reasoning_effort", def.id));
     if let Some(effort) = def.reasoning_effort {
         builder = builder.reasoning_effort(effort);
     }
@@ -233,7 +318,10 @@ async fn build_agent_with_llm_and_block_temperature(
         .await
         .map_err(|source| HostBuildError::Build {
             id: def.id.clone(),
-            source: name_temperature_key(source, temperature_key.as_deref()),
+            source: name_reasoning_key(
+                name_temperature_key(source, temperature_key.as_deref()),
+                effort_key.as_deref(),
+            ),
         })?;
 
     Ok((paladin, executor, Some(streamer)))
@@ -246,6 +334,21 @@ fn name_temperature_key(error: PaladinError, key: Option<&str>) -> PaladinError 
     match (error, key) {
         (PaladinError::ConfigurationError(message), Some(key))
             if message.contains("temperature") =>
+        {
+            PaladinError::ConfigurationError(format!("{message} (set by `{key}`)"))
+        }
+        (other, _) => other,
+    }
+}
+
+/// Append the YAML key that set the agent's reasoning effort to a builder refusal that names the
+/// `reasoning_effort` parameter (D-09), so an operator knows which line to change. Mirrors
+/// [`name_temperature_key`]: any other error, and a refusal when the agent expressed no effort,
+/// passes through unchanged.
+fn name_reasoning_key(error: PaladinError, key: Option<&str>) -> PaladinError {
+    match (error, key) {
+        (PaladinError::ConfigurationError(message), Some(key))
+            if message.contains("reasoning_effort") =>
         {
             PaladinError::ConfigurationError(format!("{message} (set by `{key}`)"))
         }
@@ -303,6 +406,15 @@ pub(crate) async fn build_agent(
             value,
             key: format!("llm.{}.default_temperature", yaml_provider_key(&provider)),
         });
+    // Pitfall 6: the block's default effort is checked against this agent's model, never copied
+    // onto the agent (the adapter applies it below the agent's own value).
+    let block_reasoning = config.get_provider_config(&provider).and_then(|block| {
+        block.reasoning_effort.map(|effort| BlockReasoning {
+            effort,
+            fallback: block.reasoning_fallback,
+            key: format!("llm.{}.reasoning_effort", yaml_provider_key(&provider)),
+        })
+    });
     build_agent_with_llm_and_block_temperature(
         def,
         llm,
@@ -310,6 +422,7 @@ pub(crate) async fn build_agent(
         treasury_ledger,
         token_budget,
         block_temperature,
+        block_reasoning,
     )
     .await
 }
@@ -781,6 +894,57 @@ mod tests {
         let request = llm.inner.last_request().expect("the model was called");
         assert_eq!(request.reasoning, None);
         assert_eq!(request.reasoning_fallback, None);
+    }
+
+    #[tokio::test]
+    async fn an_agents_refused_effort_names_the_agent_key() {
+        use paladin_core::platform::container::reasoning::ReasoningEffort;
+        let mut def = base("r");
+        def.reasoning_effort = Some(ReasoningEffort::Medium);
+
+        let result = build_agent_with_llm(
+            &def,
+            effort_mock([ReasoningEffort::Low, ReasoningEffort::High]),
+            default_circuit_breaker(),
+            None,
+            TokenBudgetConfig::default(),
+        )
+        .await;
+
+        let Err(HostBuildError::Build { source, .. }) = result else {
+            panic!("medium is not listed, so the agent must be refused at build");
+        };
+        let text = source.to_string();
+        assert!(text.contains("reasoning_effort"), "{text}");
+        assert!(
+            text.ends_with("(set by `agents[r].reasoning_effort`)"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn name_reasoning_key_rewords_only_an_effort_refusal() {
+        fn config_error(message: &str) -> PaladinError {
+            PaladinError::ConfigurationError(message.to_string())
+        }
+        let effort =
+            "model 'm' on provider 'p' does not accept parameter 'reasoning_effort' = high: x";
+        assert_eq!(
+            name_reasoning_key(config_error(effort), Some("agents[a].reasoning_effort"))
+                .to_string(),
+            config_error(&format!("{effort} (set by `agents[a].reasoning_effort`)")).to_string()
+        );
+        // No key expressed: untouched.
+        assert_eq!(
+            name_reasoning_key(config_error(effort), None).to_string(),
+            config_error(effort).to_string()
+        );
+        // An unrelated refusal passes through even with a key.
+        let other = "system prompt cannot be empty";
+        assert_eq!(
+            name_reasoning_key(config_error(other), Some("agents[a].reasoning_effort")).to_string(),
+            config_error(other).to_string()
+        );
     }
 
     #[tokio::test]
@@ -1624,6 +1788,157 @@ mod config_driven_tests {
             .is_ok(),
             "nothing expressed, nothing judged"
         );
+    }
+
+    // --- Phase 51 (plan 51-08, D-09, Pitfall 6): the provider block's default effort ---
+
+    /// A `ModelOverride` listing exactly the given effort levels, built through serde because the
+    /// type is `#[non_exhaustive]`.
+    fn override_listing(levels: &[&str]) -> paladin_llm::registry::ModelOverride {
+        serde_json::from_value(json!({ "effort": { "supported": { "levels": levels } } }))
+            .expect("an effort override parses")
+    }
+
+    fn deepseek_block_llm(
+        block: LlmProviderConfig,
+        model: &str,
+        levels: Option<&[&str]>,
+    ) -> LlmConfig {
+        let block = match levels {
+            Some(levels) => block.with_models(std::collections::BTreeMap::from([(
+                model.to_string(),
+                override_listing(levels),
+            )])),
+            None => block,
+        };
+        LlmConfig {
+            deepseek: Some(block),
+            ..LlmConfig::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_blocks_default_effort_the_model_cannot_honour_refuses_the_agent_naming_the_block_key()
+     {
+        use paladin_core::platform::container::reasoning::ReasoningEffort;
+        let llm = deepseek_block_llm(
+            LlmProviderConfig::new(SECRET).with_reasoning_effort(ReasoningEffort::High),
+            "agent-model-x",
+            None,
+        );
+        let def = agent("a1", "deepseek", "agent-model-x");
+
+        let err = build(&def, Some(&llm), "openai")
+            .await
+            .err()
+            .expect("no measured effort data for the model, so the block's default is refused");
+        assert!(matches!(err, HostBuildError::Build { .. }), "got {err:?}");
+        let text = err.to_string();
+        for needle in [
+            "a1",
+            "deepseek",
+            "agent-model-x",
+            "reasoning_effort",
+            "high",
+            "(set by `llm.deepseek.reasoning_effort`)",
+        ] {
+            assert!(text.contains(needle), "missing '{needle}' in: {text}");
+        }
+        assert!(!text.contains("agents[a1]"), "{text}");
+        assert!(!text.contains(SECRET), "no key in the error: {text}");
+    }
+
+    #[tokio::test]
+    async fn a_blocks_default_effort_the_model_lists_builds_and_stays_off_the_paladin() {
+        use paladin_core::platform::container::reasoning::ReasoningEffort;
+        let llm = deepseek_block_llm(
+            LlmProviderConfig::new(SECRET).with_reasoning_effort(ReasoningEffort::High),
+            "agent-model-x",
+            Some(&["high"]),
+        );
+        let def = agent("a1", "deepseek", "agent-model-x");
+
+        let Ok((paladin, _, _)) = build(&def, Some(&llm), "openai").await else {
+            panic!("a model whose override lists high must accept the block's high");
+        };
+        // The provider default stays the adapter's, below the agent (REASON-01 prohibition).
+        assert_eq!(paladin.data.reasoning_effort, None);
+        assert_eq!(paladin.data.reasoning_fallback, None);
+    }
+
+    #[tokio::test]
+    async fn a_blocks_own_fallback_lets_its_default_substitute_at_build() {
+        use paladin_core::platform::container::reasoning::{ReasoningEffort, ReasoningFallback};
+        let block = LlmProviderConfig::new(SECRET)
+            .with_reasoning_effort(ReasoningEffort::Medium)
+            .with_reasoning_fallback(ReasoningFallback::NearestLower);
+        let llm = deepseek_block_llm(block, "agent-model-x", Some(&["low", "high"]));
+        let def = agent("a1", "deepseek", "agent-model-x");
+
+        let Ok((paladin, _, _)) = build(&def, Some(&llm), "openai").await else {
+            panic!("medium steps down to low under the block's nearest_lower");
+        };
+        assert_eq!(paladin.data.reasoning_effort, None);
+        assert_eq!(paladin.data.reasoning_fallback, None);
+    }
+
+    #[tokio::test]
+    async fn the_agents_fallback_applies_to_a_block_default_that_sets_none() {
+        use paladin_core::platform::container::reasoning::{ReasoningEffort, ReasoningFallback};
+        let block = LlmProviderConfig::new(SECRET).with_reasoning_effort(ReasoningEffort::Medium);
+        let llm = deepseek_block_llm(block, "agent-model-x", Some(&["low", "high"]));
+
+        let refused = agent("a1", "deepseek", "agent-model-x");
+        assert!(
+            build(&refused, Some(&llm), "openai").await.is_err(),
+            "no fallback anywhere: medium is not listed"
+        );
+
+        let mut lenient = agent("a2", "deepseek", "agent-model-x");
+        lenient.reasoning_fallback = Some(ReasoningFallback::NearestHigher);
+        assert!(
+            build(&lenient, Some(&llm), "openai").await.is_ok(),
+            "the agent's nearest_higher substitutes the block's medium"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_agents_own_effort_is_judged_on_its_own_value_only() {
+        use paladin_core::platform::container::reasoning::ReasoningEffort;
+        // The block's medium is not listed (it would refuse); the agent's own high is.
+        let block = LlmProviderConfig::new(SECRET).with_reasoning_effort(ReasoningEffort::Medium);
+        let llm = deepseek_block_llm(block, "agent-model-x", Some(&["high"]));
+
+        let mut own = agent("a1", "deepseek", "agent-model-x");
+        own.reasoning_effort = Some(ReasoningEffort::High);
+        let Ok((paladin, _, _)) = build(&own, Some(&llm), "openai").await else {
+            panic!("the agent's listed high must beat the block's refused medium");
+        };
+        assert_eq!(paladin.data.reasoning_effort, Some(ReasoningEffort::High));
+
+        // And the agent's own refused value names the agent key, never the block's.
+        let mut bad = agent("a2", "deepseek", "agent-model-x");
+        bad.reasoning_effort = Some(ReasoningEffort::Low);
+        let err = build(&bad, Some(&llm), "openai")
+            .await
+            .err()
+            .expect("low is not listed");
+        let text = err.to_string();
+        assert!(
+            text.contains("(set by `agents[a2].reasoning_effort`)"),
+            "{text}"
+        );
+        assert!(!text.contains("llm.deepseek"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn a_block_and_an_agent_with_no_effort_build_as_before() {
+        let llm = deepseek_block_llm(LlmProviderConfig::new(SECRET), "agent-model-x", None);
+        let def = agent("a1", "deepseek", "agent-model-x");
+        let Ok((paladin, _, _)) = build(&def, Some(&llm), "openai").await else {
+            panic!("nothing expressed, nothing judged");
+        };
+        assert_eq!(paladin.data.reasoning_effort, None);
     }
 
     /// An absent `llm:` section resolves from the environment exactly as `create(name)` did: an

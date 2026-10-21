@@ -16,6 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carries them (request, then agent, then `llm.<provider>.reasoning_effort`). An unknown spelling
   fails config load naming the field, and an agent that sets neither builds today's agent.
 
+- **Build-time refusals name the YAML key that set the effort (REASON-04; Phase 51 plan 08).** An
+  agent whose own `reasoning_effort` its model cannot honour fails at load with an error ending
+  in ``(set by `agents[<id>].reasoning_effort`)``. An agent that sets none, under a provider block
+  that sets `llm.<provider>.reasoning_effort`, has the block's value checked against the agent's
+  own model at build time (with the block's `reasoning_fallback`, else the agent's); a value the
+  model cannot honour, or a model nobody has measured, fails the agent naming
+  `llm.<provider>.reasoning_effort`. The block's value is only checked: it is never copied onto
+  the agent, so the adapter still applies it below the agent's own value. An agent and block that
+  set no effort build exactly as before.
+
 - **Reasoning effort: the agent level, a build-time refusal and a fallback-chain pre-flight
   (REASON-01, REASON-04, REASON-05; Phase 51 plan 07).** `PaladinBuilder::reasoning_effort` and
   `reasoning_fallback` set a per-agent default that rides on every model call the Paladin makes: it

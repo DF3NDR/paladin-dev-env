@@ -1236,4 +1236,95 @@ mod tests {
             ReasoningWire::EnableThinking
         );
     }
+    mod reasoning_effort {
+        use super::*;
+        use crate::compat::test_support::{mock_completion, plain_request, send_capturing, server};
+        use crate::reasoning::{
+            REASONING_EFFECTIVE_METADATA_KEY, REASONING_REQUESTED_METADATA_KEY,
+        };
+        use paladin_ports::output::llm_port::ReasoningEffort;
+        use paladin_ports::output::model_profile::{BudgetBounds, EffortLevels, EffortSupport};
+
+        const MODEL: &str = "qwen3.8-max";
+
+        fn adapter(base_url: &str) -> QwenAdapter {
+            let over = registry::ModelOverride {
+                effort: Some(EffortSupport::Supported(
+                    EffortLevels::new([])
+                        .with_off(true)
+                        .with_auto(true)
+                        .with_budget(BudgetBounds::new(1, 32_768)),
+                )),
+                ..registry::ModelOverride::default()
+            };
+            QwenAdapter::new(
+                QwenConfig::new("test-key".to_string(), MODEL.to_string())
+                    .with_base_url(base_url)
+                    .with_model_overrides(BTreeMap::from([(MODEL.to_string(), over)])),
+            )
+            .unwrap()
+        }
+
+        #[tokio::test]
+        async fn a_budget_sends_enable_thinking_and_thinking_budget() {
+            let mut server = server().await;
+            let captured = mock_completion(&mut server).await;
+            let adapter = adapter(&server.url());
+
+            let (body, response) = send_capturing(
+                &adapter,
+                &captured,
+                plain_request(MODEL).with_reasoning(ReasoningEffort::Budget(512)),
+            )
+            .await
+            .expect("an in-bounds budget is accepted");
+            assert_eq!(body["enable_thinking"], true, "{body}");
+            assert_eq!(body["thinking_budget"], 512, "{body}");
+            assert!(body.get("reasoning_effort").is_none(), "{body}");
+            assert!(body.get("thinking").is_none(), "{body}");
+            assert_eq!(
+                response.metadata[REASONING_REQUESTED_METADATA_KEY],
+                "budget:512"
+            );
+            assert_eq!(
+                response.metadata[REASONING_EFFECTIVE_METADATA_KEY],
+                "budget:512"
+            );
+
+            let (off, _) = send_capturing(
+                &adapter,
+                &captured,
+                plain_request(MODEL).with_reasoning(ReasoningEffort::Off),
+            )
+            .await
+            .unwrap();
+            assert_eq!(off["enable_thinking"], false, "{off}");
+            assert!(off.get("thinking_budget").is_none(), "{off}");
+        }
+
+        #[tokio::test]
+        async fn an_out_of_bounds_budget_and_a_level_are_refused_before_http() {
+            let mut server = server().await;
+            let captured = mock_completion(&mut server).await;
+            let adapter = adapter(&server.url());
+
+            for requested in [ReasoningEffort::Budget(32_769), ReasoningEffort::Low] {
+                let error = send_capturing(
+                    &adapter,
+                    &captured,
+                    plain_request(MODEL).with_reasoning(requested),
+                )
+                .await
+                .expect_err("refused");
+                assert!(
+                    matches!(error, LlmError::UnsupportedParameter { .. }),
+                    "{requested}: {error:?}"
+                );
+                assert!(
+                    captured.lock().unwrap().is_none(),
+                    "{requested}: no HTTP hit"
+                );
+            }
+        }
+    }
 }

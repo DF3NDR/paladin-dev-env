@@ -1443,4 +1443,78 @@ mod tests {
             ReasoningWire::Unsupported
         );
     }
+    #[tokio::test]
+    async fn grok_refuses_every_explicit_effort_even_with_an_override_and_never_hits_the_wire() {
+        use crate::compat::test_support::{mock_completion, plain_request, send_capturing, server};
+        use paladin_ports::output::llm_port::ReasoningEffort::{
+            Auto, Budget, High, Low, Max, Medium, Minimal, Off, XHigh,
+        };
+        use paladin_ports::output::model_profile::{EffortLevels, EffortSupport};
+
+        let mut server = server().await;
+        let captured = mock_completion(&mut server).await;
+        let over = registry::ModelOverride {
+            effort: Some(EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High])
+                    .with_off(true)
+                    .with_auto(true),
+            )),
+            ..registry::ModelOverride::default()
+        };
+        let adapter = GrokAdapter::new(
+            GrokConfig::new("test-key".to_string(), "grok-4.3".to_string())
+                .with_base_url(server.url())
+                .with_model_overrides(std::collections::BTreeMap::from([(
+                    "grok-4.3".to_string(),
+                    over,
+                )])),
+        )
+        .unwrap();
+
+        for requested in [
+            Off,
+            Auto,
+            Minimal,
+            Low,
+            Medium,
+            High,
+            XHigh,
+            Max,
+            Budget(512),
+        ] {
+            let error = send_capturing(
+                &adapter,
+                &captured,
+                plain_request("grok-4.3").with_reasoning(requested),
+            )
+            .await
+            .expect_err("every explicit effort is refused on an unconfirmed wire");
+            match error {
+                LlmError::UnsupportedParameter {
+                    reason, provider, ..
+                } => {
+                    assert_eq!(provider, "grok");
+                    assert!(reason.contains("not verified"), "{requested}: {reason}");
+                }
+                other => panic!("{requested}: expected UnsupportedParameter, got {other:?}"),
+            }
+            assert!(
+                captured.lock().unwrap().is_none(),
+                "{requested}: no HTTP hit"
+            );
+        }
+
+        // An unset effort is untouched.
+        let (body, _) = send_capturing(&adapter, &captured, plain_request("grok-4.3"))
+            .await
+            .unwrap();
+        for key in [
+            "reasoning_effort",
+            "thinking",
+            "enable_thinking",
+            "thinking_budget",
+        ] {
+            assert!(body.get(key).is_none(), "{key} in {body}");
+        }
+    }
 }

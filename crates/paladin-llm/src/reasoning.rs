@@ -317,8 +317,45 @@ fn refusal_reason(
     }
 }
 
+/// The effort and fallback in force for one request: the request's own value, else the provider
+/// level default from `llm.<provider>.reasoning_effort` / `reasoning_fallback` (Phase 51, D-00e).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct InForce {
+    /// The effort to admit; `None` sends nothing.
+    pub(crate) effort: Option<ReasoningEffort>,
+    /// The fallback to admit it under; `None` means refuse.
+    pub(crate) fallback: Option<ReasoningFallback>,
+    /// `llm.<provider>.reasoning_effort` when `effort` came from the provider default (the
+    /// request set none), so a refusal can name the line to change; `None` when the request
+    /// set the effort itself.
+    pub(crate) source_key: Option<String>,
+}
+
+/// Resolve the effort and fallback in force: a request-level value always wins, field by field,
+/// and with neither set nothing changes (D-00e, D-00i).
+///
+/// Called per request, never at construction, so the provider default is judged against the
+/// request's own model (research Pitfall 6).
+pub(crate) fn in_force(
+    provider: &str,
+    request_effort: Option<ReasoningEffort>,
+    request_fallback: Option<ReasoningFallback>,
+    default_effort: Option<ReasoningEffort>,
+    default_fallback: Option<ReasoningFallback>,
+) -> InForce {
+    let from_default = request_effort.is_none() && default_effort.is_some();
+    InForce {
+        effort: request_effort.or(default_effort),
+        fallback: request_fallback.or(default_fallback),
+        source_key: from_default.then(|| format!("llm.{provider}.reasoning_effort")),
+    }
+}
+
 /// Decide whether `requested` may reach the wire for `model`, before any HTTP call.
 ///
+/// - `source_key`: when the effort in force came from a provider-level default rather than the
+///   request, the configuration key that set it (`llm.<provider>.reasoning_effort`); a refusal
+///   then ends with "(set by `<key>`)" so an operator knows which line to change.
 /// - `None` requested: `Ok(None)`. Nothing is sent, the profile is not read and no metadata is
 ///   stamped (D-00i).
 /// - Otherwise the profile's effort data decides through
@@ -332,6 +369,9 @@ fn refusal_reason(
 /// # Errors
 ///
 /// [`LlmError::UnsupportedParameter`], which is `Permanent`: it is raised before the retry loop.
+// Eight inputs, each independent and each read once: bundling them into a struct would only move the
+// list to every call site.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn admit(
     provider: &str,
     model: &str,
@@ -339,12 +379,19 @@ pub(crate) fn admit(
     requested: Option<ReasoningEffort>,
     fallback: Option<ReasoningFallback>,
     max_tokens: Option<u32>,
+    source_key: Option<&str>,
     log: &SubstitutionLog,
 ) -> Result<Option<ResolvedEffort>, LlmError> {
     let Some(requested) = requested else {
         return Ok(None);
     };
     let refuse = |reason: String| {
+        // The effort came from a provider-level default, not from the request: say which line
+        // of configuration to change (research Pitfall 6).
+        let reason = match source_key {
+            Some(key) => format!("{reason} (set by `{key}`)"),
+            None => reason,
+        };
         LlmError::unsupported_parameter(
             "reasoning_effort",
             requested.to_string(),
@@ -426,6 +473,78 @@ mod tests {
     }
 
     #[test]
+    fn a_request_value_beats_the_provider_default_field_by_field() {
+        let high = Some(ReasoningEffort::High);
+        let low = Some(ReasoningEffort::Low);
+        let lower = Some(ReasoningFallback::NearestLower);
+        let higher = Some(ReasoningFallback::NearestHigher);
+        // Request effort wins; no source key because the request named it.
+        let won = in_force("deepseek", low, None, high, lower);
+        assert_eq!(won.effort, low);
+        assert_eq!(won.fallback, lower);
+        assert_eq!(won.source_key, None);
+        // Request fallback wins over the default fallback independently of the effort.
+        assert_eq!(
+            in_force("deepseek", None, higher, high, lower).fallback,
+            higher
+        );
+        // Nothing set anywhere: nothing in force.
+        let none = in_force("deepseek", None, None, None, None);
+        assert_eq!(
+            (none.effort, none.fallback, none.source_key),
+            (None, None, None)
+        );
+        // The provider default fills an unset request and names its key.
+        let defaulted = in_force("kimi", None, None, high, None);
+        assert_eq!(defaulted.effort, high);
+        assert_eq!(
+            defaulted.source_key.as_deref(),
+            Some("llm.kimi.reasoning_effort")
+        );
+        // A default fallback alone does not make the effort come from configuration.
+        assert_eq!(in_force("kimi", None, None, None, lower).source_key, None);
+    }
+
+    #[test]
+    fn a_refusal_of_a_provider_default_names_the_config_key() {
+        let log = SubstitutionLog::new();
+        let error = admit(
+            "deepseek",
+            "deepseek-flash",
+            &ModelProfile::new(),
+            Some(ReasoningEffort::High),
+            None,
+            None,
+            Some("llm.deepseek.reasoning_effort"),
+            &log,
+        )
+        .unwrap_err();
+        let LlmError::UnsupportedParameter { reason, .. } = &error else {
+            panic!("expected UnsupportedParameter, got {error:?}");
+        };
+        assert!(
+            reason.ends_with("(set by `llm.deepseek.reasoning_effort`)"),
+            "{reason}"
+        );
+        // A request-level effort names no config key.
+        let error = admit(
+            "deepseek",
+            "deepseek-flash",
+            &ModelProfile::new(),
+            Some(ReasoningEffort::High),
+            None,
+            None,
+            None,
+            &log,
+        )
+        .unwrap_err();
+        let LlmError::UnsupportedParameter { reason, .. } = &error else {
+            panic!("expected UnsupportedParameter, got {error:?}");
+        };
+        assert!(!reason.contains("set by"), "{reason}");
+    }
+
+    #[test]
     fn an_unset_effort_is_admitted_without_reading_the_profile() {
         // A default profile is `Unmeasured`, which would refuse anything: unset must not care.
         let log = SubstitutionLog::new();
@@ -436,6 +555,7 @@ mod tests {
             None,
             Some(ReasoningFallback::NearestLower),
             Some(10),
+            None,
             &log,
         );
         assert!(matches!(admitted, Ok(None)));
@@ -449,6 +569,7 @@ mod tests {
             "deepseek-flash",
             &ModelProfile::new(),
             Some(ReasoningEffort::High),
+            None,
             None,
             None,
             &log,
@@ -489,6 +610,7 @@ mod tests {
                     Some(ReasoningEffort::Low),
                     None,
                     None,
+                    None,
                     &log,
                 )
                 .unwrap_err(),
@@ -504,6 +626,7 @@ mod tests {
                 "m",
                 &wire_unsupported,
                 Some(ReasoningEffort::Low),
+                None,
                 None,
                 None,
                 &log,
@@ -528,6 +651,7 @@ mod tests {
                 Some(ReasoningEffort::Medium),
                 None,
                 None,
+                None,
                 &log,
             )
             .unwrap_err(),
@@ -546,6 +670,7 @@ mod tests {
             "m",
             &model,
             Some(ReasoningEffort::High),
+            None,
             None,
             None,
             &log,
@@ -596,6 +721,7 @@ mod tests {
             Some(ReasoningEffort::XHigh),
             None,
             None,
+            None,
             &log,
         );
         assert!(refused.is_err(), "Refuse is the default");
@@ -606,6 +732,7 @@ mod tests {
             &model,
             Some(ReasoningEffort::XHigh),
             Some(ReasoningFallback::NearestLower),
+            None,
             None,
             &log,
         )
@@ -639,6 +766,7 @@ mod tests {
                 Some(ReasoningEffort::Budget(2048)),
                 None,
                 max_tokens,
+                None,
                 &log,
             )
         };
@@ -665,6 +793,7 @@ mod tests {
                 Some(ReasoningEffort::Budget(10)),
                 None,
                 Some(5),
+                None,
                 &log,
             )
             .unwrap_err(),
@@ -684,6 +813,7 @@ mod tests {
             Some(ReasoningEffort::High),
             None,
             Some(1),
+            None,
             &log,
         );
         assert!(admitted.unwrap().is_some());

@@ -1920,5 +1920,257 @@ mod tests {
                 find_row("openai-compatible").map(|r| r.name)
             );
         }
+
+        // ── Phase 51 (D-00e, D-10): the provider-level reasoning default, end to end ────────────
+        //
+        // Every case builds the adapter through `create_from_config_with_env` from a block, the
+        // production path from `llm.<provider>` YAML to a constructed adapter, and reads the
+        // request body a mock vendor captured.
+
+        mod reasoning_defaults {
+            use super::*;
+            use crate::reasoning::{
+                REASONING_EFFECTIVE_METADATA_KEY, REASONING_REQUESTED_METADATA_KEY, ReasoningWire,
+            };
+            use paladin_ports::output::llm_port::{ReasoningEffort, ReasoningFallback};
+            use paladin_ports::output::model_profile::{EffortLevels, EffortSupport};
+
+            /// What one provider needs to prove its default reaches the wire.
+            struct Case {
+                provider: &'static str,
+                /// The operator's `effort` override for the block's default model.
+                support: EffortSupport,
+                /// The wire a self-hosted provider declares in its block.
+                wire: Option<ReasoningWire>,
+                /// The provider-level default.
+                default: ReasoningEffort,
+                /// A different effort a request sets itself.
+                other: ReasoningEffort,
+                /// Where the effort lands in the request body.
+                read: fn(&Value) -> Option<Value>,
+                /// How an effort is spelled there.
+                expect: fn(ReasoningEffort) -> Value,
+            }
+
+            /// A model no override or seed describes, so its effort is `Unmeasured`.
+            const UNPROFILED: &str = "an-unprofiled-model";
+
+            fn level_spelling(effort: ReasoningEffort) -> Value {
+                json!(effort.to_string())
+            }
+
+            fn levels(levels: &[ReasoningEffort]) -> EffortSupport {
+                EffortSupport::Supported(EffortLevels::new(levels.iter().copied()))
+            }
+
+            /// Send one request through the adapter the block builds. `with_default` puts the
+            /// case's default in the block; `effort` is the request's own.
+            async fn send(
+                case: &Case,
+                with_default: bool,
+                effort: Option<ReasoningEffort>,
+                model: Option<&str>,
+            ) -> (Option<Value>, Result<LlmResponse, LlmError>) {
+                let wire = wire_cases()
+                    .into_iter()
+                    .find(|c| c.provider == case.provider)
+                    .unwrap_or_else(|| panic!("{} is not compiled in", case.provider));
+                let mut vendor = server().await;
+                let captured = crate::test_support::mock_capture(
+                    &mut vendor,
+                    &wire.path,
+                    wire.response.clone(),
+                )
+                .await;
+                let mut block = block_for(&wire, &vendor.url()).with_models(BTreeMap::from([(
+                    wire.model.to_string(),
+                    ModelOverride {
+                        effort: Some(case.support.clone()),
+                        ..ModelOverride::default()
+                    },
+                )]));
+                if with_default {
+                    block = block.with_reasoning_effort(case.default);
+                }
+                if let Some(declared) = case.wire {
+                    block = block.with_reasoning_wire(declared);
+                }
+                let config = config_with(case.provider, block);
+                let port = LlmProviderFactory::new()
+                    .create_from_config_with_env(&config, case.provider, None, &no_env)
+                    .unwrap_or_else(|e| panic!("{}: {e}", case.provider));
+                let mut request = LlmRequest::new(
+                    model.unwrap_or(wire.model),
+                    PromptItem::new(PromptType::User(UserPrompt {
+                        query: "Hello".to_string(),
+                        context: None,
+                    }))
+                    .unwrap(),
+                );
+                if let Some(effort) = effort {
+                    request = request.with_reasoning(effort);
+                }
+                let result = port.generate(request).await;
+                let body = captured.lock().unwrap().take();
+                (body, result)
+            }
+
+            fn stamped(response: &LlmResponse) -> (Option<&str>, Option<&str>) {
+                (
+                    response
+                        .metadata
+                        .get(REASONING_REQUESTED_METADATA_KEY)
+                        .map(String::as_str),
+                    response
+                        .metadata
+                        .get(REASONING_EFFECTIVE_METADATA_KEY)
+                        .map(String::as_str),
+                )
+            }
+
+            /// The precedence contract of D-00e for one provider: request, then provider
+            /// default, then nothing; and a refused default names the key that set it.
+            async fn assert_default_applies(case: Case) {
+                let name = case.provider;
+                let default = case.default.to_string();
+                let other = case.other.to_string();
+
+                // 1. No effort on the request: the provider default is sent and stamped.
+                let (body, result) = send(&case, true, None, None).await;
+                let response = result.unwrap_or_else(|e| panic!("{name}: {e}"));
+                let body = body.unwrap_or_else(|| panic!("{name}: no request reached the wire"));
+                assert_eq!(
+                    (case.read)(&body),
+                    Some((case.expect)(case.default)),
+                    "{name}: {body}"
+                );
+                assert_eq!(
+                    stamped(&response),
+                    (Some(default.as_str()), Some(default.as_str())),
+                    "{name}"
+                );
+
+                // 2. A different request effort wins, and only it reaches the wire.
+                let (body, result) = send(&case, true, Some(case.other), None).await;
+                let response = result.unwrap_or_else(|e| panic!("{name}: {e}"));
+                let body = body.unwrap();
+                assert_eq!(
+                    (case.read)(&body),
+                    Some((case.expect)(case.other)),
+                    "{name}: {body}"
+                );
+                assert_eq!(
+                    stamped(&response),
+                    (Some(other.as_str()), Some(other.as_str())),
+                    "{name}"
+                );
+
+                // 3. The same level as the default: one field, requested and effective equal it.
+                let (body, result) = send(&case, true, Some(case.default), None).await;
+                let response = result.unwrap_or_else(|e| panic!("{name}: {e}"));
+                let body = body.unwrap();
+                assert_eq!(
+                    (case.read)(&body),
+                    Some((case.expect)(case.default)),
+                    "{name}: {body}"
+                );
+                assert_eq!(
+                    stamped(&response),
+                    (Some(default.as_str()), Some(default.as_str())),
+                    "{name}"
+                );
+
+                // 4. Neither set: nothing on the wire and nothing stamped (D-00i, the golden).
+                let (body, result) = send(&case, false, None, None).await;
+                let response = result.unwrap_or_else(|e| panic!("{name}: {e}"));
+                let body = body.unwrap();
+                assert_eq!((case.read)(&body), None, "{name}: {body}");
+                assert_eq!(stamped(&response), (None, None), "{name}");
+
+                // 5. The default on a model that cannot honour it refuses before HTTP, naming the
+                //    key (Pitfall 6); the same model with an explicit request effort does not.
+                let (body, result) = send(&case, true, None, Some(UNPROFILED)).await;
+                assert!(
+                    body.is_none(),
+                    "{name}: a refused default must not reach the wire"
+                );
+                match result {
+                    Err(LlmError::UnsupportedParameter {
+                        reason, provider, ..
+                    }) => {
+                        assert_eq!(provider, name);
+                        assert!(
+                            reason.contains(&format!("llm.{name}.reasoning_effort")),
+                            "{name}: {reason}"
+                        );
+                    }
+                    other => panic!("{name}: expected UnsupportedParameter, got {other:?}"),
+                }
+                let (body, result) = send(&case, true, Some(case.other), Some(UNPROFILED)).await;
+                assert!(body.is_none(), "{name}");
+                match result {
+                    Err(LlmError::UnsupportedParameter { reason, .. }) => assert!(
+                        !reason.contains("(set by"),
+                        "{name}: a request-level effort names no config key: {reason}"
+                    ),
+                    other => panic!("{name}: expected UnsupportedParameter, got {other:?}"),
+                }
+            }
+
+            #[cfg(feature = "deepseek")]
+            #[tokio::test]
+            async fn deepseek_applies_the_provider_default_below_the_request() {
+                assert_default_applies(Case {
+                    provider: "deepseek",
+                    support: levels(&[
+                        ReasoningEffort::Low,
+                        ReasoningEffort::High,
+                        ReasoningEffort::Max,
+                    ]),
+                    wire: None,
+                    default: ReasoningEffort::High,
+                    other: ReasoningEffort::Low,
+                    read: |body| body.get("reasoning_effort").cloned(),
+                    expect: level_spelling,
+                })
+                .await;
+            }
+
+            #[cfg(feature = "deepseek")]
+            #[tokio::test]
+            async fn a_provider_fallback_default_substitutes_when_the_model_lacks_the_level() {
+                // The block's fallback is the provider-level default; the model admits only
+                // `low` and `high`, so a default of `medium` runs as `low`.
+                let mut vendor = server().await;
+                let wire = wire_cases()
+                    .into_iter()
+                    .find(|c| c.provider == "deepseek")
+                    .unwrap();
+                let captured = crate::test_support::mock_capture(
+                    &mut vendor,
+                    &wire.path,
+                    wire.response.clone(),
+                )
+                .await;
+                let block = block_for(&wire, &vendor.url())
+                    .with_models(BTreeMap::from([(
+                        wire.model.to_string(),
+                        ModelOverride {
+                            effort: Some(levels(&[ReasoningEffort::Low, ReasoningEffort::High])),
+                            ..ModelOverride::default()
+                        },
+                    )]))
+                    .with_reasoning_effort(ReasoningEffort::Medium)
+                    .with_reasoning_fallback(ReasoningFallback::NearestLower);
+                let config = config_with("deepseek", block);
+                let port = LlmProviderFactory::new()
+                    .create_from_config_with_env(&config, "deepseek", None, &no_env)
+                    .unwrap();
+                let response = generate_once(port.as_ref(), wire.model).await.unwrap();
+                let body = captured.lock().unwrap().take().unwrap();
+                assert_eq!(body["reasoning_effort"], "low", "{body}");
+                assert_eq!(stamped(&response), (Some("medium"), Some("low")));
+            }
+        }
     }
 }

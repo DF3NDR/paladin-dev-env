@@ -308,6 +308,36 @@ macro_rules! config_knob_builders {
             self.model_overrides = model_overrides;
             self
         }
+
+        /// Set the provider-level default reasoning effort (Phase 51, D-00e).
+        ///
+        /// Sent for every request that sets no effort of its own, resolved per request against
+        /// that request's own model. A request's own effort, or an agent's, always wins over
+        /// it. Set it only where every model this provider serves supports it: a request on a
+        /// model that cannot honour it is refused before any HTTP call, with a reason naming
+        /// `llm.<provider>.reasoning_effort`. Nothing is set by default (D-00i).
+        #[must_use]
+        pub fn with_reasoning_effort(
+            mut self,
+            effort: paladin_ports::output::llm_port::ReasoningEffort,
+        ) -> Self {
+            self.reasoning_effort = Some(effort);
+            self
+        }
+
+        /// Set the provider-level default fallback for reasoning efforts (Phase 51, D-05).
+        ///
+        /// Applies when the effort in force (a request's, or the provider default) is not one
+        /// the model accepts; a request's own fallback wins over it. Without one, an effort the
+        /// model does not accept is refused before any HTTP call.
+        #[must_use]
+        pub fn with_reasoning_fallback(
+            mut self,
+            fallback: paladin_ports::output::llm_port::ReasoningFallback,
+        ) -> Self {
+            self.reasoning_fallback = Some(fallback);
+            self
+        }
     };
 }
 #[allow(unused_imports)]
@@ -2842,5 +2872,119 @@ mod endpoint_builder_tests {
             .with_timeout_seconds(7);
             assert_eq!((config.base_url.as_str(), config.timeout_seconds), (URL, 7));
         }
+    }
+
+    /// The provider-level reasoning default builders `config_knob_builders!`'s `@common` arm
+    /// generates (Phase 51, D-00e, D-05): every `*Config` starts with neither set (D-00i), the
+    /// builders set both, and `Debug` names both fields while still redacting the key (T-51-22).
+    #[test]
+    fn reasoning_default_builders_work_on_every_config() {
+        use paladin_ports::output::llm_port::{ReasoningEffort, ReasoningFallback};
+
+        const KEY: &str = "never-printed-0123456789";
+
+        /// Assert the shared contract on one config, given as its three observations.
+        fn check(
+            name: &str,
+            unset: (Option<ReasoningEffort>, Option<ReasoningFallback>, String),
+            set: (Option<ReasoningEffort>, Option<ReasoningFallback>, String),
+        ) {
+            assert_eq!(
+                (unset.0, unset.1),
+                (None, None),
+                "{name}: no compiled-in reasoning default (D-00i)"
+            );
+            assert_eq!(
+                (set.0, set.1),
+                (
+                    Some(ReasoningEffort::Low),
+                    Some(ReasoningFallback::NearestLower)
+                ),
+                "{name}: the builders set both fields"
+            );
+            for debug in [&unset.2, &set.2] {
+                assert!(debug.contains("reasoning_effort"), "{name}: {debug}");
+                assert!(debug.contains("reasoning_fallback"), "{name}: {debug}");
+                assert!(!debug.contains(KEY), "{name}: Debug leaked the key");
+            }
+        }
+
+        macro_rules! probe {
+            ($name:literal, $make:expr) => {{
+                let unset = $make;
+                let unset_view = (
+                    unset.reasoning_effort,
+                    unset.reasoning_fallback,
+                    format!("{unset:?}"),
+                );
+                let set = $make
+                    .with_reasoning_effort(ReasoningEffort::Low)
+                    .with_reasoning_fallback(ReasoningFallback::NearestLower);
+                let set_view = (
+                    set.reasoning_effort,
+                    set.reasoning_fallback,
+                    format!("{set:?}"),
+                );
+                check($name, unset_view, set_view);
+            }};
+        }
+
+        #[cfg(feature = "openai")]
+        probe!(
+            "openai",
+            crate::openai::OpenAIConfig::new(KEY.to_string(), "gpt-5.4".to_string())
+        );
+        #[cfg(feature = "anthropic")]
+        probe!(
+            "anthropic",
+            crate::anthropic::AnthropicConfig::new(KEY.to_string(), "claude-haiku-5-5".to_string())
+        );
+        #[cfg(feature = "deepseek")]
+        probe!(
+            "deepseek",
+            crate::deepseek::DeepSeekConfig::new(KEY.to_string(), "deepseek-chat".to_string())
+        );
+        #[cfg(feature = "gemini")]
+        probe!(
+            "gemini",
+            crate::gemini::GeminiConfig::new(KEY.to_string(), "gemini-3.5-flash".to_string())
+        );
+        #[cfg(feature = "kimi")]
+        probe!(
+            "kimi",
+            crate::kimi::KimiConfig::new(KEY.to_string(), "kimi-k3".to_string())
+        );
+        #[cfg(feature = "qwen")]
+        probe!(
+            "qwen",
+            crate::qwen::QwenConfig::new(KEY.to_string(), "qwen-plus".to_string())
+        );
+        #[cfg(feature = "grok")]
+        probe!(
+            "grok",
+            crate::grok::GrokConfig::new(KEY.to_string(), "grok-4.3".to_string())
+        );
+        #[cfg(feature = "ollama")]
+        probe!(
+            "ollama",
+            crate::ollama::OllamaConfig::new(
+                "http://localhost:11434".to_string(),
+                "llama3".to_string()
+            )
+        );
+        #[cfg(feature = "openai-compatible")]
+        probe!("openai-compatible", {
+            let capabilities =
+                crate::openai_compatible::OpenAiCompatibleCapabilitiesConfig::from_lookup(&|_| {
+                    None
+                })
+                .expect("no variables set is the conservative default");
+            crate::openai_compatible::OpenAiCompatibleConfig::new(
+                KEY.to_string(),
+                "https://gateway.example/v1".to_string(),
+                "some-model".to_string(),
+                capabilities,
+            )
+        });
     }
 }

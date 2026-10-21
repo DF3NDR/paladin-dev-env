@@ -9,6 +9,9 @@
 //! 3. the provider's legacy environment variables (exactly the ones its `from_env` reads),
 //! 4. the adapter's compiled default.
 //!
+//! The reasoning defaults (`reasoning_effort`, `reasoning_fallback`, Phase 51) are read from the
+//! block alone: there is no environment variable for them and no compiled default (D-00i).
+//!
 //! An environment variable never overrides a value written in the block: the operator who typed
 //! it into the file made the more specific statement (PARITY-03 prohibition, T-50-09-05).
 //!
@@ -49,7 +52,10 @@
 
 use std::collections::BTreeMap;
 
+use paladin_ports::output::llm_port::{ReasoningEffort, ReasoningFallback};
+
 use crate::config::llm::LlmProviderConfig;
+use crate::reasoning::ReasoningWire;
 use crate::registry::{ModelOverride, REASONING_DEFAULT_TIMEOUT_SECONDS};
 
 /// The longest model id construction accepts, in characters.
@@ -198,6 +204,14 @@ pub(crate) struct Layered {
     pub(crate) context_window: Option<u32>,
     /// The block's per-model overrides.
     pub(crate) model_overrides: BTreeMap<String, ModelOverride>,
+    /// The block's provider-level default reasoning effort (Phase 51, D-00e). Block only: there
+    /// is no environment variable and no compiled default (D-00i).
+    pub(crate) reasoning_effort: Option<ReasoningEffort>,
+    /// The block's provider-level default reasoning fallback (Phase 51, D-05). Block only.
+    pub(crate) reasoning_fallback: Option<ReasoningFallback>,
+    /// The block's declared reasoning wire (Phase 51, D-10), carried only for `ollama` and
+    /// `openai-compatible`; any other provider's block that sets it is a resolve problem.
+    pub(crate) reasoning_wire: Option<ReasoningWire>,
 }
 
 impl std::fmt::Debug for Layered {
@@ -211,6 +225,9 @@ impl std::fmt::Debug for Layered {
             .field("max_tokens", &self.max_tokens)
             .field("context_window", &self.context_window)
             .field("model_overrides", &self.model_overrides)
+            .field("reasoning_effort", &self.reasoning_effort)
+            .field("reasoning_fallback", &self.reasoning_fallback)
+            .field("reasoning_wire", &self.reasoning_wire)
             .finish()
     }
 }
@@ -319,6 +336,10 @@ fn layered_number<T: std::str::FromStr>(
         }
     }
 }
+
+/// The providers whose `llm.<provider>.reasoning_wire` the operator may set (Phase 51, D-10):
+/// the self-hosted endpoints, whose wire only the operator can know.
+const REASONING_WIRE_PROVIDERS: [&str; 2] = ["ollama", "openai-compatible"];
 
 /// The core of the layering: resolve every input, collecting each problem found while filling the
 /// field from the next layer down. The first problem is the one a strict caller reports.
@@ -471,6 +492,17 @@ fn resolve(
     )
     .or(defaults.max_tokens);
 
+    // Reasoning wire (Phase 51, D-10): only a self-hosted endpoint can declare it. A named vendor
+    // changes its wire through a Paladin release after the dated probe, never through
+    // configuration, so a block that sets it is refused rather than silently ignored.
+    let reasoning_wire = block.and_then(|b| b.reasoning_wire);
+    if reasoning_wire.is_some() && !REASONING_WIRE_PROVIDERS.contains(&provider) {
+        problems.push(format!(
+            "{subject_text}: `llm.{provider}.reasoning_wire` is only accepted for `ollama` and \
+             `openai-compatible`; named vendors change their wire only through a Paladin release"
+        ));
+    }
+
     let layered = Layered {
         api_key,
         base_url,
@@ -480,6 +512,9 @@ fn resolve(
         max_tokens,
         context_window: block.and_then(|b| b.context_window),
         model_overrides: block.map(|b| b.models.clone()).unwrap_or_default(),
+        reasoning_effort: block.and_then(|b| b.reasoning_effort),
+        reasoning_fallback: block.and_then(|b| b.reasoning_fallback),
+        reasoning_wire,
     };
     (layered, problems)
 }

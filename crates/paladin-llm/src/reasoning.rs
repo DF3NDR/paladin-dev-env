@@ -338,7 +338,7 @@ pub(crate) fn admit(
     profile: &ModelProfile,
     requested: Option<ReasoningEffort>,
     fallback: Option<ReasoningFallback>,
-    _max_tokens: Option<u32>,
+    max_tokens: Option<u32>,
     log: &SubstitutionLog,
 ) -> Result<Option<ResolvedEffort>, LlmError> {
     let Some(requested) = requested else {
@@ -357,6 +357,17 @@ pub(crate) fn admit(
         .effort
         .resolve(requested, fallback.unwrap_or_default())
         .map_err(|refusal| refuse(refusal_reason(provider, model, refusal, &profile.effort)))?;
+    // A budget is part of the output cap: a request whose cap is not above the budget leaves the
+    // model no room to answer. Checked on the effective cap, after the profile accepted the
+    // budget, so a profile refusal is reported first.
+    if let (ReasoningEffort::Budget(budget), Some(cap)) = (resolved.effective, max_tokens)
+        && budget >= cap
+    {
+        return Err(refuse(format!(
+            "a reasoning budget must be below max_tokens ({cap}); the budget is {budget}. Raise \
+             max_tokens above the budget or lower the budget"
+        )));
+    }
     if resolved.substituted() {
         log.record(provider, model, resolved.requested, resolved.effective);
     }
@@ -609,6 +620,76 @@ mod tests {
             ReasoningEffort::XHigh,
             ReasoningEffort::High
         ));
+    }
+
+    fn budget_profile() -> ModelProfile {
+        profile(
+            EffortLevels::new([ReasoningEffort::High]).with_budget(BudgetBounds::new(1024, 32_000)),
+        )
+    }
+
+    #[test]
+    fn a_budget_must_stay_below_max_tokens_by_at_least_one() {
+        let log = SubstitutionLog::new();
+        let run = |max_tokens: Option<u32>| {
+            admit(
+                "kimi",
+                "m",
+                &budget_profile(),
+                Some(ReasoningEffort::Budget(2048)),
+                None,
+                max_tokens,
+                &log,
+            )
+        };
+        let reason = reason_of(run(Some(2048)).unwrap_err());
+        assert!(
+            reason.contains("budget must be below max"),
+            "{reason}"
+        );
+        assert!(reason.contains("2048"), "{reason}");
+        assert!(
+            run(Some(2049)).unwrap().is_some(),
+            "n == max_tokens - 1 passes"
+        );
+        assert!(run(Some(100)).is_err(), "a budget above the cap is refused");
+        assert!(run(None).unwrap().is_some(), "no cap, no output check");
+    }
+
+    #[test]
+    fn the_profile_refusal_wins_over_the_output_check() {
+        // A budget outside the span is refused as out of bounds, whatever max_tokens says.
+        let log = SubstitutionLog::new();
+        let reason = reason_of(
+            admit(
+                "kimi",
+                "m",
+                &budget_profile(),
+                Some(ReasoningEffort::Budget(10)),
+                None,
+                Some(5),
+                &log,
+            )
+            .unwrap_err(),
+        );
+        assert!(reason.contains("1024"), "{reason}");
+        assert!(!reason.contains("max_tokens"), "{reason}");
+    }
+
+    #[test]
+    fn the_output_check_applies_to_budgets_only() {
+        let log = SubstitutionLog::new();
+        let model = profile(EffortLevels::new([ReasoningEffort::High]));
+        let admitted = admit(
+            "kimi",
+            "m",
+            &model,
+            Some(ReasoningEffort::High),
+            None,
+            Some(1),
+            &log,
+        );
+        assert!(admitted.unwrap().is_some());
     }
 
     #[test]

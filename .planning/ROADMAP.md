@@ -1820,7 +1820,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 51-08-PLAN.md — `AgentDefinition` YAML fields and agent-host key naming for build-time refusals (wave 6)
+- [x] 51-08-PLAN.md — `AgentDefinition` YAML fields and agent-host key naming for build-time refusals (wave 6)
 
 **Wave 7** *(blocked on Wave 6 completion)*
 

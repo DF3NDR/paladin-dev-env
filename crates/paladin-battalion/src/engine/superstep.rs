@@ -53,6 +53,9 @@ use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::parley::{
     ParleyId, ParleyKind, ParleyRequest, ParleyResponse,
 };
+use paladin_core::platform::container::reasoning::{
+    REASONING_EFFECTIVE_METADATA_KEY, REASONING_REQUESTED_METADATA_KEY,
+};
 use paladin_core::platform::container::run_scope::RunScope;
 use paladin_core::platform::container::structured::SchemaRef;
 use paladin_core::platform::container::token_usage::TokenUsage;
@@ -698,11 +701,23 @@ async fn race_attempt(
         // accumulator it recorded into is not (G-50-5a, plan 50-29).
         _ = deadline_or_pending(deadline) => {
             let (usage, cost) = recorded_spend(&spend_scope);
-            (None, usage, cost, Err(NodeFailure::Timeout(deadline_kind)))
+            (
+                None,
+                usage,
+                cost,
+                Err(NodeFailure::Timeout(deadline_kind)),
+                AttemptReasoning::default(),
+            )
         }
         _ = idle_or_pending(heartbeat, bounds.idle, node_id, trace, heartbeat_last_emitted, heartbeat_interval) => {
             let (usage, cost) = recorded_spend(&spend_scope);
-            (None, usage, cost, Err(NodeFailure::Timeout(TimeoutKind::Idle)))
+            (
+                None,
+                usage,
+                cost,
+                Err(NodeFailure::Timeout(TimeoutKind::Idle)),
+                AttemptReasoning::default(),
+            )
         }
     }
 }
@@ -723,9 +738,9 @@ fn recorded_spend(scope: &SpendScope) -> (TokenUsage, Option<Cost>) {
 /// unchanged (A1-50-29: one source per outcome, never two).
 fn with_incurred_spend(result: NodeDispatchResult, scope: &SpendScope) -> NodeDispatchResult {
     match result {
-        (paladin_id, usage, None, Err(failure)) if usage == TokenUsage::default() => {
+        (paladin_id, usage, None, Err(failure), reasoning) if usage == TokenUsage::default() => {
             let (usage, cost) = recorded_spend(scope);
-            (paladin_id, usage, cost, Err(failure))
+            (paladin_id, usage, cost, Err(failure), reasoning)
         }
         other => other,
     }
@@ -1092,7 +1107,38 @@ type NodeDispatchResult = (
     TokenUsage,
     Option<Cost>,
     Result<Directive, NodeFailure>,
+    AttemptReasoning,
 );
+
+/// The reasoning effort one successful Paladin or structured-output attempt
+/// ran with, as the attempt's own response metadata recorded it (D-11,
+/// REASON-05): the `paladin.reasoning_requested` and
+/// `paladin.reasoning_effective` values, carried beside `cost` to the
+/// attempt's `TraceEvent::NodeFinished`.
+///
+/// Read only from the attempt's `PaladinResult.run_metadata`, never from the
+/// agent's configured effort, so the trace can only show an effort the
+/// adapter reported it applied. `AttemptReasoning::default()` (both `None`)
+/// is every other node kind, every failed or timed-out attempt, and any
+/// attempt whose adapter stamped nothing -- mirroring how `cost` is `None`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct AttemptReasoning {
+    /// `paladin.reasoning_requested`, a `ReasoningEffort` `Display` spelling.
+    requested: Option<String>,
+    /// `paladin.reasoning_effective`, a `ReasoningEffort` `Display` spelling.
+    effective: Option<String>,
+}
+
+impl AttemptReasoning {
+    /// Reads the two reasoning keys out of a result's `run_metadata`; any
+    /// other key is ignored.
+    fn from_run_metadata(run_metadata: &BTreeMap<String, String>) -> Self {
+        Self {
+            requested: run_metadata.get(REASONING_REQUESTED_METADATA_KEY).cloned(),
+            effective: run_metadata.get(REASONING_EFFECTIVE_METADATA_KEY).cloned(),
+        }
+    }
+}
 
 /// Executes a [`NodeSpec::Gate`] node's no-`run`-body-of-its-own contract
 /// (HITL-01, D-05), dispatched exactly like a `Function` node
@@ -1280,6 +1326,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                     TokenUsage::default(),
                     None,
                     result.map_err(NodeFailure::Node),
+                    AttemptReasoning::default(),
                 )
             }
             NodeDispatch::Paladin {
@@ -1314,6 +1361,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                             TokenUsage::default(),
                             None,
                             Err(NodeFailure::Node(StateNodeError(e.to_string()))),
+                            AttemptReasoning::default(),
                         );
                     }
                 };
@@ -1353,6 +1401,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                                  rejected this before any node ran (node output_field: {})",
                                 output_field.as_str()
                             )))),
+                            AttemptReasoning::default(),
                         );
                     };
                     return match executor
@@ -1380,9 +1429,14 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                                 }
                                 _ => (structured.raw.usage.clone(), structured.raw.cost.clone()),
                             };
+                            // --- D-11: the last call's own adapter-stamped
+                            // effort, from `raw` (the same call whose
+                            // response `raw` is), never from configuration.
+                            let reasoning =
+                                AttemptReasoning::from_run_metadata(&structured.raw.run_metadata);
                             let mut delta = StateDelta::new();
                             delta.set_raw(output_field, structured.value);
-                            (paladin_id, usage, cost, Ok(delta.into()))
+                            (paladin_id, usage, cost, Ok(delta.into()), reasoning)
                         }
                         // --- D-29, Phase 25 D-05: exhaustion is ALWAYS
                         // `Transience::Unknown` here -- never delegated to
@@ -1402,6 +1456,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                             TokenUsage::default(),
                             None,
                             Err(NodeFailure::StructuredOutputInvalid(err)),
+                            AttemptReasoning::default(),
                         ),
                         // Any OTHER underlying failure (e.g. an LLM call
                         // failure inside the repair loop) keeps its own
@@ -1412,6 +1467,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                             TokenUsage::default(),
                             None,
                             Err(NodeFailure::Paladin(other)),
+                            AttemptReasoning::default(),
                         ),
                     };
                 }
@@ -1440,16 +1496,28 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                         // carried beside usage exactly like the structured-
                         // output arm above.
                         let cost = result.cost.clone();
+                        // --- D-11 (REASON-05): this attempt's own
+                        // requested / effective effort as its adapter
+                        // recorded it on the response metadata; never the
+                        // agent's configured value. Only a successful
+                        // result reaches here, so a failed attempt keeps
+                        // `AttemptReasoning::default()`.
+                        let reasoning = AttemptReasoning::from_run_metadata(&result.run_metadata);
                         // --- CF-02, D-11: the `DirectiveParser` call replacing
                         // the prior unconditional `delta.set(output_field,
                         // result.output.clone())` write. `PlainOutput`
                         // reproduces that write verbatim; `StructuredDirective`
                         // parses D-11's envelope and applies only its `delta`.
                         match directive_parser.parse(&result.output, &output_field) {
-                            Ok(directive) => (paladin_id, usage, cost, Ok(directive)),
-                            Err(e) => {
-                                (paladin_id, usage, cost, Err(NodeFailure::DirectiveParse(e)))
-                            }
+                            Ok(directive) => (paladin_id, usage, cost, Ok(directive), reasoning),
+                            // A failed attempt reports no effort (D-11).
+                            Err(e) => (
+                                paladin_id,
+                                usage,
+                                cost,
+                                Err(NodeFailure::DirectiveParse(e)),
+                                AttemptReasoning::default(),
+                            ),
                         }
                     }
                     // --- D-10, G-50-5a (plan 50-29): the neutral pair HERE
@@ -1464,6 +1532,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                         TokenUsage::default(),
                         None,
                         Err(NodeFailure::Paladin(e)),
+                        AttemptReasoning::default(),
                     ),
                 }
             }
@@ -1527,6 +1596,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                                 "battalion node {}: failed to derive child thread id: {e}",
                                 ctx.node_id
                             )))),
+                            AttemptReasoning::default(),
                         );
                     }
                 };
@@ -1577,6 +1647,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                                     "battalion node {}: failed to read child thread history: {e}",
                                     ctx.node_id
                                 )))),
+                                AttemptReasoning::default(),
                             );
                         }
                     }
@@ -1596,7 +1667,13 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                             delta.set_raw(parent_field.clone(), value.clone());
                         }
                     }
-                    return (None, TokenUsage::default(), None, Ok(delta.into()));
+                    return (
+                        None,
+                        TokenUsage::default(),
+                        None,
+                        Ok(delta.into()),
+                        AttemptReasoning::default(),
+                    );
                 }
 
                 let (
@@ -1638,6 +1715,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                                          battlefield: {e}",
                                             ctx.node_id
                                         )))),
+                                        AttemptReasoning::default(),
                                     );
                                 }
                             };
@@ -1651,6 +1729,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                                      field(s): {e}",
                                     ctx.node_id
                                 )))),
+                                AttemptReasoning::default(),
                             );
                         }
                         (
@@ -1761,7 +1840,13 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                                 delta.set_raw(parent_field.clone(), value.clone());
                             }
                         }
-                        (None, TokenUsage::default(), None, Ok(delta.into()))
+                        (
+                            None,
+                            TokenUsage::default(),
+                            None,
+                            Ok(delta.into()),
+                            AttemptReasoning::default(),
+                        )
                     }
                     Ok(RunOutcome::Halted { cause, .. }) => {
                         // --- D-21, 42-REVIEW CR-1: the child halted at its
@@ -1780,6 +1865,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                             TokenUsage::default(),
                             None,
                             Err(NodeFailure::ChildHalted(cause)),
+                            AttemptReasoning::default(),
                         )
                     }
                     Ok(RunOutcome::AwaitingInput { .. }) => (
@@ -1792,6 +1878,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                                 child_thread,
                             },
                         )),
+                        AttemptReasoning::default(),
                     ),
                     Ok(RunOutcome::Failed { error, .. }) => (
                         None,
@@ -1802,6 +1889,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                             child_thread,
                             source: Box::new(error),
                         })),
+                        AttemptReasoning::default(),
                     ),
                     Err(error) => (
                         None,
@@ -1812,6 +1900,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                             child_thread,
                             source: Box::new(error),
                         })),
+                        AttemptReasoning::default(),
                     ),
                 }
             }
@@ -3026,6 +3115,8 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                             duration_ms,
                             usage: TokenUsage::default(),
                             cost: None,
+                            reasoning_requested: None,
+                            reasoning_effective: None,
                             cache_hit: true,
                         });
                         return NodeTaskOutput {
@@ -3100,18 +3191,20 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                             }
                         }
 
-                        let (paladin_id, usage, cost, outcome) = match decision {
+                        let (paladin_id, usage, cost, outcome, reasoning) = match decision {
                             InterceptDecision::Skip(reason) => (
                                 None,
                                 TokenUsage::default(),
                                 None,
                                 NodeRunOutcome::Skipped(reason),
+                                AttemptReasoning::default(),
                             ),
                             InterceptDecision::Fail(err) => (
                                 None,
                                 TokenUsage::default(),
                                 None,
                                 NodeRunOutcome::Failed(NodeFailure::Node(err)),
+                                AttemptReasoning::default(),
                             ),
                             InterceptDecision::Proceed => match Arc::clone(&sem)
                                 .acquire_owned()
@@ -3126,22 +3219,23 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                                     // it recorded is still counted, G-50-5a)
                                     // and the failure names the bound by
                                     // typed `TimeoutKind`.
-                                    let (paladin_id, usage, cost, result) = race_attempt(
-                                        execute_vanguard_node(
-                                            dispatch.clone(),
-                                            &snap,
-                                            &ctx,
-                                            &port,
-                                            &node_structured_executor,
-                                        ),
-                                        &attempt_bounds,
-                                        &ctx.heartbeat,
-                                        &nid,
-                                        &node_trace,
-                                        &node_heartbeat_last_emitted,
-                                        heartbeat_interval,
-                                    )
-                                    .await;
+                                    let (paladin_id, usage, cost, result, reasoning) =
+                                        race_attempt(
+                                            execute_vanguard_node(
+                                                dispatch.clone(),
+                                                &snap,
+                                                &ctx,
+                                                &port,
+                                                &node_structured_executor,
+                                            ),
+                                            &attempt_bounds,
+                                            &ctx.heartbeat,
+                                            &nid,
+                                            &node_trace,
+                                            &node_heartbeat_last_emitted,
+                                            heartbeat_interval,
+                                        )
+                                        .await;
                                     match result {
                                         Ok(mut directive) => {
                                             // --- ENG-FR-22: run every `after` in
@@ -3184,6 +3278,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                                                 usage,
                                                 cost,
                                                 NodeRunOutcome::Succeeded(directive),
+                                                reasoning,
                                             )
                                         }
                                         // --- 42-REVIEW CR-1: a halted child is
@@ -3193,10 +3288,15 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                                             usage,
                                             cost,
                                             NodeRunOutcome::ChildHalted(cause),
+                                            AttemptReasoning::default(),
                                         ),
-                                        Err(e) => {
-                                            (paladin_id, usage, cost, NodeRunOutcome::Failed(e))
-                                        }
+                                        Err(e) => (
+                                            paladin_id,
+                                            usage,
+                                            cost,
+                                            NodeRunOutcome::Failed(e),
+                                            AttemptReasoning::default(),
+                                        ),
                                     }
                                 }
                                 // Semaphore is never `.close()`d anywhere in this
@@ -3215,6 +3315,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                                         "internal error: superstep semaphore closed unexpectedly"
                                             .to_string(),
                                     ))),
+                                    AttemptReasoning::default(),
                                 ),
                             },
                         };
@@ -3237,6 +3338,15 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                             // error -- or the neutral pair when it recorded
                             // nothing.
                             cost: cost.clone(),
+                            // D-11 (REASON-05): this attempt's own requested
+                            // and effective effort, read from the attempt's
+                            // response metadata -- the Paladin arm's
+                            // `PaladinResult.run_metadata` or the structured-
+                            // output arm's `structured.raw.run_metadata`;
+                            // `None` for every other node kind, a failed
+                            // attempt and a cache hit (mirroring `cost`).
+                            reasoning_requested: reasoning.requested.clone(),
+                            reasoning_effective: reasoning.effective.clone(),
                             // Plan 25-13 is the only plan that sets this
                             // `true` (a served-from-cache outcome).
                             cache_hit: false,
@@ -14935,6 +15045,23 @@ mod tests {
             node_events,
             vec![("NodeStarted", 1, None), ("NodeFinished", 1, Some(true))]
         );
+        // D-11: a cache hit ran nothing, so it carries no effort.
+        let hit_reasoning: Vec<(Option<String>, Option<String>)> = sink
+            .events()
+            .await
+            .iter()
+            .filter_map(|record| match &record.event {
+                TraceEvent::NodeFinished {
+                    reasoning_requested,
+                    reasoning_effective,
+                    ..
+                } if record.thread_id == hit_thread => {
+                    Some((reasoning_requested.clone(), reasoning_effective.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(hit_reasoning, vec![(None, None)]);
         // And the populating run's own pair was NOT a hit.
         let miss_thread = ThreadId::new("trace-1").unwrap();
         let miss_finished: Vec<bool> = sink

@@ -794,6 +794,8 @@ mod tests {
                     duration_ms: 5,
                     usage: TokenUsage::new(3, 0),
                     cost: None,
+                    reasoning_requested: None,
+                    reasoning_effective: None,
                     cache_hit: false,
                 },
             ))
@@ -890,6 +892,8 @@ mod tests {
                 duration_ms: 5,
                 usage: TokenUsage::new(42, 0),
                 cost: None,
+                reasoning_requested: None,
+                reasoning_effective: None,
                 cache_hit: true,
             },
         ))
@@ -1024,6 +1028,8 @@ mod tests {
                     duration_ms: 5,
                     usage: TokenUsage::new(1, 0),
                     cost: None,
+                    reasoning_requested: None,
+                    reasoning_effective: None,
                     cache_hit: false,
                 },
             ))
@@ -1057,6 +1063,8 @@ mod tests {
                 duration_ms: 5,
                 usage: TokenUsage::new(2, 0),
                 cost: None,
+                reasoning_requested: None,
+                reasoning_effective: None,
                 cache_hit: false,
             },
         ))
@@ -1179,6 +1187,8 @@ mod tests {
                 duration_ms: 5,
                 usage: TokenUsage::new(0, 0),
                 cost: None,
+                reasoning_requested: None,
+                reasoning_effective: None,
                 cache_hit: false,
             },
         ))

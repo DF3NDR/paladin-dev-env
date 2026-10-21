@@ -271,6 +271,24 @@ pub enum TraceEvent {
         /// to the pre-field JSON shape (the `served_by`/D-25 precedent).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cost: Option<Cost>,
+        /// The reasoning effort this attempt asked for, as its adapter
+        /// recorded it under `paladin.reasoning_requested` (D-11,
+        /// REASON-05), spelled as `ReasoningEffort`'s `Display`. Read only
+        /// from the attempt's own response metadata, never from the agent's
+        /// configured value. `None` for a non-Paladin node, a cache hit, a
+        /// failed attempt, or a run with no effort in force.
+        /// `#[serde(default)]` so a `run_traces` row persisted before this
+        /// field existed deserializes with `reasoning_requested == None`,
+        /// and a `None` emits no key (the `cost` precedent).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning_requested: Option<String>,
+        /// The reasoning effort this attempt actually ran with, as its
+        /// adapter recorded it under `paladin.reasoning_effective` (D-11,
+        /// REASON-05): equal to `reasoning_requested` unless the request's
+        /// fallback substituted a neighbouring level. `None` in the same
+        /// cases as `reasoning_requested`. Same serde treatment.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning_effective: Option<String>,
         /// Whether this attempt's outcome was served from the node cache
         /// (FT-06) instead of by executing the node.
         cache_hit: bool,
@@ -648,6 +666,8 @@ mod tests {
                 duration_ms: 5,
                 usage: TokenUsage::default(),
                 cost: None,
+                reasoning_requested: None,
+                reasoning_effective: None,
                 cache_hit: false,
             },
             TraceEvent::EdgeEvaluated {
@@ -903,6 +923,54 @@ mod tests {
             TraceEvent::RunFinished { cost, .. } => assert_eq!(cost, None),
             other => panic!("expected RunFinished, got {other:?}"),
         }
+    }
+
+    /// D-11: `NodeFinished` with both reasoning fields `None` serialises
+    /// with neither key (byte-identical to the pre-field shape); a row
+    /// written before the fields existed deserialises with both `None`;
+    /// `Some` values round-trip.
+    #[test]
+    fn node_finished_reasoning_fields_are_skipped_when_none_and_default_on_read() {
+        let node_json = r#"{"thread_id":"t1","seq":1,"at":"2026-01-01T00:00:00Z","kind":"node_finished","superstep":1,"node_id":"n1","attempt":1,"outcome":"Succeeded","duration_ms":5,"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0,"cache_read_tokens":null,"cache_write_tokens":null,"reasoning_tokens":null},"cache_hit":false}"#;
+        let record: TraceRecord = serde_json::from_str(node_json).unwrap();
+        match &record.event {
+            TraceEvent::NodeFinished {
+                reasoning_requested,
+                reasoning_effective,
+                ..
+            } => {
+                assert_eq!(*reasoning_requested, None);
+                assert_eq!(*reasoning_effective, None);
+            }
+            other => panic!("expected NodeFinished, got {other:?}"),
+        }
+        let reserialised = serde_json::to_string(&record).unwrap();
+        assert!(
+            !reserialised.contains("reasoning_requested")
+                && !reserialised.contains("reasoning_effective"),
+            "a None pair must emit neither key: {reserialised}"
+        );
+
+        let set = TraceRecord {
+            event: TraceEvent::NodeFinished {
+                superstep: 1,
+                node_id: NodeId::new("n1"),
+                attempt: 1,
+                outcome: NodeOutcomeKind::Succeeded,
+                duration_ms: 5,
+                usage: TokenUsage::default(),
+                cost: None,
+                reasoning_requested: Some("high".to_string()),
+                reasoning_effective: Some("medium".to_string()),
+                cache_hit: false,
+            },
+            ..record
+        };
+        let json = serde_json::to_string(&set).unwrap();
+        assert!(json.contains(r#""reasoning_requested":"high""#), "{json}");
+        assert!(json.contains(r#""reasoning_effective":"medium""#), "{json}");
+        let back: TraceRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, set);
     }
 
     /// D-10: a `TraceRecord` whose `RunFinished.cost` is `Some` serializes

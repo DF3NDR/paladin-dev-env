@@ -849,6 +849,8 @@ mod tests {
                 duration_ms: 1,
                 usage: TokenUsage::new(1, 0),
                 cost: None,
+                reasoning_requested: None,
+                reasoning_effective: None,
                 cache_hit: false,
             },
         )

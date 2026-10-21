@@ -895,6 +895,8 @@ mod tests {
                     duration_ms: 10,
                     usage: TokenUsage::new(5, 0),
                     cost: None,
+                    reasoning_requested: None,
+                    reasoning_effective: None,
                     cache_hit: false,
                 },
             ),

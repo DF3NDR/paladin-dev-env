@@ -650,6 +650,8 @@ fn map_trace_event_covers_exactly_seven_of_twelve() {
                 duration_ms: 5,
                 usage: TokenUsage::default(),
                 cost: None,
+                reasoning_requested: None,
+                reasoning_effective: None,
                 cache_hit: false,
             },
             true,

@@ -416,6 +416,8 @@ mod tests {
                 duration_ms: 5,
                 usage: TokenUsage::new(11, 7),
                 cost: None,
+                reasoning_requested: None,
+                reasoning_effective: None,
                 cache_hit: false,
             },
             TraceEvent::RunFinished {

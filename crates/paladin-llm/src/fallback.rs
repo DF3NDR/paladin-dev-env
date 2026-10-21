@@ -1551,6 +1551,8 @@ mod tests {
                     duration_ms: 0,
                     usage: paladin_core::platform::container::token_usage::TokenUsage::default(),
                     cost: None,
+                    reasoning_requested: None,
+                    reasoning_effective: None,
                     cache_hit: false,
                 });
             })

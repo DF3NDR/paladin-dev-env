@@ -40,7 +40,9 @@
 //! the fixture's own vendor total by 1000 and asserts the mapped usage is unchanged (D-02) and the
 //! disagreement recorded. Plan 50-27 (G-50-5a) added `billed_failures_carry_their_usage`: an
 //! empty completion (buffered and streamed) and a typed refusal carry the usage their body
-//! reported on the error ([`LlmError::billed_usage`]), bringing the suite to twenty cases. A
+//! reported on the error ([`LlmError::billed_usage`]), bringing the suite to twenty cases. Phase 51 (plan 51-01, D-00i) added
+//! `unset_reasoning_leaves_the_wire_body_unchanged`, which compares each adapter's raw request
+//! body for an unset reasoning effort with a golden file, for twenty-one. A
 //! vendor that
 //! lacks a feature never skips a case: it states its documented alternative shape through the
 //! fixture ([`RefusalShape::ContentFilterOnly`], [`MalformedFrame::SkippedWithWarning`]), so every
@@ -1087,6 +1089,42 @@ pub mod cases {
         (wire_body, result)
     }
 
+    /// [`send_capturing`], but returning the request body as the exact UTF-8 text the adapter
+    /// sent, not the parsed JSON -- so a change in the order or spelling of a field is visible
+    /// (Phase 51, D-00i).
+    async fn send_capturing_raw<F: ConformanceFixture>(
+        request: LlmRequest,
+        response_body: String,
+    ) -> (String, Result<LlmResponse, LlmError>) {
+        use std::sync::Mutex;
+
+        let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let slot = Arc::clone(&captured);
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body_from_request(move |req| {
+                let text = req.utf8_lossy_body().unwrap_or_default().into_owned();
+                if let Ok(mut guard) = slot.lock() {
+                    *guard = Some(text);
+                }
+                response_body.clone().into_bytes()
+            })
+            .create_async()
+            .await;
+
+        let adapter = F::adapter(&server.url());
+        let result = adapter.generate(request).await;
+        let wire_body = captured
+            .lock()
+            .expect("the capture slot is never poisoned")
+            .take()
+            .expect("the adapter must have sent a request body");
+        (wire_body, result)
+    }
+
     /// Where `param` sits in a request body of `wire`: the OpenAI-chat and Anthropic bodies carry
     /// it at the top level (Anthropic names stop sequences `stop_sequences`, and has no penalty
     /// keys -- a profile that admitted one would therefore fail the capability case), Gemini
@@ -1755,18 +1793,65 @@ pub mod cases {
             "{PARAMS_OMITTED_METADATA_KEY} must list temperature, got {omitted:?}"
         );
     }
+
+    /// Case (Phase 51, D-00i, REASON-01): a request that sets no reasoning effort leaves the
+    /// adapter's wire body **byte for byte** what the adapter sent before the effort feature
+    /// existed. The expected body is `tests/golden/reasoning_unset/<provider_name>.json`,
+    /// captured from the unmodified adapters before any of them was edited. `Auto` is a set
+    /// value and is not exercised here: this case sends `None`.
+    ///
+    /// Run with `UPDATE_REASONING_GOLDEN=1` to (re)write the file instead of comparing; the
+    /// compared text ignores one trailing newline, which the repository's end-of-file hook adds.
+    pub async fn unset_reasoning_leaves_the_wire_body_unchanged<F: ConformanceFixture>() {
+        let request = request_for_model(F::default_model());
+        assert!(
+            request.reasoning.is_none() && request.reasoning_fallback.is_none(),
+            "{}: the conformance request must leave the effort unset",
+            F::provider_name()
+        );
+        let (raw_body, result) = send_capturing_raw::<F>(request, F::success_body()).await;
+        result.expect("an unset-effort request must succeed");
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/golden/reasoning_unset")
+            .join(format!("{}.json", F::provider_name()));
+        if std::env::var("UPDATE_REASONING_GOLDEN").is_ok_and(|v| v == "1") {
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir).expect("create the golden directory");
+            }
+            std::fs::write(&path, format!("{raw_body}\n")).expect("write the golden body");
+            return;
+        }
+        let golden = std::fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!(
+                "{}: cannot read the golden body {}: {error}. Bless it with \
+                 UPDATE_REASONING_GOLDEN=1 only from an unmodified adapter.",
+                F::provider_name(),
+                path.display()
+            )
+        });
+        let golden = golden.strip_suffix('\n').unwrap_or(&golden);
+        assert!(
+            raw_body == golden,
+            "{}: the unset-effort wire body changed (D-00i). Golden file {} (bless switch \
+             UPDATE_REASONING_GOLDEN=1, only for an intended change).\n  golden: {golden}\n  actual: {raw_body}",
+            F::provider_name(),
+            path.display()
+        );
+    }
 }
 
 /// Generate one `#[tokio::test]` per fixed case in [`cases`] for a concrete
 /// [`ConformanceFixture`], plus a `CASE_COUNT` derived from the SAME identifier lists the tests
 /// are generated from -- so a case silently dropped from the lists shrinks `CASE_COUNT` too,
 /// which `suite_generates_the_full_case_list_for_a_fixture` (below) pins against the documented
-/// `20`, turning a silently-dropped case into a build/test failure rather than a quiet pass.
+/// `21`, turning a silently-dropped case into a build/test failure rather than a quiet pass.
 ///
 /// The lists are split in two groups: the ten transport cases (status mapping, streaming
-/// framing, redaction, redirects, rate limits) and the ten behaviour cases
+/// framing, redaction, redirects, rate limits) and the eleven behaviour cases
 /// (capability truthfulness, structured output, empty completion, refusal, usage, vendor-total
-/// reconciliation, billed failures, the parameter policy). `llm_conformance_suite!(Fixture)` generates both.
+/// reconciliation, billed failures, the parameter policy, the unset-effort golden body).
+/// `llm_conformance_suite!(Fixture)` generates both.
 /// `llm_conformance_suite!(Fixture, transport_only)` generates only the first group and exists
 /// for one caller, the macro's own
 /// self-test fixture, which is a bare transport with no profile, sampling or refusal surface;
@@ -1806,6 +1891,7 @@ macro_rules! llm_conformance_suite {
                 vendor_total_disagreement_is_recorded,
                 billed_failures_carry_their_usage,
                 unsupported_parameters_are_omitted_and_recorded,
+                unset_reasoning_leaves_the_wire_body_unchanged,
             ]
         );
     };
@@ -2093,8 +2179,8 @@ mod tests {
     #[test]
     fn suite_generates_the_full_case_list_for_a_fixture() {
         assert_eq!(
-            CASE_COUNT, 20,
-            "llm_conformance_suite! must generate exactly the documented 20 fixed cases -- if this \
+            CASE_COUNT, 21,
+            "llm_conformance_suite! must generate exactly the documented 21 fixed cases -- if this \
              fails, a case was added to or removed from the macro's list without updating this \
              pinned expectation"
         );

@@ -9,6 +9,17 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- Phase 51 (REASON-01, REASON-02, REASON-04, REASON-06; plan 51-01):
+  `output::model_profile::{EffortSupport, EffortLevels, BudgetBounds, ResolvedEffort,
+  EffortRefusal}` with `EffortSupport::resolve` (the one admission rule) and
+  `EffortSupport::intersect` (AND semantics, commutative and associative); `ModelProfile.effort`
+  and `effort_verified_on` with `with_effort` / `with_effort_verified_on`;
+  `LlmRequest.reasoning` and `reasoning_fallback` with `with_reasoning` /
+  `with_reasoning_fallback`; `LlmError::UnsupportedParameter` and
+  `LlmError::unsupported_parameter` (`Permanent`); `ReasoningEffort` and `ReasoningFallback`
+  re-exported on `output::llm_port`. Additive: every touched type is `#[non_exhaustive]`. The
+  nine unset-effort wire bodies are pinned by golden files in `paladin-llm`.
+
 - Phase 50 (G-50-5a, PARITY-05; plans 50-25 and 50-26): the additive half of the billed-failure
   change. `output::llm_port::BilledUsage` (`new`, `with_cost`), the constructors
   `LlmError::empty_completion` and `LlmError::refusal`, and `LlmError::with_billed_usage` /

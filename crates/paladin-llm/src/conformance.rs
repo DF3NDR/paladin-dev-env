@@ -277,6 +277,10 @@ pub fn chat_effort_wire_value(body: &Value) -> Option<String> {
 
 /// [`ConformanceFixture::effort_wire_value`] for a chat-completions body that carries the level
 /// inside the `thinking` object (Kimi's `thinking.effort`), else `None`.
+///
+/// Gated on the three adapters whose fixtures call it, so a default-feature test build carries no
+/// unused helper.
+#[cfg(any(feature = "kimi", feature = "ollama", feature = "openai-compatible"))]
 pub fn thinking_effort_wire_value(body: &Value) -> Option<String> {
     body.get("thinking")
         .and_then(|thinking| thinking.get("effort"))

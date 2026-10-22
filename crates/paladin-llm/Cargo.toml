@@ -133,7 +133,18 @@ required-features = ["openai", "anthropic", "deepseek", "kimi", "qwen", "grok", 
 # 50.1-06 measured `AnthropicConfig::new` the same way (`new(api_key, base_url, model, max_tokens)`
 # became `new(api_key, model)`, four parameters before and two now, same lint, default features and
 # all nine adapter features agreeing), so it has its own entry beside them.
+#
+# REASON-02 (D-00b, MIGRATION.md §9.2, Phase 51 plan 51-04, measured in plan 51-14 on 2026-10-22):
+# `CompatRequestParameters` gained the public field `reasoning: ReasoningWire` and `all()` became
+# `all(reasoning)`. The measurement (cargo-semver-checks 0.50.0 vs the published 0.10.1,
+# `--release-type minor`, default features and the nine adapter features, this table removed and
+# restored byte-for-byte, `cmp`-verified) ran 196 checks and fired four lints in both runs: the
+# three above, and `constructible_struct_adds_field`, the fourth line below, on
+# `CompatRequestParameters.reasoning`. `method_parameter_count_changed` also named
+# `CompatRequestParameters::all` (0 parameters before, 1 now). Both lints are mirrored by
+# `CompatRequestParameters` entries in `.cargo/semver-checks-allowlist.toml`.
 [package.metadata.cargo-semver-checks.lints]
 struct_marked_non_exhaustive = "allow"
 enum_discriminants_undefined_non_unit_variant = "allow"
 method_parameter_count_changed = "allow"
+constructible_struct_adds_field = "allow"

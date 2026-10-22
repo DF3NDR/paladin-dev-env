@@ -754,56 +754,83 @@ migration_row = "paladin-llm | AnthropicConfig"
 requirement_id = "SURFACE-02"
 justification = "AnthropicConfig::new(api_key, base_url, model, max_tokens) became new(api_key, model) (Phase 50.1, plan 50.1-06, D-05, D-07). A clean break with no alias (ADR-0060): new(k, url, m, n) becomes new(k, m).with_base_url(url).with_max_tokens(n). The endpoint defaults to ANTHROPIC_DEFAULT_BASE_URL (the one copy, used by new, from_env() and the layered path) and is set with the with_base_url builder, the timeout with with_timeout_seconds. With the owner's compiled-default answer (plan 50.1-06 checkpoint, 2026-10-20) max_tokens is 4,096 for every model, the same value from_env() and the layered path use; the model's seeded maximum output is reachable only through with_max_tokens. from_env() reads the same variables. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
 
-# Plan 51-04 (D-00b, REASON-02), registered 2026-10-21 in the SAME commit that adds the field:
-# cargo-semver-checks is absent in this container (`cargo semver-checks --version` fails), so the
-# lint ids below are UNMEASURED. Plan 51-14 measures them against the published `paladin-llm` 0.10.1
-# (`--release-type minor`, lint table removed and restored byte-for-byte) and corrects this entry.
+# Plan 51-04 (D-00b, REASON-02), registered 2026-10-21 in the SAME commit that adds the field;
+# measured in plan 51-14 on 2026-10-22: cargo-semver-checks 0.50.0 vs the published `paladin-llm`
+# 0.10.1, `--release-type minor`, with `crates/paladin-llm/Cargo.toml`'s lint table removed and
+# restored byte-for-byte (`cmp`-verified), run with the default features and again with the nine
+# adapter features (`openai,anthropic,deepseek,kimi,qwen,grok,ollama,gemini,openai-compatible`):
+# 196 checks, 192 pass, 4 fail, 58 skip in both runs. The four lints are the three already
+# allowed (`struct_marked_non_exhaustive`, `enum_discriminants_undefined_non_unit_variant`,
+# `method_parameter_count_changed`) and `constructible_struct_adds_field`, which is new to this
+# table and named `CompatRequestParameters.reasoning` (compat/engine.rs:182, reported twice, once
+# per path). `method_parameter_count_changed` also named `CompatRequestParameters::all` (0
+# parameters before, 1 now, on the `compat::engine` and the `compat` path), so the one MIGRATION
+# row carries two entries, one per measured lint.
 
 [[entry]]
 crate = "paladin-llm"
-lint = "register-only (unmeasured: cargo-semver-checks absent on 2026-10-21; measured in plan 51-14)"
+lint = "constructible_struct_adds_field"
 migration_row = "paladin-llm | CompatRequestParameters"
 requirement_id = "REASON-02"
-justification = "CompatRequestParameters gained the public field reasoning: ReasoningWire and its constructor all() became all(reasoning) (Phase 51, plan 51-04, D-04, D-10). The type has no Default by design, so the reasoning wire is stated at every construction site and no preset can be built without a stated position (REASON-02). A clean break with no alias and no deprecated all() (ADR-0060): state reasoning in the literal, or pass the wire to all(..). Registered without a measured lint id; plan 51-14 measures and corrects it."
+justification = "CompatRequestParameters gained the public field reasoning: ReasoningWire and its constructor all() became all(reasoning) (Phase 51, plan 51-04, D-04, D-10). The type has no Default by design, so the reasoning wire is stated at every construction site and no preset can be built without a stated position (REASON-02). A clean break with no alias and no deprecated all() (ADR-0060): state reasoning in the literal, or pass the wire to all(..). Measured in plan 51-14 on 2026-10-22 (see the comment above this entry)."
 
-# Plan 51-07 (D-00b, D-00e, REASON-01), registered 2026-10-21 in the SAME commit that adds the fields:
-# cargo-semver-checks is absent in this container (`cargo semver-checks --version` fails), so the lint
-# id below is UNMEASURED. Plan 51-14 measures it against the published `paladin-ai-core` 0.10.1
-# (`--release-type minor`, lint table removed and restored byte-for-byte) and corrects this entry.
+[[entry]]
+crate = "paladin-llm"
+lint = "method_parameter_count_changed"
+migration_row = "paladin-llm | CompatRequestParameters"
+requirement_id = "REASON-02"
+justification = "CompatRequestParameters::all() became all(reasoning: ReasoningWire) (Phase 51, plan 51-04, D-04, D-10): the convenience constructor takes the reasoning wire, so a preset cannot be built without stating where its vendor parses a reasoning effort (REASON-02). Measured in plan 51-14 on 2026-10-22: method_parameter_count_changed named CompatRequestParameters::all, 0 parameters before and 1 now, on both the compat::engine and the compat path. A clean break with no alias and no deprecated all() (ADR-0060): pass the wire, CompatRequestParameters::all(ReasoningWire::Unsupported) keeps today's behaviour."
+
+# Plan 51-07 (D-00b, D-00e, REASON-01), registered 2026-10-21 in the SAME commit that adds the fields;
+# measured in plan 51-14 on 2026-10-22: cargo-semver-checks 0.50.0 vs the published `paladin-ai-core`
+# 0.10.1, `--release-type minor`, with `crates/paladin-core/Cargo.toml`'s lint table removed and
+# restored byte-for-byte (`cmp`-verified) (the crate has no features, so the default run is the only
+# configuration): 196 checks, 185 pass, 11 fail, 58 skip. `constructible_struct_adds_field` named
+# `PaladinData.reasoning_effort` (paladin.rs:216) and `PaladinData.reasoning_fallback` (paladin.rs:225);
+# it is already allowed crate-wide, so the table gained no line for this entry. The other fired
+# lints name items outside Phase 51.
 # The pair `paladin-ai-core | PaladinData` already has an entry (the removed Citadel placeholder,
 # ENTITY-03); the row-level set-equality gate is deduplicated, so this is one further entry on it.
 
 [[entry]]
 crate = "paladin-ai-core"
-lint = "register-only (unmeasured: cargo-semver-checks absent on 2026-10-21; measured in plan 51-14)"
+lint = "constructible_struct_adds_field"
 migration_row = "paladin-ai-core | PaladinData"
 requirement_id = "REASON-01"
-justification = "PaladinData gained the public fields reasoning_effort: Option<ReasoningEffort> and reasoning_fallback: Option<ReasoningFallback> (Phase 51, plan 51-07, D-00e, D-05): the agent level of the reasoning-effort precedence. The struct stays constructible and is not #[non_exhaustive], so only full struct literals break; every in-tree one named both fields in the same commit. #[serde(default, skip_serializing_if = \"Option::is_none\")] keeps stored snapshots loading and an agent that sets neither serialises byte-identically. Migration: name both fields in the literal or spread ..PaladinData::default(). Registered without a measured lint id; plan 51-14 measures and corrects it."
+justification = "PaladinData gained the public fields reasoning_effort: Option<ReasoningEffort> and reasoning_fallback: Option<ReasoningFallback> (Phase 51, plan 51-07, D-00e, D-05): the agent level of the reasoning-effort precedence. The struct stays constructible and is not #[non_exhaustive], so only full struct literals break; every in-tree one named both fields in the same commit. #[serde(default, skip_serializing_if = \"Option::is_none\")] keeps stored snapshots loading and an agent that sets neither serialises byte-identically. Migration: name both fields in the literal or spread ..PaladinData::default(). Measured in plan 51-14 on 2026-10-22 (see the comment above this entry)."
 
-# Plan 51-08 (D-00b, D-00e, REASON-01), registered 2026-10-21 in the SAME commit that adds the fields:
-# cargo-semver-checks is absent in this container, so the lint id below is UNMEASURED. Plan 51-14
-# measures it against the published `paladin-ai` 0.10.1 (`--release-type minor`, the root crate's
-# crate-wide allow disabled and restored byte-for-byte) and corrects this entry. The expected lint is
-# `constructible_struct_adds_field`, already allowed crate-wide in the root Cargo.toml.
+# Plan 51-08 (D-00b, D-00e, REASON-01), registered 2026-10-21 in the SAME commit that adds the fields;
+# measured in plan 51-14 on 2026-10-22: cargo-semver-checks 0.50.0 vs the published `paladin-ai`
+# 0.10.1, `--release-type minor`, with the root `Cargo.toml`'s lint table removed and restored
+# byte-for-byte (`cmp`-verified), run with `--default-features` (CI's own flag) and again with
+# `--default-features --features llm-all` (the nine adapter features): 196 checks, 195 pass, 1 fail,
+# 58 skip in both runs. The one lint, `constructible_struct_adds_field`, named
+# `AgentDefinition.reasoning_effort` (agents.rs:367) and `AgentDefinition.reasoning_fallback`
+# (agents.rs:374); it is already allowed crate-wide, so the table gained no line. (The tool's default
+# every-feature build of this crate fails in `paladin-memory`'s qdrant adapter against a newer
+# qdrant-client, before any check runs; it is outside this phase and not what CI runs.)
 
 [[entry]]
 crate = "paladin-ai"
-lint = "register-only (unmeasured: cargo-semver-checks absent on 2026-10-21; measured in plan 51-14)"
+lint = "constructible_struct_adds_field"
 migration_row = "paladin-ai | AgentDefinition"
 requirement_id = "REASON-01"
-justification = "AgentDefinition gained the public fields reasoning_effort: Option<ReasoningEffort> and reasoning_fallback: Option<ReasoningFallback> (Phase 51, plan 51-08, D-00e, D-05, #[serde(default)]): the YAML keys agents[].reasoning_effort and agents[].reasoning_fallback. The struct stays constructible and is deliberately NOT #[non_exhaustive] (cross-crate functional-update syntax must keep working); only a downstream full struct literal breaks, and every in-tree literal named both fields in the same commit. Migration: add reasoning_effort: None, reasoning_fallback: None to the literal; YAML is unaffected. Registered without a measured lint id; plan 51-14 measures and corrects it."
+justification = "AgentDefinition gained the public fields reasoning_effort: Option<ReasoningEffort> and reasoning_fallback: Option<ReasoningFallback> (Phase 51, plan 51-08, D-00e, D-05, #[serde(default)]): the YAML keys agents[].reasoning_effort and agents[].reasoning_fallback. The struct stays constructible and is deliberately NOT #[non_exhaustive] (cross-crate functional-update syntax must keep working); only a downstream full struct literal breaks, and every in-tree literal named both fields in the same commit. Migration: add reasoning_effort: None, reasoning_fallback: None to the literal; YAML is unaffected. Measured in plan 51-14 on 2026-10-22 (see the comment above this entry)."
 
-# Plan 51-09 (D-00b, D-11, REASON-05), registered 2026-10-21 in the SAME commit that adds the fields:
-# cargo-semver-checks is absent in this container, so the lint id below is UNMEASURED. Plan 51-14
-# measures it against the published `paladin-ai-core` 0.10.1 (`--release-type minor`) and corrects or
-# retires this entry. Caveat: `TraceEvent` postdates the CI-pinned `v0.9.0` baseline (Phase 22), so the
-# CI semver job cannot observe this break and the earlier `cost` / `halt_reason` field additions were
-# registered `N/A` with no entry; this plan registers `Y` because its acceptance criteria require it.
-# The expected lint on `0.10.1` is `enum_struct_variant_field_added`.
+# Plan 51-09 (D-00b, D-11, REASON-05), registered 2026-10-21 in the SAME commit that adds the fields;
+# measured in plan 51-14 on 2026-10-22 in the same `paladin-ai-core` run as the entry above:
+# `enum_struct_variant_field_added` FIRED against the published 0.10.1 and named
+# `reasoning_requested` (trace.rs:284) and `reasoning_effective` (trace.rs:291) of
+# `TraceEvent::NodeFinished`, so this entry stays `Y` and is not retired to `N/A`. The same lint also
+# named the earlier `cost` of `NodeFinished` and `RunFinished` and `halt_reason` of `RunFinished`,
+# which are not Phase 51 and keep their `N/A` rows. The lint was not allowed in the crate's table, so
+# this plan adds `enum_struct_variant_field_added = "allow"` to it. Caveat: `TraceEvent` postdates
+# the CI-pinned `v0.9.0` baseline (Phase 22), so CI's `semver` job cannot observe this break and the
+# allow is dormant there; it matters to a run against 0.10.1 and to the local set-equality check.
 
 [[entry]]
 crate = "paladin-ai-core"
-lint = "register-only (unmeasured: cargo-semver-checks absent on 2026-10-21; measured in plan 51-14)"
+lint = "enum_struct_variant_field_added"
 migration_row = "paladin-ai-core | TraceEvent"
 requirement_id = "REASON-05"
-justification = "TraceEvent::NodeFinished gained the public struct-variant fields reasoning_requested: Option<String> and reasoning_effective: Option<String> (Phase 51, plan 51-09, D-11, D-00b): the effort one Paladin or structured-output attempt asked for and the effort it ran with, read from the attempt's own paladin.reasoning_requested / paladin.reasoning_effective response metadata. Only a constructing struct-variant literal or an exhaustive destructure breaks; every in-tree one named both fields in the same commit. #[serde(default, skip_serializing_if = \"Option::is_none\")] keeps stored run_traces rows and SSE frames loading and an event with both None serialises byte-identically. Migration: name both as None in the literal; match with `..`. Registered without a measured lint id; plan 51-14 measures and corrects it."
+justification = "TraceEvent::NodeFinished gained the public struct-variant fields reasoning_requested: Option<String> and reasoning_effective: Option<String> (Phase 51, plan 51-09, D-11, D-00b): the effort one Paladin or structured-output attempt asked for and the effort it ran with, read from the attempt's own paladin.reasoning_requested / paladin.reasoning_effective response metadata. Only a constructing struct-variant literal or an exhaustive destructure breaks; every in-tree one named both fields in the same commit. #[serde(default, skip_serializing_if = \"Option::is_none\")] keeps stored run_traces rows and SSE frames loading and an event with both None serialises byte-identically. Migration: name both as None in the literal; match with `..`. Measured in plan 51-14 on 2026-10-22 (see the comment above this entry)."

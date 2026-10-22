@@ -9,6 +9,13 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- Phase 51 (REASON-03, REASON-06; plans 51-02, 51-10, 51-14): the `live_vendor_smoke` example gains
+  `--effort` (raw-wire effort probe, `--dry-run`, `--models`) and `--effort-smoke` (adapter-path
+  smoke at the lowest and highest admitted level, `--max-tokens`, `--timeout-seconds`); both print
+  numbers, statuses and metadata values only, never response content. The crate's
+  `cargo-semver-checks` lint table gains `constructible_struct_adds_field`, the lint measured
+  against the published 0.10.1 for `CompatRequestParameters.reasoning`; the
+  `CompatRequestParameters` allowlist entry is now two measured entries. No public item changed.
 - **Reasoning effort: `FallbackLlmAdapter` pre-flights every hop before the first call (REASON-04,
   REASON-05; D-08; Phase 51 plan 07).** A request that carries `reasoning` is resolved against each
   hop's own `model_profile` (the step's model, else the request's) in chain order; the first hop that

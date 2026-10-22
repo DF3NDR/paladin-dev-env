@@ -114,9 +114,12 @@ include = [
 # `#[serde(default)]` fields `reasoning_effort` and `reasoning_fallback` (the YAML keys
 # `agents[].reasoning_effort` and `agents[].reasoning_fallback`). It stays constructible and
 # NOT `#[non_exhaustive]`, so only full struct literals break; every in-tree one named both fields
-# in the same commit. The expected lint is `constructible_struct_adds_field`, already allowed
-# below, so no new line was needed; it is UNMEASURED here (cargo-semver-checks is absent in this
-# container) and plan 51-14 measures it. The row and entry are registered in the same commit.
+# in the same commit. Measured in plan 51-14 on 2026-10-22 (cargo-semver-checks 0.50.0 vs the
+# published `paladin-ai` 0.10.1, `--release-type minor`, `--default-features` and again with
+# `--features llm-all`, this table removed and restored byte-for-byte, `cmp`-verified):
+# `constructible_struct_adds_field`, already allowed below, named `AgentDefinition.reasoning_effort`
+# and `AgentDefinition.reasoning_fallback`, so no new line was needed. The row and entry were
+# registered in the same commit as the fields.
 [package.metadata.cargo-semver-checks.lints]
 constructible_struct_adds_field = "allow"
 

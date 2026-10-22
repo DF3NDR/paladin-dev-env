@@ -41,7 +41,7 @@
 //!   answer produced at one effort is never served to the same agent at
 //!   another. An agent that sets neither appends nothing, so every key
 //!   composed before the effort existed is unchanged and
-//!   [`NODE_CACHE_KEY_VERSION`] stays `k1`. A provider-level default effort
+//!   [`NODE_CACHE_KEY_VERSION`](crate::engine::cache_key::NODE_CACHE_KEY_VERSION) stays `k1`. A provider-level default effort
 //!   (`llm.<provider>.reasoning_effort`) is not on the agent and is NOT part
 //!   of the key: changing it needs a new cache namespace or a version bump.
 //!

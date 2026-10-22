@@ -2184,11 +2184,12 @@ mod tests {
                 .await;
             }
 
-            // Pre-probe position (A1-51-04): superseded by plan 51-11. Kimi's `ThinkingObject`
-            // position is the pre-probe one plan 51-04 labelled; plan 51-11 restates this test.
+            // Plan 51-11 restated this test from `51-EFFORT-PROBE.md`'s verdict table: Kimi's
+            // `thinking_object` form is confirmed (invalid value drew 400 on both models), so a
+            // provider default lands in `thinking.effort` and nowhere else.
             #[cfg(feature = "kimi")]
             #[tokio::test]
-            async fn kimi_pre_probe_applies_the_provider_default_as_thinking_effort() {
+            async fn kimi_applies_the_provider_default_as_thinking_effort() {
                 assert_default_applies(Case {
                     provider: "kimi",
                     support: levels(&[ReasoningEffort::Low, ReasoningEffort::High]),

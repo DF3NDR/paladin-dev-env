@@ -2,8 +2,9 @@
 //!
 //! # Single source
 //!
-//! Every value in this file comes from one of two documents, both operator live seed probes run
-//! on the operator's own vendor keys:
+//! Every sampling, limit and capability value in this file comes from one of two documents, both
+//! operator live seed probes run on the operator's own vendor keys (every effort field comes from
+//! a third, `51-EFFORT-PROBE.md`; see "Effort data" below):
 //!
 //! - `.planning/phases/50-provider-parity-config-driven-model-swap/50-SEED-PROBE.md`, run at
 //!   commit `c33022b9` on **2026-10-15** (the transcript's UTC date line, 22:23:15Z).
@@ -45,6 +46,23 @@
 //! - `json_object` / `json_schema`: the matching JSON probe was accepted.
 //! - context window and maximum output: the live listing where it exposed them, otherwise the
 //!   operator's vendor-documentation evidence, with its URL and access date next to the value.
+//!
+//! # Effort data (Phase 51)
+//!
+//! Every effort field (`with_effort`, `with_effort_verified_on`) comes from one document:
+//! `.planning/phases/51-adjustable-reasoning-effort/51-EFFORT-PROBE.md`, the live reasoning-effort
+//! probe run at commit `32ce9dd0` on **2026-10-22** (UTC date lines 14:16:46Z to 14:46:52Z). Unlike
+//! the sampling fields above, effort data is written **only where it was measured**; a model the
+//! probe did not cover keeps [`EffortSupport::Unmeasured`](paladin_ports::output::model_profile::EffortSupport)
+//! and refuses an explicit effort naming its `llm.<provider>.models.<model-id>.effort` override
+//! (D-03, the owner's D-02 answer "unmeasured"). Each effort row carries a
+//! `// Source for the effort data` comment naming its transcript section. The rules, applied
+//! mechanically: `levels` are the levels accepted through the confirmed wire form; `coerced` are
+//! accepted levels the probe file's vendor-documented section lists as silently run as another;
+//! `off` is the off form accepted with no reasoning tokens reported; `auto` is the auto form (for
+//! a top-level field, the default call) accepted with reasoning tokens; `budget` is `{min, max}`
+//! only when the min was accepted, min - 1 was rejected and the max is in the vendor-documented
+//! section. A level is never converted to a budget or the reverse (D-03, D-06).
 //!
 //! The per-vendor tables are compiled with their adapter's feature, so a build without that
 //! adapter carries no unused table.
@@ -1200,7 +1218,10 @@ pub(crate) use deepseek_table::DEEPSEEK;
 #[cfg(feature = "kimi")]
 mod kimi_table {
     use crate::registry::SeededProfile;
-    use paladin_ports::output::model_profile::{ModelProfile, ParamSupport, StopSupport};
+    use paladin_ports::output::llm_port::ReasoningEffort::{High, Low, Max};
+    use paladin_ports::output::model_profile::{
+        EffortLevels, EffortSupport, ModelProfile, ParamSupport, StopSupport,
+    };
 
     /// Kimi. `kimi-k3` and `kimi-k2.6` were measured. `kimi-k2.7-code` and
     /// `kimi-k2.7-code-highspeed` (listing: 262,144-token window, reasoning) rejected every
@@ -1242,6 +1263,16 @@ mod kimi_table {
             .with_reasoning(true)
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### kimi-k2.6` (run 5,
+            // 2026-10-22, commit 32ce9dd0), the `thinking_object` rows. Owner decision
+            // 2026-10-22: Kimi ships `thinking.effort` (invalid value `bogus-effort-51` drew 400,
+            // row 17). Levels: low, high, max accepted (rows 5, 9, 13); minimal, medium, xhigh
+            // drew 400 (rows 3, 7, 11), so they are not listed. Off: row 14 accepted, 1 reasoning
+            // token against 164 on the default call (row 1). Auto: row 15 accepted, 140 reasoning
+            // tokens. No budget field on the wire; the vendor-documented section lists no
+            // coercion for Kimi.
+            .with_effort(kimi_measured_effort())
+            .with_effort_verified_on("2026-10-22")
     }
 
     fn kimi_k3() -> ModelProfile {
@@ -1257,6 +1288,24 @@ mod kimi_table {
             .with_reasoning(true)
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### kimi-k3` (run 4, 2026-10-22,
+            // commit 32ce9dd0), the `thinking_object` rows. Owner decision 2026-10-22: Kimi ships
+            // `thinking.effort` (invalid value drew 400, row 17). Levels: low=40, high=48,
+            // max=116 reasoning tokens accepted (rows 5, 9, 13); minimal, medium, xhigh drew 400
+            // (rows 3, 7, 11). Off: row 14 accepted, no reasoning-token count reported. Auto:
+            // row 15 accepted, 71 reasoning tokens. No budget field; no documented coercion.
+            .with_effort(kimi_measured_effort())
+            .with_effort_verified_on("2026-10-22")
+    }
+
+    /// The efforts both Kimi models took through `thinking.effort` in the 2026-10-22 probe: the
+    /// same three levels, `off` and `auto` on `kimi-k3` and `kimi-k2.6` (see the two rows).
+    fn kimi_measured_effort() -> EffortSupport {
+        EffortSupport::Supported(
+            EffortLevels::new([Low, High, Max])
+                .with_off(true)
+                .with_auto(true),
+        )
     }
 }
 #[cfg(feature = "kimi")]

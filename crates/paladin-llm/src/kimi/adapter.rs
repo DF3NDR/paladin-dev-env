@@ -342,13 +342,16 @@ impl KimiAdapter {
                 max_tokens: true,
                 frequency_penalty: false,
                 presence_penalty: false,
-                // Phase 51 (D-04, REASON-02), A1-51-04: Kimi's reasoning effort travels in a
-                // `thinking` object, `{"type": "enabled", "effort": "L"}` -- the form the
-                // handoff (section 4.1 / Appendix A) measured live. The vendor's current docs
-                // say K3 takes a top-level `reasoning_effort` instead (research Pitfall 2), so
-                // this is a pre-probe position: plan 51-11 restates it from `51-EFFORT-PROBE.md`'s
-                // verdict table. A top-level `reasoning_effort` is the silent no-op the handoff
-                // section 5 measured on this endpoint and is never sent from this preset.
+                // Phase 51 (D-04, REASON-02): Kimi's reasoning effort travels in a `thinking`
+                // object, `{"type": "enabled", "effort": "L"}`. Confirmed by `51-EFFORT-PROBE.md`
+                // (live probe 2026-10-22, commit 32ce9dd0; owner decision at plan 51-11's
+                // checkpoint, 2026-10-22): its `## Verdict table` marks Kimi `thinking_object`
+                // confirmed -- the invalid value `bogus-effort-51` drew 400 on both `kimi-k3` and
+                // `kimi-k2.6` (field parsed) and a higher accepted level reported more reasoning
+                // tokens (`kimi-k3` low=40, max=116). The vendor's docs say K3 takes a top-level
+                // `reasoning_effort` instead (research Pitfall 2); the probe measured otherwise:
+                // that field drew 200 for the same invalid value on both models, the silent no-op,
+                // so it is never sent from this preset (test `kimi_preset_never_emits_*`).
                 reasoning: ReasoningWire::ThinkingObject,
             },
             fallback_models: KIMI_FALLBACK_MODELS.iter().map(|s| s.to_string()).collect(),
@@ -2030,21 +2033,58 @@ mod tests {
         );
         assert!(!empty.contains("<redacted>"), "{empty}");
     }
+
     // ── Phase 51 (REASON-02, REASON-03, D-04): Kimi's reasoning wire ──
     //
-    // Every Kimi test below is a PRE-PROBE position (A1-51-04): it pins the handoff's measured
-    // `thinking` object form, which plan 51-11 restates or rewrites from `51-EFFORT-PROBE.md`'s
-    // verdict table. It is a starting position, not the silent-no-op regression.
+    // Decision (plan 51-11 checkpoint, owner, 2026-10-22, "apply-verdicts"): Kimi ships the
+    // `thinking` object (`thinking.effort`), never a top-level `reasoning_effort`. Rows quoted
+    // below are `51-EFFORT-PROBE.md` transcript rows (run 4 = `kimi-k3`, run 5 = `kimi-k2.6`,
+    // both 2026-10-22, commit `32ce9dd0`) and its `## Verdict table`:
+    //
+    // - `thinking_object`: invalid value `bogus-effort-51` drew 400 on both models (row 17,
+    //   "invalid value for thinking effort level"), so the field is parsed; `low`/`high`/`max`
+    //   accepted (rows 5, 9, 13), `minimal`/`medium`/`xhigh` rejected 400 (rows 3, 7, 11);
+    //   `off` accepted (row 14) and `auto` accepted with reasoning tokens (row 15).
+    // - `top_level_effort`: the same invalid value drew 200 on both models (row 16), the silent
+    //   no-op research Pitfall 2 warned about. It is never sent.
 
-    mod pre_probe_reasoning {
+    mod reasoning_effort {
         use super::*;
         use crate::compat::test_support::{mock_completion, plain_request, send_capturing, server};
         use crate::reasoning::{
             REASONING_EFFECTIVE_METADATA_KEY, REASONING_REQUESTED_METADATA_KEY,
         };
-        use paladin_ports::output::llm_port::ReasoningEffort;
-        use paladin_ports::output::llm_port::ReasoningEffort::{High, Low, Max};
+        use paladin_ports::output::llm_port::ReasoningEffort::{
+            Auto, Budget, High, Low, Max, Medium, Minimal, Off, XHigh,
+        };
+        use paladin_ports::output::llm_port::{ReasoningEffort, ReasoningFallback};
         use paladin_ports::output::model_profile::{BudgetBounds, EffortLevels, EffortSupport};
+
+        /// The transcript date both Kimi models were probed (runs 4 and 5).
+        const PROBED_ON: &str = "2026-10-22";
+
+        /// All nine `ReasoningEffort` values.
+        const NINE: [ReasoningEffort; 9] = [
+            Off,
+            Auto,
+            Minimal,
+            Low,
+            Medium,
+            High,
+            XHigh,
+            Max,
+            Budget(512),
+        ];
+
+        /// What the transcript evidences for both Kimi models through `thinking.effort`:
+        /// levels low, high, max (rows 5, 9, 13 on each), off (row 14), auto (row 15).
+        fn measured() -> EffortSupport {
+            EffortSupport::Supported(
+                EffortLevels::new([Low, High, Max])
+                    .with_off(true)
+                    .with_auto(true),
+            )
+        }
 
         fn effort_override(effort: EffortSupport) -> ModelOverride {
             ModelOverride {
@@ -2053,80 +2093,95 @@ mod tests {
             }
         }
 
-        fn k3_levels() -> EffortSupport {
-            EffortSupport::Supported(
-                EffortLevels::new([Low, High, Max])
-                    .with_off(true)
-                    .with_auto(true),
-            )
+        fn adapter(base_url: &str, model: &str) -> KimiAdapter {
+            KimiAdapter::new(kimi_config(base_url, model)).unwrap()
         }
 
-        fn k3_adapter(base_url: &str, effort: EffortSupport) -> KimiAdapter {
-            KimiAdapter::new(
-                kimi_config(base_url, "kimi-k3").with_model_overrides(BTreeMap::from([(
-                    "kimi-k3".to_string(),
-                    effort_override(effort),
-                )])),
-            )
-            .unwrap()
-        }
-
-        // Pre-probe position (A1-51-04): superseded by plan 51-11.
         #[test]
-        fn kimi_pre_probe_declares_the_thinking_object_wire() {
-            let adapter =
-                KimiAdapter::new(kimi_config("https://example.invalid/v1", "kimi-k3")).unwrap();
+        fn kimi_declares_the_thinking_object_wire() {
+            // Verdict table: Kimi `thinking_object` confirmed (parsed 2 of 2, effect yes).
+            let adapter = adapter("https://example.invalid/v1", "kimi-k3");
             assert_eq!(
                 adapter.engine.request_parameters().reasoning,
                 ReasoningWire::ThinkingObject
             );
         }
 
-        // Pre-probe position (A1-51-04): superseded by plan 51-11.
-        #[tokio::test]
-        async fn kimi_pre_probe_high_sends_thinking_effort_and_no_top_level_effort() {
-            let mut server = server().await;
-            let captured = mock_completion(&mut server).await;
-            let adapter = k3_adapter(&server.url(), k3_levels());
-
-            let (body, response) = send_capturing(
-                &adapter,
-                &captured,
-                plain_request("kimi-k3").with_reasoning(High),
-            )
-            .await
-            .expect("a listed level is accepted");
-            assert_eq!(
-                body["thinking"],
-                json!({"type": "enabled", "effort": "high"}),
-                "{body}"
-            );
-            assert!(body.get("reasoning_effort").is_none(), "{body}");
-            assert!(body.get("enable_thinking").is_none(), "{body}");
-            assert!(body.get("thinking_budget").is_none(), "{body}");
-            assert_eq!(response.metadata[REASONING_REQUESTED_METADATA_KEY], "high");
-            assert_eq!(response.metadata[REASONING_EFFECTIVE_METADATA_KEY], "high");
+        #[test]
+        fn kimi_k3_effort_seed_matches_the_transcript() {
+            let adapter = adapter("https://example.invalid/v1", "kimi-k3");
+            let profile = adapter.model_profile("kimi-k3").unwrap();
+            assert_eq!(profile.effort, measured());
+            assert_eq!(profile.effort_verified_on.as_deref(), Some(PROBED_ON));
         }
 
-        // Pre-probe position (A1-51-04): superseded by plan 51-11.
+        #[test]
+        fn kimi_k2_6_effort_seed_matches_the_transcript() {
+            // Run 5: low=141 high=620 max=141 accepted, minimal/medium/xhigh 400, off row 14
+            // (1 reasoning token against 164 by default), auto row 15 (140 tokens).
+            let adapter = adapter("https://example.invalid/v1", "kimi-k2.6");
+            let profile = adapter.model_profile("kimi-k2.6").unwrap();
+            assert_eq!(profile.effort, measured());
+            assert_eq!(profile.effort_verified_on.as_deref(), Some(PROBED_ON));
+        }
+
+        #[test]
+        fn kimi_models_the_probe_did_not_cover_stay_unmeasured() {
+            // D-02 (owner, plan 51-10): an unprobed row stays `Unmeasured`. `kimi-k2.7-code` is
+            // not seeded at all, so it runs on the adapter-wide fallback.
+            let adapter = adapter("https://example.invalid/v1", "kimi-k3");
+            let profile = adapter.model_profile("kimi-k2.7-code").unwrap();
+            assert_eq!(profile.effort, EffortSupport::Unmeasured);
+            assert_eq!(profile.effort_verified_on, None);
+        }
+
         #[tokio::test]
-        async fn kimi_pre_probe_off_and_auto_ride_the_thinking_type() {
+        async fn kimi_accepted_levels_reach_the_wire_exactly() {
+            for model in ["kimi-k3", "kimi-k2.6"] {
+                let mut server = server().await;
+                let captured = mock_completion(&mut server).await;
+                let adapter = adapter(&server.url(), model);
+                // Rows 5, 9, 13: the three levels the vendor accepted.
+                for (level, spelled) in [(Low, "low"), (High, "high"), (Max, "max")] {
+                    let (body, response) = send_capturing(
+                        &adapter,
+                        &captured,
+                        plain_request(model).with_reasoning(level),
+                    )
+                    .await
+                    .unwrap_or_else(|e| panic!("{model} {level}: {e}"));
+                    assert_eq!(
+                        body["thinking"],
+                        json!({"type": "enabled", "effort": spelled}),
+                        "{model} {level}: {body}"
+                    );
+                    assert!(body.get("reasoning_effort").is_none(), "{model}: {body}");
+                    assert_eq!(response.metadata[REASONING_REQUESTED_METADATA_KEY], spelled);
+                    assert_eq!(response.metadata[REASONING_EFFECTIVE_METADATA_KEY], spelled);
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn kimi_off_and_auto_ride_the_thinking_type() {
+            // Rows 14 (off) and 15 (auto) of run 4.
             let mut server = server().await;
             let captured = mock_completion(&mut server).await;
-            let adapter = k3_adapter(&server.url(), k3_levels());
+            let adapter = adapter(&server.url(), "kimi-k3");
 
             let (off, _) = send_capturing(
                 &adapter,
                 &captured,
-                plain_request("kimi-k3").with_reasoning(ReasoningEffort::Off),
+                plain_request("kimi-k3").with_reasoning(Off),
             )
             .await
             .unwrap();
             assert_eq!(off["thinking"], json!({"type": "disabled"}), "{off}");
+            assert!(off.get("reasoning_effort").is_none(), "{off}");
             let (auto, response) = send_capturing(
                 &adapter,
                 &captured,
-                plain_request("kimi-k3").with_reasoning(ReasoningEffort::Auto),
+                plain_request("kimi-k3").with_reasoning(Auto),
             )
             .await
             .unwrap();
@@ -2134,17 +2189,114 @@ mod tests {
             assert_eq!(response.metadata[REASONING_EFFECTIVE_METADATA_KEY], "auto");
         }
 
-        // Pre-probe position (A1-51-04): superseded by plan 51-11.
         #[tokio::test]
-        async fn kimi_pre_probe_unmeasured_model_refuses_naming_its_override_before_http() {
+        async fn kimi_unevidenced_efforts_refuse_with_zero_hits() {
+            // Rows 3, 7, 11: minimal, medium and xhigh drew 400; no budget field exists on the
+            // `thinking` object.
+            for model in ["kimi-k3", "kimi-k2.6"] {
+                let mut server = server().await;
+                let captured = mock_completion(&mut server).await;
+                let adapter = adapter(&server.url(), model);
+                for requested in [Minimal, Medium, XHigh, Budget(512)] {
+                    let error = send_capturing(
+                        &adapter,
+                        &captured,
+                        plain_request(model).with_reasoning(requested),
+                    )
+                    .await
+                    .expect_err("an effort the probe did not evidence is refused");
+                    assert!(
+                        matches!(error, LlmError::UnsupportedParameter { .. }),
+                        "{model} {requested}: {error:?}"
+                    );
+                    assert!(
+                        captured.lock().unwrap().is_none(),
+                        "{model} {requested}: no HTTP hit"
+                    );
+                }
+            }
+        }
+
+        /// Research Pitfall 2 / roadmap success criterion 3, in the direction the probe decided:
+        /// whatever the effort and the fallback, a body Kimi sends carries `thinking` and never a
+        /// top-level `reasoning_effort` (row 16: the vendor answers it 200 and ignores it), and
+        /// never a second effort field. `forbidden` names the field this call asserts absent.
+        async fn assert_one_effort_field_only(model: &str, forbidden: &str) {
             let mut server = server().await;
             let captured = mock_completion(&mut server).await;
-            let adapter = KimiAdapter::new(kimi_config(&server.url(), "kimi-k2.6")).unwrap();
+            let adapter = adapter(&server.url(), model);
+            let mut sent = 0;
+            for fallback in [
+                ReasoningFallback::Refuse,
+                ReasoningFallback::NearestLower,
+                ReasoningFallback::NearestHigher,
+            ] {
+                for requested in NINE {
+                    let request = plain_request(model)
+                        .with_reasoning(requested)
+                        .with_reasoning_fallback(fallback);
+                    match send_capturing(&adapter, &captured, request).await {
+                        Ok((body, _)) => {
+                            sent += 1;
+                            assert!(
+                                body.get(forbidden).is_none(),
+                                "{model} {requested} {fallback}: {forbidden} in {body}"
+                            );
+                            assert!(
+                                body.get("thinking").is_some(),
+                                "{model} {requested} {fallback}: no thinking object: {body}"
+                            );
+                            for other in ["reasoning_effort", "enable_thinking", "thinking_budget"]
+                            {
+                                assert!(
+                                    body.get(other).is_none(),
+                                    "{model} {requested} {fallback}: second field {other}: {body}"
+                                );
+                            }
+                        }
+                        Err(error) => {
+                            assert!(
+                                matches!(error, LlmError::UnsupportedParameter { .. }),
+                                "{model} {requested} {fallback}: {error:?}"
+                            );
+                            assert!(
+                                captured.lock().unwrap().is_none(),
+                                "{model} {requested} {fallback}: a refusal sends nothing"
+                            );
+                        }
+                    }
+                }
+            }
+            assert!(sent > 0, "{model}: no effort reached the wire at all");
+        }
+
+        #[tokio::test]
+        async fn kimi_preset_never_emits_top_level_reasoning_effort() {
+            for model in ["kimi-k3", "kimi-k2.6"] {
+                assert_one_effort_field_only(model, "reasoning_effort").await;
+            }
+        }
+
+        #[tokio::test]
+        async fn kimi_preset_never_emits_enable_thinking_or_a_budget_beside_thinking() {
+            for model in ["kimi-k3", "kimi-k2.6"] {
+                assert_one_effort_field_only(model, "enable_thinking").await;
+                assert_one_effort_field_only(model, "thinking_budget").await;
+            }
+        }
+
+        #[tokio::test]
+        async fn kimi_unseeded_model_refuses_naming_its_override_before_http() {
+            // `kimi-k2.6` is seeded now; `kimi-k2.7-code` was not probed (it rejects every call
+            // that disables thinking) and is not seeded, so it has no effort data (D-02, D-03).
+            let mut server = server().await;
+            let captured = mock_completion(&mut server).await;
+            let adapter = adapter(&server.url(), "kimi-k3");
 
             let error = send_capturing(
                 &adapter,
                 &captured,
-                plain_request("kimi-k2.6").with_reasoning(High),
+                plain_request("kimi-k2.7-code").with_reasoning(High),
             )
             .await
             .expect_err("a model with no effort data refuses an explicit effort");
@@ -2156,9 +2308,9 @@ mod tests {
                     ..
                 } => {
                     assert_eq!(provider, "kimi");
-                    assert_eq!(model, "kimi-k2.6");
+                    assert_eq!(model, "kimi-k2.7-code");
                     assert!(
-                        reason.contains("llm.kimi.models.kimi-k2.6.effort"),
+                        reason.contains("llm.kimi.models.kimi-k2.7-code.effort"),
                         "{reason}"
                     );
                 }
@@ -2170,15 +2322,21 @@ mod tests {
             );
         }
 
-        // Pre-probe position (A1-51-04): superseded by plan 51-11.
         #[test]
-        fn kimi_pre_probe_model_profile_reports_only_what_the_wire_carries() {
+        fn kimi_model_profile_reports_only_what_the_wire_carries() {
+            // The `thinking` object has no budget field (verdict table: no budget row on Kimi),
+            // so an operator override carrying a budget span is masked out of the profile.
             let with_budget = EffortSupport::Supported(
                 EffortLevels::new([Low, High])
                     .with_off(true)
                     .with_budget(BudgetBounds::new(1024, 32_000)),
             );
-            let adapter = k3_adapter("https://example.invalid/v1", with_budget);
+            let adapter = KimiAdapter::new(
+                kimi_config("https://example.invalid/v1", "kimi-k3").with_model_overrides(
+                    BTreeMap::from([("kimi-k3".to_string(), effort_override(with_budget))]),
+                ),
+            )
+            .unwrap();
             let profile = adapter.model_profile("kimi-k3").unwrap();
             match profile.effort {
                 EffortSupport::Supported(levels) => {

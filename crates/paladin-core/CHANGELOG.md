@@ -15,6 +15,11 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- Phase 51 (REASON-05; plan 51-14): the crate's `cargo-semver-checks` lint table gains
+  `enum_struct_variant_field_added`, the lint measured against the published 0.10.1 for
+  `TraceEvent::NodeFinished`'s `reasoning_requested` and `reasoning_effective` (the
+  `PaladinData` fields fire the already-allowed `constructible_struct_adds_field`). No public item
+  changed.
 - Phase 51 (REASON-05; plan 51-09): `TraceEvent::NodeFinished.reasoning_requested` and
   `.reasoning_effective` (`Option<String>`, `#[serde(default, skip_serializing_if =
   "Option::is_none")]`), the attempt's own requested and effective reasoning effort. A `None` pair

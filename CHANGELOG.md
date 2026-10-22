@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Reasoning Effort guide, decision record and live evidence (REASON-02, REASON-03, REASON-06, REASON-07;
+  Phase 51 plans 02, 10, 13, 14).** The book gains a "Reasoning Effort" page
+  (`docs/src/user-guides/reasoning-effort.md`): the values and where to set them, when a model
+  cannot honour one, the per-provider wire and per-model table (derived from the nine built
+  adapters by a drift test, so it cannot disagree with the code), and a measured `kimi-k3` effort,
+  output budget and timeout example. ADR-0062 records the exact-or-refuse policy and amends
+  ADR-0004. `live_vendor_smoke` gains `--effort` (the raw-wire probe, whose dated 2026-10-22
+  transcript seeds every model's effort data) and `--effort-smoke` (two requests per model through
+  the shipped adapter at the lowest and highest admitted level, with optional `--max-tokens` and
+  `--timeout-seconds`); the 2026-10-22 adapter-path transcript for `claude-opus-4-8`,
+  `deepseek-v4-pro` and `kimi-k3`, and the documented `llm.kimi` configuration (`low`, 16,000
+  tokens, 300 s) answering, is `.planning/phases/51-adjustable-reasoning-effort/51-EFFORT-SMOKE.md`.
+  `MIGRATION.md` gains the additive Phase 51 rows in 9.2, the six configuration keys in 9.5 and
+  DR-20 to DR-26 in 9.8; the four deliberate breaks (`CompatRequestParameters`, `PaladinData`,
+  `AgentDefinition`, `TraceEvent::NodeFinished`) carry cargo-semver-checks 0.50.0 lint ids measured
+  against the published 0.10.1. No public item changed in this entry.
 - **Requested and effective reasoning effort on the trace (REASON-05, D-11; Phase 51 plan 09).**
   `TraceEvent::NodeFinished` carries `reasoning_requested` and `reasoning_effective`, the effort one
   Paladin or structured-output attempt asked for and the effort it actually ran with (they differ

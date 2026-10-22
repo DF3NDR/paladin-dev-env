@@ -8,7 +8,7 @@
 //! [`LlmError::UnsupportedParameter`](paladin_ports::output::llm_port::LlmError) before any HTTP
 //! call. It never drops the effort (the sampling module's omit-and-log path is deliberately not
 //! used here) and it never swaps it for another effort unless the caller chose a substituting
-//! [`ReasoningFallback`](paladin_ports::output::llm_port::ReasoningFallback). A request that sets
+//! [`ReasoningFallback`]. A request that sets
 //! no effort is untouched: nothing is sent, the profile is not consulted and no metadata is
 //! stamped, so its wire body stays byte-identical to what it was before this feature existed
 //! (D-00i).
@@ -31,7 +31,7 @@
 //! substituting fallback was chosen, in which case the first substitution per adapter instance,
 //! model and pair of values also emits one `warn!` (target `paladin::reasoning`). Both values are
 //! the `Display` spellings of
-//! [`ReasoningEffort`](paladin_ports::output::llm_port::ReasoningEffort), plain ASCII.
+//! [`ReasoningEffort`], plain ASCII.
 //!
 //! # The wire declaration
 //!

@@ -1841,7 +1841,7 @@ Plans:
 
 **Wave 11** *(blocked on Wave 10 completion)*
 
-- [ ] 51-14-PLAN.md — adapter-path live smoke, MIGRATION / CHANGELOG close-out, measured semver register, phase gates (checkpoint, wave 11)
+- [x] 51-14-PLAN.md — adapter-path live smoke, MIGRATION / CHANGELOG close-out, measured semver register, phase gates (checkpoint, wave 11)
 
 ---
 *Roadmap created: 2026-07-30 (ingest run 1 of 5 — `.project/Milestone_1-MVP`, 36 docs)*

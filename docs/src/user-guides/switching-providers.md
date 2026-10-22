@@ -527,3 +527,16 @@ providers is credential-gated and is a manual check, not part of CI.
 See also: [Provider Expansion](../appendix/provider-expansion.md), the contributor guide
 [Contributing New LLM Providers](../contributing/contributing-providers.md), and
 [Paladin Configuration](paladin-configuration.md).
+
+<!-- Footnote markers [a] to [i] in the behaviour table. They are defined here so
+mdbook-linkcheck (warning-policy = error) does not read each one as an incomplete link; the
+switching_page_tests drift test still reads the raw markers. -->
+[a]: #per-provider-and-per-model-behaviour
+[b]: #per-provider-and-per-model-behaviour
+[c]: #per-provider-and-per-model-behaviour
+[d]: #per-provider-and-per-model-behaviour
+[e]: #per-provider-and-per-model-behaviour
+[f]: #per-provider-and-per-model-behaviour
+[g]: #per-provider-and-per-model-behaviour
+[h]: #per-provider-and-per-model-behaviour
+[i]: #per-provider-and-per-model-behaviour

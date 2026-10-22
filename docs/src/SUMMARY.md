@@ -29,6 +29,7 @@
 - [Agent Runtime: Middleware, Context Management, Vault Memory, Structured Output and the Reasoning Agent](user-guides/agent-runtime.md)
 - [Paladin Configuration](user-guides/paladin-configuration.md)
 - [Switching Providers](user-guides/switching-providers.md)
+- [Reasoning Effort](user-guides/reasoning-effort.md)
 - [Memory Management](user-guides/memory-management.md)
 - [Tool Integration](user-guides/tool-integration.md)
 - [Output Formatting](user-guides/output-formatting.md)

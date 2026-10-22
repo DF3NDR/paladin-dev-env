@@ -2817,6 +2817,794 @@ mod switching_page_tests {
     }
 }
 
+/// The Reasoning Effort page against the built adapters (Phase 51 plan 51-13, REASON-07, T-51-38):
+/// the mdBook page `docs/src/user-guides/reasoning-effort.md` carries one mapping-table row per
+/// seeded model and one declared-wire row per provider, and this module fails when a row disagrees
+/// with what the adapters report, so the page cannot say a refused effort works.
+///
+/// The expected cells are never typed here. Each one is read from the profile a built adapter
+/// reports for the model (`LlmPort::model_profile(id)`, after the adapter has masked the seeded
+/// data with the wire it can actually carry) by asking the single admission rule,
+/// `EffortSupport::resolve`, what it does with each effort under `Refuse`. A row that is missing,
+/// extra, out of order or edited fails with a message naming the provider, the model and the cell.
+///
+/// Compiled only when all nine adapters are (the page lists all nine). Skip rule (the
+/// `switching_page_tests` precedent): the check is skipped only when the tree has no `docs/`
+/// directory at all, which is the Docker test image's build context (`.dockerignore` excludes
+/// `docs/`). A tree that has `docs/` but not the page fails.
+#[cfg(all(
+    test,
+    feature = "openai",
+    feature = "anthropic",
+    feature = "deepseek",
+    feature = "kimi",
+    feature = "qwen",
+    feature = "grok",
+    feature = "gemini",
+    feature = "ollama",
+    feature = "openai-compatible"
+))]
+mod reasoning_page_tests {
+    use super::*;
+    use paladin_ports::output::llm_port::{LlmPort, ReasoningEffort, ReasoningFallback};
+    use paladin_ports::output::model_profile::EffortRefusal;
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+
+    /// The page, relative to the workspace root.
+    const PAGE: &str = "docs/src/user-guides/reasoning-effort.md";
+    /// The providers the page lists, in the fixed order every table on it uses.
+    const PROVIDERS: [&str; 9] = [
+        "openai",
+        "anthropic",
+        "deepseek",
+        "kimi",
+        "qwen",
+        "grok",
+        "gemini",
+        "ollama",
+        "openai-compatible",
+    ];
+    const MAPPING_HEADING: &str = "## Mapping table";
+    const WIRES_HEADING: &str = "### Declared wire per provider";
+    const MODELS_HEADING: &str = "### Effort per model";
+    /// The model cell of a provider's declared-wire row.
+    const WIRE_LABEL: &str = "(declared wire)";
+    /// Leads the wire cell of a provider that ships no wire form (D-04); a reason must follow.
+    const UNVERIFIED_PREFIX: &str = "unverified:";
+    /// The `verified on` cell of a model with no measured effort data (D-02).
+    const UNMEASURED: &str = "unmeasured";
+    /// The `verified on` cell of a model or provider the probe did not confirm a wire for.
+    const UNVERIFIED: &str = "unverified";
+    /// Header of the per-model table: the nine effort columns are checked against `resolve`.
+    const MODEL_HEADERS: [&str; 12] = [
+        "Provider",
+        "Model",
+        "Off",
+        "Auto",
+        "Minimal",
+        "Low",
+        "Medium",
+        "High",
+        "XHigh",
+        "Max",
+        "Budget",
+        "Verified on",
+    ];
+    /// Header of the declared-wire table.
+    const WIRE_HEADERS: [&str; 4] = ["Provider", "Model", "Wire field", "Verified on"];
+    /// The efforts of columns 2 to 9, in order.
+    const EFFORT_COLUMNS: [ReasoningEffort; 8] = [
+        ReasoningEffort::Off,
+        ReasoningEffort::Auto,
+        ReasoningEffort::Minimal,
+        ReasoningEffort::Low,
+        ReasoningEffort::Medium,
+        ReasoningEffort::High,
+        ReasoningEffort::XHigh,
+        ReasoningEffort::Max,
+    ];
+
+    /// What a check of the page concluded.
+    #[derive(Debug, PartialEq, Eq)]
+    enum Outcome {
+        /// The tree has no `docs/` directory (the Docker test image): nothing to check.
+        Skipped,
+        /// The page was read and agrees with the adapters.
+        Checked,
+    }
+
+    fn workspace_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    /// The seeded table of `provider`.
+    fn seeded_for(provider: &str) -> &'static [SeededProfile] {
+        match provider {
+            "openai" => seeded::OPENAI,
+            "anthropic" => seeded::ANTHROPIC,
+            "deepseek" => seeded::DEEPSEEK,
+            "kimi" => seeded::KIMI,
+            "qwen" => seeded::QWEN,
+            "grok" => seeded::GROK,
+            "gemini" => seeded::GEMINI,
+            "ollama" => seeded::OLLAMA,
+            // OpenAI-compatible has no table by design.
+            _ => &[],
+        }
+    }
+
+    /// The adapter `provider` ships, built with a dummy key and an endpoint that does not
+    /// resolve. Construction makes no network call (Phase 50 D-05), so this needs no network.
+    fn build_adapter(provider: &str) -> Result<Arc<dyn LlmPort>, String> {
+        const KEY: &str = "test-key";
+        const URL: &str = "https://example.invalid/v1";
+        fn boxed<A: LlmPort + 'static, E: std::fmt::Display>(
+            provider: &str,
+            built: Result<A, E>,
+        ) -> Result<Arc<dyn LlmPort>, String> {
+            built
+                .map(|adapter| Arc::new(adapter) as Arc<dyn LlmPort>)
+                .map_err(|error| format!("{provider}: {error}"))
+        }
+        let key = || KEY.to_string();
+        let model = |id: &str| id.to_string();
+        match provider {
+            "openai" => boxed(
+                provider,
+                crate::openai::OpenAIAdapter::new(
+                    crate::openai::OpenAIConfig::new(key(), model("gpt-5.4")).with_base_url(URL),
+                ),
+            ),
+            "anthropic" => boxed(
+                provider,
+                crate::anthropic::AnthropicAdapter::new(
+                    crate::anthropic::AnthropicConfig::new(key(), model("claude-haiku-5-5"))
+                        .with_base_url(URL),
+                ),
+            ),
+            "deepseek" => boxed(
+                provider,
+                crate::deepseek::DeepSeekAdapter::new(
+                    crate::deepseek::DeepSeekConfig::new(key(), model("deepseek-v4-pro"))
+                        .with_base_url(URL),
+                ),
+            ),
+            "kimi" => boxed(
+                provider,
+                crate::kimi::KimiAdapter::new(
+                    crate::kimi::KimiConfig::new(key(), model("kimi-k3")).with_base_url(URL),
+                ),
+            ),
+            "qwen" => boxed(
+                provider,
+                crate::qwen::QwenAdapter::new(
+                    crate::qwen::QwenConfig::new(key(), model("qwen-plus")).with_base_url(URL),
+                ),
+            ),
+            "grok" => boxed(
+                provider,
+                crate::grok::GrokAdapter::new(
+                    crate::grok::GrokConfig::new(key(), model("grok-4.3")).with_base_url(URL),
+                ),
+            ),
+            "gemini" => boxed(
+                provider,
+                crate::gemini::GeminiAdapter::new(
+                    crate::gemini::GeminiConfig::new(key(), model("gemini-3.5-flash"))
+                        .with_base_url(URL),
+                ),
+            ),
+            "ollama" => boxed(
+                provider,
+                crate::ollama::OllamaAdapter::new(crate::ollama::OllamaConfig::new(
+                    "https://example.invalid".to_string(),
+                    model("llama3"),
+                )),
+            ),
+            "openai-compatible" => {
+                let capabilities =
+                    crate::openai_compatible::OpenAiCompatibleCapabilitiesConfig::from_lookup(
+                        &|_| None,
+                    )
+                    .map_err(|error| format!("{provider}: {error}"))?;
+                boxed(
+                    provider,
+                    crate::openai_compatible::OpenAiCompatibleAdapter::new(
+                        crate::openai_compatible::OpenAiCompatibleConfig::new(
+                            key(),
+                            URL.to_string(),
+                            model("some-model"),
+                            capabilities,
+                        ),
+                    ),
+                )
+            }
+            other => Err(format!("the test builds no adapter for '{other}'")),
+        }
+    }
+
+    /// The wire field the page names for a provider whose wire is shipped. Pinned per vendor by
+    /// the adapters' own wire-body tests and by the conformance case
+    /// `seeded_effort_levels_reach_the_wire`; whether a provider has a wire at all is read from
+    /// the adapter, not from this table.
+    fn declared_wire(provider: &str) -> &'static str {
+        match provider {
+            "openai" | "deepseek" | "grok" => "`reasoning_effort`",
+            "anthropic" => "`output_config.effort`",
+            "kimi" => "`thinking.effort`",
+            "qwen" => "`enable_thinking` + `thinking_budget`",
+            "gemini" => "`thinkingLevel`",
+            _ => "",
+        }
+    }
+
+    /// One effort cell: what `EffortSupport::resolve` does with `effort` under `Refuse`.
+    fn render_effort(support: &EffortSupport, effort: ReasoningEffort) -> String {
+        match support.resolve(effort, ReasoningFallback::Refuse) {
+            Ok(resolved) if resolved.on_wire => "exact",
+            Ok(_) => "no-op",
+            Err(EffortRefusal::LevelCoerced) => "refused (coerced)",
+            Err(_) => "refused",
+        }
+        .to_string()
+    }
+
+    /// The budget cell: the accepted span, or `refused` when the model takes no budget.
+    fn render_budget(support: &EffortSupport) -> String {
+        match support {
+            EffortSupport::Supported(levels) => match levels.budget {
+                Some(bounds) if bounds.is_valid() => {
+                    format!("budget {}-{}", bounds.min, bounds.max)
+                }
+                _ => "refused".to_string(),
+            },
+            _ => "refused".to_string(),
+        }
+    }
+
+    /// The `verified on` cell of a model: its probe date, else why it has none.
+    fn render_verified(profile: &ModelProfile) -> String {
+        match (&profile.effort_verified_on, &profile.effort) {
+            (Some(date), _) => date.clone(),
+            (None, EffortSupport::Unmeasured) => UNMEASURED.to_string(),
+            (None, _) => UNVERIFIED.to_string(),
+        }
+    }
+
+    /// The cells one seeded model must have on the page.
+    fn expected_model_cells(provider: &str, model: &str, profile: &ModelProfile) -> Vec<String> {
+        let mut cells = vec![provider.to_string(), format!("`{model}`")];
+        cells.extend(
+            EFFORT_COLUMNS
+                .iter()
+                .map(|effort| render_effort(&profile.effort, *effort)),
+        );
+        cells.push(render_budget(&profile.effort));
+        cells.push(render_verified(profile));
+        cells
+    }
+
+    /// What one built adapter reports: its seeded models' profiles (id ascending) and whether it
+    /// ships a wire form at all.
+    struct Built {
+        models: Vec<(String, ModelProfile)>,
+        ships_a_wire: bool,
+    }
+
+    /// Build `provider`'s adapter and read its profiles.
+    fn read_adapter(provider: &str) -> Result<Built, String> {
+        let adapter = build_adapter(provider)?;
+        let mut ids: Vec<&str> = seeded_for(provider).iter().map(|e| e.model).collect();
+        ids.sort_unstable();
+        let models = ids
+            .into_iter()
+            .map(|id| {
+                adapter
+                    .model_profile(id)
+                    .map(|profile| (id.to_string(), profile))
+                    .ok_or_else(|| format!("{provider} reports no model profile for '{id}'"))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        // A provider ships a wire when the adapter does not report `WireUnsupported` for one of
+        // its models (the first seeded one, else a nominal id): that is the adapter saying it
+        // has no wire for an effort (D-04).
+        let probe = models
+            .first()
+            .map_or("unseeded-model", |(id, _)| id.as_str());
+        let profile = adapter
+            .model_profile(probe)
+            .ok_or_else(|| format!("{provider} reports no model profile for '{probe}'"))?;
+        Ok(Built {
+            models,
+            ships_a_wire: !matches!(profile.effort, EffortSupport::WireUnsupported),
+        })
+    }
+
+    /// The nine adapters, built once per test process (building a client is not free, and the
+    /// mutation tests check the page many times).
+    fn built(provider: &str) -> Result<&'static Built, String> {
+        static ALL: std::sync::OnceLock<Result<Vec<(&'static str, Built)>, String>> =
+            std::sync::OnceLock::new();
+        let all = ALL
+            .get_or_init(|| {
+                PROVIDERS
+                    .iter()
+                    .map(|name| read_adapter(name).map(|built| (*name, built)))
+                    .collect()
+            })
+            .as_ref()
+            .map_err(Clone::clone)?;
+        all.iter()
+            .find(|(name, _)| *name == provider)
+            .map(|(_, built)| built)
+            .ok_or_else(|| format!("'{provider}' is not a listed provider"))
+    }
+
+    /// The model profiles of `provider`'s seeded models, id ascending, read from its adapter.
+    fn model_profiles(provider: &str) -> Result<Vec<(String, ModelProfile)>, String> {
+        Ok(built(provider)?.models.clone())
+    }
+
+    /// Whether `provider` ships a wire form, as its adapter reports it.
+    fn ships_a_wire(provider: &str) -> Result<bool, String> {
+        Ok(built(provider)?.ships_a_wire)
+    }
+
+    /// The `verified on` cell of a provider's declared-wire row: the latest probe date among its
+    /// seeded models, else `unverified`.
+    fn provider_verified(provider: &str) -> Result<String, String> {
+        Ok(model_profiles(provider)?
+            .into_iter()
+            .filter_map(|(_, profile)| profile.effort_verified_on)
+            .max()
+            .unwrap_or_else(|| UNVERIFIED.to_string()))
+    }
+
+    /// The lines under `heading`, up to the next heading of any level.
+    fn lines_under<'a>(page: &'a str, heading: &str) -> Result<Vec<&'a str>, String> {
+        let mut lines = page.lines();
+        if !lines.by_ref().any(|line| line.trim_end() == heading) {
+            return Err(format!("the page has no `{heading}` section"));
+        }
+        Ok(lines.take_while(|line| !line.starts_with('#')).collect())
+    }
+
+    fn cells_of(line: &str) -> Vec<String> {
+        line.trim()
+            .trim_matches('|')
+            .split('|')
+            .map(|cell| cell.trim().to_string())
+            .collect()
+    }
+
+    /// The table under `heading`: its header cells and its data rows, each checked for width.
+    fn table_under(
+        page: &str,
+        heading: &str,
+        width: usize,
+    ) -> Result<(Vec<String>, Vec<Vec<String>>), String> {
+        let mut header = None;
+        let mut rows = Vec::new();
+        for line in lines_under(page, heading)? {
+            if !line.trim_start().starts_with('|') {
+                continue;
+            }
+            let cells = cells_of(line);
+            if cells.len() != width {
+                return Err(format!(
+                    "`{heading}`: a table row has {} cells, expected {width}: {line}",
+                    cells.len()
+                ));
+            }
+            let is_rule = cells
+                .first()
+                .is_some_and(|cell| !cell.is_empty() && cell.chars().all(|c| c == '-'));
+            if is_rule {
+                continue;
+            }
+            if header.is_none() {
+                header = Some(cells);
+            } else {
+                rows.push(cells);
+            }
+        }
+        let header = header.ok_or_else(|| format!("`{heading}` has no table"))?;
+        Ok((header, rows))
+    }
+
+    fn check_header(heading: &str, found: &[String], expected: &[&str]) -> Result<(), String> {
+        if found == expected {
+            Ok(())
+        } else {
+            Err(format!(
+                "`{heading}`: the header reads {found:?}, expected {expected:?}"
+            ))
+        }
+    }
+
+    /// Compare one provider-by-model table with the adapters: the same rows in the same order,
+    /// then every cell. The error names the first disagreement.
+    fn check_rows(
+        heading: &str,
+        headers: &[&str],
+        actual: &[Vec<String>],
+        expected: &[Vec<String>],
+        key_columns: usize,
+    ) -> Result<(), String> {
+        let key = |row: &Vec<String>| row[..key_columns].join(" ");
+        let actual_keys: Vec<String> = actual.iter().map(key).collect();
+        let expected_keys: Vec<String> = expected.iter().map(key).collect();
+        if let Some(missing) = expected_keys.iter().find(|k| !actual_keys.contains(k)) {
+            return Err(format!("`{heading}` has no row for {missing}"));
+        }
+        if let Some(extra) = actual_keys.iter().find(|k| !expected_keys.contains(k)) {
+            return Err(format!(
+                "`{heading}` has a row for {extra} that the registry does not seed"
+            ));
+        }
+        if actual_keys != expected_keys {
+            return Err(format!(
+                "`{heading}` rows are out of order: expected the fixed provider order, then \
+                 model id ascending"
+            ));
+        }
+        for (row, want) in actual.iter().zip(expected) {
+            if let Some(column) = (0..headers.len()).find(|&i| row[i] != want[i]) {
+                return Err(format!(
+                    "{}: column '{}' reads `{}` on the page but the adapter reports `{}`",
+                    key(row),
+                    headers[column],
+                    row[column],
+                    want[column]
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// The declared-wire rows the adapters imply. A provider with a wire must name the field
+    /// (the cell is compared exactly); one without must read `unverified:` followed by a reason
+    /// (only the prefix is compared, the reason is prose).
+    fn check_wires(page: &str) -> Result<(), String> {
+        let (header, rows) = table_under(page, WIRES_HEADING, WIRE_HEADERS.len())?;
+        check_header(WIRES_HEADING, &header, &WIRE_HEADERS)?;
+        let mut expected = Vec::new();
+        for provider in PROVIDERS {
+            let wire = if ships_a_wire(provider)? {
+                declared_wire(provider).to_string()
+            } else {
+                String::new()
+            };
+            expected.push(vec![
+                provider.to_string(),
+                WIRE_LABEL.to_string(),
+                wire,
+                provider_verified(provider)?,
+            ]);
+        }
+        // A provider that ships no wire form states why in prose, so its wire cell cannot be
+        // compared exactly: require the `unverified:` prefix and a reason, then take the page's
+        // own cell as the expectation so only the rest of the row is compared. A missing row is
+        // left for `check_rows` to report.
+        for want in &mut expected {
+            if !want[2].is_empty() {
+                continue;
+            }
+            let Some(row) = rows
+                .iter()
+                .find(|row| row[0] == want[0] && row[1] == want[1])
+            else {
+                continue;
+            };
+            let reason = row[2].strip_prefix(UNVERIFIED_PREFIX).map(str::trim);
+            if reason.is_some_and(|reason| !reason.is_empty()) {
+                want[2].clone_from(&row[2]);
+            } else {
+                return Err(format!(
+                    "{} {WIRE_LABEL}: the adapter ships no wire form, so the wire cell must \
+                     read `{UNVERIFIED_PREFIX}` followed by the reason, found `{}`",
+                    row[0], row[2]
+                ));
+            }
+        }
+        check_rows(WIRES_HEADING, &WIRE_HEADERS, &rows, &expected, 2)
+    }
+
+    /// The per-model rows the adapters imply, in page order.
+    fn check_models(page: &str) -> Result<(), String> {
+        let (header, rows) = table_under(page, MODELS_HEADING, MODEL_HEADERS.len())?;
+        check_header(MODELS_HEADING, &header, &MODEL_HEADERS)?;
+        let mut expected = Vec::new();
+        for provider in PROVIDERS {
+            for (model, profile) in model_profiles(provider)? {
+                expected.push(expected_model_cells(provider, &model, &profile));
+            }
+        }
+        check_rows(MODELS_HEADING, &MODEL_HEADERS, &rows, &expected, 2)
+    }
+
+    /// Compare the page text with the adapters; the error names the first disagreement.
+    fn check_page_text(page: &str) -> Result<(), String> {
+        if !page.lines().any(|line| line.trim_end() == MAPPING_HEADING) {
+            return Err(format!("the page has no `{MAPPING_HEADING}` section"));
+        }
+        check_wires(page)?;
+        check_models(page)
+    }
+
+    /// Read and check the page under `root`: skipped only when `root` has no `docs/` directory.
+    fn check_page_in(root: &Path) -> Result<Outcome, String> {
+        if !root.join("docs").is_dir() {
+            return Ok(Outcome::Skipped);
+        }
+        let path = root.join(PAGE);
+        let page = std::fs::read_to_string(&path).map_err(|error| {
+            format!(
+                "docs/ exists but {} cannot be read: {error}",
+                path.display()
+            )
+        })?;
+        check_page_text(&page).map(|()| Outcome::Checked)
+    }
+
+    /// The real page, or `None` in a tree without `docs/` (the mutation checks then have nothing
+    /// to mutate and pass vacuously, exactly like the main check skips).
+    fn real_page() -> Option<String> {
+        let root = workspace_root();
+        if !root.join("docs").is_dir() {
+            return None;
+        }
+        Some(
+            std::fs::read_to_string(root.join(PAGE))
+                .unwrap_or_else(|error| panic!("docs/ exists but the page is unreadable: {error}")),
+        )
+    }
+
+    /// A fresh scratch directory under the system temp dir.
+    fn scratch(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("paladin-reasoning-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap_or_else(|error| panic!("scratch dir: {error}"));
+        dir
+    }
+
+    /// Apply `edit` to the first line that starts with `prefix`.
+    fn edit_line(page: &str, prefix: &str, edit: impl Fn(&str) -> String) -> String {
+        let mut done = false;
+        page.lines()
+            .map(|line| {
+                if !done && line.starts_with(prefix) {
+                    done = true;
+                    edit(line)
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn the_reasoning_effort_page_agrees_with_the_adapters() {
+        let outcome = check_page_in(&workspace_root());
+        assert!(
+            matches!(outcome, Ok(Outcome::Checked | Outcome::Skipped)),
+            "{}",
+            outcome.err().unwrap_or_default()
+        );
+    }
+
+    #[test]
+    fn a_deepseek_cell_edited_in_a_copy_fails_naming_the_row_and_the_cell() {
+        let Some(page) = real_page() else { return };
+        // `deepseek-v4-pro` lists `low`: flip its Low cell from `exact` to `refused`.
+        let mutated = edit_line(&page, "| deepseek | `deepseek-v4-pro` |", |line| {
+            let mut cells = cells_of(line);
+            cells[5] = "refused".to_string();
+            format!("| {} |", cells.join(" | "))
+        });
+        let root = scratch("edited-cell");
+        let page_path = root.join(PAGE);
+        std::fs::create_dir_all(page_path.parent().expect("the page has a parent"))
+            .unwrap_or_else(|error| panic!("scratch docs dir: {error}"));
+        std::fs::write(&page_path, mutated).unwrap_or_else(|error| panic!("scratch page: {error}"));
+        let outcome = check_page_in(&root);
+        let _ = std::fs::remove_dir_all(&root);
+        let error = outcome.expect_err("an edited cell must fail");
+        assert!(
+            error.contains("deepseek-v4-pro")
+                && error.contains("'Low'")
+                && error.contains("refused")
+                && error.contains("exact"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_missing_seeded_model_row_fails_the_check() {
+        let Some(page) = real_page() else { return };
+        let mutated: String = page
+            .lines()
+            .filter(|line| !line.starts_with("| deepseek | `deepseek-flash` |"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let error = check_page_text(&mutated).expect_err("a deleted row must fail");
+        assert!(error.contains("deepseek-flash"), "{error}");
+    }
+
+    #[test]
+    fn an_extra_model_row_fails_the_check() {
+        let Some(page) = real_page() else { return };
+        let mutated = edit_line(&page, "| deepseek | `deepseek-flash` |", |line| {
+            format!(
+                "{line}\n{}",
+                line.replace("deepseek-flash", "deepseek-ghost")
+            )
+        });
+        let error = check_page_text(&mutated).expect_err("an extra row must fail");
+        assert!(error.contains("deepseek-ghost"), "{error}");
+    }
+
+    /// A seeded model whose adapter reports measured effort data (`Supported` or `NoReasoning`)
+    /// must have a row: deleting any such row, for any provider, fails the check naming it.
+    #[test]
+    fn every_measured_seeded_model_needs_its_row() {
+        let Some(page) = real_page() else { return };
+        let mut measured = 0;
+        for provider in PROVIDERS {
+            for (model, profile) in model_profiles(provider).expect("the adapter builds") {
+                if !matches!(
+                    profile.effort,
+                    EffortSupport::Supported(_) | EffortSupport::NoReasoning
+                ) {
+                    continue;
+                }
+                measured += 1;
+                let prefix = format!("| {provider} | `{model}` |");
+                let mutated: String = page
+                    .lines()
+                    .filter(|line| !line.starts_with(&prefix))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let error = check_page_text(&mutated)
+                    .expect_err("a deleted row of a measured model must fail");
+                assert!(error.contains(&format!("{provider} `{model}`")), "{error}");
+            }
+        }
+        assert!(measured > 0, "the registry seeds measured effort data");
+    }
+
+    /// An unmeasured seeded model is listed too, and never as anything but `refused`: editing
+    /// one of its cells to `exact` fails.
+    #[test]
+    fn an_unmeasured_row_cannot_read_exact() {
+        let Some(page) = real_page() else { return };
+        let mutated = edit_line(&page, "| openai | `gpt-4o-mini` |", |line| {
+            let mut cells = cells_of(line);
+            cells[5] = "exact".to_string();
+            format!("| {} |", cells.join(" | "))
+        });
+        let error = check_page_text(&mutated).expect_err("an unmeasured row must stay refused");
+        assert!(
+            error.contains("gpt-4o-mini") && error.contains("'Low'") && error.contains("exact"),
+            "{error}"
+        );
+    }
+
+    /// A provider that ships no wire (Ollama, OpenAI-compatible by default) must say why, not
+    /// name a field.
+    #[test]
+    fn a_provider_without_a_wire_cannot_name_one() {
+        let Some(page) = real_page() else { return };
+        let mutated = edit_line(&page, "| ollama | (declared wire) |", |_| {
+            "| ollama | (declared wire) | `reasoning_effort` | unverified |".to_string()
+        });
+        let error =
+            check_page_text(&mutated).expect_err("an unverified provider cannot name a wire");
+        assert!(
+            error.contains("ollama") && error.contains("unverified:"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_missing_declared_wire_row_fails_the_check() {
+        let Some(page) = real_page() else { return };
+        let mutated: String = page
+            .lines()
+            .filter(|line| !line.starts_with("| deepseek | (declared wire) |"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let error = check_page_text(&mutated).expect_err("a missing wire row must fail");
+        assert!(error.contains("deepseek"), "{error}");
+    }
+
+    #[test]
+    fn an_edited_declared_wire_fails_the_check() {
+        let Some(page) = real_page() else { return };
+        let mutated = edit_line(&page, "| deepseek | (declared wire) |", |line| {
+            line.replace("`reasoning_effort`", "`thinking.effort`")
+        });
+        let error = check_page_text(&mutated).expect_err("a changed wire must fail");
+        assert!(error.contains("Wire field"), "{error}");
+    }
+
+    #[test]
+    fn an_edited_verified_on_date_fails_the_check() {
+        let Some(page) = real_page() else { return };
+        let mutated = edit_line(&page, "| deepseek | `deepseek-v4-pro` |", |line| {
+            line.replace("2026-10-22", "2026-10-21")
+        });
+        let error = check_page_text(&mutated).expect_err("a changed date must fail");
+        assert!(
+            error.contains("deepseek-v4-pro") && error.contains("Verified on"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_page_without_the_mapping_table_heading_fails() {
+        let Some(page) = real_page() else { return };
+        let mutated = page.replace(MAPPING_HEADING, "## Something else");
+        let error = check_page_text(&mutated).expect_err("a missing heading must fail");
+        assert!(error.contains(MAPPING_HEADING), "{error}");
+    }
+
+    #[test]
+    fn a_tree_with_docs_but_without_the_page_fails() {
+        let root = scratch("no-page");
+        std::fs::create_dir_all(root.join("docs/src"))
+            .unwrap_or_else(|error| panic!("scratch docs dir: {error}"));
+        let outcome = check_page_in(&root);
+        let _ = std::fs::remove_dir_all(&root);
+        let error = outcome.expect_err("docs/ without the page must fail, never skip");
+        assert!(error.contains("cannot be read"), "{error}");
+    }
+
+    #[test]
+    fn a_tree_without_a_docs_directory_is_a_recorded_skip() {
+        let root = scratch("no-docs");
+        let outcome = check_page_in(&root);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(outcome, Ok(Outcome::Skipped));
+    }
+
+    #[test]
+    fn the_cell_vocabulary_follows_the_admission_rule() {
+        let support = EffortSupport::Supported(
+            paladin_ports::output::model_profile::EffortLevels::new([
+                ReasoningEffort::Low,
+                ReasoningEffort::High,
+            ])
+            .with_off(true)
+            .with_coerced([ReasoningEffort::Medium])
+            .with_budget(paladin_ports::output::model_profile::BudgetBounds::new(
+                1, 9,
+            )),
+        );
+        assert_eq!(render_effort(&support, ReasoningEffort::Low), "exact");
+        assert_eq!(render_effort(&support, ReasoningEffort::Off), "exact");
+        assert_eq!(render_effort(&support, ReasoningEffort::Auto), "refused");
+        assert_eq!(render_effort(&support, ReasoningEffort::Max), "refused");
+        assert_eq!(
+            render_effort(&support, ReasoningEffort::Medium),
+            "refused (coerced)"
+        );
+        assert_eq!(render_budget(&support), "budget 1-9");
+        assert_eq!(
+            render_effort(&EffortSupport::NoReasoning, ReasoningEffort::Off),
+            "no-op"
+        );
+        assert_eq!(
+            render_effort(&EffortSupport::Unmeasured, ReasoningEffort::Low),
+            "refused"
+        );
+        assert_eq!(render_budget(&EffortSupport::WireUnsupported), "refused");
+    }
+}
+
 /// The `with_base_url` / `with_timeout_seconds` builders `config_knob_builders!` generates on
 /// every `*Config` type (Phase 50.1 plan 02, SURFACE-02, D-05, D-00d: one mechanism, nine types).
 #[cfg(test)]

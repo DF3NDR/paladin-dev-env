@@ -3384,6 +3384,14 @@ stake, so an attacker donating to himself alone is a strict loss.";
         struct AnthropicFixture;
 
         impl crate::conformance::ConformanceFixture for AnthropicFixture {
+            /// Anthropic's `output_config.effort`.
+            fn effort_wire_value(body: &serde_json::Value) -> Option<String> {
+                body.get("output_config")
+                    .and_then(|config| config.get("effort"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+            }
+
             const WIRE: crate::conformance::Wire = crate::conformance::Wire::Anthropic;
 
             fn default_model() -> &'static str {

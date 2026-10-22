@@ -785,6 +785,13 @@ mod tests {
         struct OllamaFixture;
 
         impl crate::conformance::ConformanceFixture for OllamaFixture {
+            /// The self-hosted adapter's declared wire (`Unsupported` by default carries no
+            /// level; `top_level_effort` and `thinking_object` are each read).
+            fn effort_wire_value(body: &serde_json::Value) -> Option<String> {
+                crate::conformance::chat_effort_wire_value(body)
+                    .or_else(|| crate::conformance::thinking_effort_wire_value(body))
+            }
+
             const WIRE: crate::conformance::Wire = crate::conformance::Wire::OpenAiChat;
 
             fn default_model() -> &'static str {

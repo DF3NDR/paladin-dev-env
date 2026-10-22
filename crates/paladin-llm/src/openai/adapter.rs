@@ -3514,6 +3514,11 @@ mod tests {
         struct OpenAiFixture;
 
         impl crate::conformance::ConformanceFixture for OpenAiFixture {
+            /// The top-level `reasoning_effort`.
+            fn effort_wire_value(body: &serde_json::Value) -> Option<String> {
+                crate::conformance::chat_effort_wire_value(body)
+            }
+
             const WIRE: crate::conformance::Wire = crate::conformance::Wire::OpenAiChat;
 
             // OpenAI has no adapter-level default model (the model arrives per request), so the

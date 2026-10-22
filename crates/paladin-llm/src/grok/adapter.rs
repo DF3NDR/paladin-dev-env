@@ -1228,6 +1228,11 @@ mod tests {
         struct GrokFixture;
 
         impl crate::conformance::ConformanceFixture for GrokFixture {
+            /// The top-level `reasoning_effort`.
+            fn effort_wire_value(body: &serde_json::Value) -> Option<String> {
+                crate::conformance::chat_effort_wire_value(body)
+            }
+
             const WIRE: crate::conformance::Wire = crate::conformance::Wire::OpenAiChat;
 
             fn default_model() -> &'static str {

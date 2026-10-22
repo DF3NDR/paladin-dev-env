@@ -5564,6 +5564,15 @@ mod tests {
         struct GeminiFixture;
 
         impl crate::conformance::ConformanceFixture for GeminiFixture {
+            /// Gemini's `generationConfig.thinkingConfig.thinkingLevel`, lower-cased.
+            fn effort_wire_value(body: &serde_json::Value) -> Option<String> {
+                body.get("generationConfig")
+                    .and_then(|config| config.get("thinkingConfig"))
+                    .and_then(|config| config.get("thinkingLevel"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_lowercase)
+            }
+
             const WIRE: crate::conformance::Wire = crate::conformance::Wire::Gemini;
 
             fn default_model() -> &'static str {

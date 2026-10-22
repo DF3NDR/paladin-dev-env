@@ -1034,6 +1034,11 @@ mod tests {
         struct QwenFixture;
 
         impl crate::conformance::ConformanceFixture for QwenFixture {
+            /// Qwen's wire is `enable_thinking` / `thinking_budget`: no level field, so none.
+            fn effort_wire_value(_body: &serde_json::Value) -> Option<String> {
+                None
+            }
+
             const WIRE: crate::conformance::Wire = crate::conformance::Wire::OpenAiChat;
 
             fn default_model() -> &'static str {

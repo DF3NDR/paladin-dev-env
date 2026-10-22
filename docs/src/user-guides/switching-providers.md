@@ -524,8 +524,9 @@ the new date, and update the matching rows above. The drift test fails until the
 registry agree, so a row cannot be edited on one side only. The live smoke run over all nine
 providers is credential-gated and is a manual check, not part of CI.
 
-See also: [Provider Expansion](../appendix/provider-expansion.md), the contributor guide
-[Contributing New LLM Providers](../contributing/contributing-providers.md), and
+See also: [Reasoning Effort](reasoning-effort.md), which sets how hard a model thinks and carries
+its own drift-checked per-model table; [Provider Expansion](../appendix/provider-expansion.md), the
+contributor guide [Contributing New LLM Providers](../contributing/contributing-providers.md), and
 [Paladin Configuration](paladin-configuration.md).
 
 <!-- Footnote markers [a] to [i] in the behaviour table. They are defined here so

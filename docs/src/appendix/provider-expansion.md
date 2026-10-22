@@ -30,7 +30,9 @@ Paladin supports multiple LLM providers out of the box, allowing you to choose t
 These three are the long-standing providers this guide describes in detail; six more ship behind
 their own feature flags (see the comparison table below). To move an agent between any of the nine
 by configuration, and for the per-model behaviour each was measured to have, read
-[Switching Providers](../user-guides/switching-providers.md).
+[Switching Providers](../user-guides/switching-providers.md). To set how hard a model thinks
+(`reasoning_effort`) and see which models take which effort on which wire, read
+[Reasoning Effort](../user-guides/reasoning-effort.md).
 
 ---
 

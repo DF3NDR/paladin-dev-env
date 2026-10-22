@@ -2854,7 +2854,17 @@ mod reasoning_page_tests {
     /// The page, relative to the workspace root.
     const PAGE: &str = "docs/src/user-guides/reasoning-effort.md";
     /// The providers the page lists, in the fixed order every table on it uses.
-    const PROVIDERS: [&str; 1] = ["deepseek"];
+    const PROVIDERS: [&str; 9] = [
+        "openai",
+        "anthropic",
+        "deepseek",
+        "kimi",
+        "qwen",
+        "grok",
+        "gemini",
+        "ollama",
+        "openai-compatible",
+    ];
     const MAPPING_HEADING: &str = "## Mapping table";
     const WIRES_HEADING: &str = "### Declared wire per provider";
     const MODELS_HEADING: &str = "### Effort per model";
@@ -2911,7 +2921,15 @@ mod reasoning_page_tests {
     /// The seeded table of `provider`.
     fn seeded_for(provider: &str) -> &'static [SeededProfile] {
         match provider {
+            "openai" => seeded::OPENAI,
+            "anthropic" => seeded::ANTHROPIC,
             "deepseek" => seeded::DEEPSEEK,
+            "kimi" => seeded::KIMI,
+            "qwen" => seeded::QWEN,
+            "grok" => seeded::GROK,
+            "gemini" => seeded::GEMINI,
+            "ollama" => seeded::OLLAMA,
+            // OpenAI-compatible has no table by design.
             _ => &[],
         }
     }
@@ -2921,16 +2939,87 @@ mod reasoning_page_tests {
     fn build_adapter(provider: &str) -> Result<Arc<dyn LlmPort>, String> {
         const KEY: &str = "test-key";
         const URL: &str = "https://example.invalid/v1";
+        fn boxed<A: LlmPort + 'static, E: std::fmt::Display>(
+            provider: &str,
+            built: Result<A, E>,
+        ) -> Result<Arc<dyn LlmPort>, String> {
+            built
+                .map(|adapter| Arc::new(adapter) as Arc<dyn LlmPort>)
+                .map_err(|error| format!("{provider}: {error}"))
+        }
+        let key = || KEY.to_string();
+        let model = |id: &str| id.to_string();
         match provider {
-            "deepseek" => crate::deepseek::DeepSeekAdapter::new(
-                crate::deepseek::DeepSeekConfig::new(
-                    KEY.to_string(),
-                    "deepseek-v4-pro".to_string(),
+            "openai" => boxed(
+                provider,
+                crate::openai::OpenAIAdapter::new(
+                    crate::openai::OpenAIConfig::new(key(), model("gpt-5.4")).with_base_url(URL),
+                ),
+            ),
+            "anthropic" => boxed(
+                provider,
+                crate::anthropic::AnthropicAdapter::new(
+                    crate::anthropic::AnthropicConfig::new(key(), model("claude-haiku-5-5"))
+                        .with_base_url(URL),
+                ),
+            ),
+            "deepseek" => boxed(
+                provider,
+                crate::deepseek::DeepSeekAdapter::new(
+                    crate::deepseek::DeepSeekConfig::new(key(), model("deepseek-v4-pro"))
+                        .with_base_url(URL),
+                ),
+            ),
+            "kimi" => boxed(
+                provider,
+                crate::kimi::KimiAdapter::new(
+                    crate::kimi::KimiConfig::new(key(), model("kimi-k3")).with_base_url(URL),
+                ),
+            ),
+            "qwen" => boxed(
+                provider,
+                crate::qwen::QwenAdapter::new(
+                    crate::qwen::QwenConfig::new(key(), model("qwen-plus")).with_base_url(URL),
+                ),
+            ),
+            "grok" => boxed(
+                provider,
+                crate::grok::GrokAdapter::new(
+                    crate::grok::GrokConfig::new(key(), model("grok-4.3")).with_base_url(URL),
+                ),
+            ),
+            "gemini" => boxed(
+                provider,
+                crate::gemini::GeminiAdapter::new(
+                    crate::gemini::GeminiConfig::new(key(), model("gemini-3.5-flash"))
+                        .with_base_url(URL),
+                ),
+            ),
+            "ollama" => boxed(
+                provider,
+                crate::ollama::OllamaAdapter::new(crate::ollama::OllamaConfig::new(
+                    "https://example.invalid".to_string(),
+                    model("llama3"),
+                )),
+            ),
+            "openai-compatible" => {
+                let capabilities =
+                    crate::openai_compatible::OpenAiCompatibleCapabilitiesConfig::from_lookup(
+                        &|_| None,
+                    )
+                    .map_err(|error| format!("{provider}: {error}"))?;
+                boxed(
+                    provider,
+                    crate::openai_compatible::OpenAiCompatibleAdapter::new(
+                        crate::openai_compatible::OpenAiCompatibleConfig::new(
+                            key(),
+                            URL.to_string(),
+                            model("some-model"),
+                            capabilities,
+                        ),
+                    ),
                 )
-                .with_base_url(URL),
-            )
-            .map(|adapter| Arc::new(adapter) as Arc<dyn LlmPort>)
-            .map_err(|error| format!("{provider}: {error}")),
+            }
             other => Err(format!("the test builds no adapter for '{other}'")),
         }
     }
@@ -2941,7 +3030,11 @@ mod reasoning_page_tests {
     /// the adapter, not from this table.
     fn declared_wire(provider: &str) -> &'static str {
         match provider {
-            "deepseek" => "`reasoning_effort`",
+            "openai" | "deepseek" | "grok" => "`reasoning_effort`",
+            "anthropic" => "`output_config.effort`",
+            "kimi" => "`thinking.effort`",
+            "qwen" => "`enable_thinking` + `thinking_budget`",
+            "gemini" => "`thinkingLevel`",
             _ => "",
         }
     }
@@ -2992,33 +3085,70 @@ mod reasoning_page_tests {
         cells
     }
 
-    /// The model profiles of `provider`'s seeded models, id ascending, read from its adapter.
-    fn model_profiles(provider: &str) -> Result<Vec<(String, ModelProfile)>, String> {
+    /// What one built adapter reports: its seeded models' profiles (id ascending) and whether it
+    /// ships a wire form at all.
+    struct Built {
+        models: Vec<(String, ModelProfile)>,
+        ships_a_wire: bool,
+    }
+
+    /// Build `provider`'s adapter and read its profiles.
+    fn read_adapter(provider: &str) -> Result<Built, String> {
         let adapter = build_adapter(provider)?;
         let mut ids: Vec<&str> = seeded_for(provider).iter().map(|e| e.model).collect();
         ids.sort_unstable();
-        ids.into_iter()
+        let models = ids
+            .into_iter()
             .map(|id| {
                 adapter
                     .model_profile(id)
                     .map(|profile| (id.to_string(), profile))
                     .ok_or_else(|| format!("{provider} reports no model profile for '{id}'"))
             })
-            .collect()
+            .collect::<Result<Vec<_>, String>>()?;
+        // A provider ships a wire when the adapter does not report `WireUnsupported` for one of
+        // its models (the first seeded one, else a nominal id): that is the adapter saying it
+        // has no wire for an effort (D-04).
+        let probe = models
+            .first()
+            .map_or("unseeded-model", |(id, _)| id.as_str());
+        let profile = adapter
+            .model_profile(probe)
+            .ok_or_else(|| format!("{provider} reports no model profile for '{probe}'"))?;
+        Ok(Built {
+            models,
+            ships_a_wire: !matches!(profile.effort, EffortSupport::WireUnsupported),
+        })
     }
 
-    /// Whether `provider` ships a wire form: read from the adapter's profile for one of its
-    /// models (the first seeded one, else a nominal id). `WireUnsupported` is the adapter saying
-    /// it has no wire for an effort (D-04).
+    /// The nine adapters, built once per test process (building a client is not free, and the
+    /// mutation tests check the page many times).
+    fn built(provider: &str) -> Result<&'static Built, String> {
+        static ALL: std::sync::OnceLock<Result<Vec<(&'static str, Built)>, String>> =
+            std::sync::OnceLock::new();
+        let all = ALL
+            .get_or_init(|| {
+                PROVIDERS
+                    .iter()
+                    .map(|name| read_adapter(name).map(|built| (*name, built)))
+                    .collect()
+            })
+            .as_ref()
+            .map_err(Clone::clone)?;
+        all.iter()
+            .find(|(name, _)| *name == provider)
+            .map(|(_, built)| built)
+            .ok_or_else(|| format!("'{provider}' is not a listed provider"))
+    }
+
+    /// The model profiles of `provider`'s seeded models, id ascending, read from its adapter.
+    fn model_profiles(provider: &str) -> Result<Vec<(String, ModelProfile)>, String> {
+        Ok(built(provider)?.models.clone())
+    }
+
+    /// Whether `provider` ships a wire form, as its adapter reports it.
     fn ships_a_wire(provider: &str) -> Result<bool, String> {
-        let adapter = build_adapter(provider)?;
-        let model = seeded_for(provider)
-            .first()
-            .map_or("unseeded-model", |entry| entry.model);
-        let profile = adapter
-            .model_profile(model)
-            .ok_or_else(|| format!("{provider} reports no model profile for '{model}'"))?;
-        Ok(!matches!(profile.effort, EffortSupport::WireUnsupported))
+        Ok(built(provider)?.ships_a_wire)
     }
 
     /// The `verified on` cell of a provider's declared-wire row: the latest probe date among its
@@ -3315,6 +3445,68 @@ mod reasoning_page_tests {
         });
         let error = check_page_text(&mutated).expect_err("an extra row must fail");
         assert!(error.contains("deepseek-ghost"), "{error}");
+    }
+
+    /// A seeded model whose adapter reports measured effort data (`Supported` or `NoReasoning`)
+    /// must have a row: deleting any such row, for any provider, fails the check naming it.
+    #[test]
+    fn every_measured_seeded_model_needs_its_row() {
+        let Some(page) = real_page() else { return };
+        let mut measured = 0;
+        for provider in PROVIDERS {
+            for (model, profile) in model_profiles(provider).expect("the adapter builds") {
+                if !matches!(
+                    profile.effort,
+                    EffortSupport::Supported(_) | EffortSupport::NoReasoning
+                ) {
+                    continue;
+                }
+                measured += 1;
+                let prefix = format!("| {provider} | `{model}` |");
+                let mutated: String = page
+                    .lines()
+                    .filter(|line| !line.starts_with(&prefix))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let error = check_page_text(&mutated)
+                    .expect_err("a deleted row of a measured model must fail");
+                assert!(error.contains(&format!("{provider} `{model}`")), "{error}");
+            }
+        }
+        assert!(measured > 0, "the registry seeds measured effort data");
+    }
+
+    /// An unmeasured seeded model is listed too, and never as anything but `refused`: editing
+    /// one of its cells to `exact` fails.
+    #[test]
+    fn an_unmeasured_row_cannot_read_exact() {
+        let Some(page) = real_page() else { return };
+        let mutated = edit_line(&page, "| openai | `gpt-4o-mini` |", |line| {
+            let mut cells = cells_of(line);
+            cells[5] = "exact".to_string();
+            format!("| {} |", cells.join(" | "))
+        });
+        let error = check_page_text(&mutated).expect_err("an unmeasured row must stay refused");
+        assert!(
+            error.contains("gpt-4o-mini") && error.contains("'Low'") && error.contains("exact"),
+            "{error}"
+        );
+    }
+
+    /// A provider that ships no wire (Ollama, OpenAI-compatible by default) must say why, not
+    /// name a field.
+    #[test]
+    fn a_provider_without_a_wire_cannot_name_one() {
+        let Some(page) = real_page() else { return };
+        let mutated = edit_line(&page, "| ollama | (declared wire) |", |_| {
+            "| ollama | (declared wire) | `reasoning_effort` | unverified |".to_string()
+        });
+        let error =
+            check_page_text(&mutated).expect_err("an unverified provider cannot name a wire");
+        assert!(
+            error.contains("ollama") && error.contains("unverified:"),
+            "{error}"
+        );
     }
 
     #[test]

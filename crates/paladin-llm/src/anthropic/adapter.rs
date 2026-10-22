@@ -1205,8 +1205,15 @@ struct ClaudeThinking {
 
 /// What Anthropic's request body can carry of a profile's effort data (Phase 51, D-00h): a
 /// listed level (`output_config.effort`), `off` and `auto` (the `thinking` switch) and, on a model
-/// whose profile carries budget bounds, the legacy `thinking.budget_tokens`. Plan 51-12 confirms
-/// each form against the dated probe or sets this to [`WireCaps::NONE`] (D-04).
+/// whose profile carries budget bounds, the legacy `thinking.budget_tokens`.
+///
+/// Confirmed against the dated probe (plan 51-12, D-04; owner decision of 2026-10-22 at plan
+/// 51-11's checkpoint): `51-EFFORT-PROBE.md`'s verdict table marks Anthropic's `output_config`
+/// confirmed (the invalid value drew 400 on 11 of 11 models, so the field is parsed; the highest
+/// accepted level reports more reasoning tokens than the lowest on 7 of 9 comparable models). The
+/// documented capabilities therefore stand; they are not `WireCaps::NONE`. No seeded row carries
+/// a budget span (the vendor-documented section names no fixed upper bound), so a budget refuses
+/// on every seeded model until an operator override states one.
 const ANTHROPIC_REASONING_WIRE: WireCaps = WireCaps {
     levels: true,
     off: true,
@@ -3866,6 +3873,8 @@ stake, so an attacker donating to himself alone is a strict loss.";
         use std::sync::Mutex as StdMutex;
 
         const OPUS_4_8: &str = "claude-opus-4-8";
+        /// A model id with no seeded row, so it stays `Unmeasured` and refuses an explicit effort.
+        const UNPROFILED: &str = "claude-unprofiled-test-model";
         const OPUS_4_6: &str = "claude-opus-4-6";
 
         fn request_for(model: &str) -> LlmRequest {
@@ -4041,7 +4050,7 @@ stake, so an attacker donating to himself alone is a strict loss.";
         #[tokio::test]
         async fn an_effort_on_an_unmeasured_model_is_refused_before_any_http_call() {
             let (body, result) =
-                send_raw(Vec::new(), request_for(OPUS_4_8).with_reasoning(High)).await;
+                send_raw(Vec::new(), request_for(UNPROFILED).with_reasoning(High)).await;
             assert!(
                 body.is_none(),
                 "no request may reach the endpoint: {body:?}"
@@ -4056,9 +4065,9 @@ stake, so an attacker donating to himself alone is a strict loss.";
                     ..
                 } => {
                     assert_eq!(provider, "anthropic");
-                    assert_eq!(model, OPUS_4_8);
+                    assert_eq!(model, UNPROFILED);
                     assert!(
-                        reason.contains("llm.anthropic.models.claude-opus-4-8.effort"),
+                        reason.contains("llm.anthropic.models.claude-unprofiled-test-model.effort"),
                         "{reason}"
                     );
                 }
@@ -4431,11 +4440,184 @@ stake, so an attacker donating to himself alone is a strict loss.";
             assert_eq!(levels.budget, Some(BudgetBounds::new(1024, 32_000)));
         }
 
+        /// The transcript date every Anthropic model was probed (run 2).
+        const PROBED_ON: &str = "2026-10-22";
+
+        /// `(model, levels, off, auto, paired)` as `51-EFFORT-PROBE.md` evidences them (run 2):
+        /// levels accepted through `output_config`; `off` = the `thinking` disabled row accepted
+        /// with no reasoning tokens reported; `auto` = the adaptive row accepted with more than 0
+        /// reasoning tokens; `paired` = the owner's pairing set (`enable_thinking_with_level`),
+        /// the four models whose thinking tokens appear only beside `thinking: adaptive`.
+        #[allow(clippy::type_complexity)]
+        fn transcript() -> Vec<(&'static str, Vec<ReasoningEffort>, bool, bool, bool)> {
+            let five = vec![Low, Medium, High, XHigh, Max];
+            let four = vec![Low, Medium, High, Max];
+            vec![
+                // off 200 rt=0; auto rt=95.
+                ("claude-haiku-5-5", five.clone(), true, true, false),
+                // off 200 rt=0; auto rt=0 (not seeded); paired max 41 against 0 alone.
+                ("claude-opus-4-8", five.clone(), true, false, true),
+                // off 400; auto rt=30.
+                ("claude-fable-5-1", five.clone(), false, true, false),
+                // off 400; auto rt=11.
+                ("claude-fable-5", five.clone(), false, true, false),
+                // off 400; auto rt=8.
+                ("claude-opus-5-5", five.clone(), false, true, false),
+                // off 200 rt=0; auto rt=12.
+                ("claude-opus-5", five.clone(), true, true, false),
+                // off 400; auto rt=0 (not seeded).
+                ("claude-sonnet-5-5", five.clone(), false, false, false),
+                // off 200 rt=0; auto rt=0 (not seeded).
+                ("claude-sonnet-5", five.clone(), true, false, false),
+                // off 200 rt=0; auto rt=0 (not seeded); paired max 50 against 0 alone.
+                ("claude-opus-4-7", five, true, false, true),
+                // xhigh drew 400; off 200 (no count); auto rt=46; paired max 48.
+                ("claude-opus-4-6", four.clone(), true, true, true),
+                // xhigh drew 400; off 200 (no count); auto rt=46; paired max 48.
+                ("claude-sonnet-4-6", four, true, true, true),
+            ]
+        }
+
+        fn expected(
+            levels: &[ReasoningEffort],
+            off: bool,
+            auto: bool,
+            paired: bool,
+        ) -> EffortSupport {
+            EffortSupport::Supported(
+                EffortLevels::new(levels.iter().copied())
+                    .with_off(off)
+                    .with_auto(auto)
+                    .with_enable_thinking_with_level(paired),
+            )
+        }
+
+        #[test]
+        fn anthropic_effort_seed_matches_the_transcript() {
+            let adapter = adapter_over("https://example.invalid/v1", Vec::new());
+            for (model, levels, off, auto, paired) in transcript() {
+                let profile = adapter
+                    .model_profile(model)
+                    .unwrap_or_else(|| panic!("{model}: no profile"));
+                assert_eq!(
+                    profile.effort,
+                    expected(&levels, off, auto, paired),
+                    "{model}"
+                );
+                assert_eq!(
+                    profile.effort_verified_on.as_deref(),
+                    Some(PROBED_ON),
+                    "{model}"
+                );
+            }
+            // `thinking_budget` 1024 was accepted on the 4.6 pair, but the vendor-documented
+            // section names no fixed maximum, so no model carries a span (judgement call, SUMMARY).
+            for (model, ..) in transcript() {
+                let EffortSupport::Supported(levels) = adapter.model_profile(model).unwrap().effort
+                else {
+                    panic!("{model}: Supported");
+                };
+                assert_eq!(levels.budget, None, "{model}");
+                assert!(levels.coerced.is_empty(), "{model}");
+            }
+        }
+
+        #[tokio::test]
+        async fn seeded_levels_reach_the_wire_and_pair_adaptive_thinking_only_on_the_pairing_set() {
+            for (model, levels, _, _, paired) in transcript() {
+                for level in levels {
+                    let (body, result) =
+                        send_raw(Vec::new(), request_for(model).with_reasoning(level)).await;
+                    result.unwrap_or_else(|e| panic!("{model}/{level}: {e}"));
+                    let body = json_of(body);
+                    assert_eq!(body["output_config"], json!({"effort": level.to_string()}));
+                    if paired {
+                        assert_eq!(body["thinking"], json!({"type": "adaptive"}), "{model}");
+                    } else {
+                        assert!(body.get("thinking").is_none(), "{model}: {body}");
+                    }
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn off_and_auto_follow_the_seeded_flags() {
+            for (model, _, off, auto, _) in transcript() {
+                for (effort, supported, wire) in [
+                    (ReasoningEffort::Off, off, "disabled"),
+                    (ReasoningEffort::Auto, auto, "adaptive"),
+                ] {
+                    let (body, result) =
+                        send_raw(Vec::new(), request_for(model).with_reasoning(effort)).await;
+                    if supported {
+                        result.unwrap_or_else(|e| panic!("{model}/{effort}: {e}"));
+                        let body = json_of(body);
+                        assert_eq!(body["thinking"], json!({"type": wire}), "{model}/{effort}");
+                        assert!(body.get("output_config").is_none(), "{model}: {body}");
+                    } else {
+                        assert!(body.is_none(), "{model}/{effort}: reached the wire");
+                        assert!(
+                            matches!(result, Err(LlmError::UnsupportedParameter { .. })),
+                            "{model}/{effort}: {result:?}"
+                        );
+                    }
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn a_level_the_probe_did_not_accept_and_every_budget_refuse_before_http() {
+            for (model, levels, ..) in transcript() {
+                let mut refused: Vec<ReasoningEffort> = ReasoningEffort::LEVELS
+                    .into_iter()
+                    .filter(|level| !levels.contains(level))
+                    .collect();
+                refused.push(ReasoningEffort::Budget(2048));
+                for effort in refused {
+                    let (body, result) =
+                        send_raw(Vec::new(), request_for(model).with_reasoning(effort)).await;
+                    assert!(body.is_none(), "{model}/{effort}: reached the wire");
+                    assert!(
+                        matches!(result, Err(LlmError::UnsupportedParameter { .. })),
+                        "{model}/{effort}: {result:?}"
+                    );
+                }
+            }
+        }
+
+        /// web3sec's `claude-opus-4-8`: every level the transcript evidences sends
+        /// `output_config.effort` beside `thinking: adaptive`, as the trailing two body fields.
+        #[tokio::test]
+        async fn claude_opus_4_8_takes_every_evidenced_level_through_the_shipped_adapter() {
+            let (unset, _) = send_raw(Vec::new(), request_for(OPUS_4_8)).await;
+            let unset = unset.expect("the unset request reached the wire");
+            let prefix = unset.strip_suffix('}').expect("a JSON object");
+            for level in ["low", "medium", "high", "xhigh", "max"] {
+                let effort = match level {
+                    "low" => Low,
+                    "medium" => Medium,
+                    "high" => High,
+                    "xhigh" => XHigh,
+                    _ => Max,
+                };
+                let (set, result) =
+                    send_raw(Vec::new(), request_for(OPUS_4_8).with_reasoning(effort)).await;
+                result.unwrap_or_else(|e| panic!("{level}: {e}"));
+                assert_eq!(
+                    set.expect("reached the wire"),
+                    format!(
+                        "{prefix},\"output_config\":{{\"effort\":\"{level}\"}},\"thinking\":{{\"type\":\"adaptive\"}}}}"
+                    ),
+                    "{level}"
+                );
+            }
+        }
+
         #[test]
         fn an_unmeasured_model_stays_unmeasured_in_the_reported_profile() {
             let adapter = adapter_over("http://localhost:1", Vec::new());
             assert_eq!(
-                adapter.model_profile(OPUS_4_8).unwrap().effort,
+                adapter.model_profile(UNPROFILED).unwrap().effort,
                 EffortSupport::Unmeasured
             );
         }

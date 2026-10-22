@@ -517,3 +517,33 @@ cargo run -q -p paladin-llm --example live_vendor_smoke --features openai,anthro
 
 - total planned calls: 710
 ```
+
+## Final candidate set
+
+Recorded on 2026-10-22, before any live call, from the owner's answers at plan 51-10's checkpoint (Task 1). The
+owner's words, verbatim:
+
+- Option: "run here." (option `run-here`; this is also the go-ahead to spend.)
+- Candidate set: confirmed as drafted. "that should be the ones that have been previously probed ... the models that
+  are the currently active latest models available". Struck ids: none. Added ids: none. (The orchestrator checked the
+  drafted table against the seeded registry's model ids before dispatch and found them identical.)
+- D-02 treatment of an unprobed seeded `reasoning: false` entry: "D02 unmeasured" (`EffortSupport::Unmeasured`, the
+  research Pitfall 1 alternative, not `NoReasoning`).
+
+Delta against the draft above: drafted 62, struck 0, added 0, final 62. Every id in the draft table is probed, the
+planner's "addition" rows included (all of Anthropic's and OpenAI's ids that were not seeded `reasoning: true`).
+
+| vendor | drafted | struck | added | final | calls per model | calls |
+|---|---|---|---|---|---|---|
+| anthropic | 11 | 0 | 0 | 11 | 17 | 187 |
+| openai | 17 | 0 | 0 | 17 | 10 | 170 |
+| deepseek | 2 | 0 | 0 | 2 | 12 | 24 |
+| kimi | 2 | 0 | 0 | 2 | 18 | 36 |
+| qwen | 13 | 0 | 0 | 13 | 8 | 104 |
+| grok | 5 | 0 | 0 | 5 | 9 | 45 |
+| gemini | 12 | 0 | 0 | 12 | 12 | 144 |
+| **total** | **62** | **0** | **0** | **62** | | **710** |
+
+The per-vendor `--models` flags are exactly those in the Commands table above. Run order: `kimi=kimi-k3` alone first
+(both wire forms), then OpenAI, Anthropic, DeepSeek, Kimi (both ids), Qwen, Grok, Gemini, one vendor at a time.
+Ollama and OpenAI-compatible are not probed: no daemon or endpoint is configured in this environment.

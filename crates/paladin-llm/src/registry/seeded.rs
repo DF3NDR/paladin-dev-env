@@ -1146,7 +1146,12 @@ pub(crate) use openai_table::OPENAI;
 #[cfg(feature = "deepseek")]
 mod deepseek_table {
     use crate::registry::SeededProfile;
-    use paladin_ports::output::model_profile::{ModelProfile, ParamSupport, StopSupport};
+    use paladin_ports::output::llm_port::ReasoningEffort::{
+        High, Low, Max, Medium, Minimal, XHigh,
+    };
+    use paladin_ports::output::model_profile::{
+        EffortLevels, EffortSupport, ModelProfile, ParamSupport, StopSupport,
+    };
 
     /// DeepSeek. `deepseek-flash` is the live listing's general-purpose model (2026-10-15,
     /// `50-SEED-PROBE.md`); `deepseek-v4-pro` is its larger sibling, listed and probed on
@@ -1185,6 +1190,14 @@ mod deepseek_table {
             .with_json_object(true)
             // "This response_format type is unavailable now".
             .with_json_schema(false)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### deepseek-flash` under
+            // `## DeepSeek` (run 3, 2026-10-22, commit 32ce9dd0), its vendor-documented section
+            // (https://api-docs.deepseek.com/guides/thinking_mode, accessed 2026-10-22) and the
+            // owner decision of 2026-10-22 (plan 51-11's checkpoint): the top-level
+            // `reasoning_effort` is confirmed (invalid value drew 422, parsed 2 of 2). See
+            // `deepseek_measured_effort` for the per-field trace.
+            .with_effort(deepseek_measured_effort())
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -1210,6 +1223,38 @@ mod deepseek_table {
             .with_json_object(true)
             // Probe 13: "This response_format type is unavailable now".
             .with_json_schema(false)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### deepseek-v4-pro` under
+            // `## DeepSeek` (run 3, 2026-10-22, commit 32ce9dd0; one of web3sec's three models),
+            // its vendor-documented section and the owner decision of 2026-10-22. See
+            // `deepseek_measured_effort` for the per-field trace.
+            .with_effort(deepseek_measured_effort())
+            .with_effort_verified_on("2026-10-22")
+    }
+
+    /// The efforts both DeepSeek models took through the top-level `reasoning_effort` and the
+    /// `thinking` switch in the 2026-10-22 probe (the two rows agree on every field):
+    ///
+    /// - `levels` `low`, `high`, `max`: all six levels `minimal`..`max` were accepted (rows
+    ///   `top_level_effort`; `deepseek-v4-pro` 37, 25, 36, 35, 35, 39 reasoning tokens,
+    ///   `deepseek-flash` 20, 24, 19, 17, 18, 22) and the invalid value drew 422 on both.
+    /// - `coerced` `minimal`, `medium`, `xhigh`: the vendor-documented section
+    ///   (https://api-docs.deepseek.com/guides/thinking_mode, accessed 2026-10-22) maps minimal to
+    ///   low, medium to high and xhigh to high, so those three are accepted but run as another
+    ///   level, and refuse whatever the fallback. `low`, `high` and `max` map to themselves.
+    /// - `off`: the `thinking` disabled row was accepted (200) and reported no reasoning-token
+    ///   count on both models.
+    /// - `auto`: the `thinking` enabled row was accepted with reasoning tokens (17 on
+    ///   `deepseek-flash`, 110 on `deepseek-v4-pro`).
+    /// - `enable_thinking_with_level` is not set: the probe sent `reasoning_effort` alone (no
+    ///   paired `thinking` row) and the default call already reasoned (20 and 35 tokens).
+    /// - no `budget`: the wire has no budget field.
+    fn deepseek_measured_effort() -> EffortSupport {
+        EffortSupport::Supported(
+            EffortLevels::new([Low, High, Max])
+                .with_coerced([Minimal, Medium, XHigh])
+                .with_off(true)
+                .with_auto(true),
+        )
     }
 }
 #[cfg(feature = "deepseek")]

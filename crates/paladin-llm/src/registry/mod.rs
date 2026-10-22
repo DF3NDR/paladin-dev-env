@@ -1327,6 +1327,49 @@ mod seeded_tests {
         }
     }
 
+    /// Phase 51 (plan 51-12): every seeded row's effort data is internally consistent. A
+    /// `Supported` row passes [`EffortLevels::validate`](paladin_ports::output::model_profile::EffortLevels::validate)
+    /// and carries the transcript date it was measured on; a row with no effort data carries
+    /// no date, so a date never sits on data the probe did not measure.
+    #[test]
+    fn every_seeded_effort_entry_validates() {
+        use paladin_ports::output::model_profile::EffortSupport;
+        for (provider, table) in tables() {
+            for entry in table {
+                let profile = (entry.build)();
+                match &profile.effort {
+                    EffortSupport::Supported(levels) => {
+                        levels.validate().unwrap_or_else(|problem| {
+                            panic!("{provider}/{}: effort: {problem}", entry.model)
+                        });
+                        let date = profile.effort_verified_on.as_deref().unwrap_or_else(|| {
+                            panic!("{provider}/{}: Supported effort has no date", entry.model)
+                        });
+                        assert!(
+                            is_iso_date(date),
+                            "{provider}/{}: effort_verified_on {date:?} is not YYYY-MM-DD",
+                            entry.model
+                        );
+                    }
+                    EffortSupport::Unmeasured => assert_eq!(
+                        profile.effort_verified_on, None,
+                        "{provider}/{}: an unmeasured row carries a date",
+                        entry.model
+                    ),
+                    EffortSupport::NoReasoning => assert!(
+                        profile.effort_verified_on.is_some(),
+                        "{provider}/{}: a measured NoReasoning row has no date",
+                        entry.model
+                    ),
+                    other => panic!(
+                        "{provider}/{}: {other:?} is not a seedable effort state",
+                        entry.model
+                    ),
+                }
+            }
+        }
+    }
+
     #[test]
     fn the_date_check_accepts_iso_dates_and_rejects_the_rest() {
         assert!(is_iso_date("2026-10-15"));

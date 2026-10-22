@@ -319,8 +319,14 @@ struct DeepSeekThinking {
 /// What DeepSeek's request body can carry of a profile's effort data (Phase 51, D-00f): a listed
 /// level (`reasoning_effort`), `off` and `auto` (the `thinking` switch). It has no field for a
 /// reasoning-token budget, so a budget is masked out of the profile this adapter reports and is
-/// never sent. Plan 51-12 confirms each form against the dated probe or sets this to
-/// [`WireCaps::NONE`] (D-04).
+/// never sent.
+///
+/// Confirmed against the dated probe (plan 51-12, D-04; owner decision of 2026-10-22 at plan
+/// 51-11's checkpoint): `51-EFFORT-PROBE.md`'s verdict table marks DeepSeek's `top_level_effort`
+/// confirmed (the invalid value drew 422 on 2 of 2 models, so the field is parsed; the highest
+/// accepted level reports more reasoning tokens than the lowest on 2 of 2), and its `thinking`
+/// switch parsed (422 on 2 of 2) with `off` and `auto` accepted on both models. The documented
+/// capabilities therefore stand; they are not `WireCaps::NONE`.
 const DEEPSEEK_REASONING_WIRE: WireCaps = WireCaps {
     levels: true,
     off: true,
@@ -2699,6 +2705,10 @@ mod tests {
         use std::sync::Mutex;
 
         const PRO: &str = "deepseek-v4-pro";
+        /// A model id with no seeded row, so it stays `Unmeasured` and refuses an explicit effort.
+        const UNPROFILED: &str = "deepseek-unprofiled-model";
+        /// The transcript date both DeepSeek models were probed (run 3).
+        const PROBED_ON: &str = "2026-10-22";
 
         fn request_for(model: &str) -> LlmRequest {
             LlmRequest::new(
@@ -2848,11 +2858,8 @@ mod tests {
 
         #[tokio::test]
         async fn an_effort_on_an_unmeasured_model_is_refused_before_any_http_call() {
-            let (body, result) = send_raw(
-                Vec::new(),
-                request_for("deepseek-flash").with_reasoning(High),
-            )
-            .await;
+            let (body, result) =
+                send_raw(Vec::new(), request_for(UNPROFILED).with_reasoning(High)).await;
             assert!(
                 body.is_none(),
                 "no request may reach the endpoint: {body:?}"
@@ -2867,9 +2874,9 @@ mod tests {
                     ..
                 } => {
                     assert_eq!(provider, "deepseek");
-                    assert_eq!(model, "deepseek-flash");
+                    assert_eq!(model, UNPROFILED);
                     assert!(
-                        reason.contains("llm.deepseek.models.deepseek-flash.effort"),
+                        reason.contains(&format!("llm.deepseek.models.{UNPROFILED}.effort")),
                         "{reason}"
                     );
                 }
@@ -3106,7 +3113,7 @@ mod tests {
         #[tokio::test]
         async fn a_refusal_carries_no_prompt_content() {
             let request = LlmRequest::new(
-                "deepseek-flash",
+                UNPROFILED,
                 PromptItem::new(PromptType::User(UserPrompt {
                     query: "PROMPT-MARKER-7f3a".to_string(),
                     context: Some("CONTEXT-MARKER-91bc".to_string()),
@@ -3120,6 +3127,155 @@ mod tests {
             assert!(!text.contains("PROMPT-MARKER-7f3a"), "{text}");
             assert!(!text.contains("CONTEXT-MARKER-91bc"), "{text}");
             assert!(!text.contains("test-key"), "{text}");
+        }
+
+        /// What `51-EFFORT-PROBE.md` evidences for both DeepSeek models (run 3, 2026-10-22):
+        /// all six levels accepted through `reasoning_effort`, of which the vendor-documented
+        /// section lists minimal, medium and xhigh as run as another level; `thinking` off
+        /// accepted with no reasoning-token count; `thinking` auto accepted with reasoning
+        /// tokens (17 and 110).
+        fn measured() -> EffortSupport {
+            EffortSupport::Supported(
+                EffortLevels::new([Low, High, Max])
+                    .with_coerced([
+                        ReasoningEffort::Minimal,
+                        ReasoningEffort::Medium,
+                        ReasoningEffort::XHigh,
+                    ])
+                    .with_off(true)
+                    .with_auto(true),
+            )
+        }
+
+        #[test]
+        fn deepseek_effort_seed_matches_the_transcript() {
+            let adapter = adapter_over(
+                "https://example.invalid/v1",
+                "unused",
+                EffortSupport::Unmeasured,
+            );
+            // (model, expected effort, expected effort_verified_on)
+            let table: [(&str, EffortSupport, Option<&str>); 3] = [
+                // `### deepseek-v4-pro`: levels minimal=37 low=25 medium=36 high=35 xhigh=35
+                // max=39 accepted, off 200 (no count), auto 200 (110 tokens).
+                (PRO, measured(), Some(PROBED_ON)),
+                // `### deepseek-flash`: the same six levels (20, 24, 19, 17, 18, 22), off 200,
+                // auto 200 (17 tokens).
+                ("deepseek-flash", measured(), Some(PROBED_ON)),
+                // Not probed: D-02 (owner, plan 51-10) "unmeasured".
+                (UNPROFILED, EffortSupport::Unmeasured, None),
+            ];
+            for (model, effort, verified_on) in table {
+                let profile = adapter
+                    .model_profile(model)
+                    .unwrap_or_else(|| panic!("{model}: no profile"));
+                assert_eq!(profile.effort, effort, "{model}");
+                assert_eq!(
+                    profile.effort_verified_on.as_deref(),
+                    verified_on,
+                    "{model}"
+                );
+            }
+        }
+
+        /// Plan 51-12 tracer: with no override at all, each evidenced level on the seeded pro
+        /// model sends exactly `"reasoning_effort":"<level>"`, appended as the last field, and
+        /// no `thinking` object (the row does not set `enable_thinking_with_level`).
+        #[tokio::test]
+        async fn every_evidenced_level_reaches_the_wire_through_the_seeded_row() {
+            let (unset, _) = send_raw(Vec::new(), request_for(PRO)).await;
+            let unset = unset.expect("the unset request reached the wire");
+            let prefix = unset.strip_suffix('}').expect("a JSON object");
+            for (level, spelled) in [(Low, "low"), (High, "high"), (Max, "max")] {
+                let (set, result) =
+                    send_raw(Vec::new(), request_for(PRO).with_reasoning(level)).await;
+                let response = result.unwrap_or_else(|e| panic!("{spelled}: {e}"));
+                assert_eq!(
+                    set.expect("reached the wire"),
+                    format!("{prefix},\"reasoning_effort\":\"{spelled}\"}}"),
+                    "{spelled}"
+                );
+                assert_eq!(response.metadata[REASONING_REQUESTED_METADATA_KEY], spelled);
+                assert_eq!(response.metadata[REASONING_EFFECTIVE_METADATA_KEY], spelled);
+            }
+        }
+
+        #[tokio::test]
+        async fn off_and_auto_ride_the_thinking_switch_through_the_seeded_row() {
+            let (off, result) = send_raw(
+                Vec::new(),
+                request_for(PRO).with_reasoning(ReasoningEffort::Off),
+            )
+            .await;
+            result.expect("off is evidenced");
+            let off = off.expect("reached the wire");
+            assert!(
+                off.ends_with(",\"thinking\":{\"type\":\"disabled\"}}"),
+                "{off}"
+            );
+            assert!(!off.contains("reasoning_effort"), "{off}");
+            let (auto, result) = send_raw(
+                Vec::new(),
+                request_for(PRO).with_reasoning(ReasoningEffort::Auto),
+            )
+            .await;
+            result.expect("auto is evidenced");
+            let auto = auto.expect("reached the wire");
+            assert!(
+                auto.ends_with(",\"thinking\":{\"type\":\"enabled\"}}"),
+                "{auto}"
+            );
+            assert!(!auto.contains("reasoning_effort"), "{auto}");
+        }
+
+        /// The vendor-documented section runs minimal, medium and xhigh as another level, so the
+        /// seed lists them as coerced and they refuse whatever the fallback, before HTTP.
+        #[tokio::test]
+        async fn a_documented_coerced_level_refuses_with_zero_hits_under_every_fallback() {
+            for level in [
+                ReasoningEffort::Minimal,
+                ReasoningEffort::Medium,
+                ReasoningEffort::XHigh,
+            ] {
+                for fallback in [
+                    ReasoningFallback::Refuse,
+                    ReasoningFallback::NearestLower,
+                    ReasoningFallback::NearestHigher,
+                ] {
+                    let (body, result) = send_raw(
+                        Vec::new(),
+                        request_for(PRO)
+                            .with_reasoning(level)
+                            .with_reasoning_fallback(fallback),
+                    )
+                    .await;
+                    assert!(
+                        body.is_none(),
+                        "{level}/{fallback}: reached the wire: {body:?}"
+                    );
+                    assert!(
+                        matches!(result, Err(LlmError::UnsupportedParameter { .. })),
+                        "{level}/{fallback}: {result:?}"
+                    );
+                }
+            }
+        }
+
+        /// DeepSeek has no budget field: a budget refuses before HTTP on a seeded row.
+        #[tokio::test]
+        async fn a_budget_refuses_on_the_seeded_rows() {
+            for model in [PRO, "deepseek-flash"] {
+                let (body, result) = send_raw(
+                    Vec::new(),
+                    request_for(model).with_reasoning(ReasoningEffort::Budget(2048)),
+                )
+                .await;
+                assert!(body.is_none(), "{model}: {body:?}");
+                assert!(
+                    matches!(result, Err(LlmError::UnsupportedParameter { .. })),
+                    "{model}: {result:?}"
+                );
+            }
         }
 
         #[test]

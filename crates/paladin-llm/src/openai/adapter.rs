@@ -353,8 +353,13 @@ struct OpenAIRequest {
 /// What OpenAI Chat Completions' request body can carry of a profile's effort data (Phase 51,
 /// D-00f): a listed level and `off` (spelled `none`) through `reasoning_effort`, and `auto` as the
 /// absence of the field. It has no field for a reasoning-token budget, so a budget is masked out
-/// of the profile this adapter reports and is never sent. Plan 51-12 confirms each form against
-/// the dated probe or sets this to [`WireCaps::NONE`] (D-04).
+/// of the profile this adapter reports and is never sent.
+///
+/// Confirmed against the dated probe (plan 51-12, D-04; owner decision of 2026-10-22 at plan
+/// 51-11's checkpoint): `51-EFFORT-PROBE.md`'s verdict table marks OpenAI's `top_level_effort`
+/// confirmed (the invalid value drew 400 on 17 of 17 models, so the field is parsed; the highest
+/// accepted level reports more reasoning tokens than the lowest on 14 of 17). The documented
+/// capabilities therefore stand; they are not `WireCaps::NONE`.
 const OPENAI_REASONING_WIRE: WireCaps = WireCaps {
     levels: true,
     off: true,
@@ -3048,7 +3053,7 @@ mod tests {
         use paladin_ports::output::llm_port::ReasoningEffort::{
             Auto, High, Low, Max, Medium, Minimal, Off, XHigh,
         };
-        use paladin_ports::output::llm_port::ReasoningFallback;
+        use paladin_ports::output::llm_port::{ReasoningEffort, ReasoningFallback};
         use paladin_ports::output::model_profile::{BudgetBounds, EffortLevels, EffortSupport};
         use serde_json::json;
         use std::sync::{Arc, Mutex};
@@ -3128,6 +3133,181 @@ mod tests {
 
         fn json_of(body: Option<String>) -> serde_json::Value {
             serde_json::from_str(&body.expect("a request reached the wire")).unwrap()
+        }
+
+        /// The transcript date every probed OpenAI model carries (run 1).
+        const PROBED_ON: &str = "2026-10-22";
+
+        /// `(model, levels, off, auto)` as `51-EFFORT-PROBE.md` evidences them (run 1): levels
+        /// accepted through the top-level `reasoning_effort`; `off` = `none` accepted (200, 0
+        /// reasoning tokens); `auto` = the default call reported more than 0 reasoning tokens.
+        #[allow(clippy::type_complexity)]
+        fn transcript() -> Vec<(&'static str, Vec<ReasoningEffort>, bool, bool)> {
+            let lmhx = vec![Low, Medium, High, XHigh];
+            let mlmh = vec![Minimal, Low, Medium, High];
+            vec![
+                ("gpt-5.4-nano", lmhx.clone(), true, false),
+                ("gpt-6.1-sol", lmhx.clone(), false, true),
+                ("gpt-6-sol", lmhx.clone(), true, true),
+                ("gpt-6-luna", lmhx.clone(), true, true),
+                ("gpt-6-astra", lmhx.clone(), false, true),
+                ("gpt-5.6-sol", lmhx.clone(), true, false),
+                ("gpt-5.6-luna", lmhx.clone(), true, true),
+                ("gpt-5.6-terra", lmhx.clone(), true, true),
+                ("gpt-5.5", lmhx.clone(), true, true),
+                ("gpt-5.4", lmhx.clone(), true, false),
+                ("gpt-5.4-mini", lmhx.clone(), true, false),
+                ("gpt-5.2", lmhx.clone(), true, false),
+                // xhigh and max drew 400 on gpt-5.1.
+                ("gpt-5.1", vec![Low, Medium, High], true, false),
+                ("gpt-5", mlmh.clone(), false, true),
+                ("gpt-5-mini", mlmh.clone(), false, false),
+                ("gpt-5-nano", mlmh, false, true),
+                // o3 accepted low, medium, high and xhigh; `none` drew 400; default 0 tokens.
+                ("o3", lmhx, false, false),
+            ]
+        }
+
+        fn expected(levels: &[ReasoningEffort], off: bool, auto: bool) -> EffortSupport {
+            EffortSupport::Supported(
+                EffortLevels::new(levels.iter().copied())
+                    .with_off(off)
+                    .with_auto(auto),
+            )
+        }
+
+        fn seeded_adapter(base_url: &str) -> OpenAIAdapter {
+            let config =
+                OpenAIConfig::new("test-key".to_string(), OPENAI_DEFAULT_MODEL.to_string())
+                    .with_base_url(base_url);
+            OpenAIAdapter::new(config).expect("a plain config builds")
+        }
+
+        /// Send `request` through an adapter with no override at all (the seeded rows only).
+        async fn send_seeded(
+            request: LlmRequest,
+        ) -> (Option<String>, Result<LlmResponse, LlmError>) {
+            let mut server = Server::new_async().await;
+            let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let slot = Arc::clone(&captured);
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    ok_body()
+                })
+                .create_async()
+                .await;
+            let result = seeded_adapter(&server.url()).generate(request).await;
+            let body = captured.lock().unwrap().take();
+            (body, result)
+        }
+
+        #[test]
+        fn openai_effort_seed_matches_the_transcript() {
+            let adapter = seeded_adapter("https://example.invalid/v1");
+            for (model, levels, off, auto) in transcript() {
+                let profile = adapter
+                    .model_profile(model)
+                    .unwrap_or_else(|| panic!("{model}: no profile"));
+                assert_eq!(profile.effort, expected(&levels, off, auto), "{model}");
+                assert_eq!(
+                    profile.effort_verified_on.as_deref(),
+                    Some(PROBED_ON),
+                    "{model}"
+                );
+            }
+            // Not probed (the planner excluded them): D-02, the owner's answer "unmeasured".
+            for model in ["gpt-4o-mini", "chat-latest"] {
+                let profile = adapter.model_profile(model).unwrap();
+                assert_eq!(profile.effort, EffortSupport::Unmeasured, "{model}");
+                assert_eq!(profile.effort_verified_on, None, "{model}");
+            }
+        }
+
+        #[tokio::test]
+        async fn each_evidenced_level_sends_that_reasoning_effort_spelling() {
+            for (model, levels, ..) in transcript() {
+                for level in levels {
+                    let (body, result) =
+                        send_seeded(request_for(model).with_reasoning(level)).await;
+                    result.unwrap_or_else(|e| panic!("{model}/{level}: {e}"));
+                    let body = json_of(body);
+                    assert_eq!(body["reasoning_effort"], level.to_string(), "{model}");
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn off_sends_none_only_where_none_was_accepted() {
+            for (model, _, off, _) in transcript() {
+                let (body, result) = send_seeded(request_for(model).with_reasoning(Off)).await;
+                if off {
+                    result.unwrap_or_else(|e| panic!("{model}: {e}"));
+                    assert_eq!(json_of(body)["reasoning_effort"], "none", "{model}");
+                } else {
+                    assert!(
+                        body.is_none(),
+                        "{model}: a rejected `none` reached the wire"
+                    );
+                    assert!(
+                        matches!(result, Err(LlmError::UnsupportedParameter { .. })),
+                        "{model}: {result:?}"
+                    );
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn auto_is_seeded_only_where_the_default_call_reasoned() {
+            for (model, _, _, auto) in transcript() {
+                let (body, result) = send_seeded(request_for(model).with_reasoning(Auto)).await;
+                if auto {
+                    let response = result.unwrap_or_else(|e| panic!("{model}: {e}"));
+                    assert!(json_of(body).get("reasoning_effort").is_none(), "{model}");
+                    assert_eq!(response.metadata[REASONING_EFFECTIVE_METADATA_KEY], "auto");
+                } else {
+                    assert!(body.is_none(), "{model}");
+                    assert!(
+                        matches!(result, Err(LlmError::UnsupportedParameter { .. })),
+                        "{model}: {result:?}"
+                    );
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn a_level_the_probe_rejected_and_every_budget_refuse_before_http() {
+            for (model, levels, ..) in transcript() {
+                let mut refused: Vec<ReasoningEffort> = ReasoningEffort::LEVELS
+                    .into_iter()
+                    .filter(|level| !levels.contains(level))
+                    .collect();
+                refused.push(ReasoningEffort::Budget(2048));
+                for effort in refused {
+                    let (body, result) =
+                        send_seeded(request_for(model).with_reasoning(effort)).await;
+                    assert!(body.is_none(), "{model}/{effort}: reached the wire");
+                    assert!(
+                        matches!(result, Err(LlmError::UnsupportedParameter { .. })),
+                        "{model}/{effort}: {result:?}"
+                    );
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn an_unprobed_seeded_model_refuses_an_explicit_effort() {
+            for model in ["gpt-4o-mini", "chat-latest"] {
+                let (body, result) = send_seeded(request_for(model).with_reasoning(High)).await;
+                assert!(body.is_none(), "{model}");
+                assert!(
+                    matches!(result, Err(LlmError::UnsupportedParameter { .. })),
+                    "{model}: {result:?}"
+                );
+            }
         }
 
         #[tokio::test]
@@ -3334,6 +3514,11 @@ mod tests {
         struct OpenAiFixture;
 
         impl crate::conformance::ConformanceFixture for OpenAiFixture {
+            /// The top-level `reasoning_effort`.
+            fn effort_wire_value(body: &serde_json::Value) -> Option<String> {
+                crate::conformance::chat_effort_wire_value(body)
+            }
+
             const WIRE: crate::conformance::Wire = crate::conformance::Wire::OpenAiChat;
 
             // OpenAI has no adapter-level default model (the model arrives per request), so the

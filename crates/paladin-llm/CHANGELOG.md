@@ -195,6 +195,20 @@ and this project follows lockstep workspace versioning.
 
 ### Changed
 
+- Anthropic, OpenAI, DeepSeek and Gemini accept a reasoning effort on the models the 2026-10-22
+  live probe measured (Phase 51 plan 51-12, REASON-02 to REASON-06; `51-EFFORT-PROBE.md`, commit
+  `32ce9dd0`). The four native wires keep their documented capabilities (verdict: confirmed).
+  OpenAI: 17 probed models take `low`..`xhigh` (`gpt-5.1` to `high`; `gpt-5`, `gpt-5-mini`,
+  `gpt-5-nano` take `minimal`..`high`), `off` as `none` on 11 and `auto` where the default call
+  reasoned. Anthropic: 11 models take `low`..`max` through `output_config.effort` (`xhigh`
+  rejected on `claude-opus-4-6` and `claude-sonnet-4-6`); `claude-opus-4-8`, `claude-opus-4-7`,
+  `claude-opus-4-6` and `claude-sonnet-4-6` pair it with adaptive thinking. DeepSeek:
+  `deepseek-flash` and `deepseek-v4-pro` take `low`, `high`, `max`, `off`, `auto`; `minimal`,
+  `medium` and `xhigh` are refused (the vendor runs them as another level). Gemini: 12 models take
+  `low`..`high` in lowercase, six also `minimal`. No native model takes an explicit `Budget` (no
+  vendor-documented maximum). Models the probe did not cover refuse an explicit effort. The
+  conformance suite gains three cases (24 in all) and the required fixture method
+  `ConformanceFixture::effort_wire_value`. No public item changed.
 - Kimi, Qwen and Grok accept a reasoning effort on the models the 2026-10-22 live probe measured
   (Phase 51 plan 51-11, REASON-02, REASON-03, REASON-04, REASON-06; `51-EFFORT-PROBE.md`, commit
   `32ce9dd0`). Kimi keeps the `thinking.effort` wire and never sends a top-level

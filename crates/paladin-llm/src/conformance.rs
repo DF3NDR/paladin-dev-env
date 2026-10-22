@@ -42,7 +42,11 @@
 //! empty completion (buffered and streamed) and a typed refusal carry the usage their body
 //! reported on the error ([`LlmError::billed_usage`]), bringing the suite to twenty cases. Phase 51 (plan 51-01, D-00i) added
 //! `unset_reasoning_leaves_the_wire_body_unchanged`, which compares each adapter's raw request
-//! body for an unset reasoning effort with a golden file, for twenty-one. A
+//! body for an unset reasoning effort with a golden file, for twenty-one. Plan 51-12 added three
+//! more, for twenty-four: `explicit_reasoning_on_an_unprofiled_model_refuses_before_http`
+//! (REASON-02), `seeded_effort_levels_reach_the_wire` (REASON-03) and
+//! `every_seeded_effort_level_round_trips_to_its_wire_body` (the assumption-delta invariant), the
+//! last two driven by [`ConformanceFixture::effort_wire_value`]. A
 //! vendor that
 //! lacks a feature never skips a case: it states its documented alternative shape through the
 //! fixture ([`RefusalShape::ContentFilterOnly`], [`MalformedFrame::SkippedWithWarning`]), so every
@@ -62,8 +66,9 @@ use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserProm
 use paladin_core::platform::container::transience::Transience;
 use paladin_ports::output::llm_port::{
     FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ModelProfile, ParamSupport,
-    ResponseFormat, SamplingParam, StopSupport,
+    ReasoningEffort, ResponseFormat, SamplingParam, StopSupport,
 };
+use paladin_ports::output::model_profile::EffortSupport;
 use serde_json::Value;
 
 use crate::redaction::RESPONSE_EXCERPT_CHAR_BUDGET;
@@ -248,6 +253,35 @@ pub trait ConformanceFixture {
     fn disagreeing_usage_body() -> Option<String> {
         wire_defaults::disagreeing_usage_body(&Self::usage_body())
     }
+
+    /// The effort level the adapter put on the wire in `body` (a request body this fixture's
+    /// adapter sent), in Paladin's lowercase spelling, or `None` when the body carries no level.
+    ///
+    /// Required, with no default: each fixture states where its adapter puts a level
+    /// (`reasoning_effort`, `thinking.effort`, `output_config.effort`,
+    /// `generationConfig.thinkingConfig.thinkingLevel`), so an adapter that gains a wire form
+    /// cannot join the suite without saying where it is. `None` is the answer for a wire with no
+    /// level field (Qwen's `enable_thinking`, a self-hosted adapter whose wire is `Unsupported`).
+    /// Used by [`cases::seeded_effort_levels_reach_the_wire`] and
+    /// [`cases::every_seeded_effort_level_round_trips_to_its_wire_body`] (Phase 51, plan 51-12).
+    fn effort_wire_value(body: &serde_json::Value) -> Option<String>;
+}
+
+/// [`ConformanceFixture::effort_wire_value`] for a chat-completions body that carries the level
+/// at the top-level `reasoning_effort` (OpenAI, DeepSeek, Grok), else `None`.
+pub fn chat_effort_wire_value(body: &Value) -> Option<String> {
+    body.get("reasoning_effort")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+/// [`ConformanceFixture::effort_wire_value`] for a chat-completions body that carries the level
+/// inside the `thinking` object (Kimi's `thinking.effort`), else `None`.
+pub fn thinking_effort_wire_value(body: &Value) -> Option<String> {
+    body.get("thinking")
+        .and_then(|thinking| thinking.get("effort"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
 }
 
 /// Wire-default response bodies for the cases added in Phase 50 plan 50-15, shaped from the
@@ -1839,18 +1873,261 @@ pub mod cases {
             path.display()
         );
     }
+
+    // ── Phase 51 plan 51-12: effort admission and the seeded wire round trip ──
+
+    /// A model id no seeded table lists, so it carries no effort data on any adapter.
+    const UNPROFILED_MODEL: &str = "conformance-unprofiled-model";
+
+    /// The model ids `provider`'s seeded table lists, in table order (empty for a provider with
+    /// no table: Ollama and OpenAI-compatible).
+    fn seeded_models(provider: &str) -> Vec<&'static str> {
+        #[allow(unused_imports)]
+        use crate::registry::{SeededProfile, seeded};
+        let table: &[SeededProfile] = match provider {
+            #[cfg(feature = "openai")]
+            "openai" => seeded::OPENAI,
+            #[cfg(feature = "anthropic")]
+            "anthropic" => seeded::ANTHROPIC,
+            #[cfg(feature = "deepseek")]
+            "deepseek" => seeded::DEEPSEEK,
+            #[cfg(feature = "kimi")]
+            "kimi" => seeded::KIMI,
+            #[cfg(feature = "qwen")]
+            "qwen" => seeded::QWEN,
+            #[cfg(feature = "grok")]
+            "grok" => seeded::GROK,
+            #[cfg(feature = "gemini")]
+            "gemini" => seeded::GEMINI,
+            _ => &[],
+        };
+        table.iter().map(|entry| entry.model).collect()
+    }
+
+    /// One mock server that records the last request body it received, and an adapter of `F`
+    /// pointed at it.
+    struct Session {
+        _server: mockito::ServerGuard,
+        slot: Arc<std::sync::Mutex<Option<String>>>,
+        adapter: Arc<dyn LlmPort>,
+    }
+
+    impl Session {
+        async fn new<F: ConformanceFixture>() -> Self {
+            let slot: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
+            let writer = Arc::clone(&slot);
+            let mut server = Server::new_async().await;
+            let response_body = F::success_body();
+            server
+                .mock("POST", Matcher::Any)
+                .with_status(200)
+                .with_header("content-type", "application/json")
+                .with_body_from_request(move |req| {
+                    let text = req.utf8_lossy_body().unwrap_or_default().into_owned();
+                    if let Ok(mut guard) = writer.lock() {
+                        *guard = Some(text);
+                    }
+                    response_body.clone().into_bytes()
+                })
+                .create_async()
+                .await;
+            let adapter = F::adapter(&server.url());
+            Self {
+                _server: server,
+                slot,
+                adapter,
+            }
+        }
+
+        /// Send `request` buffered; returns the JSON body that reached the wire (`None` when
+        /// no HTTP call was made) and the result.
+        async fn send(
+            &self,
+            request: LlmRequest,
+        ) -> (Option<Value>, Result<LlmResponse, LlmError>) {
+            let result = self.adapter.generate(request).await;
+            let text = self
+                .slot
+                .lock()
+                .expect("the capture slot is never poisoned")
+                .take();
+            let body = text.map(|text| {
+                serde_json::from_str(&text).expect("the adapter must send a JSON request body")
+            });
+            (body, result)
+        }
+    }
+
+    /// `body` with every field an effort can add removed: the top-level `reasoning_effort`,
+    /// `thinking`, `enable_thinking`, `thinking_budget` and `output_config`, and Gemini's
+    /// `generationConfig.thinkingConfig`. What is left must be identical with and without an
+    /// effort.
+    fn without_effort_fields(mut body: Value) -> Value {
+        if let Some(object) = body.as_object_mut() {
+            for key in [
+                "reasoning_effort",
+                "thinking",
+                "enable_thinking",
+                "thinking_budget",
+                "output_config",
+            ] {
+                object.remove(key);
+            }
+            if let Some(config) = object
+                .get_mut("generationConfig")
+                .and_then(Value::as_object_mut)
+            {
+                config.remove("thinkingConfig");
+            }
+        }
+        body
+    }
+
+    /// Case (Phase 51, REASON-02): an explicit `with_reasoning(High)` on a model id the adapter
+    /// has no effort data for is refused before any HTTP call, on every adapter: an
+    /// [`LlmError::UnsupportedParameter`], [`Transience::Permanent`], zero requests captured (a
+    /// mock that expects none). Both the buffered and the streaming path.
+    pub async fn explicit_reasoning_on_an_unprofiled_model_refuses_before_http<
+        F: ConformanceFixture,
+    >() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("POST", Matcher::Any)
+            .with_status(200)
+            .with_body(F::success_body())
+            .expect(0)
+            .create_async()
+            .await;
+        let adapter = F::adapter(&server.url());
+
+        let request = request_for_model(UNPROFILED_MODEL).with_reasoning(ReasoningEffort::High);
+        let error = adapter
+            .generate(request.clone())
+            .await
+            .expect_err("an explicit effort on an unprofiled model must be refused");
+        assert!(
+            matches!(error, LlmError::UnsupportedParameter { .. }),
+            "{}: expected UnsupportedParameter, got {error:?}",
+            F::provider_name()
+        );
+        assert_eq!(error.transience(), Transience::Permanent);
+
+        let streamed = adapter.generate_stream(request).await;
+        assert!(
+            matches!(streamed, Err(LlmError::UnsupportedParameter { .. })),
+            "{}: the streaming path must refuse too",
+            F::provider_name()
+        );
+        mock.assert_async().await;
+    }
+
+    /// Case (Phase 51, REASON-03): the first seeded model whose profile lists an effort level
+    /// puts that level on the wire exactly: the body it sent equals the model's unset body plus
+    /// only the effort field(s) ([`without_effort_fields`]), and
+    /// [`ConformanceFixture::effort_wire_value`] reads the level back. A fixture whose seeded
+    /// table lists no model with a level (Qwen's budget-only rows, and the self-hosted adapters,
+    /// which have no table and are measured on their default model) asserts instead that every
+    /// one of its ids refuses an explicit level before HTTP.
+    pub async fn seeded_effort_levels_reach_the_wire<F: ConformanceFixture>() {
+        let provider = F::provider_name();
+        let mut ids = seeded_models(provider);
+        if ids.is_empty() {
+            ids.push(F::default_model());
+        }
+        let session = Session::new::<F>().await;
+        let first_with_a_level =
+            ids.iter()
+                .find_map(|id| match session.adapter.model_profile(id)?.effort {
+                    EffortSupport::Supported(levels) => {
+                        levels.levels.first().map(|level| (*id, *level))
+                    }
+                    _ => None,
+                });
+
+        let Some((model, level)) = first_with_a_level else {
+            for id in ids {
+                let (body, result) = session
+                    .send(request_for_model(id).with_reasoning(ReasoningEffort::High))
+                    .await;
+                assert!(
+                    body.is_none(),
+                    "{provider}/{id}: a refused effort reached the wire"
+                );
+                assert!(
+                    matches!(result, Err(LlmError::UnsupportedParameter { .. })),
+                    "{provider}/{id}: expected a refusal, got {result:?}"
+                );
+            }
+            return;
+        };
+
+        let (unset, result) = session.send(request_for_model(model)).await;
+        result.expect("the unset request must succeed");
+        let unset = unset.expect("the unset request reached the wire");
+        let (set, result) = session
+            .send(request_for_model(model).with_reasoning(level))
+            .await;
+        result.unwrap_or_else(|e| panic!("{provider}/{model}/{level}: {e}"));
+        let set = set.expect("the effort request reached the wire");
+
+        assert_eq!(
+            F::effort_wire_value(&set),
+            Some(level.to_string()),
+            "{provider}/{model}: the level is not on the wire in {set}"
+        );
+        assert_eq!(
+            F::effort_wire_value(&unset),
+            None,
+            "{provider}/{model}: an unset body carries a level: {unset}"
+        );
+        assert_eq!(
+            without_effort_fields(set.clone()),
+            without_effort_fields(unset),
+            "{provider}/{model}: the effort body differs from the unset body by more than the \
+             effort fields: {set}"
+        );
+    }
+
+    /// Case (Phase 51, the assumption-delta invariant): for every seeded model of the adapter
+    /// whose effort is `Supported`, every listed level the profile reports reaches the wire as
+    /// exactly that level ([`ConformanceFixture::effort_wire_value`]). A seeded level the adapter
+    /// does not send, or sends as another, fails here.
+    pub async fn every_seeded_effort_level_round_trips_to_its_wire_body<F: ConformanceFixture>() {
+        let provider = F::provider_name();
+        let session = Session::new::<F>().await;
+        for id in seeded_models(provider) {
+            let Some(EffortSupport::Supported(levels)) =
+                session.adapter.model_profile(id).map(|p| p.effort)
+            else {
+                continue;
+            };
+            for level in levels.levels {
+                let (body, result) = session
+                    .send(request_for_model(id).with_reasoning(level))
+                    .await;
+                result.unwrap_or_else(|e| panic!("{provider}/{id}/{level}: {e}"));
+                let body = body.expect("the effort request reached the wire");
+                assert_eq!(
+                    F::effort_wire_value(&body),
+                    Some(level.to_string()),
+                    "{provider}/{id}: seeded level {level} did not reach the wire: {body}"
+                );
+            }
+        }
+    }
 }
 
 /// Generate one `#[tokio::test]` per fixed case in [`cases`] for a concrete
 /// [`ConformanceFixture`], plus a `CASE_COUNT` derived from the SAME identifier lists the tests
 /// are generated from -- so a case silently dropped from the lists shrinks `CASE_COUNT` too,
 /// which `suite_generates_the_full_case_list_for_a_fixture` (below) pins against the documented
-/// `21`, turning a silently-dropped case into a build/test failure rather than a quiet pass.
+/// `24`, turning a silently-dropped case into a build/test failure rather than a quiet pass.
 ///
 /// The lists are split in two groups: the ten transport cases (status mapping, streaming
-/// framing, redaction, redirects, rate limits) and the eleven behaviour cases
+/// framing, redaction, redirects, rate limits) and the fourteen behaviour cases
 /// (capability truthfulness, structured output, empty completion, refusal, usage, vendor-total
-/// reconciliation, billed failures, the parameter policy, the unset-effort golden body).
+/// reconciliation, billed failures, the parameter policy, the unset-effort golden body, the
+/// unprofiled-model effort refusal, the seeded effort wire body and the seeded round trip).
 /// `llm_conformance_suite!(Fixture)` generates both.
 /// `llm_conformance_suite!(Fixture, transport_only)` generates only the first group and exists
 /// for one caller, the macro's own
@@ -1892,6 +2169,9 @@ macro_rules! llm_conformance_suite {
                 billed_failures_carry_their_usage,
                 unsupported_parameters_are_omitted_and_recorded,
                 unset_reasoning_leaves_the_wire_body_unchanged,
+                explicit_reasoning_on_an_unprofiled_model_refuses_before_http,
+                seeded_effort_levels_reach_the_wire,
+                every_seeded_effort_level_round_trips_to_its_wire_body,
             ]
         );
     };
@@ -2122,6 +2402,11 @@ mod tests {
     struct TrivialFixture;
 
     impl ConformanceFixture for TrivialFixture {
+        /// The bare transport has no effort wire.
+        fn effort_wire_value(_body: &serde_json::Value) -> Option<String> {
+            None
+        }
+
         const WIRE: Wire = Wire::OpenAiChat;
 
         fn adapter(base_url: &str) -> Arc<dyn LlmPort> {
@@ -2179,8 +2464,8 @@ mod tests {
     #[test]
     fn suite_generates_the_full_case_list_for_a_fixture() {
         assert_eq!(
-            CASE_COUNT, 21,
-            "llm_conformance_suite! must generate exactly the documented 21 fixed cases -- if this \
+            CASE_COUNT, 24,
+            "llm_conformance_suite! must generate exactly the documented 24 fixed cases -- if this \
              fails, a case was added to or removed from the macro's list without updating this \
              pinned expectation"
         );

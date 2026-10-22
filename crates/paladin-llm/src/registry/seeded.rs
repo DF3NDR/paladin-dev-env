@@ -70,7 +70,10 @@
 #[cfg(feature = "anthropic")]
 mod anthropic_table {
     use crate::registry::SeededProfile;
-    use paladin_ports::output::model_profile::{ModelProfile, ParamSupport, StopSupport};
+    use paladin_ports::output::llm_port::ReasoningEffort::{High, Low, Max, Medium, XHigh};
+    use paladin_ports::output::model_profile::{
+        EffortLevels, EffortSupport, ModelProfile, ParamSupport, StopSupport,
+    };
 
     /// Anthropic. `claude-haiku-5-5` (2026-10-15, `50-SEED-PROBE.md`) and the ten current
     /// candidates of `50.1-SEED-PROBE.md` (2026-10-20, run 1: `claude-opus-4-8`,
@@ -164,6 +167,20 @@ mod anthropic_table {
             // Anthropic has no JSON mode (probe: NOT APPLICABLE).
             .with_json_object(false)
             .with_json_schema(false)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### claude-haiku-5-5` under `##
+            // Anthropic` (run 2, 2026-10-22, commit 32ce9dd0), the `output_config` rows. Owner
+            // decision 2026-10-22: `output_config.effort` is confirmed (invalid value drew 400 on
+            // 11 of 11). Levels: low, medium, high, xhigh, max accepted. Off: the `thinking`
+            // disabled row was accepted (200) with 0 reasoning tokens. Auto: the adaptive row was
+            // accepted with 95 reasoning tokens. Not paired: `output_config` alone already reported
+            // 137 reasoning tokens at `max` (paired: 227), so `enable_thinking_with_level` is not
+            // set. Budget: 1024 and 1023 both drew 400, so none. No documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High, XHigh, Max])
+                    .with_off(true)
+                    .with_auto(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -190,6 +207,22 @@ mod anthropic_table {
             // Probes 12 and 13: NOT APPLICABLE, Anthropic has no JSON mode.
             .with_json_object(false)
             .with_json_schema(false)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### claude-opus-4-8` under `##
+            // Anthropic` (run 2, 2026-10-22, commit 32ce9dd0), the `output_config` rows. Owner
+            // decision 2026-10-22: `output_config.effort` is confirmed (invalid value drew 400 on
+            // 11 of 11). Levels: low, medium, high, xhigh, max accepted. Off: the `thinking`
+            // disabled row was accepted (200) with 0 reasoning tokens. Auto: the adaptive row was
+            // accepted but reported 0 reasoning tokens, so auto is not seeded. Pairing: at `max`,
+            // `output_config` alone reported 0 reasoning tokens against 41 when paired with
+            // `thinking: {type: adaptive}` (the paired-versus-alone table), so
+            // `enable_thinking_with_level` is set (owner decision 2026-10-22). Budget: 1024 and
+            // 1023 both drew 400, so none. No documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High, XHigh, Max])
+                    .with_off(true)
+                    .with_enable_thinking_with_level(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -216,6 +249,18 @@ mod anthropic_table {
             // Probes 12 and 13: NOT APPLICABLE, Anthropic has no JSON mode.
             .with_json_object(false)
             .with_json_schema(false)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### claude-fable-5-1` under `##
+            // Anthropic` (run 2, 2026-10-22, commit 32ce9dd0), the `output_config` rows. Owner
+            // decision 2026-10-22: `output_config.effort` is confirmed (invalid value drew 400 on
+            // 11 of 11). Levels: low, medium, high, xhigh, max accepted. Off: the `thinking`
+            // disabled row drew 400, so off is not seeded. Auto: the adaptive row was accepted with
+            // 30 reasoning tokens. Not paired: `output_config` alone already reported 36 reasoning
+            // tokens at `max` (paired: 36), so `enable_thinking_with_level` is not set. Budget:
+            // 1024 and 1023 both drew 400, so none. No documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High, XHigh, Max]).with_auto(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -241,6 +286,18 @@ mod anthropic_table {
             // Probes 12 and 13: NOT APPLICABLE, Anthropic has no JSON mode.
             .with_json_object(false)
             .with_json_schema(false)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### claude-fable-5` under `##
+            // Anthropic` (run 2, 2026-10-22, commit 32ce9dd0), the `output_config` rows. Owner
+            // decision 2026-10-22: `output_config.effort` is confirmed (invalid value drew 400 on
+            // 11 of 11). Levels: low, medium, high, xhigh, max accepted. Off: the `thinking`
+            // disabled row drew 400, so off is not seeded. Auto: the adaptive row was accepted with
+            // 11 reasoning tokens. Not paired: `output_config` alone already reported 144 reasoning
+            // tokens at `max` (paired: 149), so `enable_thinking_with_level` is not set. Budget:
+            // 1024 and 1023 both drew 400, so none. No documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High, XHigh, Max]).with_auto(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -267,6 +324,18 @@ mod anthropic_table {
             // Probes 12 and 13: NOT APPLICABLE, Anthropic has no JSON mode.
             .with_json_object(false)
             .with_json_schema(false)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### claude-opus-5-5` under `##
+            // Anthropic` (run 2, 2026-10-22, commit 32ce9dd0), the `output_config` rows. Owner
+            // decision 2026-10-22: `output_config.effort` is confirmed (invalid value drew 400 on
+            // 11 of 11). Levels: low, medium, high, xhigh, max accepted. Off: the `thinking`
+            // disabled row drew 400, so off is not seeded. Auto: the adaptive row was accepted with
+            // 8 reasoning tokens. Not paired: `output_config` alone already reported 106 reasoning
+            // tokens at `max` (paired: 106), so `enable_thinking_with_level` is not set. Budget:
+            // 1024 and 1023 both drew 400, so none. No documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High, XHigh, Max]).with_auto(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -292,6 +361,20 @@ mod anthropic_table {
             // Probes 12 and 13: NOT APPLICABLE, Anthropic has no JSON mode.
             .with_json_object(false)
             .with_json_schema(false)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### claude-opus-5` under `##
+            // Anthropic` (run 2, 2026-10-22, commit 32ce9dd0), the `output_config` rows. Owner
+            // decision 2026-10-22: `output_config.effort` is confirmed (invalid value drew 400 on
+            // 11 of 11). Levels: low, medium, high, xhigh, max accepted. Off: the `thinking`
+            // disabled row was accepted (200) with 0 reasoning tokens. Auto: the adaptive row was
+            // accepted with 12 reasoning tokens. Not paired: `output_config` alone already reported
+            // 63 reasoning tokens at `max` (paired: 129), so `enable_thinking_with_level` is not
+            // set. Budget: 1024 and 1023 both drew 400, so none. No documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High, XHigh, Max])
+                    .with_off(true)
+                    .with_auto(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -318,6 +401,19 @@ mod anthropic_table {
             // Probes 12 and 13: NOT APPLICABLE, Anthropic has no JSON mode.
             .with_json_object(false)
             .with_json_schema(false)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### claude-sonnet-5-5` under `##
+            // Anthropic` (run 2, 2026-10-22, commit 32ce9dd0), the `output_config` rows. Owner
+            // decision 2026-10-22: `output_config.effort` is confirmed (invalid value drew 400 on
+            // 11 of 11). Levels: low, medium, high, xhigh, max accepted. Off: the `thinking`
+            // disabled row drew 400, so off is not seeded. Auto: the adaptive row was accepted but
+            // reported 0 reasoning tokens, so auto is not seeded. Not paired: `output_config` alone
+            // already reported 65 reasoning tokens at `max` (paired: 66), so
+            // `enable_thinking_with_level` is not set. Budget: 1024 and 1023 both drew 400, so
+            // none. No documented coercion.
+            .with_effort(EffortSupport::Supported(EffortLevels::new([
+                Low, Medium, High, XHigh, Max,
+            ])))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -344,6 +440,19 @@ mod anthropic_table {
             // Probes 12 and 13: NOT APPLICABLE, Anthropic has no JSON mode.
             .with_json_object(false)
             .with_json_schema(false)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### claude-sonnet-5` under `##
+            // Anthropic` (run 2, 2026-10-22, commit 32ce9dd0), the `output_config` rows. Owner
+            // decision 2026-10-22: `output_config.effort` is confirmed (invalid value drew 400 on
+            // 11 of 11). Levels: low, medium, high, xhigh, max accepted. Off: the `thinking`
+            // disabled row was accepted (200) with 0 reasoning tokens. Auto: the adaptive row was
+            // accepted but reported 0 reasoning tokens, so auto is not seeded. Not paired:
+            // `output_config` alone already reported 164 reasoning tokens at `max` (paired: 141),
+            // so `enable_thinking_with_level` is not set. Budget: 1024 and 1023 both drew 400, so
+            // none. No documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High, XHigh, Max]).with_off(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -370,6 +479,22 @@ mod anthropic_table {
             // Probes 12 and 13: NOT APPLICABLE, Anthropic has no JSON mode.
             .with_json_object(false)
             .with_json_schema(false)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### claude-opus-4-7` under `##
+            // Anthropic` (run 2, 2026-10-22, commit 32ce9dd0), the `output_config` rows. Owner
+            // decision 2026-10-22: `output_config.effort` is confirmed (invalid value drew 400 on
+            // 11 of 11). Levels: low, medium, high, xhigh, max accepted. Off: the `thinking`
+            // disabled row was accepted (200) with 0 reasoning tokens. Auto: the adaptive row was
+            // accepted but reported 0 reasoning tokens, so auto is not seeded. Pairing: at `max`,
+            // `output_config` alone reported 0 reasoning tokens against 50 when paired with
+            // `thinking: {type: adaptive}` (the paired-versus-alone table), so
+            // `enable_thinking_with_level` is set (owner decision 2026-10-22). Budget: 1024 and
+            // 1023 both drew 400, so none. No documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High, XHigh, Max])
+                    .with_off(true)
+                    .with_enable_thinking_with_level(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -395,6 +520,26 @@ mod anthropic_table {
             // Probes 12 and 13: NOT APPLICABLE, Anthropic has no JSON mode.
             .with_json_object(false)
             .with_json_schema(false)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### claude-opus-4-6` under `##
+            // Anthropic` (run 2, 2026-10-22, commit 32ce9dd0), the `output_config` rows. Owner
+            // decision 2026-10-22: `output_config.effort` is confirmed (invalid value drew 400 on
+            // 11 of 11). Levels: low, medium, high, max accepted; xhigh drew 400, so it is not
+            // listed. Off: the `thinking` disabled row was accepted (200) with no reasoning-token
+            // count. Auto: the adaptive row was accepted with 46 reasoning tokens. Pairing: at
+            // `max`, `output_config` alone reported no reasoning-token count against 48 when
+            // paired with `thinking: {type: adaptive}` (the paired-versus-alone table), so
+            // `enable_thinking_with_level` is set (owner decision 2026-10-22). Budget:
+            // `budget_tokens` 1024 was accepted and 1023 rejected, but the vendor-documented
+            // section (platform.claude.com extended-thinking, accessed 2026-10-22) names no fixed
+            // upper bound, only "less than max_tokens", so no budget span is seeded and a budget
+            // refuses. No documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High, Max])
+                    .with_off(true)
+                    .with_auto(true)
+                    .with_enable_thinking_with_level(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -420,6 +565,26 @@ mod anthropic_table {
             // Probes 12 and 13: NOT APPLICABLE, Anthropic has no JSON mode.
             .with_json_object(false)
             .with_json_schema(false)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### claude-sonnet-4-6` under `##
+            // Anthropic` (run 2, 2026-10-22, commit 32ce9dd0), the `output_config` rows. Owner
+            // decision 2026-10-22: `output_config.effort` is confirmed (invalid value drew 400 on
+            // 11 of 11). Levels: low, medium, high, max accepted; xhigh drew 400, so it is not
+            // listed. Off: the `thinking` disabled row was accepted (200) with no reasoning-token
+            // count. Auto: the adaptive row was accepted with 46 reasoning tokens. Pairing: at
+            // `max`, `output_config` alone reported no reasoning-token count against 48 when
+            // paired with `thinking: {type: adaptive}` (the paired-versus-alone table), so
+            // `enable_thinking_with_level` is set (owner decision 2026-10-22). Budget:
+            // `budget_tokens` 1024 was accepted and 1023 rejected, but the vendor-documented
+            // section (platform.claude.com extended-thinking, accessed 2026-10-22) names no fixed
+            // upper bound, only "less than max_tokens", so no budget span is seeded and a budget
+            // refuses. No documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High, Max])
+                    .with_off(true)
+                    .with_auto(true)
+                    .with_enable_thinking_with_level(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 }
 #[cfg(feature = "anthropic")]
@@ -428,7 +593,10 @@ pub(crate) use anthropic_table::ANTHROPIC;
 #[cfg(feature = "openai")]
 mod openai_table {
     use crate::registry::SeededProfile;
-    use paladin_ports::output::model_profile::{ModelProfile, ParamSupport, StopSupport};
+    use paladin_ports::output::llm_port::ReasoningEffort::{High, Low, Medium, Minimal, XHigh};
+    use paladin_ports::output::model_profile::{
+        EffortLevels, EffortSupport, ModelProfile, ParamSupport, StopSupport,
+    };
 
     /// OpenAI. `gpt-5.4-nano` and `gpt-4o-mini` were measured on 2026-10-15
     /// (`50-SEED-PROBE.md`); 17 further ids were measured end to end on 2026-10-20
@@ -581,6 +749,17 @@ mod openai_table {
             .with_reasoning(false)
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### gpt-5.4-nano` under `## OpenAI`
+            // (run 1, 2026-10-22, commit 32ce9dd0), the `top_level_effort` rows. Owner decision
+            // 2026-10-22: the top-level `reasoning_effort` is confirmed (invalid value drew 400 on
+            // 17 of 17). Levels accepted (low=0 medium=8 high=6 xhigh=13 reasoning tokens); minimal
+            // and max drew 400. Off: `none` was accepted (200) with 0 reasoning tokens. Auto: the
+            // default call reported 0 reasoning tokens, so auto is not seeded. No budget field on
+            // the wire; no documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High, XHigh]).with_off(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     fn gpt_4o_mini() -> ModelProfile {
@@ -599,6 +778,8 @@ mod openai_table {
             .with_reasoning(false)
             .with_json_object(true)
             .with_json_schema(true)
+        // No effort data: `51-EFFORT-PROBE.md` did not probe this id (the planner excluded it), and
+        // the owner's D-02 answer is "unmeasured", so it stays `Unmeasured` with no date.
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -630,6 +811,17 @@ mod openai_table {
             // Probes 13 and 14: json_object and json_schema ACCEPTED.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### gpt-6.1-sol` under `## OpenAI`
+            // (run 1, 2026-10-22, commit 32ce9dd0), the `top_level_effort` rows. Owner decision
+            // 2026-10-22: the top-level `reasoning_effort` is confirmed (invalid value drew 400 on
+            // 17 of 17). Levels accepted (low=6 medium=8 high=14 xhigh=11 reasoning tokens);
+            // minimal and max drew 400. Off: `none` drew 400, so off is not seeded and refuses.
+            // Auto: the default call reported 5 reasoning tokens. No budget field on the wire; no
+            // documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High, XHigh]).with_auto(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 2 (2026-10-20), `### Probes:
@@ -661,6 +853,19 @@ mod openai_table {
             // Probes 13 and 14: json_object and json_schema ACCEPTED.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### gpt-6-sol` under `## OpenAI`
+            // (run 1, 2026-10-22, commit 32ce9dd0), the `top_level_effort` rows. Owner decision
+            // 2026-10-22: the top-level `reasoning_effort` is confirmed (invalid value drew 400 on
+            // 17 of 17). Levels accepted (low=7 medium=8 high=14 xhigh=14 reasoning tokens);
+            // minimal and max drew 400. Off: `none` was accepted (200) with 0 reasoning tokens.
+            // Auto: the default call reported 10 reasoning tokens. No budget field on the wire; no
+            // documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High, XHigh])
+                    .with_off(true)
+                    .with_auto(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -692,6 +897,19 @@ mod openai_table {
             // Probes 13 and 14: json_object and json_schema ACCEPTED.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### gpt-6-luna` under `## OpenAI`
+            // (run 1, 2026-10-22, commit 32ce9dd0), the `top_level_effort` rows. Owner decision
+            // 2026-10-22: the top-level `reasoning_effort` is confirmed (invalid value drew 400 on
+            // 17 of 17). Levels accepted (low=8 medium=13 high=11 xhigh=8 reasoning tokens);
+            // minimal and max drew 400. Off: `none` was accepted (200) with 0 reasoning tokens.
+            // Auto: the default call reported 14 reasoning tokens. No budget field on the wire; no
+            // documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High, XHigh])
+                    .with_off(true)
+                    .with_auto(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -723,6 +941,17 @@ mod openai_table {
             // Probes 13 and 14: json_object and json_schema ACCEPTED.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### gpt-6-astra` under `## OpenAI`
+            // (run 1, 2026-10-22, commit 32ce9dd0), the `top_level_effort` rows. Owner decision
+            // 2026-10-22: the top-level `reasoning_effort` is confirmed (invalid value drew 400 on
+            // 17 of 17). Levels accepted (low=4 medium=7 high=11 xhigh=14 reasoning tokens);
+            // minimal and max drew 400. Off: `none` drew 400, so off is not seeded and refuses.
+            // Auto: the default call reported 7 reasoning tokens. No budget field on the wire; no
+            // documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High, XHigh]).with_auto(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -754,6 +983,17 @@ mod openai_table {
             // Probes 13 and 14: json_object and json_schema ACCEPTED.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### gpt-5.6-sol` under `## OpenAI`
+            // (run 1, 2026-10-22, commit 32ce9dd0), the `top_level_effort` rows. Owner decision
+            // 2026-10-22: the top-level `reasoning_effort` is confirmed (invalid value drew 400 on
+            // 17 of 17). Levels accepted (low=0 medium=0 high=0 xhigh=0 reasoning tokens); minimal
+            // and max drew 400. Off: `none` was accepted (200) with 0 reasoning tokens. Auto: the
+            // default call reported 0 reasoning tokens, so auto is not seeded. No budget field on
+            // the wire; no documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High, XHigh]).with_off(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -785,6 +1025,19 @@ mod openai_table {
             // Probes 13 and 14: json_object and json_schema ACCEPTED.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### gpt-5.6-luna` under `## OpenAI`
+            // (run 1, 2026-10-22, commit 32ce9dd0), the `top_level_effort` rows. Owner decision
+            // 2026-10-22: the top-level `reasoning_effort` is confirmed (invalid value drew 400 on
+            // 17 of 17). Levels accepted (low=13 medium=9 high=13 xhigh=14 reasoning tokens);
+            // minimal and max drew 400. Off: `none` was accepted (200) with 0 reasoning tokens.
+            // Auto: the default call reported 13 reasoning tokens. No budget field on the wire; no
+            // documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High, XHigh])
+                    .with_off(true)
+                    .with_auto(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -816,6 +1069,19 @@ mod openai_table {
             // Probes 13 and 14: json_object and json_schema ACCEPTED.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### gpt-5.6-terra` under `## OpenAI`
+            // (run 1, 2026-10-22, commit 32ce9dd0), the `top_level_effort` rows. Owner decision
+            // 2026-10-22: the top-level `reasoning_effort` is confirmed (invalid value drew 400 on
+            // 17 of 17). Levels accepted (low=9 medium=13 high=12 xhigh=13 reasoning tokens);
+            // minimal and max drew 400. Off: `none` was accepted (200) with 0 reasoning tokens.
+            // Auto: the default call reported 9 reasoning tokens. No budget field on the wire; no
+            // documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High, XHigh])
+                    .with_off(true)
+                    .with_auto(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -847,6 +1113,19 @@ mod openai_table {
             // Probes 13 and 14: json_object and json_schema ACCEPTED.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### gpt-5.5` under `## OpenAI` (run
+            // 1, 2026-10-22, commit 32ce9dd0), the `top_level_effort` rows. Owner decision
+            // 2026-10-22: the top-level `reasoning_effort` is confirmed (invalid value drew 400 on
+            // 17 of 17). Levels accepted (low=13 medium=14 high=20 xhigh=41 reasoning tokens);
+            // minimal and max drew 400. Off: `none` was accepted (200) with 0 reasoning tokens.
+            // Auto: the default call reported 13 reasoning tokens. No budget field on the wire; no
+            // documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High, XHigh])
+                    .with_off(true)
+                    .with_auto(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -876,6 +1155,17 @@ mod openai_table {
             // Probes 13 and 14: json_object and json_schema ACCEPTED.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### gpt-5.4` under `## OpenAI` (run
+            // 1, 2026-10-22, commit 32ce9dd0), the `top_level_effort` rows. Owner decision
+            // 2026-10-22: the top-level `reasoning_effort` is confirmed (invalid value drew 400 on
+            // 17 of 17). Levels accepted (low=4 medium=12 high=15 xhigh=14 reasoning tokens);
+            // minimal and max drew 400. Off: `none` was accepted (200) with 0 reasoning tokens.
+            // Auto: the default call reported 0 reasoning tokens, so auto is not seeded. No budget
+            // field on the wire; no documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High, XHigh]).with_off(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -905,6 +1195,17 @@ mod openai_table {
             // Probes 13 and 14: json_object and json_schema ACCEPTED.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### gpt-5.4-mini` under `## OpenAI`
+            // (run 1, 2026-10-22, commit 32ce9dd0), the `top_level_effort` rows. Owner decision
+            // 2026-10-22: the top-level `reasoning_effort` is confirmed (invalid value drew 400 on
+            // 17 of 17). Levels accepted (low=12 medium=13 high=18 xhigh=50 reasoning tokens);
+            // minimal and max drew 400. Off: `none` was accepted (200) with 0 reasoning tokens.
+            // Auto: the default call reported 0 reasoning tokens, so auto is not seeded. No budget
+            // field on the wire; no documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High, XHigh]).with_off(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -934,6 +1235,17 @@ mod openai_table {
             // Probes 13 and 14: json_object and json_schema ACCEPTED.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### gpt-5.2` under `## OpenAI` (run
+            // 1, 2026-10-22, commit 32ce9dd0), the `top_level_effort` rows. Owner decision
+            // 2026-10-22: the top-level `reasoning_effort` is confirmed (invalid value drew 400 on
+            // 17 of 17). Levels accepted (low=6 medium=12 high=26 xhigh=14 reasoning tokens);
+            // minimal and max drew 400. Off: `none` was accepted (200) with 0 reasoning tokens.
+            // Auto: the default call reported 0 reasoning tokens, so auto is not seeded. No budget
+            // field on the wire; no documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High, XHigh]).with_off(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -966,6 +1278,17 @@ mod openai_table {
             // Probes 13 and 14: json_object and json_schema ACCEPTED.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### gpt-5.1` under `## OpenAI` (run
+            // 1, 2026-10-22, commit 32ce9dd0), the `top_level_effort` rows. Owner decision
+            // 2026-10-22: the top-level `reasoning_effort` is confirmed (invalid value drew 400 on
+            // 17 of 17). Levels accepted (low=0 medium=10 high=112 reasoning tokens); minimal,
+            // xhigh and max drew 400. Off: `none` was accepted (200) with 0 reasoning tokens. Auto:
+            // the default call reported 0 reasoning tokens, so auto is not seeded. No budget field
+            // on the wire; no documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High]).with_off(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 2 (2026-10-20), `### Probes:
@@ -1001,6 +1324,17 @@ mod openai_table {
             // Probes 13 and 14: json_object and json_schema ACCEPTED.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### gpt-5` under `## OpenAI` (run 1,
+            // 2026-10-22, commit 32ce9dd0), the `top_level_effort` rows. Owner decision 2026-10-22:
+            // the top-level `reasoning_effort` is confirmed (invalid value drew 400 on 17 of 17).
+            // Levels accepted (minimal=0 low=0 medium=384 high=128 reasoning tokens); xhigh and max
+            // drew 400. Off: `none` drew 400, so off is not seeded and refuses. Auto: the default
+            // call reported 64 reasoning tokens. No budget field on the wire; no documented
+            // coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Minimal, Low, Medium, High]).with_auto(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -1037,6 +1371,17 @@ mod openai_table {
             // Probes 13 and 14: json_object and json_schema ACCEPTED.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### gpt-5-mini` under `## OpenAI`
+            // (run 1, 2026-10-22, commit 32ce9dd0), the `top_level_effort` rows. Owner decision
+            // 2026-10-22: the top-level `reasoning_effort` is confirmed (invalid value drew 400 on
+            // 17 of 17). Levels accepted (minimal=0 low=0 medium=64 high=64 reasoning tokens);
+            // xhigh and max drew 400. Off: `none` drew 400, so off is not seeded and refuses. Auto:
+            // the default call reported 0 reasoning tokens, so auto is not seeded. No budget field
+            // on the wire; no documented coercion.
+            .with_effort(EffortSupport::Supported(EffortLevels::new([
+                Minimal, Low, Medium, High,
+            ])))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -1072,6 +1417,17 @@ mod openai_table {
             // Probes 13 and 14: json_object and json_schema ACCEPTED.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### gpt-5-nano` under `## OpenAI`
+            // (run 1, 2026-10-22, commit 32ce9dd0), the `top_level_effort` rows. Owner decision
+            // 2026-10-22: the top-level `reasoning_effort` is confirmed (invalid value drew 400 on
+            // 17 of 17). Levels accepted (minimal=0 low=64 medium=64 high=448 reasoning tokens);
+            // xhigh and max drew 400. Off: `none` drew 400, so off is not seeded and refuses. Auto:
+            // the default call reported 128 reasoning tokens. No budget field on the wire; no
+            // documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Minimal, Low, Medium, High]).with_auto(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -1105,6 +1461,8 @@ mod openai_table {
             // Probes 13 and 14: json_object and json_schema ACCEPTED.
             .with_json_object(true)
             .with_json_schema(true)
+        // No effort data: `51-EFFORT-PROBE.md` did not probe this id (the planner excluded it), and
+        // the owner's D-02 answer is "unmeasured", so it stays `Unmeasured` with no date.
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -1138,6 +1496,17 @@ mod openai_table {
             // Probes 13 and 14: json_object and json_schema ACCEPTED.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### o3` under `## OpenAI` (run 1,
+            // 2026-10-22, commit 32ce9dd0), the `top_level_effort` rows. Owner decision 2026-10-22:
+            // the top-level `reasoning_effort` is confirmed (invalid value drew 400 on 17 of 17).
+            // Levels accepted (low=0 medium=64 high=0 xhigh=0 reasoning tokens); minimal and max
+            // drew 400. Off: `none` drew 400, so off is not seeded and refuses. Auto: the default
+            // call reported 0 reasoning tokens, so auto is not seeded. No budget field on the wire;
+            // no documented coercion.
+            .with_effort(EffortSupport::Supported(EffortLevels::new([
+                Low, Medium, High, XHigh,
+            ])))
+            .with_effort_verified_on("2026-10-22")
     }
 }
 #[cfg(feature = "openai")]
@@ -1146,7 +1515,12 @@ pub(crate) use openai_table::OPENAI;
 #[cfg(feature = "deepseek")]
 mod deepseek_table {
     use crate::registry::SeededProfile;
-    use paladin_ports::output::model_profile::{ModelProfile, ParamSupport, StopSupport};
+    use paladin_ports::output::llm_port::ReasoningEffort::{
+        High, Low, Max, Medium, Minimal, XHigh,
+    };
+    use paladin_ports::output::model_profile::{
+        EffortLevels, EffortSupport, ModelProfile, ParamSupport, StopSupport,
+    };
 
     /// DeepSeek. `deepseek-flash` is the live listing's general-purpose model (2026-10-15,
     /// `50-SEED-PROBE.md`); `deepseek-v4-pro` is its larger sibling, listed and probed on
@@ -1185,6 +1559,14 @@ mod deepseek_table {
             .with_json_object(true)
             // "This response_format type is unavailable now".
             .with_json_schema(false)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### deepseek-flash` under
+            // `## DeepSeek` (run 3, 2026-10-22, commit 32ce9dd0), its vendor-documented section
+            // (https://api-docs.deepseek.com/guides/thinking_mode, accessed 2026-10-22) and the
+            // owner decision of 2026-10-22 (plan 51-11's checkpoint): the top-level
+            // `reasoning_effort` is confirmed (invalid value drew 422, parsed 2 of 2). See
+            // `deepseek_measured_effort` for the per-field trace.
+            .with_effort(deepseek_measured_effort())
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -1210,6 +1592,38 @@ mod deepseek_table {
             .with_json_object(true)
             // Probe 13: "This response_format type is unavailable now".
             .with_json_schema(false)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### deepseek-v4-pro` under
+            // `## DeepSeek` (run 3, 2026-10-22, commit 32ce9dd0; one of web3sec's three models),
+            // its vendor-documented section and the owner decision of 2026-10-22. See
+            // `deepseek_measured_effort` for the per-field trace.
+            .with_effort(deepseek_measured_effort())
+            .with_effort_verified_on("2026-10-22")
+    }
+
+    /// The efforts both DeepSeek models took through the top-level `reasoning_effort` and the
+    /// `thinking` switch in the 2026-10-22 probe (the two rows agree on every field):
+    ///
+    /// - `levels` `low`, `high`, `max`: all six levels `minimal`..`max` were accepted (rows
+    ///   `top_level_effort`; `deepseek-v4-pro` 37, 25, 36, 35, 35, 39 reasoning tokens,
+    ///   `deepseek-flash` 20, 24, 19, 17, 18, 22) and the invalid value drew 422 on both.
+    /// - `coerced` `minimal`, `medium`, `xhigh`: the vendor-documented section
+    ///   (https://api-docs.deepseek.com/guides/thinking_mode, accessed 2026-10-22) maps minimal to
+    ///   low, medium to high and xhigh to high, so those three are accepted but run as another
+    ///   level, and refuse whatever the fallback. `low`, `high` and `max` map to themselves.
+    /// - `off`: the `thinking` disabled row was accepted (200) and reported no reasoning-token
+    ///   count on both models.
+    /// - `auto`: the `thinking` enabled row was accepted with reasoning tokens (17 on
+    ///   `deepseek-flash`, 110 on `deepseek-v4-pro`).
+    /// - `enable_thinking_with_level` is not set: the probe sent `reasoning_effort` alone (no
+    ///   paired `thinking` row) and the default call already reasoned (20 and 35 tokens).
+    /// - no `budget`: the wire has no budget field.
+    fn deepseek_measured_effort() -> EffortSupport {
+        EffortSupport::Supported(
+            EffortLevels::new([Low, High, Max])
+                .with_coerced([Minimal, Medium, XHigh])
+                .with_off(true)
+                .with_auto(true),
+        )
     }
 }
 #[cfg(feature = "deepseek")]
@@ -2211,7 +2625,10 @@ pub(crate) use grok_table::GROK;
 #[cfg(feature = "gemini")]
 mod gemini_table {
     use crate::registry::SeededProfile;
-    use paladin_ports::output::model_profile::{ModelProfile, ParamSupport, StopSupport};
+    use paladin_ports::output::llm_port::ReasoningEffort::{High, Low, Medium, Minimal};
+    use paladin_ports::output::model_profile::{
+        EffortLevels, EffortSupport, ModelProfile, ParamSupport, StopSupport,
+    };
 
     /// Gemini. `gemini-3.5-flash-lite`, `gemini-3.5-flash` and `gemini-3.6-flash` were
     /// measured on 2026-10-15 (`50-SEED-PROBE.md`); nine further ids were measured end to end on
@@ -2309,14 +2726,60 @@ mod gemini_table {
 
     fn gemini_3_5_flash_lite() -> ModelProfile {
         measured()
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### gemini-3.5-flash-lite` under `##
+            // Gemini` (run 9, 2026-10-22, commit 32ce9dd0), the `thinking_level` rows. Owner
+            // decision 2026-10-22: lowercase `thinkingLevel` is confirmed (invalid value drew 400
+            // on 12 of 12; uppercase `HIGH` also accepted, lowercase kept). Levels accepted
+            // (minimal=- low=75 medium=209 high=328 reasoning tokens, `-` = no count), including
+            // `minimal`. Off: `thinkingBudget` 0 drew 400, so off is not seeded and refuses. Auto:
+            // the default call reported no reasoning-token count, so auto is not seeded. Budget:
+            // `thinkingBudget` 128 and 1 were accepted and -5 rejected, but no vendor-documented
+            // bound is in the probe file (no Gemini 2.5 id was probed), so no budget span is seeded
+            // and a budget refuses. No documented coercion.
+            .with_effort(EffortSupport::Supported(EffortLevels::new([
+                Minimal, Low, Medium, High,
+            ])))
+            .with_effort_verified_on("2026-10-22")
     }
 
     fn gemini_3_6_flash() -> ModelProfile {
         measured()
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### gemini-3.6-flash` under `##
+            // Gemini` (run 9, 2026-10-22, commit 32ce9dd0), the `thinking_level` rows. Owner
+            // decision 2026-10-22: lowercase `thinkingLevel` is confirmed (invalid value drew 400
+            // on 12 of 12; uppercase `HIGH` also accepted, lowercase kept). Levels accepted
+            // (minimal=- low=155 medium=286 high=181 reasoning tokens, `-` = no count), including
+            // `minimal`. Off: `thinkingBudget` 0 was accepted (200) with no reasoning-token count.
+            // Auto (no `thinkingConfig`, the default call): 165 reasoning tokens. Budget:
+            // `thinkingBudget` 128 and 1 were accepted and -5 rejected, but no vendor-documented
+            // bound is in the probe file (no Gemini 2.5 id was probed), so no budget span is seeded
+            // and a budget refuses. No documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Minimal, Low, Medium, High])
+                    .with_off(true)
+                    .with_auto(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     fn gemini_3_5_flash() -> ModelProfile {
         measured()
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### gemini-3.5-flash` under `##
+            // Gemini` (run 9, 2026-10-22, commit 32ce9dd0), the `thinking_level` rows. Owner
+            // decision 2026-10-22: lowercase `thinkingLevel` is confirmed (invalid value drew 400
+            // on 12 of 12; uppercase `HIGH` also accepted, lowercase kept). Levels accepted
+            // (minimal=- low=181 medium=167 high=207 reasoning tokens, `-` = no count), including
+            // `minimal`. Off: `thinkingBudget` 0 was accepted (200) with no reasoning-token count.
+            // Auto (no `thinkingConfig`, the default call): 234 reasoning tokens. Budget:
+            // `thinkingBudget` 128 and 1 were accepted and -5 rejected, but no vendor-documented
+            // bound is in the probe file (no Gemini 2.5 id was probed), so no budget span is seeded
+            // and a budget refuses. No documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Minimal, Low, Medium, High])
+                    .with_off(true)
+                    .with_auto(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -2341,6 +2804,22 @@ mod gemini_table {
             // Probes 12 and 13: responseMimeType and responseSchema both accepted.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### gemini-4-argon` under `##
+            // Gemini` (run 9, 2026-10-22, commit 32ce9dd0), the `thinking_level` rows. Owner
+            // decision 2026-10-22: lowercase `thinkingLevel` is confirmed (invalid value drew 400
+            // on 12 of 12; uppercase `HIGH` also accepted, lowercase kept). Levels accepted (low=-
+            // medium=227 high=415 reasoning tokens, `-` = no count); `minimal` drew 400, so it is
+            // not listed. Off: `thinkingBudget` 0 was accepted (200) with no reasoning-token count.
+            // Auto (no `thinkingConfig`, the default call): 34 reasoning tokens. Budget:
+            // `thinkingBudget` 128 and 1 were accepted and -5 rejected, but no vendor-documented
+            // bound is in the probe file (no Gemini 2.5 id was probed), so no budget span is seeded
+            // and a budget refuses. No documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High])
+                    .with_off(true)
+                    .with_auto(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -2365,6 +2844,20 @@ mod gemini_table {
             // Probes 12 and 13: responseMimeType and responseSchema both accepted.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### gemini-3.8-flash` under `##
+            // Gemini` (run 9, 2026-10-22, commit 32ce9dd0), the `thinking_level` rows. Owner
+            // decision 2026-10-22: lowercase `thinkingLevel` is confirmed (invalid value drew 400
+            // on 12 of 12; uppercase `HIGH` also accepted, lowercase kept). Levels accepted (low=34
+            // medium=235 high=232 reasoning tokens, `-` = no count); `minimal` drew 400, so it is
+            // not listed. Off: `thinkingBudget` 0 was accepted but reported 206 reasoning tokens,
+            // so off is not seeded. Auto (no `thinkingConfig`, the default call): 245 reasoning
+            // tokens. Budget: `thinkingBudget` 128 and 1 were accepted and -5 rejected, but no
+            // vendor-documented bound is in the probe file (no Gemini 2.5 id was probed), so no
+            // budget span is seeded and a budget refuses. No documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High]).with_auto(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -2389,6 +2882,20 @@ mod gemini_table {
             // Probes 12 and 13: responseMimeType and responseSchema both accepted.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### gemini-3.7-flash` under `##
+            // Gemini` (run 9, 2026-10-22, commit 32ce9dd0), the `thinking_level` rows. Owner
+            // decision 2026-10-22: lowercase `thinkingLevel` is confirmed (invalid value drew 400
+            // on 12 of 12; uppercase `HIGH` also accepted, lowercase kept). Levels accepted (low=60
+            // medium=200 high=324 reasoning tokens, `-` = no count); `minimal` drew 400, so it is
+            // not listed. Off: `thinkingBudget` 0 was accepted but reported 48 reasoning tokens, so
+            // off is not seeded. Auto (no `thinkingConfig`, the default call): 243 reasoning
+            // tokens. Budget: `thinkingBudget` 128 and 1 were accepted and -5 rejected, but no
+            // vendor-documented bound is in the probe file (no Gemini 2.5 id was probed), so no
+            // budget span is seeded and a budget refuses. No documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High]).with_auto(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -2415,6 +2922,20 @@ mod gemini_table {
             // Probes 12 and 13: responseMimeType and responseSchema both accepted.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### gemini-3.1-pro-preview` under
+            // `## Gemini` (run 9, 2026-10-22, commit 32ce9dd0), the `thinking_level` rows. Owner
+            // decision 2026-10-22: lowercase `thinkingLevel` is confirmed (invalid value drew 400
+            // on 12 of 12; uppercase `HIGH` also accepted, lowercase kept). Levels accepted
+            // (low=322 medium=981 high=498 reasoning tokens, `-` = no count); `minimal` drew 400,
+            // so it is not listed. Off: `thinkingBudget` 0 drew 400, so off is not seeded and
+            // refuses. Auto (no `thinkingConfig`, the default call): 424 reasoning tokens. Budget:
+            // `thinkingBudget` 128 and 1 were accepted and -5 rejected, but no vendor-documented
+            // bound is in the probe file (no Gemini 2.5 id was probed), so no budget span is seeded
+            // and a budget refuses. No documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High]).with_auto(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -2441,6 +2962,20 @@ mod gemini_table {
             // Probes 12 and 13: responseMimeType and responseSchema both accepted.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### gemini-pro-latest` under `##
+            // Gemini` (run 9, 2026-10-22, commit 32ce9dd0), the `thinking_level` rows. Owner
+            // decision 2026-10-22: lowercase `thinkingLevel` is confirmed (invalid value drew 400
+            // on 12 of 12; uppercase `HIGH` also accepted, lowercase kept). Levels accepted
+            // (low=355 medium=521 high=406 reasoning tokens, `-` = no count); `minimal` drew 400,
+            // so it is not listed. Off: `thinkingBudget` 0 drew 400, so off is not seeded and
+            // refuses. Auto (no `thinkingConfig`, the default call): 399 reasoning tokens. Budget:
+            // `thinkingBudget` 128 and 1 were accepted and -5 rejected, but no vendor-documented
+            // bound is in the probe file (no Gemini 2.5 id was probed), so no budget span is seeded
+            // and a budget refuses. No documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High]).with_auto(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -2467,6 +3002,20 @@ mod gemini_table {
             // Probes 12 and 13: responseMimeType and responseSchema both accepted.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### gemini-flash-latest` under `##
+            // Gemini` (run 9, 2026-10-22, commit 32ce9dd0), the `thinking_level` rows. Owner
+            // decision 2026-10-22: lowercase `thinkingLevel` is confirmed (invalid value drew 400
+            // on 12 of 12; uppercase `HIGH` also accepted, lowercase kept). Levels accepted
+            // (low=188 medium=198 high=259 reasoning tokens, `-` = no count); `minimal` drew 400,
+            // so it is not listed. Off: `thinkingBudget` 0 was accepted but reported 109 reasoning
+            // tokens, so off is not seeded. Auto (no `thinkingConfig`, the default call): 181
+            // reasoning tokens. Budget: `thinkingBudget` 128 and 1 were accepted and -5 rejected,
+            // but no vendor-documented bound is in the probe file (no Gemini 2.5 id was probed), so
+            // no budget span is seeded and a budget refuses. No documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High]).with_auto(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -2493,6 +3042,20 @@ mod gemini_table {
             // Probes 12 and 13: responseMimeType and responseSchema both accepted.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### gemini-flash-lite-latest` under
+            // `## Gemini` (run 9, 2026-10-22, commit 32ce9dd0), the `thinking_level` rows. Owner
+            // decision 2026-10-22: lowercase `thinkingLevel` is confirmed (invalid value drew 400
+            // on 12 of 12; uppercase `HIGH` also accepted, lowercase kept). Levels accepted
+            // (minimal=- low=163 medium=223 high=217 reasoning tokens, `-` = no count), including
+            // `minimal`. Off: `thinkingBudget` 0 drew 400, so off is not seeded and refuses. Auto:
+            // the default call reported no reasoning-token count, so auto is not seeded. Budget:
+            // `thinkingBudget` 128 and 1 were accepted and -5 rejected, but no vendor-documented
+            // bound is in the probe file (no Gemini 2.5 id was probed), so no budget span is seeded
+            // and a budget refuses. No documented coercion.
+            .with_effort(EffortSupport::Supported(EffortLevels::new([
+                Minimal, Low, Medium, High,
+            ])))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -2517,6 +3080,20 @@ mod gemini_table {
             // Probes 12 and 13: responseMimeType and responseSchema both accepted.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### gemini-3.1-flash-lite` under `##
+            // Gemini` (run 9, 2026-10-22, commit 32ce9dd0), the `thinking_level` rows. Owner
+            // decision 2026-10-22: lowercase `thinkingLevel` is confirmed (invalid value drew 400
+            // on 12 of 12; uppercase `HIGH` also accepted, lowercase kept). Levels accepted
+            // (minimal=- low=143 medium=280 high=370 reasoning tokens, `-` = no count), including
+            // `minimal`. Off: `thinkingBudget` 0 was accepted (200) with no reasoning-token count.
+            // Auto: the default call reported no reasoning-token count, so auto is not seeded.
+            // Budget: `thinkingBudget` 128 and 1 were accepted and -5 rejected, but no vendor-
+            // documented bound is in the probe file (no Gemini 2.5 id was probed), so no budget
+            // span is seeded and a budget refuses. No documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Minimal, Low, Medium, High]).with_off(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -2543,6 +3120,22 @@ mod gemini_table {
             // Probes 12 and 13: responseMimeType and responseSchema both accepted.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### gemini-3-flash-preview` under
+            // `## Gemini` (run 9, 2026-10-22, commit 32ce9dd0), the `thinking_level` rows. Owner
+            // decision 2026-10-22: lowercase `thinkingLevel` is confirmed (invalid value drew 400
+            // on 12 of 12; uppercase `HIGH` also accepted, lowercase kept). Levels accepted
+            // (minimal=- low=236 medium=315 high=288 reasoning tokens, `-` = no count), including
+            // `minimal`. Off: `thinkingBudget` 0 was accepted (200) with no reasoning-token count.
+            // Auto (no `thinkingConfig`, the default call): 278 reasoning tokens. Budget:
+            // `thinkingBudget` 128 and 1 were accepted and -5 rejected, but no vendor-documented
+            // bound is in the probe file (no Gemini 2.5 id was probed), so no budget span is seeded
+            // and a budget refuses. No documented coercion.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Minimal, Low, Medium, High])
+                    .with_off(true)
+                    .with_auto(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 }
 #[cfg(feature = "gemini")]

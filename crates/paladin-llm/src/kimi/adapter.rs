@@ -1702,6 +1702,12 @@ mod tests {
         struct KimiFixture;
 
         impl crate::conformance::ConformanceFixture for KimiFixture {
+            /// Kimi's `thinking.effort` only: a top-level `reasoning_effort` is the silent no-op
+            /// the probe found, so it must never read as a level.
+            fn effort_wire_value(body: &serde_json::Value) -> Option<String> {
+                crate::conformance::thinking_effort_wire_value(body)
+            }
+
             const WIRE: crate::conformance::Wire = crate::conformance::Wire::OpenAiChat;
 
             fn default_model() -> &'static str {

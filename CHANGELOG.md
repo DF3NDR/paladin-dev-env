@@ -958,6 +958,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Anthropic, OpenAI, DeepSeek and Gemini accept a reasoning effort on the models the 2026-10-22
+  live probe measured (REASON-02, REASON-03, REASON-04, REASON-05, REASON-06; D-00h, D-01, D-04;
+  Phase 51 plan 12).** The four native wires are confirmed by `51-EFFORT-PROBE.md` (run
+  2026-10-22, commit `32ce9dd0`) and keep their documented capabilities; the seeded rows now carry
+  effort data. Every other model (`gpt-4o-mini`, `chat-latest`, any id with no row) and any effort
+  the probe did not evidence is refused before HTTP naming the
+  `llm.<provider>.models.<model-id>.effort` override. No public item changed.
+  - **OpenAI** (top-level `reasoning_effort`): all 17 probed models take `low`, `medium`, `high`
+    and `xhigh`, except `gpt-5.1` (`low`, `medium`, `high`), `gpt-5`, `gpt-5-mini` and `gpt-5-nano`
+    (`minimal`, `low`, `medium`, `high`). `off` (sent as `none`) is accepted by 11 models and
+    refused by `gpt-6.1-sol`, `gpt-6-astra`, `gpt-5`, `gpt-5-mini`, `gpt-5-nano` and `o3`; `auto` is
+    taken only where the default call reported reasoning tokens.
+  - **Anthropic** (`output_config.effort`): all 11 probed models take `low` to `max` (`xhigh`
+    too, except `claude-opus-4-6` and `claude-sonnet-4-6`, which rejected it). `claude-opus-4-8`,
+    `claude-opus-4-7`, `claude-opus-4-6` and `claude-sonnet-4-6` send `thinking: {type: adaptive}`
+    beside a level (their thinking tokens appeared only when paired). `off` and `auto` are taken
+    per model as measured. No Anthropic model takes an explicit `Budget`: the vendor-documented
+    section names no fixed maximum.
+  - **DeepSeek** (top-level `reasoning_effort` and the `thinking` switch): `deepseek-flash` and
+    `deepseek-v4-pro` take `low`, `high`, `max`, `off` and `auto`; `minimal`, `medium` and `xhigh`
+    are refused whatever the fallback, because DeepSeek runs them as `low`, `high` and `high`.
+  - **Gemini** (lowercase `thinkingLevel`, kept after the probe accepted it on 12 of 12 models):
+    all 12 probed models take `low`, `medium` and `high`; six also take `minimal` (the others
+    drew 400). `off` (`thinkingBudget` 0) and `auto` are taken per model as measured. No Gemini
+    model takes an explicit `Budget`: the probe file holds no vendor-documented bound.
+  - The shared conformance suite grows from 21 to 24 cases, adding the nine-adapter effort
+    refusal before HTTP, the seeded effort wire body and the seeded-level round trip.
+
 - **Kimi, Qwen and Grok accept a reasoning effort on the models the 2026-10-22 live probe measured
   (REASON-02, REASON-03, REASON-04, REASON-06; D-01, D-04; Phase 51 plan 11).** The seeded rows
   now carry effort data from `51-EFFORT-PROBE.md` (run 2026-10-22, commit `32ce9dd0`); every other

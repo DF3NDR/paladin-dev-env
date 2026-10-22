@@ -1446,8 +1446,15 @@ struct GeminiThinkingConfig {
 
 /// What Gemini's `generateContent` body can carry of a profile's effort data (Phase 51): a
 /// `thinkingLevel`, a `thinkingBudget` (and `0` for `off`), and `auto` as the absence of both.
-/// Plan 51-12 confirms each form against the dated probe or sets this to [`WireCaps::NONE`]
-/// (D-04).
+///
+/// Confirmed against the dated probe (plan 51-12, D-04; owner decision of 2026-10-22 at plan
+/// 51-11's checkpoint): `51-EFFORT-PROBE.md`'s verdict table marks Gemini's `thinking_level`
+/// confirmed (the invalid value drew 400 on 12 of 12 models, so the field is parsed; the highest
+/// accepted level reports more reasoning tokens than the lowest on 5 of 5 comparable models), and
+/// `thinkingBudget` parsed (400 on 12 of 12). The documented capabilities therefore stand; they
+/// are not `WireCaps::NONE`. No seeded row carries a budget span (the probe file holds no
+/// vendor-documented bound), so a budget refuses on every seeded model until an operator
+/// override states one.
 const GEMINI_REASONING_WIRE: WireCaps = WireCaps {
     levels: true,
     off: true,
@@ -1455,10 +1462,10 @@ const GEMINI_REASONING_WIRE: WireCaps = WireCaps {
     budget: true,
 };
 
-/// The `thinkingLevel` spelling of a level, kept in one place so the probe (plan 51-12) can
-/// change it for the whole adapter. Lower-case per the vendor documentation (research A2): the
-/// REST spelling is unconfirmed until the dated probe reads the lower-case versus upper-case
-/// rows.
+/// The `thinkingLevel` spelling of a level, kept in one place so it can change for the whole
+/// adapter. Lower-case, confirmed by the dated probe (research A2, plan 51-12): every seeded level
+/// was accepted in lower-case on 12 of 12 models, and the upper-case `HIGH` was accepted too, so
+/// the lower-case spelling stays. Pinned by a wire-body test.
 fn thinking_level_spelling(effort: ReasoningEffort) -> Option<&'static str> {
     reasoning::level_spelling(effort)
 }
@@ -4874,7 +4881,7 @@ mod tests {
         };
         use paladin_core::platform::container::prompt::PromptParameters;
         use paladin_core::platform::container::transience::Transience;
-        use paladin_ports::output::llm_port::ReasoningEffort::{High, Low, Medium};
+        use paladin_ports::output::llm_port::ReasoningEffort::{High, Low, Medium, Minimal};
         use paladin_ports::output::llm_port::{ReasoningEffort, ReasoningFallback};
         use paladin_ports::output::model_profile::{BudgetBounds, EffortLevels, EffortSupport};
         use serde_json::Value;
@@ -4882,7 +4889,7 @@ mod tests {
 
         const LEVELS_MODEL: &str = "gemini-3.8-flash";
         const BUDGET_MODEL: &str = "gemini-2.5-flash";
-        const UNMEASURED_MODEL: &str = "gemini-4-argon";
+        const UNMEASURED_MODEL: &str = "gemini-unprofiled-test-model";
 
         fn request_for(model: &str) -> LlmRequest {
             build_request(
@@ -5224,7 +5231,7 @@ mod tests {
                     assert_eq!(provider, "gemini");
                     assert_eq!(model, UNMEASURED_MODEL);
                     assert!(
-                        reason.contains("llm.gemini.models.gemini-4-argon.effort"),
+                        reason.contains("llm.gemini.models.gemini-unprofiled-test-model.effort"),
                         "{reason}"
                     );
                 }
@@ -5365,6 +5372,154 @@ mod tests {
             ));
         }
 
+        /// The transcript date every Gemini model was probed (run 9).
+        const PROBED_ON: &str = "2026-10-22";
+
+        /// `(model, minimal accepted, off, auto)` as `51-EFFORT-PROBE.md` evidences them (run 9):
+        /// `low`, `medium` and `high` were accepted on all twelve; `minimal` was rejected (400)
+        /// on six and accepted (no count) on six; `off` = `thinkingBudget` 0 accepted with no
+        /// reasoning-token count; `auto` = the default call reported more than 0 reasoning
+        /// tokens.
+        fn transcript() -> [(&'static str, bool, bool, bool); 12] {
+            [
+                ("gemini-4-argon", false, true, true),
+                ("gemini-3.8-flash", false, false, true),
+                ("gemini-3.7-flash", false, false, true),
+                ("gemini-3.1-pro-preview", false, false, true),
+                ("gemini-pro-latest", false, false, true),
+                ("gemini-flash-latest", false, false, true),
+                ("gemini-flash-lite-latest", true, false, false),
+                ("gemini-3.1-flash-lite", true, true, false),
+                ("gemini-3-flash-preview", true, true, true),
+                ("gemini-3.5-flash-lite", true, false, false),
+                ("gemini-3.6-flash", true, true, true),
+                ("gemini-3.5-flash", true, true, true),
+            ]
+        }
+
+        fn expected(minimal: bool, off: bool, auto: bool) -> EffortSupport {
+            let levels: Vec<ReasoningEffort> = if minimal {
+                vec![Minimal, Low, Medium, High]
+            } else {
+                vec![Low, Medium, High]
+            };
+            EffortSupport::Supported(EffortLevels::new(levels).with_off(off).with_auto(auto))
+        }
+
+        #[test]
+        fn gemini_effort_seed_matches_the_transcript() {
+            let adapter = adapter_over("https://example.invalid/v1", Vec::new());
+            for (model, minimal, off, auto) in transcript() {
+                let profile = adapter
+                    .model_profile(model)
+                    .unwrap_or_else(|| panic!("{model}: no profile"));
+                assert_eq!(profile.effort, expected(minimal, off, auto), "{model}");
+                assert_eq!(
+                    profile.effort_verified_on.as_deref(),
+                    Some(PROBED_ON),
+                    "{model}"
+                );
+                let EffortSupport::Supported(levels) = profile.effort else {
+                    panic!("{model}: Supported");
+                };
+                // Budgets 128 and 1 were accepted and -5 rejected, but no vendor-documented
+                // bound is in the probe file, so no span is seeded (judgement call, SUMMARY).
+                assert_eq!(levels.budget, None, "{model}");
+            }
+        }
+
+        /// Research A2: the lowercase spelling is the one pinned. The transcript accepted
+        /// lowercase everywhere (12 of 12) and uppercase `HIGH` too; lowercase is kept.
+        #[tokio::test]
+        async fn thinking_level_is_sent_in_lowercase_on_every_seeded_level() {
+            for (model, minimal, ..) in transcript() {
+                let mut levels = vec![Low, Medium, High];
+                if minimal {
+                    levels.insert(0, ReasoningEffort::Minimal);
+                }
+                for level in levels {
+                    let (body, result) =
+                        send_raw(Vec::new(), request_for(model).with_reasoning(level)).await;
+                    result.unwrap_or_else(|e| panic!("{model}/{level}: {e}"));
+                    let body: Value =
+                        serde_json::from_str(&body.expect("reached the wire")).unwrap();
+                    assert_eq!(
+                        body["generationConfig"]["thinkingConfig"],
+                        serde_json::json!({"thinkingLevel": level.to_string()}),
+                        "{model}/{level}"
+                    );
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn off_and_auto_follow_the_seeded_flags() {
+            for (model, _, off, auto) in transcript() {
+                let (body, result) = send_raw(
+                    Vec::new(),
+                    request_for(model).with_reasoning(ReasoningEffort::Off),
+                )
+                .await;
+                if off {
+                    result.unwrap_or_else(|e| panic!("{model}: {e}"));
+                    let body: Value = serde_json::from_str(&body.unwrap()).unwrap();
+                    assert_eq!(
+                        body["generationConfig"]["thinkingConfig"],
+                        serde_json::json!({"thinkingBudget": 0}),
+                        "{model}"
+                    );
+                } else {
+                    assert!(body.is_none(), "{model}: off reached the wire");
+                    assert!(
+                        matches!(result, Err(LlmError::UnsupportedParameter { .. })),
+                        "{model}: {result:?}"
+                    );
+                }
+                let (body, result) = send_raw(
+                    Vec::new(),
+                    request_for(model).with_reasoning(ReasoningEffort::Auto),
+                )
+                .await;
+                if auto {
+                    result.unwrap_or_else(|e| panic!("{model}: {e}"));
+                    let body: Value = serde_json::from_str(&body.unwrap()).unwrap();
+                    assert!(
+                        body["generationConfig"].get("thinkingConfig").is_none(),
+                        "{model}: {body}"
+                    );
+                } else {
+                    assert!(body.is_none(), "{model}: auto reached the wire");
+                    assert!(
+                        matches!(result, Err(LlmError::UnsupportedParameter { .. })),
+                        "{model}: {result:?}"
+                    );
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn a_level_the_probe_rejected_and_every_budget_refuse_before_http() {
+            for (model, minimal, ..) in transcript() {
+                let mut refused = vec![
+                    ReasoningEffort::XHigh,
+                    ReasoningEffort::Max,
+                    ReasoningEffort::Budget(128),
+                ];
+                if !minimal {
+                    refused.push(ReasoningEffort::Minimal);
+                }
+                for effort in refused {
+                    let (body, result) =
+                        send_raw(Vec::new(), request_for(model).with_reasoning(effort)).await;
+                    assert!(body.is_none(), "{model}/{effort}: reached the wire");
+                    assert!(
+                        matches!(result, Err(LlmError::UnsupportedParameter { .. })),
+                        "{model}/{effort}: {result:?}"
+                    );
+                }
+            }
+        }
+
         #[test]
         fn the_reported_profile_keeps_levels_auto_off_and_budget() {
             let adapter = adapter_over(
@@ -5409,6 +5564,15 @@ mod tests {
         struct GeminiFixture;
 
         impl crate::conformance::ConformanceFixture for GeminiFixture {
+            /// Gemini's `generationConfig.thinkingConfig.thinkingLevel`, lower-cased.
+            fn effort_wire_value(body: &serde_json::Value) -> Option<String> {
+                body.get("generationConfig")
+                    .and_then(|config| config.get("thinkingConfig"))
+                    .and_then(|config| config.get("thinkingLevel"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_lowercase)
+            }
+
             const WIRE: crate::conformance::Wire = crate::conformance::Wire::Gemini;
 
             fn default_model() -> &'static str {

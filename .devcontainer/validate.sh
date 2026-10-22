@@ -57,6 +57,7 @@ test_command "cargo-nextest" "cargo nextest --version"
 test_command "cargo-audit" "cargo audit --version"
 test_command "cargo-edit" "cargo set-version --help"
 test_command "cargo-expand" "cargo expand --version"
+test_command "cargo-semver-checks" "cargo semver-checks --version"
 test_command "sqlx-cli" "sqlx --version"
 echo ""
 

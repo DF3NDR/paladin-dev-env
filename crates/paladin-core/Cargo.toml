@@ -111,19 +111,21 @@ rand = { workspace = true }
 # per-agent `reasoning_effort` and `reasoning_fallback` fields
 # (`#[serde(default, skip_serializing_if = "Option::is_none")]`) and stays
 # constructible and NOT `#[non_exhaustive]`, so cross-crate `..Default::default()`
-# keeps working. The expected lint is `constructible_struct_adds_field`, already
-# allowed above; it is UNMEASURED here (cargo-semver-checks is absent in this
-# container) and plan 51-14 measures it. The MIGRATION.md section 9.2 row and the
-# `.cargo/semver-checks-allowlist.toml` entry are registered in the same commit
-# as the fields; every in-tree full literal named both fields in that commit.
+# keeps working. Measured in plan 51-14 on 2026-10-22 (cargo-semver-checks 0.50.0 vs the
+# published 0.10.1, `--release-type minor`, this table removed and restored byte-for-byte,
+# `cmp`-verified): `constructible_struct_adds_field`, already allowed above, named
+# `PaladinData.reasoning_effort` and `PaladinData.reasoning_fallback`. The MIGRATION.md
+# section 9.2 row and the `.cargo/semver-checks-allowlist.toml` entry were registered in the
+# same commit as the fields; every in-tree full literal named both fields in that commit.
 #
 # REASON-05 (D-00b, D-11, Phase 51 plan 51-09): `TraceEvent::NodeFinished`
 # gained the `reasoning_requested` and `reasoning_effective` struct-variant
-# fields. The expected lint on the published 0.10.1 is
-# `enum_struct_variant_field_added`, which is NOT allowed in this table, so no
-# line is added or removed here: the break is registered in MIGRATION.md
-# section 9.2 and `.cargo/semver-checks-allowlist.toml` (UNMEASURED, plan
-# 51-14 measures it; `TraceEvent` postdates the CI-pinned v0.9.0 baseline).
+# fields. Measured in plan 51-14 on 2026-10-22 in the same run: the lint
+# `enum_struct_variant_field_added`, the last line below, fired against the published 0.10.1
+# and named both fields (it also named the earlier `cost` and `halt_reason` additions, which
+# are not Phase 51), so the line was added in this plan and the break keeps its MIGRATION.md
+# section 9.2 `Y` row and `.cargo/semver-checks-allowlist.toml` entry. `TraceEvent`
+# postdates the CI-pinned v0.9.0 baseline, so CI's `semver` job cannot observe it.
 [package.metadata.cargo-semver-checks.lints]
 enum_marked_non_exhaustive = "allow"
 constructible_struct_adds_field = "allow"
@@ -135,3 +137,4 @@ enum_missing = "allow"
 enum_variant_missing = "allow"
 module_missing = "allow"
 trait_missing = "allow"
+enum_struct_variant_field_added = "allow"

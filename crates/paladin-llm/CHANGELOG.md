@@ -195,6 +195,16 @@ and this project follows lockstep workspace versioning.
 
 ### Changed
 
+- Kimi, Qwen and Grok accept a reasoning effort on the models the 2026-10-22 live probe measured
+  (Phase 51 plan 51-11, REASON-02, REASON-03, REASON-04, REASON-06; `51-EFFORT-PROBE.md`, commit
+  `32ce9dd0`). Kimi keeps the `thinking.effort` wire and never sends a top-level
+  `reasoning_effort` (the vendor ignored an invalid value there): `kimi-k3` and `kimi-k2.6` take
+  `low`, `high`, `max`, `off`, `auto`. Qwen keeps `enable_thinking` / `thinking_budget`: all 13
+  probed models take `off`, 11 also `auto` and `Budget(1..=32768)` (`qwen-max` and
+  `qwen-plus-latest` `off` only), and no named level. Grok's wire changes from `Unsupported` to the
+  top-level `reasoning_effort`: `grok-4.3`/`4.6`/`4.7` take `minimal` to `xhigh` and `auto`,
+  `grok-4.5` `minimal` to `high` and `auto` (`xhigh` refused as coerced), `grok-4.20-reasoning`
+  `auto` only. Models the probe did not cover refuse an explicit effort. No public item changed.
 - BREAKING: `compat::CompatRequestParameters` gains the field `reasoning: ReasoningWire` and
   `CompatRequestParameters::all()` becomes `all(reasoning: ReasoningWire)` (Phase 51 plan 51-04,
   REASON-02). Migration: state `reasoning: ReasoningWire::Unsupported` in the literal, or pass the

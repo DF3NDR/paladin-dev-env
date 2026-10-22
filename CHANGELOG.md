@@ -958,6 +958,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Kimi, Qwen and Grok accept a reasoning effort on the models the 2026-10-22 live probe measured
+  (REASON-02, REASON-03, REASON-04, REASON-06; D-01, D-04; Phase 51 plan 11).** The seeded rows
+  now carry effort data from `51-EFFORT-PROBE.md` (run 2026-10-22, commit `32ce9dd0`); every other
+  model, and any effort the probe did not evidence, is refused before HTTP naming the
+  `llm.<provider>.models.<model-id>.effort` override. No public item changed.
+  - **Kimi** (`thinking.effort`; a top-level `reasoning_effort` is never sent, because the vendor
+    answered an invalid value 200 on both models): `kimi-k3` and `kimi-k2.6` take `low`, `high`,
+    `max`, `off` and `auto`; `minimal`, `medium` and `xhigh` drew 400 and are refused.
+  - **Qwen** (`enable_thinking` with `thinking_budget`): all 13 probed models take `off`; 11 of
+    them (every `qwen3.x` model, `qwen-plus` and `qwen-flash`) also take `auto` and a
+    `Budget(1..=32768)`; `qwen-max` and `qwen-plus-latest` take `off` only. No named level is
+    accepted (the vendor has no level field, and a level is never converted to a budget).
+  - **Grok** (top-level `reasoning_effort`, previously refused): `grok-4.3`, `grok-4.6` and
+    `grok-4.7` take `minimal` to `xhigh` and `auto`; `grok-4.5` takes `minimal` to `high` and
+    `auto` (`xhigh` is refused: xAI runs it as `high`); `grok-4.20-reasoning` takes `auto` only (it
+    rejected every level). `max` and `off` are refused on every Grok model.
+
 - **BREAKING (`paladin-ai-core`): `TraceEvent::NodeFinished` gains the fields
   `reasoning_requested: Option<String>` and `reasoning_effective: Option<String>` (REASON-05, D-00b,
   D-11; Phase 51 plan 09; `MIGRATION.md` 9.2).** Both are `#[serde(default, skip_serializing_if =

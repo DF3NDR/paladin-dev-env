@@ -1314,7 +1314,9 @@ pub(crate) use kimi_table::KIMI;
 #[cfg(feature = "qwen")]
 mod qwen_table {
     use crate::registry::SeededProfile;
-    use paladin_ports::output::model_profile::{ModelProfile, ParamSupport, StopSupport};
+    use paladin_ports::output::model_profile::{
+        BudgetBounds, EffortLevels, EffortSupport, ModelProfile, ParamSupport, StopSupport,
+    };
 
     /// Qwen. `qwen3.8-flash` and `qwen-plus` were measured on 2026-10-15 (`50-SEED-PROBE.md`);
     /// 11 further ids were measured end to end on 2026-10-20 (`50.1-SEED-PROBE.md`; run 1
@@ -1417,6 +1419,18 @@ mod qwen_table {
             .with_reasoning(true)
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### qwen3.8-flash` under `## Qwen`
+            // (run 6, 2026-10-22, commit 32ce9dd0), the `enable_thinking` and `thinking_budget`
+            // rows.
+            // Owner decision 2026-10-22: Qwen ships `enable_thinking` with `thinking_budget`; the
+            // wire has no level field, so no level is listed.
+            // Off: row 2 accepted, no reasoning-token count. Auto: row 3 accepted, 50 reasoning
+            // tokens. Budget: row 4 (1) accepted, row 5 (0) rejected; max 32768 from the
+            // vendor-documented section of the probe file (Alibaba Cloud Model Studio "deep
+            // thinking", https://www.alibabacloud.com/help/en/model-studio/deep-thinking, accessed
+            // 2026-10-22: "Value range 1~32768").
+            .with_effort(qwen_effort(true, true))
+            .with_effort_verified_on("2026-10-22")
     }
 
     fn qwen_plus() -> ModelProfile {
@@ -1433,6 +1447,17 @@ mod qwen_table {
             .with_reasoning(false)
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### qwen-plus` under `## Qwen` (run
+            // 6, 2026-10-22, commit 32ce9dd0), the `enable_thinking` and `thinking_budget` rows.
+            // Owner decision 2026-10-22: Qwen ships `enable_thinking` with `thinking_budget`; the
+            // wire has no level field, so no level is listed.
+            // Off: row 2 accepted, no reasoning-token count. Auto: row 3 accepted, 1047 reasoning
+            // tokens. Budget: row 4 (1) accepted, row 5 (0) rejected; max 32768 from the
+            // vendor-documented section of the probe file (Alibaba Cloud Model Studio "deep
+            // thinking", https://www.alibabacloud.com/help/en/model-studio/deep-thinking, accessed
+            // 2026-10-22: "Value range 1~32768").
+            .with_effort(qwen_effort(true, true))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -1460,6 +1485,18 @@ mod qwen_table {
             // Probes 12 and 13: json_object and json_schema ACCEPTED.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### qwen3.8-max` under `## Qwen`
+            // (run 6, 2026-10-22, commit 32ce9dd0), the `enable_thinking` and `thinking_budget`
+            // rows.
+            // Owner decision 2026-10-22: Qwen ships `enable_thinking` with `thinking_budget`; the
+            // wire has no level field, so no level is listed.
+            // Off: row 2 accepted, no reasoning-token count. Auto: row 3 accepted, 47 reasoning
+            // tokens. Budget: row 4 (1) accepted, row 5 (0) rejected; max 32768 from the
+            // vendor-documented section of the probe file (Alibaba Cloud Model Studio "deep
+            // thinking", https://www.alibabacloud.com/help/en/model-studio/deep-thinking, accessed
+            // 2026-10-22: "Value range 1~32768").
+            .with_effort(qwen_effort(true, true))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -1489,6 +1526,18 @@ mod qwen_table {
             // Probes 12 and 13: json_object and json_schema ACCEPTED.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### qwen3.7-plus` under `## Qwen`
+            // (run 6, 2026-10-22, commit 32ce9dd0), the `enable_thinking` and `thinking_budget`
+            // rows.
+            // Owner decision 2026-10-22: Qwen ships `enable_thinking` with `thinking_budget`; the
+            // wire has no level field, so no level is listed.
+            // Off: row 2 accepted, no reasoning-token count. Auto: row 3 accepted, 146 reasoning
+            // tokens. Budget: row 4 (1) accepted, row 5 (0) rejected; max 32768 from the
+            // vendor-documented section of the probe file (Alibaba Cloud Model Studio "deep
+            // thinking", https://www.alibabacloud.com/help/en/model-studio/deep-thinking, accessed
+            // 2026-10-22: "Value range 1~32768").
+            .with_effort(qwen_effort(true, true))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -1516,6 +1565,18 @@ mod qwen_table {
             // Probes 12 and 13: json_object and json_schema ACCEPTED.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### qwen3.7-max` under `## Qwen`
+            // (run 6 for the auto and budget rows; the off row is run 7's retry, because run 6's
+            // row 2 was a transport error), 2026-10-22, commit 32ce9dd0.
+            // Owner decision 2026-10-22: Qwen ships `enable_thinking` with `thinking_budget`; the
+            // wire has no level field, so no level is listed.
+            // Off: row 2 accepted, no reasoning-token count. Auto: row 3 accepted, 247 reasoning
+            // tokens. Budget: row 4 (1) accepted, row 5 (0) rejected; max 32768 from the
+            // vendor-documented section of the probe file (Alibaba Cloud Model Studio "deep
+            // thinking", https://www.alibabacloud.com/help/en/model-studio/deep-thinking, accessed
+            // 2026-10-22: "Value range 1~32768").
+            .with_effort(qwen_effort(true, true))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 2 (2026-10-20), `### Probes:
@@ -1545,6 +1606,18 @@ mod qwen_table {
             // Probes 12 and 13: json_object and json_schema ACCEPTED.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### qwen3.7-flash` under `## Qwen`
+            // (run 6, 2026-10-22, commit 32ce9dd0), the `enable_thinking` and `thinking_budget`
+            // rows.
+            // Owner decision 2026-10-22: Qwen ships `enable_thinking` with `thinking_budget`; the
+            // wire has no level field, so no level is listed.
+            // Off: row 2 accepted, no reasoning-token count. Auto: row 3 accepted, 823 reasoning
+            // tokens. Budget: row 4 (1) accepted, row 5 (0) rejected; max 32768 from the
+            // vendor-documented section of the probe file (Alibaba Cloud Model Studio "deep
+            // thinking", https://www.alibabacloud.com/help/en/model-studio/deep-thinking, accessed
+            // 2026-10-22: "Value range 1~32768").
+            .with_effort(qwen_effort(true, true))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -1571,6 +1644,18 @@ mod qwen_table {
             // Probes 12 and 13: json_object and json_schema ACCEPTED.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### qwen3.6-plus` under `## Qwen`
+            // (run 6, 2026-10-22, commit 32ce9dd0), the `enable_thinking` and `thinking_budget`
+            // rows.
+            // Owner decision 2026-10-22: Qwen ships `enable_thinking` with `thinking_budget`; the
+            // wire has no level field, so no level is listed.
+            // Off: row 2 accepted, no reasoning-token count. Auto: row 3 accepted, 2645 reasoning
+            // tokens. Budget: row 4 (1) accepted, row 5 (0) rejected; max 32768 from the
+            // vendor-documented section of the probe file (Alibaba Cloud Model Studio "deep
+            // thinking", https://www.alibabacloud.com/help/en/model-studio/deep-thinking, accessed
+            // 2026-10-22: "Value range 1~32768").
+            .with_effort(qwen_effort(true, true))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -1599,6 +1684,18 @@ mod qwen_table {
             // Probes 12 and 13: json_object and json_schema ACCEPTED.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### qwen3.6-flash` under `## Qwen`
+            // (run 6, 2026-10-22, commit 32ce9dd0), the `enable_thinking` and `thinking_budget`
+            // rows.
+            // Owner decision 2026-10-22: Qwen ships `enable_thinking` with `thinking_budget`; the
+            // wire has no level field, so no level is listed.
+            // Off: row 2 accepted, no reasoning-token count. Auto: row 3 accepted, 318 reasoning
+            // tokens. Budget: row 4 (1) accepted, row 5 (0) rejected; max 32768 from the
+            // vendor-documented section of the probe file (Alibaba Cloud Model Studio "deep
+            // thinking", https://www.alibabacloud.com/help/en/model-studio/deep-thinking, accessed
+            // 2026-10-22: "Value range 1~32768").
+            .with_effort(qwen_effort(true, true))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -1625,6 +1722,18 @@ mod qwen_table {
             // Probes 12 and 13: json_object and json_schema ACCEPTED.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### qwen3.5-plus` under `## Qwen`
+            // (run 6, 2026-10-22, commit 32ce9dd0), the `enable_thinking` and `thinking_budget`
+            // rows.
+            // Owner decision 2026-10-22: Qwen ships `enable_thinking` with `thinking_budget`; the
+            // wire has no level field, so no level is listed.
+            // Off: row 2 accepted, no reasoning-token count. Auto: row 3 accepted, 4699 reasoning
+            // tokens. Budget: row 4 (1) accepted, row 5 (0) rejected; max 32768 from the
+            // vendor-documented section of the probe file (Alibaba Cloud Model Studio "deep
+            // thinking", https://www.alibabacloud.com/help/en/model-studio/deep-thinking, accessed
+            // 2026-10-22: "Value range 1~32768").
+            .with_effort(qwen_effort(true, true))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 2 (2026-10-20), `### Probes:
@@ -1651,6 +1760,18 @@ mod qwen_table {
             // Probes 12 and 13: json_object and json_schema ACCEPTED.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### qwen3.5-flash` under `## Qwen`
+            // (run 6, 2026-10-22, commit 32ce9dd0), the `enable_thinking` and `thinking_budget`
+            // rows.
+            // Owner decision 2026-10-22: Qwen ships `enable_thinking` with `thinking_budget`; the
+            // wire has no level field, so no level is listed.
+            // Off: row 2 accepted, no reasoning-token count. Auto: row 3 accepted, 462 reasoning
+            // tokens. Budget: row 4 (1) accepted, row 5 (0) rejected; max 32768 from the
+            // vendor-documented section of the probe file (Alibaba Cloud Model Studio "deep
+            // thinking", https://www.alibabacloud.com/help/en/model-studio/deep-thinking, accessed
+            // 2026-10-22: "Value range 1~32768").
+            .with_effort(qwen_effort(true, true))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -1679,6 +1800,15 @@ mod qwen_table {
             // Probes 12 and 13: json_object and json_schema ACCEPTED.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### qwen-max` under `## Qwen` (run
+            // 6, 2026-10-22, commit 32ce9dd0), the `enable_thinking` and `thinking_budget` rows.
+            // Owner decision 2026-10-22: Qwen ships `enable_thinking` with `thinking_budget`; the
+            // wire has no level field, so no level is listed.
+            // Off: row 2 accepted, no reasoning-token count (the model never reports any). Auto:
+            // row 3 accepted but with no reasoning tokens, so it is not evidenced. Budget: 1, 0 and
+            // -1 were all accepted (rows 4-6), so the field is ignored and no bound is evidenced.
+            .with_effort(qwen_effort(false, false))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -1705,6 +1835,17 @@ mod qwen_table {
             // Probes 12 and 13: json_object and json_schema ACCEPTED.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### qwen-flash` under `## Qwen` (run
+            // 6, 2026-10-22, commit 32ce9dd0), the `enable_thinking` and `thinking_budget` rows.
+            // Owner decision 2026-10-22: Qwen ships `enable_thinking` with `thinking_budget`; the
+            // wire has no level field, so no level is listed.
+            // Off: row 2 accepted, no reasoning-token count. Auto: row 3 accepted, 336 reasoning
+            // tokens. Budget: row 4 (1) accepted, row 5 (0) rejected; max 32768 from the
+            // vendor-documented section of the probe file (Alibaba Cloud Model Studio "deep
+            // thinking", https://www.alibabacloud.com/help/en/model-studio/deep-thinking, accessed
+            // 2026-10-22: "Value range 1~32768").
+            .with_effort(qwen_effort(true, true))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -1735,6 +1876,35 @@ mod qwen_table {
             // Probes 12 and 13: json_object and json_schema ACCEPTED.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### qwen-plus-latest` under `##
+            // Qwen` (run 6, 2026-10-22, commit 32ce9dd0), the `enable_thinking` and
+            // `thinking_budget` rows.
+            // Owner decision 2026-10-22: Qwen ships `enable_thinking` with `thinking_budget`; the
+            // wire has no level field, so no level is listed.
+            // Off: row 2 accepted, no reasoning-token count. Auto (row 3) and budget 1 (row 4) drew
+            // 400 "parameter.enable_thinking only support stream call", so neither is evidenced for
+            // this non-streaming call.
+            .with_effort(qwen_effort(false, false))
+            .with_effort_verified_on("2026-10-22")
+    }
+
+    /// The `thinking_budget` upper bound the seed uses: the vendor-documented figure in
+    /// `51-EFFORT-PROBE.md`'s `## Vendor-documented bounds and coercions` (Alibaba Cloud Model
+    /// Studio "deep thinking", accessed 2026-10-22: "Value range 1~32768"). The page states it for
+    /// the console's debugging panel and names no per-model API bound, and the transcript's own
+    /// rejection bodies name larger figures (262144, 81920); the lowest figure is seeded so a
+    /// budget the seed admits is within every one of them.
+    const THINKING_BUDGET_DOCUMENTED_MAX: u32 = 32_768;
+
+    /// A Qwen row's measured effort: no levels (the wire has no level field), `off` as measured,
+    /// `auto` only where the auto form was accepted with reasoning tokens, and the budget span
+    /// `1..=THINKING_BUDGET_DOCUMENTED_MAX` only where budget 1 was accepted and 0 rejected.
+    fn qwen_effort(auto: bool, budget: bool) -> EffortSupport {
+        let mut levels = EffortLevels::new([]).with_off(true).with_auto(auto);
+        if budget {
+            levels = levels.with_budget(BudgetBounds::new(1, THINKING_BUDGET_DOCUMENTED_MAX));
+        }
+        EffortSupport::Supported(levels)
     }
 }
 #[cfg(feature = "qwen")]
@@ -1743,7 +1913,10 @@ pub(crate) use qwen_table::QWEN;
 #[cfg(feature = "grok")]
 mod grok_table {
     use crate::registry::SeededProfile;
-    use paladin_ports::output::model_profile::{ModelProfile, ParamSupport, StopSupport};
+    use paladin_ports::output::llm_port::ReasoningEffort::{High, Low, Medium, Minimal, XHigh};
+    use paladin_ports::output::model_profile::{
+        EffortLevels, EffortSupport, ModelProfile, ParamSupport, StopSupport,
+    };
 
     /// Grok. `grok-4.3`, `grok-4.5` and `grok-4.6` were measured on 2026-10-15
     /// (`50-SEED-PROBE.md`). On 2026-10-20 (`50.1-SEED-PROBE.md`) `grok-4.20-reasoning` and
@@ -1827,6 +2000,16 @@ mod grok_table {
             .with_reasoning(true)
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### grok-4.3` under `## Grok` (run
+            // 8, 2026-10-22, commit 32ce9dd0), the `top_level_effort` rows. Owner decision
+            // 2026-10-22: Grok ships the top-level `reasoning_effort` (invalid value drew 400,
+            // row 8). Levels: minimal, low, medium, high, xhigh accepted (rows 2-6; 353, 270,
+            // 877, 426, 245 reasoning tokens), max rejected 400 (row 7). Auto: the default call
+            // (row 1) reported 327 reasoning tokens. Off: no row, and the vendor-documented
+            // section says reasoning "cannot be disabled" on its listed models. Coerced: that
+            // section names neither this model nor a coercion for it.
+            .with_effort(grok_five_levels())
+            .with_effort_verified_on("2026-10-22")
     }
 
     fn grok_4_6() -> ModelProfile {
@@ -1845,6 +2028,15 @@ mod grok_table {
             .with_reasoning(true)
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### grok-4.6` under `## Grok` (run
+            // 8, 2026-10-22, commit 32ce9dd0), the `top_level_effort` rows. Owner decision
+            // 2026-10-22: top-level `reasoning_effort` (invalid value drew 400, row 8). Levels:
+            // minimal, low, medium, high, xhigh accepted (rows 2-6; 145, 154, 126, 296, 267
+            // reasoning tokens), max rejected 400 (row 7). Auto: default call (row 1), 189
+            // reasoning tokens. Off: no row; the docs say reasoning "cannot be disabled". The
+            // vendor-documented section lists `xhigh` as available on grok-4.6, so none is coerced.
+            .with_effort(grok_five_levels())
+            .with_effort_verified_on("2026-10-22")
     }
 
     fn grok_4_5() -> ModelProfile {
@@ -1865,6 +2057,22 @@ mod grok_table {
             .with_reasoning(true)
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### grok-4.5` under `## Grok` (run
+            // 8, 2026-10-22, commit 32ce9dd0), the `top_level_effort` rows, and its
+            // vendor-documented section (https://docs.x.ai/docs/guides/reasoning, accessed
+            // 2026-10-22). Owner decision 2026-10-22: top-level `reasoning_effort` (invalid value
+            // drew 400, row 8). Accepted: minimal, low, medium, high, xhigh (rows 2-6; 133, 128,
+            // 132, 126, 120 reasoning tokens); max rejected 400 (row 7). Coerced: the docs say
+            // `xhigh` "is available on grok-4.6 and later" and on grok-4.5 is "treated as
+            // high", so `xhigh` is listed as coerced and refuses whatever the fallback. Auto:
+            // default call (row 1), 130 reasoning tokens. Off: no row; the docs say it "cannot be
+            // disabled".
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([Minimal, Low, Medium, High])
+                    .with_coerced([XHigh])
+                    .with_auto(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -1895,6 +2103,16 @@ mod grok_table {
             // Probes 12 and 13: json_object and json_schema ACCEPTED.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### grok-4.20-reasoning` under
+            // `## Grok` (run 8, 2026-10-22, commit 32ce9dd0), the `top_level_effort` rows. Every
+            // level (minimal..max, rows 2-7) and the invalid value (row 8) drew 400 "Model
+            // grok-4.20-reasoning does not support parameter reasoningEffort", so no level is
+            // listed; the default call (row 1) reported 351 reasoning tokens, so the model
+            // reasons and only `auto` (the default call) is evidenced. Off: no row.
+            .with_effort(EffortSupport::Supported(
+                EffortLevels::new([]).with_auto(true),
+            ))
+            .with_effort_verified_on("2026-10-22")
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
@@ -1922,6 +2140,8 @@ mod grok_table {
             // Probes 12 and 13: json_object and json_schema ACCEPTED.
             .with_json_object(true)
             .with_json_schema(true)
+        // No effort data: `51-EFFORT-PROBE.md` did not probe this alias (the planner excluded
+        // it), and the owner's D-02 answer is "unmeasured", so it stays `Unmeasured`.
     }
 
     // Source for the row below: `50.1-SEED-PROBE.md`, `### Probes: `grok-4.7`` in run 1 and in run
@@ -1965,6 +2185,24 @@ mod grok_table {
             // Probes 12 and 13: json_object and json_schema ACCEPTED in both runs.
             .with_json_object(true)
             .with_json_schema(true)
+            // Source for the effort data: 51-EFFORT-PROBE.md, `### grok-4.7` under `## Grok` (run
+            // 8, 2026-10-22, commit 32ce9dd0), the `top_level_effort` rows. Owner decision
+            // 2026-10-22: top-level `reasoning_effort` (invalid value drew 400, row 8). Levels:
+            // minimal, low, medium, high, xhigh accepted (rows 2-6; 96, 91, 84, 105, 99
+            // reasoning tokens), max rejected 400 (row 7). Auto: default call (row 1), 93
+            // reasoning tokens. Off: no row; the vendor-documented section says "cannot be
+            // disabled". It lists `xhigh` as available on grok-4.7, so none is coerced.
+            .with_effort(grok_five_levels())
+            .with_effort_verified_on("2026-10-22")
+    }
+
+    /// The efforts `grok-4.3`, `grok-4.6` and `grok-4.7` took through the top-level
+    /// `reasoning_effort` in the 2026-10-22 probe: the five levels `minimal` to `xhigh`, and
+    /// `auto` (the default call, which reported reasoning tokens on each).
+    fn grok_five_levels() -> EffortSupport {
+        EffortSupport::Supported(
+            EffortLevels::new([Minimal, Low, Medium, High, XHigh]).with_auto(true),
+        )
     }
 }
 #[cfg(feature = "grok")]

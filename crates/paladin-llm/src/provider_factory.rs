@@ -2254,35 +2254,23 @@ mod tests {
                 .await;
             }
 
-            /// Grok's wire is declared `Unsupported` (plan 51-04): its provider default refuses
-            /// before HTTP, naming the key that set it.
+            /// Plan 51-11 restated this case from `51-EFFORT-PROBE.md`'s verdict table: Grok's
+            /// top-level `reasoning_effort` is confirmed (invalid value drew 400 on 5 of 5
+            /// models), so a provider default lands in that field, and a default on a model with
+            /// no effort data still refuses before HTTP naming the key that set it.
             #[cfg(feature = "grok")]
             #[tokio::test]
-            async fn grok_refuses_its_provider_default_before_http() {
-                let case = Case {
+            async fn grok_applies_the_provider_default_as_reasoning_effort() {
+                assert_default_applies(Case {
                     provider: "grok",
-                    support: levels(&[ReasoningEffort::High]),
+                    support: levels(&[ReasoningEffort::Low, ReasoningEffort::High]),
                     wire: None,
                     default: ReasoningEffort::High,
                     other: ReasoningEffort::Low,
                     read: |body| body.get("reasoning_effort").cloned(),
                     expect: level_spelling,
-                };
-                let (body, result) = send(&case, true, None, None).await;
-                assert!(body.is_none(), "a refused default must not reach the wire");
-                match result {
-                    Err(LlmError::UnsupportedParameter {
-                        reason, provider, ..
-                    }) => {
-                        assert_eq!(provider, "grok");
-                        assert!(reason.contains("llm.grok.reasoning_effort"), "{reason}");
-                    }
-                    other => panic!("expected UnsupportedParameter, got {other:?}"),
-                }
-                // With no default the same adapter still answers (the golden path).
-                let (body, result) = send(&case, false, None, None).await;
-                result.expect("no effort set anywhere sends as before");
-                assert!(body.unwrap().get("reasoning_effort").is_none());
+                })
+                .await;
             }
 
             // ── D-10: the self-hosted wire declared from YAML ──────────────────────────────

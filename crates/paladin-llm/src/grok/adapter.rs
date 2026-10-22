@@ -319,11 +319,14 @@ impl GrokAdapter {
                 top_p: true,
                 frequency_penalty: false,
                 presence_penalty: false,
-                // Phase 51 (D-04, REASON-02): the xAI chat-completions field that carries a
-                // reasoning effort is unconfirmed for this endpoint, so no effort is sent: every
-                // explicit effort is refused before HTTP. Plan 51-11 restates this from
-                // `51-EFFORT-PROBE.md` (a confirmed form lifts it).
-                reasoning: ReasoningWire::Unsupported,
+                // Phase 51 (D-04, REASON-02): xAI takes a top-level `reasoning_effort`. Confirmed
+                // by `51-EFFORT-PROBE.md` (live probe 2026-10-22, commit 32ce9dd0; owner decision
+                // at plan 51-11's checkpoint, 2026-10-22): the invalid value `bogus-effort-51`
+                // drew 400 ("Invalid reasoning effort.") on 5 of 5 models, and a higher accepted
+                // level reported more reasoning tokens on 2 of 4 comparable models. Which
+                // efforts each model takes is per-model seeded data (`registry::seeded::GROK`);
+                // `grok-4.20-reasoning` rejects every level and seeds none.
+                reasoning: ReasoningWire::TopLevelEffort,
             },
             fallback_models: GROK_FALLBACK_MODELS.iter().map(|s| s.to_string()).collect(),
             // No usage-cap (quota) mapping for grok: its quota-exhaustion body was never captured
@@ -1451,46 +1454,43 @@ mod tests {
             assert!(debug.contains(needle), "'{needle}' missing from {debug}");
         }
     }
-    // ── Phase 51 (REASON-02, D-04): the declared reasoning wire ──
+
+    // ── Phase 51 (REASON-02, D-04): Grok's reasoning wire ──
+    //
+    // Decision (plan 51-11 checkpoint, owner, 2026-10-22, "apply-verdicts"): Grok ships the
+    // top-level `reasoning_effort`. `51-EFFORT-PROBE.md`'s `## Verdict table` marks Grok
+    // `top_level_effort` confirmed: the invalid value `bogus-effort-51` drew 400 ("Invalid
+    // reasoning effort.") on 5 of 5 models, and a higher accepted level reported more reasoning
+    // tokens on 2 of 4 comparable models (run 8, 2026-10-22, commit `32ce9dd0`). `minimal`..
+    // `xhigh` were accepted on grok-4.3, grok-4.5, grok-4.6 and grok-4.7, `max` was rejected
+    // everywhere, and `grok-4.20-reasoning` rejected every level ("does not support parameter
+    // reasoningEffort") while its default call reported reasoning tokens.
 
     #[test]
-    fn grok_declares_no_reasoning_wire_until_the_probe_confirms_one() {
+    fn grok_declares_the_top_level_effort_wire() {
         let adapter =
             GrokAdapter::new(GrokConfig::new("k".to_string(), "grok-4.3".to_string())).unwrap();
         assert_eq!(
             adapter.engine.request_parameters().reasoning,
-            ReasoningWire::Unsupported
+            ReasoningWire::TopLevelEffort
         );
     }
-    #[tokio::test]
-    async fn grok_refuses_every_explicit_effort_even_with_an_override_and_never_hits_the_wire() {
+
+    mod reasoning_effort {
+        use super::*;
         use crate::compat::test_support::{mock_completion, plain_request, send_capturing, server};
+        use crate::reasoning::{
+            REASONING_EFFECTIVE_METADATA_KEY, REASONING_REQUESTED_METADATA_KEY,
+        };
         use paladin_ports::output::llm_port::ReasoningEffort::{
             Auto, Budget, High, Low, Max, Medium, Minimal, Off, XHigh,
         };
         use paladin_ports::output::model_profile::{EffortLevels, EffortSupport};
 
-        let mut server = server().await;
-        let captured = mock_completion(&mut server).await;
-        let over = registry::ModelOverride {
-            effort: Some(EffortSupport::Supported(
-                EffortLevels::new([Low, Medium, High])
-                    .with_off(true)
-                    .with_auto(true),
-            )),
-            ..registry::ModelOverride::default()
-        };
-        let adapter = GrokAdapter::new(
-            GrokConfig::new("test-key".to_string(), "grok-4.3".to_string())
-                .with_base_url(server.url())
-                .with_model_overrides(std::collections::BTreeMap::from([(
-                    "grok-4.3".to_string(),
-                    over,
-                )])),
-        )
-        .unwrap();
+        /// The transcript date every probed Grok model was probed (run 8).
+        const PROBED_ON: &str = "2026-10-22";
 
-        for requested in [
+        const NINE: [ReasoningEffort; 9] = [
             Off,
             Auto,
             Minimal,
@@ -1500,40 +1500,245 @@ mod tests {
             XHigh,
             Max,
             Budget(512),
-        ] {
+        ];
+
+        fn adapter(base_url: &str) -> GrokAdapter {
+            GrokAdapter::new(
+                GrokConfig::new("test-key".to_string(), "grok-4.3".to_string())
+                    .with_base_url(base_url),
+            )
+            .unwrap()
+        }
+
+        /// The levels `grok-4.3`, `grok-4.6` and `grok-4.7` accepted (rows `minimal`..`xhigh`);
+        /// `auto` is the default call, which reported reasoning tokens (row 1) on each.
+        fn five_levels() -> EffortSupport {
+            EffortSupport::Supported(
+                EffortLevels::new([Minimal, Low, Medium, High, XHigh]).with_auto(true),
+            )
+        }
+
+        #[test]
+        fn grok_effort_seed_matches_the_transcript() {
+            let adapter = adapter("https://example.invalid/v1");
+            // (model, expected effort, expected effort_verified_on)
+            let table: [(&str, EffortSupport, Option<&str>); 6] = [
+                // Rows 2-6 accepted (353/270/877/426/245 tokens), row 7 `max` 400, default 327.
+                ("grok-4.3", five_levels(), Some(PROBED_ON)),
+                ("grok-4.6", five_levels(), Some(PROBED_ON)),
+                ("grok-4.7", five_levels(), Some(PROBED_ON)),
+                // Rows 2-6 accepted, but the vendor-documented section (docs.x.ai, accessed
+                // 2026-10-22) lists `xhigh` as treated as `high` on grok-4.5: coerced.
+                (
+                    "grok-4.5",
+                    EffortSupport::Supported(
+                        EffortLevels::new([Minimal, Low, Medium, High])
+                            .with_coerced([XHigh])
+                            .with_auto(true),
+                    ),
+                    Some(PROBED_ON),
+                ),
+                // Every level drew 400 ("does not support parameter reasoningEffort") while the
+                // default call reported 351 reasoning tokens: it reasons, with nothing to adjust.
+                (
+                    "grok-4.20-reasoning",
+                    EffortSupport::Supported(EffortLevels::new([]).with_auto(true)),
+                    Some(PROBED_ON),
+                ),
+                // Not probed; D-02 (owner, plan 51-10) "unmeasured".
+                ("grok-4.20-non-reasoning", EffortSupport::Unmeasured, None),
+            ];
+            for (model, effort, verified_on) in table {
+                let profile = adapter
+                    .model_profile(model)
+                    .unwrap_or_else(|| panic!("{model}: no profile"));
+                assert_eq!(profile.effort, effort, "{model}");
+                assert_eq!(
+                    profile.effort_verified_on.as_deref(),
+                    verified_on,
+                    "{model}"
+                );
+            }
+        }
+
+        #[tokio::test]
+        async fn grok_evidenced_levels_reach_the_wire_exactly() {
+            let mut server = server().await;
+            let captured = mock_completion(&mut server).await;
+            let adapter = adapter(&server.url());
+            for (level, spelled) in [
+                (Minimal, "minimal"),
+                (Low, "low"),
+                (Medium, "medium"),
+                (High, "high"),
+                (XHigh, "xhigh"),
+            ] {
+                let (body, response) = send_capturing(
+                    &adapter,
+                    &captured,
+                    plain_request("grok-4.3").with_reasoning(level),
+                )
+                .await
+                .unwrap_or_else(|e| panic!("{level}: {e}"));
+                assert_eq!(body["reasoning_effort"], spelled, "{body}");
+                for other in ["thinking", "enable_thinking", "thinking_budget"] {
+                    assert!(body.get(other).is_none(), "{other} in {body}");
+                }
+                assert_eq!(response.metadata[REASONING_REQUESTED_METADATA_KEY], spelled);
+                assert_eq!(response.metadata[REASONING_EFFECTIVE_METADATA_KEY], spelled);
+            }
+            // Auto is the default call: nothing is added to the body, but both keys are stamped.
+            let (body, response) = send_capturing(
+                &adapter,
+                &captured,
+                plain_request("grok-4.3").with_reasoning(Auto),
+            )
+            .await
+            .unwrap();
+            assert!(body.get("reasoning_effort").is_none(), "{body}");
+            assert_eq!(response.metadata[REASONING_EFFECTIVE_METADATA_KEY], "auto");
+        }
+
+        #[tokio::test]
+        async fn grok_4_5_xhigh_is_refused_as_coerced_whatever_the_fallback() {
+            // The vendor-documented section: on grok-4.5 `xhigh` is "treated as high". The probe
+            // accepted it (row 6) but the effort is not what was asked for, so it is refused
+            // even under `NearestLower`, and is never a substitution target.
+            let mut server = server().await;
+            let captured = mock_completion(&mut server).await;
+            let adapter = adapter(&server.url());
+            for fallback in [
+                ReasoningFallback::Refuse,
+                ReasoningFallback::NearestLower,
+                ReasoningFallback::NearestHigher,
+            ] {
+                let error = send_capturing(
+                    &adapter,
+                    &captured,
+                    plain_request("grok-4.5")
+                        .with_reasoning(XHigh)
+                        .with_reasoning_fallback(fallback),
+                )
+                .await
+                .expect_err("a coerced level is refused");
+                match error {
+                    LlmError::UnsupportedParameter { reason, .. } => {
+                        assert!(reason.contains("silently"), "{fallback}: {reason}");
+                    }
+                    other => panic!("{fallback}: expected UnsupportedParameter, got {other:?}"),
+                }
+                assert!(
+                    captured.lock().unwrap().is_none(),
+                    "{fallback}: no HTTP hit"
+                );
+            }
+            // A neighbouring level is accepted exactly.
+            let (body, _) = send_capturing(
+                &adapter,
+                &captured,
+                plain_request("grok-4.5").with_reasoning(High),
+            )
+            .await
+            .unwrap();
+            assert_eq!(body["reasoning_effort"], "high", "{body}");
+        }
+
+        #[tokio::test]
+        async fn grok_refuses_what_the_probe_did_not_evidence_before_http() {
+            let mut server = server().await;
+            let captured = mock_completion(&mut server).await;
+            let adapter = adapter(&server.url());
+            // `max` drew 400 on every model; no off row exists (docs: "cannot be disabled");
+            // the wire carries no budget.
+            for model in ["grok-4.3", "grok-4.5", "grok-4.6", "grok-4.7"] {
+                for requested in [Max, Off, Budget(512)] {
+                    let error = send_capturing(
+                        &adapter,
+                        &captured,
+                        plain_request(model).with_reasoning(requested),
+                    )
+                    .await
+                    .expect_err("not evidenced");
+                    assert!(
+                        matches!(error, LlmError::UnsupportedParameter { .. }),
+                        "{model} {requested}: {error:?}"
+                    );
+                    assert!(
+                        captured.lock().unwrap().is_none(),
+                        "{model} {requested}: no HTTP hit"
+                    );
+                }
+            }
+            // `grok-4.20-reasoning` rejected every level: they all refuse, `auto` is accepted.
+            for requested in [Minimal, Low, Medium, High, XHigh, Max] {
+                let error = send_capturing(
+                    &adapter,
+                    &captured,
+                    plain_request("grok-4.20-reasoning").with_reasoning(requested),
+                )
+                .await
+                .expect_err("grok-4.20-reasoning has no adjustable level");
+                assert!(
+                    matches!(error, LlmError::UnsupportedParameter { .. }),
+                    "{requested}: {error:?}"
+                );
+                assert!(
+                    captured.lock().unwrap().is_none(),
+                    "{requested}: no HTTP hit"
+                );
+            }
+            let (body, _) = send_capturing(
+                &adapter,
+                &captured,
+                plain_request("grok-4.20-reasoning").with_reasoning(Auto),
+            )
+            .await
+            .unwrap();
+            assert!(body.get("reasoning_effort").is_none(), "{body}");
+            // A non-reasoning alias the probe did not cover has no effort data at all.
             let error = send_capturing(
                 &adapter,
                 &captured,
-                plain_request("grok-4.3").with_reasoning(requested),
+                plain_request("grok-4.20-non-reasoning").with_reasoning(Low),
             )
             .await
-            .expect_err("every explicit effort is refused on an unconfirmed wire");
-            match error {
-                LlmError::UnsupportedParameter {
-                    reason, provider, ..
-                } => {
-                    assert_eq!(provider, "grok");
-                    assert!(reason.contains("not verified"), "{requested}: {reason}");
-                }
-                other => panic!("{requested}: expected UnsupportedParameter, got {other:?}"),
-            }
+            .expect_err("unmeasured");
             assert!(
-                captured.lock().unwrap().is_none(),
-                "{requested}: no HTTP hit"
+                matches!(error, LlmError::UnsupportedParameter { .. }),
+                "{error:?}"
             );
+            assert!(captured.lock().unwrap().is_none(), "no HTTP hit");
         }
 
-        // An unset effort is untouched.
-        let (body, _) = send_capturing(&adapter, &captured, plain_request("grok-4.3"))
-            .await
-            .unwrap();
-        for key in [
-            "reasoning_effort",
-            "thinking",
-            "enable_thinking",
-            "thinking_budget",
-        ] {
-            assert!(body.get(key).is_none(), "{key} in {body}");
+        #[tokio::test]
+        async fn a_grok_body_never_carries_a_second_effort_field() {
+            let mut server = server().await;
+            let captured = mock_completion(&mut server).await;
+            let adapter = adapter(&server.url());
+            let mut sent = 0;
+            for model in ["grok-4.3", "grok-4.5", "grok-4.20-reasoning"] {
+                for fallback in [
+                    ReasoningFallback::Refuse,
+                    ReasoningFallback::NearestLower,
+                    ReasoningFallback::NearestHigher,
+                ] {
+                    for requested in NINE {
+                        let request = plain_request(model)
+                            .with_reasoning(requested)
+                            .with_reasoning_fallback(fallback);
+                        if let Ok((body, _)) = send_capturing(&adapter, &captured, request).await {
+                            sent += 1;
+                            for other in ["thinking", "enable_thinking", "thinking_budget"] {
+                                assert!(
+                                    body.get(other).is_none(),
+                                    "{model} {requested} {fallback}: {other} in {body}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            assert!(sent > 0, "no effort reached the wire at all");
         }
     }
 }

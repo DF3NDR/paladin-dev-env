@@ -422,8 +422,14 @@ impl QwenAdapter {
             // individually, returned HTTP 200 with a real completion on both
             // models. No rejection observed — `all()` is the measured
             // declaration, not an unmeasured default.
-            // Phase 51 (D-04, REASON-02): Qwen's documented form is `enable_thinking` with an
-            // optional `thinking_budget`. Plan 51-11 restates it from `51-EFFORT-PROBE.md`.
+            // Phase 51 (D-04, REASON-02, REASON-06): Qwen's form is `enable_thinking` with an
+            // optional `thinking_budget`. Shipped by the owner's decision at plan 51-11's
+            // checkpoint (2026-10-22) from `51-EFFORT-PROBE.md` (live probe 2026-10-22, commit
+            // 32ce9dd0): `enable_thinking` off and auto were accepted on all 13 models (auto with
+            // reasoning tokens on 11), and `thinking_budget` 1 was accepted where 0 and -1 drew
+            // 400 on 11. The wire has no level field, so every named level refuses (D-03, D-06).
+            // The owner granted this wire although the mechanical D-04 rule cannot mark a
+            // budget-only wire `confirmed` (it has no level rows).
             request_parameters: CompatRequestParameters::all(ReasoningWire::EnableThinking),
             fallback_models: QWEN_FALLBACK_MODELS.iter().map(|s| s.to_string()).collect(),
             // No usage-cap (quota) mapping for qwen: its quota-exhaustion body was never captured
@@ -1244,7 +1250,19 @@ mod tests {
             assert!(debug.contains(needle), "'{needle}' missing from {debug}");
         }
     }
-    // ── Phase 51 (REASON-02, D-04): the declared reasoning wire ──
+
+    // ── Phase 51 (REASON-02, REASON-06, D-04): Qwen's reasoning wire ──
+    //
+    // Decision (plan 51-11 checkpoint, owner, 2026-10-22, "apply-verdicts; Qwen: ship
+    // EnableThinking with off/auto/budget seeded from the probe"): Qwen ships `enable_thinking`
+    // with an optional `thinking_budget`. The mechanical D-04 rule cannot mark a budget-only wire
+    // `confirmed` (it has no level rows), so this is the owner's reading of
+    // `51-EFFORT-PROBE.md`'s `### Qwen per model` rows (run 6, plus run 7 for `qwen3.7-max`
+    // `off`; 2026-10-22, commit `32ce9dd0`): `enable_thinking` off was accepted with no
+    // reasoning tokens reported and auto with reasoning tokens, and `thinking_budget` 1 was
+    // accepted (1 reasoning token) where 0 and -1 drew 400, on 11 of 13 models. The named levels
+    // refuse: the vendor has no level field (D-03, D-06). Qwen never converts a level to a
+    // budget.
 
     #[test]
     fn qwen_declares_the_enable_thinking_wire() {
@@ -1255,79 +1273,171 @@ mod tests {
             ReasoningWire::EnableThinking
         );
     }
+
     mod reasoning_effort {
         use super::*;
         use crate::compat::test_support::{mock_completion, plain_request, send_capturing, server};
         use crate::reasoning::{
             REASONING_EFFECTIVE_METADATA_KEY, REASONING_REQUESTED_METADATA_KEY,
         };
-        use paladin_ports::output::llm_port::ReasoningEffort;
+        use paladin_ports::output::llm_port::ReasoningEffort::{
+            Auto, Budget, High, Low, Max, Medium, Minimal, Off, XHigh,
+        };
+        use paladin_ports::output::llm_port::{ReasoningEffort, ReasoningFallback};
         use paladin_ports::output::model_profile::{BudgetBounds, EffortLevels, EffortSupport};
 
-        const MODEL: &str = "qwen3.8-max";
+        /// The transcript date every Qwen model was probed (runs 6 and 7).
+        const PROBED_ON: &str = "2026-10-22";
 
-        fn adapter(base_url: &str) -> QwenAdapter {
-            let over = registry::ModelOverride {
-                effort: Some(EffortSupport::Supported(
-                    EffortLevels::new([])
-                        .with_off(true)
-                        .with_auto(true)
-                        .with_budget(BudgetBounds::new(1, 32_768)),
-                )),
-                ..registry::ModelOverride::default()
-            };
+        /// The documented upper bound of `thinking_budget` that the seed uses
+        /// (`51-EFFORT-PROBE.md`, `## Vendor-documented bounds and coercions`, Alibaba Cloud
+        /// Model Studio "deep thinking", accessed 2026-10-22: "Value range 1~32768").
+        const DOCUMENTED_MAX: u32 = 32_768;
+
+        /// One row of the transcript table: model, `enable_thinking` off accepted with no
+        /// reasoning tokens, auto accepted with reasoning tokens (the integer), and whether
+        /// `thinking_budget` 1 was accepted while 0 was rejected.
+        struct Row {
+            model: &'static str,
+            off: bool,
+            auto_tokens: Option<u32>,
+            budget: bool,
+        }
+
+        const fn row(model: &'static str, auto_tokens: Option<u32>, budget: bool) -> Row {
+            Row {
+                model,
+                off: true,
+                auto_tokens,
+                budget,
+            }
+        }
+
+        /// Typed from the `### Qwen per model` table and the per-model transcript sections.
+        /// Every model's `off` row: 200, no reasoning-token count (`qwen3.7-max` from run 7).
+        const TRANSCRIPT: [Row; 13] = [
+            row("qwen3.8-flash", Some(50), true),
+            row("qwen3.8-max", Some(47), true),
+            row("qwen3.7-plus", Some(146), true),
+            row("qwen3.7-max", Some(247), true),
+            row("qwen3.7-flash", Some(823), true),
+            row("qwen3.6-plus", Some(2645), true),
+            row("qwen3.6-flash", Some(318), true),
+            row("qwen3.5-plus", Some(4699), true),
+            row("qwen3.5-flash", Some(462), true),
+            row("qwen-plus", Some(1047), true),
+            // auto 200 but no reasoning-token count; budget 1, 0 and -1 all 200 (field ignored).
+            row("qwen-max", None, false),
+            row("qwen-flash", Some(336), true),
+            // auto 400 "parameter.enable_thinking only support stream call"; budget 1 also 400.
+            row("qwen-plus-latest", None, false),
+        ];
+
+        fn expected(row: &Row) -> EffortSupport {
+            let mut levels = EffortLevels::new([])
+                .with_off(row.off)
+                .with_auto(row.auto_tokens.is_some());
+            if row.budget {
+                levels = levels.with_budget(BudgetBounds::new(1, DOCUMENTED_MAX));
+            }
+            EffortSupport::Supported(levels)
+        }
+
+        fn adapter(base_url: &str, model: &str) -> QwenAdapter {
             QwenAdapter::new(
-                QwenConfig::new("test-key".to_string(), MODEL.to_string())
-                    .with_base_url(base_url)
-                    .with_model_overrides(BTreeMap::from([(MODEL.to_string(), over)])),
+                QwenConfig::new("test-key".to_string(), model.to_string()).with_base_url(base_url),
             )
             .unwrap()
         }
 
+        #[test]
+        fn qwen_effort_seed_matches_the_transcript() {
+            let adapter = adapter("https://example.invalid/v1", "qwen-plus");
+            for row in &TRANSCRIPT {
+                let profile = adapter
+                    .model_profile(row.model)
+                    .unwrap_or_else(|| panic!("{}: no profile", row.model));
+                assert_eq!(profile.effort, expected(row), "{}", row.model);
+                assert_eq!(
+                    profile.effort_verified_on.as_deref(),
+                    Some(PROBED_ON),
+                    "{}",
+                    row.model
+                );
+                // The named levels refuse on every Qwen model: no level field exists.
+                match &profile.effort {
+                    EffortSupport::Supported(levels) => {
+                        assert!(levels.levels.is_empty(), "{}", row.model);
+                    }
+                    other => panic!("{}: expected Supported, got {other:?}", row.model),
+                }
+            }
+        }
+
+        #[test]
+        fn qwen_models_outside_the_probe_stay_unmeasured() {
+            // D-02 (owner, plan 51-10): a model the probe did not cover has no effort data.
+            let adapter = adapter("https://example.invalid/v1", "qwen-plus");
+            let profile = adapter.model_profile("qwen-turbo").unwrap();
+            assert_eq!(profile.effort, EffortSupport::Unmeasured);
+            assert_eq!(profile.effort_verified_on, None);
+        }
+
         #[tokio::test]
         async fn a_budget_sends_enable_thinking_and_thinking_budget() {
+            // Rows 3 and 4 of `qwen3.8-max`: auto and budget 1 accepted, 0 and -1 rejected.
+            const MODEL: &str = "qwen3.8-max";
             let mut server = server().await;
             let captured = mock_completion(&mut server).await;
-            let adapter = adapter(&server.url());
+            let adapter = adapter(&server.url(), MODEL);
 
-            let (body, response) = send_capturing(
-                &adapter,
-                &captured,
-                plain_request(MODEL).with_reasoning(ReasoningEffort::Budget(512)),
-            )
-            .await
-            .expect("an in-bounds budget is accepted");
-            assert_eq!(body["enable_thinking"], true, "{body}");
-            assert_eq!(body["thinking_budget"], 512, "{body}");
-            assert!(body.get("reasoning_effort").is_none(), "{body}");
-            assert!(body.get("thinking").is_none(), "{body}");
-            assert_eq!(
-                response.metadata[REASONING_REQUESTED_METADATA_KEY],
-                "budget:512"
-            );
-            assert_eq!(
-                response.metadata[REASONING_EFFECTIVE_METADATA_KEY],
-                "budget:512"
-            );
+            for n in [1, 512, DOCUMENTED_MAX] {
+                // A budget must be below the request's output cap (the synthetic request's
+                // default is 1000), so the cap is raised above the largest budget.
+                let mut request = plain_request(MODEL).with_reasoning(Budget(n));
+                request.prompt.entity.data.parameters.max_tokens = Some(DOCUMENTED_MAX + 1);
+                let (body, response) = send_capturing(&adapter, &captured, request)
+                    .await
+                    .unwrap_or_else(|e| panic!("budget {n}: {e}"));
+                assert_eq!(body["enable_thinking"], true, "{body}");
+                assert_eq!(body["thinking_budget"], n, "{body}");
+                assert!(body.get("reasoning_effort").is_none(), "{body}");
+                assert!(body.get("thinking").is_none(), "{body}");
+                let spelled = format!("budget:{n}");
+                assert_eq!(response.metadata[REASONING_REQUESTED_METADATA_KEY], spelled);
+                assert_eq!(response.metadata[REASONING_EFFECTIVE_METADATA_KEY], spelled);
+            }
 
             let (off, _) = send_capturing(
                 &adapter,
                 &captured,
-                plain_request(MODEL).with_reasoning(ReasoningEffort::Off),
+                plain_request(MODEL).with_reasoning(Off),
             )
             .await
             .unwrap();
             assert_eq!(off["enable_thinking"], false, "{off}");
             assert!(off.get("thinking_budget").is_none(), "{off}");
+            let (auto, _) = send_capturing(
+                &adapter,
+                &captured,
+                plain_request(MODEL).with_reasoning(Auto),
+            )
+            .await
+            .unwrap();
+            assert_eq!(auto["enable_thinking"], true, "{auto}");
+            assert!(auto.get("thinking_budget").is_none(), "{auto}");
         }
 
         #[tokio::test]
-        async fn an_out_of_bounds_budget_and_a_level_are_refused_before_http() {
+        async fn an_out_of_bounds_budget_is_refused_before_http() {
+            // Row 5 and 6: 0 and -1 drew 400 (a budget is a positive integer); the documented
+            // upper bound is 32768, so one above it refuses locally.
+            const MODEL: &str = "qwen3.8-max";
             let mut server = server().await;
             let captured = mock_completion(&mut server).await;
-            let adapter = adapter(&server.url());
+            let adapter = adapter(&server.url(), MODEL);
 
-            for requested in [ReasoningEffort::Budget(32_769), ReasoningEffort::Low] {
+            for requested in [Budget(0), Budget(DOCUMENTED_MAX + 1)] {
                 let error = send_capturing(
                     &adapter,
                     &captured,
@@ -1344,6 +1454,133 @@ mod tests {
                     "{requested}: no HTTP hit"
                 );
             }
+        }
+
+        #[tokio::test]
+        async fn a_row_with_no_evidenced_budget_refuses_every_budget() {
+            // `qwen-max` accepted budgets 1, 0 and -1 alike (the field is ignored) and
+            // `qwen-plus-latest` rejected budget 1 (stream-only), so neither has a `budget`.
+            for model in ["qwen-max", "qwen-plus-latest"] {
+                let mut server = server().await;
+                let captured = mock_completion(&mut server).await;
+                let adapter = adapter(&server.url(), model);
+                let error = send_capturing(
+                    &adapter,
+                    &captured,
+                    plain_request(model).with_reasoning(Budget(1)),
+                )
+                .await
+                .expect_err("no evidenced budget: Budget(1) refuses");
+                assert!(
+                    matches!(error, LlmError::UnsupportedParameter { .. }),
+                    "{model}: {error:?}"
+                );
+                assert!(captured.lock().unwrap().is_none(), "{model}: no HTTP hit");
+            }
+        }
+
+        #[tokio::test]
+        async fn a_row_with_no_evidenced_auto_refuses_auto_but_takes_off() {
+            for model in ["qwen-max", "qwen-plus-latest"] {
+                let mut server = server().await;
+                let captured = mock_completion(&mut server).await;
+                let adapter = adapter(&server.url(), model);
+                let error = send_capturing(
+                    &adapter,
+                    &captured,
+                    plain_request(model).with_reasoning(Auto),
+                )
+                .await
+                .expect_err("auto was not evidenced with reasoning tokens");
+                assert!(
+                    matches!(error, LlmError::UnsupportedParameter { .. }),
+                    "{model}: {error:?}"
+                );
+                assert!(captured.lock().unwrap().is_none(), "{model}: no HTTP hit");
+                let (off, _) = send_capturing(
+                    &adapter,
+                    &captured,
+                    plain_request(model).with_reasoning(Off),
+                )
+                .await
+                .unwrap_or_else(|e| panic!("{model}: {e}"));
+                assert_eq!(off["enable_thinking"], false, "{model}: {off}");
+            }
+        }
+
+        #[tokio::test]
+        async fn a_named_level_refuses_on_every_model_whatever_the_fallback() {
+            // Qwen has no level field (D-03, D-06): a level is never converted to a budget.
+            let mut server = server().await;
+            let captured = mock_completion(&mut server).await;
+            let adapter = adapter(&server.url(), "qwen-plus");
+            for row in &TRANSCRIPT {
+                for fallback in [
+                    ReasoningFallback::Refuse,
+                    ReasoningFallback::NearestLower,
+                    ReasoningFallback::NearestHigher,
+                ] {
+                    for level in [Minimal, Low, Medium, High, XHigh, Max] {
+                        let error = send_capturing(
+                            &adapter,
+                            &captured,
+                            plain_request(row.model)
+                                .with_reasoning(level)
+                                .with_reasoning_fallback(fallback),
+                        )
+                        .await
+                        .expect_err("a level has no Qwen wire form");
+                        assert!(
+                            matches!(error, LlmError::UnsupportedParameter { .. }),
+                            "{} {level} {fallback}: {error:?}",
+                            row.model
+                        );
+                        assert!(
+                            captured.lock().unwrap().is_none(),
+                            "{} {level}: no HTTP hit",
+                            row.model
+                        );
+                    }
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn a_qwen_body_never_carries_two_effort_fields() {
+            let mut server = server().await;
+            let captured = mock_completion(&mut server).await;
+            let adapter = adapter(&server.url(), "qwen-plus");
+            let nine: [ReasoningEffort; 9] = [
+                Off,
+                Auto,
+                Minimal,
+                Low,
+                Medium,
+                High,
+                XHigh,
+                Max,
+                Budget(512),
+            ];
+            let mut sent = 0;
+            for row in &TRANSCRIPT {
+                for requested in nine {
+                    let request = plain_request(row.model)
+                        .with_reasoning(requested)
+                        .with_reasoning_fallback(ReasoningFallback::NearestLower);
+                    if let Ok((body, _)) = send_capturing(&adapter, &captured, request).await {
+                        sent += 1;
+                        assert!(body.get("enable_thinking").is_some(), "{body}");
+                        for other in ["reasoning_effort", "thinking"] {
+                            assert!(
+                                body.get(other).is_none(),
+                                "{} {requested}: second effort field {other}: {body}",
+                                row.model
+                            );
+                        }
+                    }
+                }
+            }
+            assert!(sent > 0, "no effort reached the wire at all");
         }
     }
 }

@@ -1829,7 +1829,7 @@ Plans:
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
-- [ ] 51-11-PLAN.md — owner-confirmed wire decisions; Kimi, Qwen, Grok seeds and the Kimi silent-no-op regression (checkpoint, wave 8)
+- [x] 51-11-PLAN.md — owner-confirmed wire decisions; Kimi, Qwen, Grok seeds and the Kimi silent-no-op regression (checkpoint, wave 8)
 
 **Wave 9** *(blocked on Wave 8 completion)*
 

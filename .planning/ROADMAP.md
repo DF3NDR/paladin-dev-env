@@ -1837,7 +1837,7 @@ Plans:
 
 **Wave 10** *(blocked on Wave 9 completion)*
 
-- [ ] 51-13-PLAN.md — mdBook "Reasoning Effort" page with drift test, ADR-0062 amending ADR-0004 (wave 10)
+- [x] 51-13-PLAN.md — mdBook "Reasoning Effort" page with drift test, ADR-0062 amending ADR-0004 (wave 10)
 
 **Wave 11** *(blocked on Wave 10 completion)*
 

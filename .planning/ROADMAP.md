@@ -1793,7 +1793,7 @@ temperature probes.
      type, field, variant and config key with `make api-surface-update`; and `make clean-code`,
      `make check-gates`, `make api-surface`, `make security`, the 82 % coverage floor and the
      doc tests stay green, with no `unwrap`/`expect`/`panic!` added to library code.
-**Plans**: 14 plans in 11 waves
+**Plans**: 20 plans in 14 waves (14 executed; 6 gap-closure plans 51-15 to 51-20 in waves 12-14)
 
 Plans:
 **Wave 1**
@@ -1842,6 +1842,23 @@ Plans:
 **Wave 11** *(blocked on Wave 10 completion)*
 
 - [x] 51-14-PLAN.md — adapter-path live smoke, MIGRATION / CHANGELOG close-out, measured semver register, phase gates (checkpoint, wave 11)
+
+**Gap closure** *(from 51-VERIFICATION.md, gaps G-1 and G-2, 2026-10-23)*
+
+**Wave 12** *(blocked on Wave 11 completion)*
+
+- [ ] 51-15-PLAN.md — G-1: single-agent `NodeFinished` carries the call's requested / effective effort from `run_metadata` (gap closure, wave 12)
+- [ ] 51-16-PLAN.md — G-2 (a): agent-host load check takes the agent's `reasoning_fallback` before the provider block's (gap closure, wave 12)
+- [ ] 51-17-PLAN.md — G-2 (b): provided `LlmPort::check_reasoning`; DeepSeek, OpenAI, Anthropic, Gemini overrides; `PaladinBuilder::build` delegates (gap closure, wave 12)
+
+**Wave 13** *(blocked on Wave 12 completion)*
+
+- [ ] 51-18-PLAN.md — G-2 (b): compat-engine `check_reasoning` for the five presets; Pricing and Cadence forward it (gap closure, wave 13)
+- [ ] 51-19-PLAN.md — G-2 (b, c): per-hop `FallbackLlmAdapter::check_reasoning`, pre-flight with hop defaults, chain profile effort fails closed (gap closure, wave 13)
+
+**Wave 14** *(blocked on Wave 13 completion)*
+
+- [ ] 51-20-PLAN.md — nine-adapter and host parity tests, guide / ADR-0062 revision, MIGRATION / CHANGELOG register, review dispositions, gates (gap closure, wave 14)
 
 ---
 *Roadmap created: 2026-07-30 (ingest run 1 of 5 — `.project/Milestone_1-MVP`, 36 docs)*

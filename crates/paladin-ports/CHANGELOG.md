@@ -9,6 +9,14 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- Phase 51 (REASON-01, REASON-04; plans 51-17 to 51-20, gap G-2): the provided trait method
+  `LlmPort::check_reasoning(&self, model, effort, fallback) -> Result<(), LlmError>`, which
+  pre-judges without a network call whether the port's send-time reasoning check would admit that
+  effort for that model. The default body is the earlier builder rule (the model's profile alone,
+  no provider defaults; a port with no profile refuses an explicit effort), so every implementor
+  compiles unchanged. A decorator should forward it as it forwards `model_profile`. Additive: no
+  lint against the published 0.10.1 names it.
+
 - Phase 51 (REASON-01, REASON-02, REASON-04, REASON-06; plan 51-01):
   `output::model_profile::{EffortSupport, EffortLevels, BudgetBounds, ResolvedEffort,
   EffortRefusal}` with `EffortSupport::resolve` (the one admission rule) and

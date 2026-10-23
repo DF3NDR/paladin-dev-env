@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`LlmPort::check_reasoning`: pre-judge a reasoning effort without sending (REASON-01, REASON-04;
+  Phase 51 plans 51-17 to 51-20, gap G-2).** A new provided method on `LlmPort`,
+  `check_reasoning(&self, model, effort: Option<ReasoningEffort>, fallback:
+  Option<ReasoningFallback>) -> Result<(), LlmError>`, returns `Ok(())` exactly when the port's
+  send-time check would admit that effort for that model (provider-level defaults included, the
+  request's or agent's value first, field by field) and otherwise the same
+  `LlmError::UnsupportedParameter` `generate` would return, with no network call. The default
+  body is the builder's earlier rule (the model's profile alone), so every implementor compiles
+  unchanged; the nine adapters, `PricingLlmAdapter`, `CadenceLlmAdapter` and `FallbackLlmAdapter`
+  override it, and a decorator should forward it as it forwards `model_profile`. Only the
+  per-request `Budget`-versus-`max_tokens` rule is not pre-judged. A conformance case on all nine
+  adapters and a 54-combination agent-host grid pin that the build, load and pre-flight verdicts
+  equal the send-time verdict. `MIGRATION.md` 9.2 and 9.8 DR-21.
+
 - **Reasoning Effort guide, decision record and live evidence (REASON-02, REASON-03, REASON-06, REASON-07;
   Phase 51 plans 02, 10, 13, 14).** The book gains a "Reasoning Effort" page
   (`docs/src/user-guides/reasoning-effort.md`): the values and where to set them, when a model
@@ -60,12 +74,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (request, agent, provider default, vendor default). `PaladinBuilder::build` refuses an effort
   the model cannot honour with a `ConfigurationError` naming the provider, the model,
   `reasoning_effort`, the value and the reason, and refuses an explicit effort on a port that
-  reports no model profile (nothing was measured); for a `FallbackLlmAdapter` the check runs
-  against the chain's intersected profile, so a level must be usable on every hop. At send time
-  `FallbackLlmAdapter::generate` / `generate_stream` resolve the request's effort against every
-  hop's own profile before the first call: the first hop, in chain order, that cannot honour or
-  substitute it fails the whole request with `LlmError::UnsupportedParameter` naming that hop, and
-  no hop is called. A reached hop sends its own resolution, and `paladin.reasoning_requested` /
+  reports no model profile (nothing was measured); for a `FallbackLlmAdapter` the check runs hop
+  by hop, each hop against its own model and its own provider-level defaults (revised by plans
+  51-17 to 51-19; this entry first described a check against the chain's intersected profile).
+  At send time `FallbackLlmAdapter::generate` / `generate_stream` resolve the request's effort
+  against every hop's own profile before the first call: the first hop, in chain order, that
+  cannot honour or substitute it fails the whole request with `LlmError::UnsupportedParameter`
+  naming that hop, and no hop is called. A reached hop sends its own resolution, and `paladin.reasoning_requested` /
   `paladin.reasoning_effective` survive the chain's `served_by` / `served_model` stamping on both
   paths and reach `PaladinResult.run_metadata` (latest call wins). An agent that sets nothing
   builds today's request.
@@ -974,6 +989,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Build, load and chain pre-flight judge the provider-level defaults too (REASON-01, REASON-04;
+  Phase 51 plans 51-16 to 51-20, gap G-2; `MIGRATION.md` 9.2 and 9.8 DR-21).**
+  `PaladinBuilder::build` judges the agent's effort, or the port's provider-level default when the
+  agent sets none, through `LlmPort::check_reasoning`, so a Paladin built over a directly built
+  adapter whose default its model cannot honour is refused at build, and a provider-level
+  `reasoning_fallback` is honoured at build as it is on every call (behaviour change A2-51-17: a
+  builder over a port whose provider default effort the model cannot honour now fails at build
+  instead of on every call). The `FallbackLlmAdapter` pre-flight judges every hop with its own
+  provider-level defaults, so a request that carries no effort can now be refused by a hop's
+  default; `FallbackLlmAdapter::model_profile` reports effort `Unmeasured` when any hop has no
+  profile (sampling is still the intersection). A refusal under an in-force `Refuse` fallback on
+  an unlisted level ends with the reasoning-fallback hint at send time too, as it did at build.
+  A deployment that sets no effort and no provider-level default is unaffected.
+
 - **Anthropic, OpenAI, DeepSeek and Gemini accept a reasoning effort on the models the 2026-10-22
   live probe measured (REASON-02, REASON-03, REASON-04, REASON-05, REASON-06; D-00h, D-01, D-04;
   Phase 51 plan 12).** The four native wires are confirmed by `51-EFFORT-PROBE.md` (run
@@ -1441,6 +1470,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keep an earlier one.
 
 ### Fixed
+
+- **Reasoning effort gap closure (REASON-01, REASON-04, REASON-05; Phase 51 plans 51-15 to 51-19).**
+  Single-agent runs now carry `reasoning_requested` / `reasoning_effective` on `NodeFinished`
+  (51-15, gap G-1). The agent host took the provider block's `reasoning_fallback` before the
+  agent's own at load, the reverse of the send-time order; the agent's now wins (51-16, G-2).
+  A provider-level `reasoning_fallback` was inert at build and in the chain pre-flight, so an
+  agent effort that the fallback would substitute at send time was refused at build (51-17 to
+  51-19, G-2, review WR-01).
 
 - **Billed failures, hopped-past fallback bills and failed engine attempts are priced and settled
   (G-50-5a, PARITY-05; Phase 50 plans 50-26 to 50-30; `MIGRATION.md` 9.1 M-B-21).** A vendor

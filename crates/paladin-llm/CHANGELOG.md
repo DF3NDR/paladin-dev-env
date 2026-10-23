@@ -9,13 +9,23 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- Phase 51 (REASON-01, REASON-04; plans 51-17 to 51-20, gap G-2): `LlmPort::check_reasoning`
+  overrides on the nine adapters (`DeepSeekAdapter`, `OpenAIAdapter`, `AnthropicAdapter`,
+  `GeminiAdapter`, `KimiAdapter`, `QwenAdapter`, `GrokAdapter`, `OllamaAdapter`,
+  `OpenAiCompatibleAdapter`), each answering from the same precedence (`in_force`) and admission
+  (`EffortSupport::resolve`) path its `generate` runs, with its own profile and provider-level
+  defaults; `PricingLlmAdapter` and `CadenceLlmAdapter` forward it; `FallbackLlmAdapter` overrides
+  it as the AND of every hop's own `check_reasoning`, the first refusal prefixed
+  `fallback hop <index>: `. The conformance suite gains
+  `check_reasoning_agrees_with_send_time_admission` (25 cases in all).
+
 - Phase 51 (REASON-03, REASON-06; plans 51-02, 51-10, 51-14): the `live_vendor_smoke` example gains
   `--effort` (raw-wire effort probe, `--dry-run`, `--models`) and `--effort-smoke` (adapter-path
   smoke at the lowest and highest admitted level, `--max-tokens`, `--timeout-seconds`); both print
   numbers, statuses and metadata values only, never response content. The crate's
   `cargo-semver-checks` lint table gains `constructible_struct_adds_field`, the lint measured
   against the published 0.10.1 for `CompatRequestParameters.reasoning`; the
-  `CompatRequestParameters` allowlist entry is now two measured entries. No public item changed.
+  `CompatRequestParameters` allowlist entry is now two measured entries.
 - **Reasoning effort: `FallbackLlmAdapter` pre-flights every hop before the first call (REASON-04,
   REASON-05; D-08; Phase 51 plan 07).** A request that carries `reasoning` is resolved against each
   hop's own `model_profile` (the step's model, else the request's) in chain order; the first hop that
@@ -23,7 +33,7 @@ and this project follows lockstep workspace versioning.
   `LlmError::UnsupportedParameter` naming that hop's provider, model and chain index, and no hop is
   called. The serving hop's `paladin.reasoning_requested` / `paladin.reasoning_effective` keys sit
   beside `paladin.served_by` / `paladin.served_model` on the buffered response and on the streamed
-  terminal chunk. A request with no effort behaves exactly as before. No public item changed.
+  terminal chunk. A request with no effort in force on any hop behaves exactly as before.
 
 - Phase 51 (REASON-01, REASON-02, REASON-04; plan 51-06): all nine adapters honour
   `LlmRequest.reasoning` exactly or refuse it before HTTP (plans 51-03 to 51-05). Provider-level
@@ -202,6 +212,14 @@ and this project follows lockstep workspace versioning.
 
 ### Changed
 
+- Phase 51 (REASON-01, REASON-04; plans 51-17 to 51-19, gap G-2): `FallbackLlmAdapter`'s
+  pre-flight is `check_reasoning`, so each hop is judged against its own step model and its own
+  provider-level `reasoning_effort` / `reasoning_fallback`; a request with no effort can be
+  refused by a hop's default. `FallbackLlmAdapter::model_profile` reports effort `Unmeasured` (and
+  no `effort_verified_on`) when any hop reports no profile; the sampling intersection is
+  unchanged. The send-time refusal under an in-force `Refuse` fallback on an unlisted level now
+  ends with the same "set a reasoning_fallback" hint the build-time check gives.
+
 - Anthropic, OpenAI, DeepSeek and Gemini accept a reasoning effort on the models the 2026-10-22
   live probe measured (Phase 51 plan 51-12, REASON-02 to REASON-06; `51-EFFORT-PROBE.md`, commit
   `32ce9dd0`). The four native wires keep their documented capabilities (verdict: confirmed).
@@ -215,7 +233,7 @@ and this project follows lockstep workspace versioning.
   `low`..`high` in lowercase, six also `minimal`. No native model takes an explicit `Budget` (no
   vendor-documented maximum). Models the probe did not cover refuse an explicit effort. The
   conformance suite gains three cases (24 in all) and the required fixture method
-  `ConformanceFixture::effort_wire_value`. No public item changed.
+  `ConformanceFixture::effort_wire_value`.
 - Kimi, Qwen and Grok accept a reasoning effort on the models the 2026-10-22 live probe measured
   (Phase 51 plan 51-11, REASON-02, REASON-03, REASON-04, REASON-06; `51-EFFORT-PROBE.md`, commit
   `32ce9dd0`). Kimi keeps the `thinking.effort` wire and never sends a top-level
@@ -225,7 +243,7 @@ and this project follows lockstep workspace versioning.
   `qwen-plus-latest` `off` only), and no named level. Grok's wire changes from `Unsupported` to the
   top-level `reasoning_effort`: `grok-4.3`/`4.6`/`4.7` take `minimal` to `xhigh` and `auto`,
   `grok-4.5` `minimal` to `high` and `auto` (`xhigh` refused as coerced), `grok-4.20-reasoning`
-  `auto` only. Models the probe did not cover refuse an explicit effort. No public item changed.
+  `auto` only. Models the probe did not cover refuse an explicit effort. No further public item changed beyond those listed in this section.
 - BREAKING: `compat::CompatRequestParameters` gains the field `reasoning: ReasoningWire` and
   `CompatRequestParameters::all()` becomes `all(reasoning: ReasoningWire)` (Phase 51 plan 51-04,
   REASON-02). Migration: state `reasoning: ReasoningWire::Unsupported` in the literal, or pass the

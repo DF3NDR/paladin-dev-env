@@ -1904,6 +1904,115 @@ mod tests {
         assert!(message.contains("low"), "{message}");
     }
 
+    // ── Phase 51 (plan 51-19, G-2 item 3): a chain's build verdict is every hop's own verdict ──
+
+    fn chain_of(hops: Vec<Arc<dyn LlmPort>>) -> Arc<dyn LlmPort> {
+        Arc::new(paladin_llm::fallback::FallbackLlmAdapter::new(hops).expect("a non-empty chain"))
+    }
+
+    /// REASON-04/empty (D-03): a hop that reports no model profile cannot be checked, so an
+    /// explicit effort is refused at build, naming the hop -- it is never silently skipped.
+    #[tokio::test]
+    async fn a_chain_with_a_profileless_hop_refuses_an_explicit_effort_at_build() {
+        let chain = chain_of(vec![
+            Arc::new(MockLlmPort),
+            effort_port([ReasoningEffort::High]),
+        ]);
+        let message = configuration_error(
+            PaladinBuilder::new(chain)
+                .system_prompt("Test")
+                .model("m")
+                .reasoning_effort(ReasoningEffort::High)
+                .build()
+                .await,
+        );
+        assert!(message.contains("fallback hop 0"), "{message}");
+        assert!(message.contains("reports no model profile"), "{message}");
+
+        // Nothing expressed, nothing judged: the same chain still builds without an effort.
+        PaladinBuilder::new(chain_of(vec![
+            Arc::new(MockLlmPort),
+            effort_port([ReasoningEffort::High]),
+        ]))
+        .system_prompt("Test")
+        .model("m")
+        .build()
+        .await
+        .expect("no effort in force, no hop judged");
+    }
+
+    /// REASON-04/adjacency: hop level sets that only touch (`[low, high]` and `[medium, high]`)
+    /// admit `medium` under `nearest_lower` -- hop 0 substitutes `low`, hop 1 sends `medium` --
+    /// where the intersected profile (`{high}`) had no lower level to offer.
+    #[tokio::test]
+    async fn a_chain_whose_hop_levels_only_touch_builds_under_nearest_lower() {
+        let chain = chain_of(vec![
+            effort_port([ReasoningEffort::Low, ReasoningEffort::High]),
+            effort_port([ReasoningEffort::Medium, ReasoningEffort::High]),
+        ]);
+        let paladin = PaladinBuilder::new(chain)
+            .system_prompt("Test")
+            .model("m")
+            .reasoning_effort(ReasoningEffort::Medium)
+            .reasoning_fallback(ReasoningFallback::NearestLower)
+            .build()
+            .await
+            .expect("every hop admits medium or substitutes below it");
+        assert_eq!(paladin.data.reasoning_effort, Some(ReasoningEffort::Medium));
+    }
+
+    /// REASON-04/ordering: the build refusal and the pre-flight refusal for the same chain and
+    /// effort name the same (lowest-index) hop with the same reason text.
+    #[tokio::test]
+    async fn a_chain_build_refusal_names_the_same_hop_as_the_pre_flight() {
+        use crate::core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+        use paladin_ports::output::llm_port::LlmRequest;
+
+        let hops = || -> Arc<dyn LlmPort> {
+            chain_of(vec![
+                effort_port([ReasoningEffort::Low, ReasoningEffort::High]),
+                effort_port([ReasoningEffort::High, ReasoningEffort::Max]),
+            ])
+        };
+
+        let message = configuration_error(
+            PaladinBuilder::new(hops())
+                .system_prompt("Test")
+                .model("m")
+                .reasoning_effort(ReasoningEffort::Low)
+                .build()
+                .await,
+        );
+
+        let prompt = PromptItem::new(PromptType::User(UserPrompt {
+            query: "quest".to_string(),
+            context: None,
+        }))
+        .expect("a prompt");
+        let request = LlmRequest::new("m", prompt).with_reasoning(ReasoningEffort::Low);
+        let error = hops()
+            .generate(request)
+            .await
+            .expect_err("hop 1 lacks low, so the pre-flight refuses");
+        let LlmError::UnsupportedParameter {
+            provider,
+            model,
+            reason,
+            ..
+        } = error
+        else {
+            panic!("expected UnsupportedParameter, got {error:?}");
+        };
+        assert!(reason.starts_with("fallback hop 1: "), "{reason}");
+        assert_eq!(
+            message,
+            format!(
+                "model '{model}' on provider '{provider}' does not accept parameter \
+                 'reasoning_effort' = low: {reason}"
+            )
+        );
+    }
+
     // ── Phase 51 (plan 51-17, G-2 / WR-01): the builder judges with the port's own defaults ──
 
     /// A real DeepSeek adapter whose `probe-model` lists exactly `[low, high]`, configured with

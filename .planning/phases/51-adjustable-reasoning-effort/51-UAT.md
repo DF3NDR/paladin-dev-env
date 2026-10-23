@@ -1,41 +1,38 @@
 ---
-status: testing
+status: complete
 phase: 51-adjustable-reasoning-effort
 source: [51-VERIFICATION.md]
 started: 2026-10-23T05:05:00Z
-updated: 2026-10-23T13:54:47Z
+updated: 2026-10-23T21:09:41Z
 ---
 
 ## Current Test
 
-number: 1
-name: CI coverage job: cargo llvm-cov --fail-under-lines 82 on the merged branch
-expected: |
-  Workspace line coverage at or above the 82 percent floor (ADR-0006) with the phase's added
-  Rust lines (about 16.6k from plans 51-01 to 51-14 plus about 3.3k from plans 51-15 to 51-20)
-  included.
-awaiting: user response
+[testing complete]
 
 ## Tests
 
 ### 1. CI coverage job: cargo llvm-cov --fail-under-lines 82 on the merged branch
 expected: Workspace line coverage at or above the 82 percent floor (ADR-0006) with the phase's added Rust lines included. cargo-llvm-cov is absent from the devcontainer, so only the CI `coverage` job can confirm it.
-result: [pending]
+result: pass
+evidence: CI run 39966896232 Coverage job success on 6d480583 (branch head after two inline hook fixes, G-51-1a/G-51-1b); coverage-summary artifact: Lines 166762/179836 = 92.73% (floor 82%), Functions 86.40%; scope --workspace --features integration-tests. Job: https://github.com/DF3NDR/paladin-dev-env/actions/runs/39966896232/job/120458988589
 
 ### 2. Decide whether the Anthropic Budget path shipping as operator-override-only satisfies REASON-06
 expected: Owner accepts that Budget(n) on Anthropic refuses on every seeded model until `llm.anthropic.models.<id>.effort.budget` declares a span (validation logic, lower bound 1024 and below max_tokens, is implemented and tested against an override), or asks for a seeded span for the claude-opus-4-6 / claude-sonnet-4-6 pair where 1024 was accepted and 1023 rejected. A policy call about ADR-0061's seed rule against REASON-06's wording; unchanged by the gap-closure plans.
-result: [pending]
+result: pass
+decision: Owner accepted override-only (2026-10-23). Basis: 51-EFFORT-PROBE.md shows only claude-opus-4-6 / claude-sonnet-4-6 accept budget_tokens (1024: 200, 1023: 400); the other nine seeded Anthropic ids 400 at both, and the vendor has deprecated budget_tokens on 4.6 and removed it on 4.7+. The 4.6 pair is priced at or above every successor (Opus 4.6 $5/$25 vs Opus 5.5 $4/$20; Sonnet 4.6 $3/$15 vs Sonnet 5/5.5 $2/$10, prices as of 2026-10-06), so no seeded span is warranted; ADR-0061's seed rule stands and llm.anthropic.models.<id>.effort.budget remains the only path.
 
 ### 3. Decide whether Gemini 2.5 thinkingBudget ranges need an override-documented waiver
 expected: Owner accepts that no Gemini 2.5 id was probed (retired for new users, 404; excluded in the candidate set), so those ids stay Unmeasured and refuse until overridden. The requirement text names a live re-verification that could not be performed against retired models; unchanged by the gap-closure plans.
-result: [pending]
+result: pass
+decision: Owner accepted (2026-10-23): Gemini 2.5 ids answered 404 in the 2026-10-22 probe (retired for new users) and stay Unmeasured; Budget(n) refuses on them until llm.gemini.models.<id>.effort.budget declares a span. No waiver text added; REASON-06's 're-verified live' clause for Gemini 2.5 is recorded here as not performable against retired models.
 
 ## Summary
 
 total: 3
-passed: 0
+passed: 3
 issues: 0
-pending: 3
+pending: 0
 skipped: 0
 blocked: 0
 

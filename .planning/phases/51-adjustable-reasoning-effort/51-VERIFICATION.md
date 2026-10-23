@@ -1,7 +1,7 @@
 ---
 phase: 51-adjustable-reasoning-effort
 verified: 2026-10-23T05:00:00Z
-status: human_needed
+status: passed
 score: 7/7 must-haves verified
 behavior_unverified: 0
 overrides_applied: 0
@@ -9,6 +9,7 @@ re_verification:
   previous_status: gaps_found
   previous_score: 5/7
   gaps_closed:
+
     - "G-1 / SC5 / REASON-05: single-agent run_agent NodeFinished now carries reasoning_requested / reasoning_effective (plan 51-15)"
     - "G-2 / D-09: host-load fallback precedence (51-16); LlmPort::check_reasoning on all nine adapters plus Pricing/Cadence decorators (51-17, 51-18); chain per-hop check_reasoning, delegating pre-flight and fail-closed chain effort profile (51-19); conformance and host grid proof, MIGRATION/CHANGELOG/ADR/guide register (51-20)"
   gaps_remaining: []
@@ -16,12 +17,15 @@ re_verification:
 gaps: []
 behavior_unverified_items: []
 human_verification:
+
   - test: "CI coverage job: cargo llvm-cov --fail-under-lines 82 on the merged branch"
     expected: "Workspace line coverage at or above the 82 percent floor (ADR-0006) with the phase's added Rust lines (now about 3.3k more from plans 51-15 to 51-20) included"
     why_human: "cargo-llvm-cov is absent from the devcontainer and plan 51-20's summary states coverage stays the CI coverage job's call; nothing in the gap-closure summaries resolved it"
+
   - test: "Decide whether the Anthropic Budget path shipping as operator-override-only (no seeded budget span on any model) satisfies REASON-06"
     expected: "Owner accepts that Budget(n) on Anthropic refuses on every seeded model until llm.anthropic.models.<id>.effort.budget declares a span (validation logic, lower bound 1024 and below max_tokens, is implemented and tested against an override), or asks for a seeded span for the claude-opus-4-6 / claude-sonnet-4-6 pair where 1024 was accepted and 1023 rejected"
     why_human: "A policy call about ADR-0061's seed rule against REASON-06's wording. Unchanged by the gap-closure plans (none touched seeds)"
+
   - test: "Decide whether Gemini 2.5 thinkingBudget ranges (REASON-06 'Gemini 2.5 thinkingBudget ranges, re-verified live') need an override-documented waiver"
     expected: "Owner accepts that no Gemini 2.5 id was probed (retired for new users, 404; excluded in the candidate set) so those ids stay Unmeasured and refuse until overridden"
     why_human: "The requirement text names a live re-verification that could not be performed against retired models. Unchanged by the gap-closure plans"

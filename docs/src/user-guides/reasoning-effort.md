@@ -167,6 +167,12 @@ agents:
 What the fallback **never** substitutes, with the opt-in set: `Off`, `Auto`, any `Budget`, a level the
 vendor is known to coerce silently, and any model with no measured levels. Those still refuse.
 
+A provider-level `llm.<provider>.reasoning_fallback` is honoured wherever the effort is judged: by
+`PaladinBuilder::build`, by the agent host when it loads the configuration, by a fallback chain's
+pre-flight and at send time. It always sits beneath an agent's or a request's own
+`reasoning_fallback`, field by field: a block that says `nearest_lower` lets an agent's own
+`medium` step down at build, and an agent that says `refuse` still wins over it.
+
 ## Unmeasured models and the override
 
 Paladin writes an effort fact for a model only where a dated live probe measured it. A model with
@@ -207,25 +213,48 @@ the seed's own.
 
 ## Fallback chains
 
-A `FallbackLlmAdapter` (the Aegis model fallback) checks the request's effort against **every
-hop's own model** before the first HTTP call. If any hop can neither honour the effort nor
-substitute under the request's fallback, the whole request refuses, and the reason reads
-`fallback hop <index>: <reason>` with a zero-based index naming that hop's provider and model. A
-misconfigured chain therefore fails on its first call, not during an outage of hop 1. Each hop that
-is actually reached sends its own resolved effort (a substitution may differ per hop), and the
-response metadata records the effort of the hop that served. A request with no effort skips the
-check. The check covers the request's own effort; a hop adapter's provider-level default is resolved
-by that adapter at send time and refuses there, naming `llm.<provider>.reasoning_effort`.
+A `FallbackLlmAdapter` (the Aegis model fallback) judges the request against **every hop** before
+the first HTTP call. Each hop is judged by its own `LlmPort::check_reasoning`, that is, its step
+model plus its adapter's own `llm.<provider>.reasoning_effort` and `reasoning_fallback` beneath the
+request's values. If any hop can neither honour the effort nor substitute under the fallback in
+force, the whole request refuses, and the reason reads `fallback hop <index>: <reason>` with a
+zero-based index naming that hop's provider and model. A misconfigured chain therefore fails on its
+first call, not during an outage of hop 1. Each hop that is actually reached sends its own resolved
+effort (a substitution may differ per hop), and the response metadata records the effort of the hop
+that served.
+
+A hop whose provider-level default its model cannot honour refuses the chain before the first call
+even when the request sets no effort; the reason reads `fallback hop <index>: ...` and ends with
+``(set by `llm.<provider>.reasoning_effort`)``. A request with no effort over hops that set no
+default is never refused. A hop that reports no model profile refuses an explicit effort, and the
+chain's own `model_profile` reports its effort as unmeasured whenever any hop has no profile.
 
 ## Build-time checks
 
-`PaladinBuilder::build` refuses an agent-level effort that the agent's model cannot honour, with a
-`ConfigurationError` naming the provider, the model, `reasoning_effort`, the value and the reason.
-The same check judges the agent against its model profile with the agent's `reasoning_fallback`
-(`Refuse` when unset); a port that reports no profile refuses an explicit effort, because nothing
-was measured. For a fallback chain the check uses the chain's **intersected** profile: a level is
-usable only if every hop takes it. With `nearest_lower` or `nearest_higher` the build succeeds and
-the substitution happens per request.
+`PaladinBuilder::build` asks the port's `LlmPort::check_reasoning` with the agent's effort and
+fallback. The port's own provider-level defaults (`llm.<provider>.reasoning_effort` and
+`reasoning_fallback`) therefore sit beneath the agent's values with the same precedence and the same
+admission rule as every call, and a refusal is a `ConfigurationError` naming the provider, the
+model, `reasoning_effort`, the value and the reason.
+
+- An agent that sets no effort is still judged when the port has a provider-level default: a
+  default its model cannot honour is refused at build, not on every call.
+- A port that reports no model profile refuses an explicit effort, because nothing was measured.
+- A fallback chain is judged hop by hop against each hop's own model and each hop's own defaults,
+  not against a chain-wide profile; one hop that cannot serve the effort refuses the build, and the
+  error names that hop.
+- The agent host's load check takes the agent's own fallback before the block's, the order
+  `paladin_llm::reasoning::in_force` applies on each call.
+- Only the `Budget`-versus-`max_tokens` rule waits for the request, because the request's own cap
+  is not known at build.
+
+With `nearest_lower` or `nearest_higher` the build succeeds and the substitution happens per
+request.
+
+For callers who build adapters directly, `check_reasoning(model, effort, fallback)` pre-judges a
+request without sending it: it returns `Ok(())` exactly when the adapter would admit that effort at
+send time, and otherwise the same `UnsupportedParameter` error `generate` would return, with no
+network call.
 
 When an agent is built from YAML, the host names the line to change: an agent-level refusal ends with
 ``(set by `agents[<id>].reasoning_effort`)``, and a provider default the agent's model cannot honour
@@ -542,7 +571,8 @@ is judged against its own model. `llm.openai.reasoning_effort: high` therefore r
 `gpt-4o-mini` too, which was never measured, and refuses every request for it (the reason ends with
 ``(set by `llm.openai.reasoning_effort`)``). Set a provider-wide default only where every model you
 serve supports it; otherwise set the effort on the agent or the request. A per-model default is not
-offered.
+offered. Such a default is refused at build and at agent load as well as on every request, so a
+default a model cannot honour is found when the agent is built.
 
 ### The node cache
 

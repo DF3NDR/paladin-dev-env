@@ -1858,7 +1858,7 @@ Plans:
 
 **Wave 14** *(blocked on Wave 13 completion)*
 
-- [ ] 51-20-PLAN.md — nine-adapter and host parity tests, guide / ADR-0062 revision, MIGRATION / CHANGELOG register, review dispositions, gates (gap closure, wave 14)
+- [x] 51-20-PLAN.md — nine-adapter and host parity tests, guide / ADR-0062 revision, MIGRATION / CHANGELOG register, review dispositions, gates (gap closure, wave 14)
 
 ---
 *Roadmap created: 2026-07-30 (ingest run 1 of 5 — `.project/Milestone_1-MVP`, 36 docs)*

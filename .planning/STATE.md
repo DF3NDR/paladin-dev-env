@@ -2,30 +2,30 @@
 gsd_state_version: 1.0
 milestone: v0.11.0
 milestone_name: Crate Release
-current_phase: 51
-current_phase_name: adjustable-reasoning-effort
-status: executing
-stopped_at: Phase 51 context gathered
-last_updated: "2026-10-23T00:48:58.314Z"
+current_phase: 46
+current_phase_name: Docs Currency & Hygiene
+status: planning
+stopped_at: Phase 51 complete, ready to plan Phase 46
+last_updated: "2026-10-23T21:18:00.231Z"
 last_activity: 2026-10-23
-last_activity_desc: Phase 51 execution started
+last_activity_desc: Phase 51 complete, transitioned to Phase 46
 progress:
   total_phases: 13
-  completed_phases: 12
+  completed_phases: 13
   total_plans: 150
-  completed_plans: 144
+  completed_plans: 150
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-10-20 after Phase 50.1)
+See: .planning/PROJECT.md (updated 2026-10-23 after Phase 51)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 51 — adjustable-reasoning-effort
+**Current focus:** Phase 46 — Docs Currency & Hygiene (then Phase 47, the v0.11.0 crate release)
 2026-10-14 from the web3sec handoff and sequenced before Phases 46-47 (the first of a series of
 consumer-driven phases). Phase 50 (Provider Parity & Configuration-Driven Model Swap, added
 2026-10-14 from the second web3sec handoff, `50-HANDOFF-web3sec-parity.md`) follows it, then Phase 51
@@ -43,9 +43,9 @@ delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-1
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 130/130 plans (100%) of the phases planned so far (38-45, 48-50.1);
-Phases 46, 47 and 51 are not yet planned; Phase 49 closed 2026-10-14 (3/3 kept plans, 3 cancelled); Phase 50.1 sealed 2026-10-20; Phase 51 is next, then Phases 46 and 47.
-
+**Progress:** [████████████████████] 150/150 plans (100%) of the phases planned so far (38-45, 48-51);
+Phases 46 and 47 are not yet planned; Phase 49 closed 2026-10-14 (3/3 kept plans, 3 cancelled); Phase 50.1 sealed 2026-10-20;
+Phase 51 sealed 2026-10-23 (20/20 plans, verification `passed` 7/7, UAT 3/3, security 61/61 closed, ADR-0062); Phase 46 is next, then Phase 47.
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
 (22-37.1), 231 plans, 574 tasks, 88/89 requirements (SHIP-05 superseded by SHIP-06), 1,678 commits
 (`495483ef..6a08c293`, 2026-09-01 → 2026-09-23). Archived to `milestones/v0.10.0-ROADMAP.md`,
@@ -62,16 +62,16 @@ under `milestones/`.
 
 ## Current Position
 
-Phase: 51 (adjustable-reasoning-effort) — EXECUTING
-Plan: 1 of 20
-Status: Executing Phase 51
-Last activity: 2026-10-23 — Phase 51 execution started
+Phase: 46 — Docs Currency & Hygiene
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-10-23 — Phase 51 complete, transitioned to Phase 46
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 545
+- Total plans completed: 565
 - Average duration: —
 - Total execution time: —
 
@@ -129,6 +129,7 @@ Last activity: 2026-10-23 — Phase 51 execution started
 | 49 | 3 | - | - |
 | 50 | 32 | - | - |
 | 50.1 | 9 | - | - |
+| 51 | 20 | - | - |
 
 *Updated after each plan completion*
 
@@ -378,6 +379,16 @@ Phases 22-37.1 is recorded in its own `NN-CONTEXT.md` (and the SUMMARY decision 
   runs now emit SSE/webhook events (Phase 45 PLAT-08, row 31 → fixed row 60). Still open: SSE `done`
   reports `halted` for a caller-cancelled run whose persisted status is `Cancelled` (Phase 27 D-14;
   Phase 42).
+
+- **Reasoning effort is honoured exactly or refused before HTTP** (Phase 51, ADR-0062, amends
+  ADR-0004 and extends ADR-0061) — one `#[non_exhaustive]` `ReasoningEffort` per request, agent and
+  provider; substitution only under an explicit `NearestLower` / `NearestHigher` with both values on
+  the response and trace; per-model levels and budget bounds seeded only from the dated
+  `51-EFFORT-PROBE.md` transcript (an unprobed model stays `Unmeasured` and refuses until overridden);
+  `LlmPort::check_reasoning` pre-judges without sending. Owner decisions at UAT 2026-10-23: Anthropic
+  `Budget(n)` stays operator-override-only (the 4.6 pair is the only `budget_tokens`-legal target and
+  costs at or above every successor); Gemini 2.5 ids stay `Unmeasured` (404 at probe time). Phase 46's
+  guide must carry the Phase 51 MIGRATION §9.2 rows and DR-20..26.
 
 - **Release mechanics** — tags are cut on `main` merge commits per the Phase 29 two-SHA rule; the
   `.project/v0.10.0/09-program-acceptance-audit.md` sign-off boxes are ticked by a human, never an
@@ -820,9 +831,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-21T00:09:40.505Z
-**Stopped at:** Phase 51 context gathered
-**Resume file:** .planning/phases/51-adjustable-reasoning-effort/51-CONTEXT.md
+**Last session:** 2026-10-23T21:20:00Z
+**Stopped at:** Phase 51 complete, ready to plan Phase 46
+**Resume file:** None
 
 ## Operator Next Steps
 

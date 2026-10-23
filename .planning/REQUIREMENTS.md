@@ -263,7 +263,7 @@ parameter-support policy (PARITY-02), config-driven construction (PARITY-03), mo
 read `v0.10.1`; the feature ships in v0.11.0. A new prefix, the fortieth. Decisions D-1..D-5 of the
 handoff are settled at discuss.*
 
-- [ ] **REASON-01**: A `#[non_exhaustive]` `ReasoningEffort` enum (`Off`, `Auto`, `Minimal`,
+- [x] **REASON-01**: A `#[non_exhaustive]` `ReasoningEffort` enum (`Off`, `Auto`, `Minimal`,
   `Low`, `Medium`, `High`, `XHigh`, `Max`, `Budget(u32)`) is settable per request
   (`LlmRequest.reasoning` + `with_reasoning`, the `response_format` precedent), per agent (a
   `#[serde(default)]` `PaladinData` field, a `PaladinBuilder` setter and a YAML `AgentDefinition`
@@ -272,7 +272,7 @@ handoff are settled at discuss.*
   `PaladinExecutionService` on every request it builds — and an unset value produces a
   byte-identical request body on every adapter
 
-- [ ] **REASON-02**: Every adapter and preset declares its reasoning wire form — a non-`bool`
+- [x] **REASON-02**: Every adapter and preset declares its reasoning wire form — a non-`bool`
   `ReasoningWire` field on `CompatRequestParameters` (no `Default`, so each preset author must
   state a position; generic OpenAI-compatible defaults to `Unsupported`) and a private
   model-aware `map_reasoning` in each native adapter — and maps each level exactly or returns a
@@ -282,31 +282,31 @@ handoff are settled at discuss.*
   known to coerce silently all refuse, and nearest-level substitution is an explicit opt-in, off
   by default, that logs `warn!` and records both requested and effective effort
 
-- [ ] **REASON-03**: No preset emits a field its vendor ignores — a silent-no-op regression test
+- [x] **REASON-03**: No preset emits a field its vendor ignores — a silent-no-op regression test
   asserts the Kimi preset never emits top-level `reasoning_effort`, an offline mockito wire-body
   case per adapter/preset pins the exact body sent for each level, and the credential-gated live
   smoke proves per vendor, where a key exists, that an invalid effort is rejected (the field is
   parsed) and that a higher level reports more `reasoning_tokens`
 
-- [ ] **REASON-04**: Supported levels and budget bounds are per model, read from Phase 50's
+- [x] **REASON-04**: Supported levels and budget bounds are per model, read from Phase 50's
   dated model-profile registry (PARITY-04) with config overrides rather than from adapter-wide
   constants, and each hop of a fallback chain resolves effort against its own model
   (PARITY-06)
 
-- [ ] **REASON-05**: Requested and effective effort are recorded in `LlmResponse.metadata` beside
+- [x] **REASON-05**: Requested and effective effort are recorded in `LlmResponse.metadata` beside
   `SERVED_BY_METADATA_KEY` and emitted on the Phase 28 trace stream; every adapter fills
   `TokenUsage.reasoning_tokens` when the vendor reports it; and reasoning text reaches callers
   through the typed shape settled at discuss (D-4) on the normal and streaming paths, building
   on PARITY-05's surface rather than duplicating it
 
-- [ ] **REASON-06**: `Budget(n)` is validated against the vendor's bounds (Anthropic
+- [x] **REASON-06**: `Budget(n)` is validated against the vendor's bounds (Anthropic
   `budget_tokens` ≥ 1024 and < `max_tokens`; Qwen `thinking_budget` 1–32768; Gemini 2.5
   `thinkingBudget` ranges, re-verified live) and the request's `max_tokens` before send;
   `EmptyCompletion` stays the runtime backstop; and the effort/output-budget/timeout guidance is
   documented so an agent on `kimi-k3` at the documented defaults answers instead of exhausting
   its budget
 
-- [ ] **REASON-07**: An ADR amending ADR-0004 records the fail-loud policy and its opt-in
+- [x] **REASON-07**: An ADR amending ADR-0004 records the fail-loud policy and its opt-in
   fallback; the mdBook has a "Reasoning effort" page with the per-provider/per-model mapping
   table; MIGRATION §9.2 and CHANGELOG carry the additive type, field, variant and config key
   with the public-API baseline refreshed; and the 82 % coverage floor (ADR-0006) and the doc
@@ -531,13 +531,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PARITY-06 | Phase 50 | Complete |
 | PARITY-07 | Phase 50 | Complete |
 | PARITY-08 | Phase 50 | Complete |
-| REASON-01 | Phase 51 | Pending |
-| REASON-02 | Phase 51 | Pending |
-| REASON-03 | Phase 51 | Pending |
-| REASON-04 | Phase 51 | Pending |
-| REASON-05 | Phase 51 | Pending |
-| REASON-06 | Phase 51 | Pending |
-| REASON-07 | Phase 51 | Pending |
+| REASON-01 | Phase 51 | Complete |
+| REASON-02 | Phase 51 | Complete |
+| REASON-03 | Phase 51 | Complete |
+| REASON-04 | Phase 51 | Complete |
+| REASON-05 | Phase 51 | Complete |
+| REASON-06 | Phase 51 | Complete |
+| REASON-07 | Phase 51 | Complete |
 | SURFACE-01 | Phase 50.1 | Complete |
 | SURFACE-02 | Phase 50.1 | Complete |
 | SURFACE-03 | Phase 50.1 | Complete |
@@ -553,7 +553,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2026-09-24*
-*Last updated: 2026-10-19 — Phase 50.1 inserted (Consumer-Surface Readiness for v0.11.0, after Phase 50 and before Phase 51), SURFACE-01..06 minted from the fourth web3sec handoff (`50.1-HANDOFF-web3sec-consumer-surface.md`); Phases 38-51 plus 50.1, 66/66 requirements mapped, 100% coverage. Previous: 2026-10-14 — Phase 49 scope cut: ADOPT-01..03 superseded by one consumer move to `v0.11.0` after Phases 50-51; ADOPT-04..05 complete. Previous: 2026-10-14 — Phase 51 added (Adjustable Reasoning Effort), REASON-01..07 minted from the
+*Last updated: 2026-10-23 — Phase 51 complete: REASON-01..07 validated (traceability Complete; UAT 3/3, verification `passed` 7/7, security 61/61). Previous: 2026-10-19 — Phase 50.1 inserted (Consumer-Surface Readiness for v0.11.0, after Phase 50 and before Phase 51), SURFACE-01..06 minted from the fourth web3sec handoff (`50.1-HANDOFF-web3sec-consumer-surface.md`); Phases 38-51 plus 50.1, 66/66 requirements mapped, 100% coverage. Previous: 2026-10-14 — Phase 49 scope cut: ADOPT-01..03 superseded by one consumer move to `v0.11.0` after Phases 50-51; ADOPT-04..05 complete. Previous: 2026-10-14 — Phase 51 added (Adjustable Reasoning Effort), REASON-01..07 minted from the
 third web3sec handoff (`51-HANDOFF-web3sec-reasoning-effort.md`); Phases 38-51, 60/60 requirements
 mapped, 100% coverage. Previous: 2026-10-14 — Phase 50 added (Provider Parity & Configuration-Driven Model Swap),
 PARITY-01..08 minted from the second web3sec handoff (`50-HANDOFF-web3sec-parity.md`); Phases 38-50,

@@ -634,7 +634,10 @@ Phases 30-33. The PRD's open operator question is answered: **full governance** 
   effort are surfaced on the response and trace stream; `Budget(n)` is validated against vendor
   bounds and `max_tokens`; an ADR amending 0004 and an mdBook "Reasoning effort" page close it. The
   third consumer-driven phase before Phases 46-47; the handoff read `v0.10.1`, the feature ships in
-  v0.11.0.
+  v0.11.0. **Sealed 2026-10-23:** 20/20 plans (14 planned plus six gap-closure plans 51-15..20),
+  verification `passed` 7/7, UAT 3/3 (CI coverage 92.73 % lines against the 82 % floor; Anthropic
+  `Budget(n)` accepted as operator-override-only; Gemini 2.5 ids accepted as `Unmeasured`), security
+  61/61 closed (ADR-0062).
 - **Consumer-surface readiness (inserted 2026-10-19, Phase 50.1, after Phase 50 and before
   Phase 51):** the six gaps web3sec's pre-measured v0.11.0 bump found (fourth handoff, 2026-10-18)
   are closed before the tag: the Aegis family is nameable through the `paladin` facade so the
@@ -1191,6 +1194,12 @@ while the code ships):
       supersession), five dormant base items retained with a written reason, "node" reserved for
       the graph sense and pinned by `tests/entity_rename_guard.rs` — Phase 48, ADR-0060
       (ENTITY-01..05), sealed 2026-10-14
+- [x] Adjustable reasoning effort: one provider-neutral `ReasoningEffort` per request, agent and
+      provider, honoured exactly on the vendor wire or refused before HTTP
+      (`LlmError::UnsupportedParameter`), per-model levels and budget bounds from the dated effort
+      probe, requested/effective effort on the response and trace, `LlmPort::check_reasoning`
+      pre-judge, the Kimi silent-no-op regression test and the mdBook "Reasoning Effort" page —
+      Phase 51, ADR-0062 (REASON-01..07), sealed 2026-10-23
 - [ ] `GET /runs*` per-caller scoping — ✓ Phase 40 (TENANT-01, TENANT-02, PLAT-07; ADR-0054;
       verified 2026-09-30, UAT 5/5, security 26/26 closed; `/v1/threads/*` scoping deferred as
       WINDOWS.md row 58, D-14); `Runnable::Agent` SSE/webhook emission — ✓ Phase 45 (PLAT-08);
@@ -1899,6 +1908,7 @@ corpus:
 | [Legacy Battalion error, retry and timeout surfaces and the stringly PaladinError LLM variant leave the tree as a clean break in v0.11.0](.planning/decisions/0059-legacy-clean-break-removal.md) (ADR-0059) | Supersedes corpus rule X-03 for Phase 44 only (D-00a): every other public API is still governed by X-03, a later removal records its own supersession, and ADR-0051 is copied as a shape, never inherited. `BattalionConfig` trades `timeout_seconds` / `retry_policy` / `error_strategy` for one `aegis: Aegis` field whose timeout bounds each attempt through one crate-private runner (no whole-Battalion wall clock); `BattalionResult.node_errors` becomes the structured `node_error::NodeError` (one-way); `transience()` is the single classification source for the Conclave and the circuit breaker (Transient only). Every break carries a `MIGRATION.md` 9.2 row and, when marked `Y`, an allowlist entry per measured lint. Supersedes ADR-0001 and ADR-0002. | ✅ Implemented — Phase 44 (2026-10-11): `crates/paladin-battalion/src/aegis_attempt.rs`, `paladin-core/src/platform/container/battalion/{mod,conclave}.rs`, `paladin-battalion/src/{formation,phalanx,campaign}_service.rs`, `commander.rs`, `conclave_execution_service.rs`, `paladin-herald/src/{json,markdown,table}_herald.rs`, `src/infrastructure/resilience/circuit_breaker.rs`, `tests/legacy_removal_guard.rs`, `commander_campaign_honours_aegis_per_attempt_timeout_end_to_end`, `aegis_attempt::tests`, `formation_bounds_each_attempt_not_the_run`, `phalanx_bounds_each_attempt_not_the_run`, `commander_builder_default_bounds_each_attempt`, `commander_conclave_bridge_derives_retry_attempts`, `conclave_retry_predicate_is_transient_only`, `circuit_breaker_counts_transient_failures_only`, `battalion_result_rejects_v0_10_node_errors_shape`, `legacy_surfaces_are_gone_from_the_tree`; Code Conformance `conforms` |
 | [The base-layer wrapper becomes Entity<T> and "node" is reserved for the graph, as a clean break in v0.11.0](.planning/decisions/0060-base-entity-rename.md) (ADR-0060) | Supersedes corpus rule X-03 for Phase 48 only (decision (a)): ADR-0051 and ADR-0059 are copied as a shape, never inherited, and no deprecated alias is kept because a renamed field cannot be aliased. `Node<T>` becomes `Entity<T>` with payload `data`; persisted JSON keeps loading through serde read-aliases that are data compatibility, not an API shim, and a v0.10 binary cannot read v0.11 output (decision (c)). The five unused base items are retained pending the content / general data orchestration review, with a bounded list of entity-sense identifiers left inside them (decision (g)); the citadel placeholder types are unified with the real `PaladinData` / `PaladinStatus` (decision (h)); and "node" means a vertex in a WarGraph or Campaign graph while "Entity" means the base-layer wrapper, pinned by `tests/entity_rename_guard.rs` (decision (i)). | ✅ Implemented — Phase 48 (2026-10-14): `crates/paladin-core/src/base/entity/wrapper.rs`, `paladin-core/src/base/service/entity_version_service.rs`, `paladin-core/src/platform/container/{citadel,content,prompt}.rs`, `paladin-core/src/base/mod.rs`, `tests/entity_rename_guard.rs`, `entity_surfaces_are_renamed_in_the_tree`, `scanner_reports_planted_entity_rename_violations`, `pre_rename_citadel_snapshot_loads_through_file_citadel`, `entity_serde_compat` (11 tests), `entity_version_rejects_both_key_spellings`, `v0_10_citadel_statuses_load_into_the_unified_status`; Code Conformance `conforms` |
 | [Per-model parameter support: refuse an explicit value the target cannot honour, omit an auto-selected one visibly](.planning/decisions/0061-per-model-parameter-support-policy.md) (ADR-0061) | Amends ADR-0004 (supersedes its amendment A2 only). An explicit sampling parameter (temperature, `top_p`, penalties, stop sequences) that the target model cannot honour is refused at build time by name; an auto-selected value is omitted with a `warn!` and the `paladin.params_omitted` response-metadata key, never silently and never clamped. The shape is an additive `#[non_exhaustive]` `ModelProfile` returned by `LlmPort::model_profile` (default `None`), leaving `ProviderCapabilities` untouched; the Pricing, Cadence and Fallback decorators forward it (a fallback chain's profile is the intersection of its hops'). Owner readings R-1 (run-metadata reach: option-b, `PaladinResult.run_metadata` and the stream's terminal chunk) and R-2 (usage-cap evidence: all five compat presets accepted unverified) were answered 2026-10-16. | ✅ Implemented — Phase 50 (2026-10-16): `crates/paladin-ports/src/output/model_profile.rs`, `paladin-llm/src/{sampling,registry/mod,registry/seeded,response_guards,window,fallback}.rs`, `paladin-llm/src/config/{llm,layers,bridge}.rs`, `paladin-llm/src/provider_factory.rs`, `src/application/services/paladin/paladin_builder.rs`, `tests/provider_swap_matrix.rs`, `docs/src/user-guides/switching-providers.md` (drift test `switching_providers_page_lists_every_seeded_model`); Code Conformance `conforms` |
+| [Reasoning effort: one provider-neutral setting, honoured exactly or refused before HTTP](.planning/decisions/0062-reasoning-effort-fail-loud-policy.md) (ADR-0062) | Amends ADR-0004 and extends ADR-0061 to a parameter whose silent failure is expensive: at least four vendors answer HTTP 200 while ignoring or coercing the requested effort, and an unconfigured `kimi-k3` reasons at `max` and returns nothing. An explicit effort is sent in the vendor's exact native form or refused with `LlmError::UnsupportedParameter` before the call; substitution only under an explicit `reasoning_fallback`, with requested and effective values on the response and trace; per-model levels and budget bounds come only from the dated probe transcript (unprobed stays `Unmeasured`). | Accepted 2026-10-22 (Phase 51 plan 13). Shipped across plans 51-01..20; owner decisions at UAT 2026-10-23: Anthropic `Budget(n)` operator-override-only, Gemini 2.5 `Unmeasured`. Conformance across all nine adapters and a 54-combination host grid pin build, load and pre-flight verdicts equal to send time. |
 
 **v0.9.0 (Phases 18-21) minted no new ADRs.** Its decisions were recorded as per-phase locked
 decisions (`D-xx`) in each phase's `CONTEXT.md`/`DISCUSSION-LOG.md`, now archived under
@@ -2063,6 +2073,17 @@ This document evolves at phase transitions and milestone boundaries.
 2. Core Value check — still the right priority?
 3. Audit Out of Scope — reasons still valid?
 4. Update Context with current state
+
+---
+*Last updated: 2026-10-23 after **Phase 51: Adjustable Reasoning Effort** completed and verified —
+REASON-01..07 validated (REQUIREMENTS.md traceability Complete); 20/20 plans (six gap-closure plans
+51-15..20 after the first verification found 5/7); verification `passed` 7/7, UAT 3/3 (CI run
+39966896232 Coverage 92.73 % lines vs the 82 % floor; two inline hook fixes en route: private rustdoc
+links in `check_reasoning` docs, and the pre-push API-surface hook now routed through `make api-surface`
+so it carries the nightly toolchain pin), security 61/61 closed; ADR-0062 added to Key Decisions. Owner
+decisions: Anthropic `Budget(n)` stays operator-override-only; Gemini 2.5 ids stay `Unmeasured`. No
+requirement invalidated or emerged; "What This Is" unchanged. Open follow-ups: `51-REVIEW.md` (0 critical,
+2 warnings, 4 info) and `/gsd-validate-phase 51` (VALIDATION.md still `draft`). Next: `/gsd-discuss-phase 46`.*
 
 ---
 *Last updated: 2026-10-20 after **Phase 50.1: Consumer-Surface Readiness for v0.11.0** completed and

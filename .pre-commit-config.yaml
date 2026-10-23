@@ -127,9 +127,15 @@ repos:
       # commits bypass commit-stage hooks entirely, and the check costs ~95s,
       # which is tolerable once per push alongside the build + lib tests above
       # but not on every commit.
+      # Routed through `make api-surface`, not the script directly: the Makefile
+      # carries the PUBLIC_API_TOOLCHAIN pin (a dated nightly, the same literal
+      # ci.yml sets). Calling scripts/check-api-surface.sh bare falls through to
+      # the floating `nightly`, whose rustdoc renders `Arc` paths and `-> Self`
+      # differently and turns ~1,100 baseline lines red with no public item
+      # added, removed or changed (measured 2026-10-23, Phase 51 UAT).
       - id: check-api-surface
         name: check public API surface vs baseline
-        entry: ./scripts/check-api-surface.sh .project/current-exports.txt
+        entry: make api-surface
         language: system
         stages: [pre-push]
         pass_filenames: false

@@ -3,7 +3,7 @@ status: testing
 phase: 51-adjustable-reasoning-effort
 source: [51-VERIFICATION.md]
 started: 2026-10-23T05:05:00Z
-updated: 2026-10-23T13:30:59Z
+updated: 2026-10-23T13:54:47Z
 ---
 
 ## Current Test
@@ -53,4 +53,18 @@ blocked: 0
       issue: "12 `[`Self::build_request`]` / `[`Self::wire_profile`]` links in check_reasoning / model_profile docs"
   missing: []
   resolved_by: "inline fix during UAT (plain code spans), commit on this branch"
+  resolved_at: 2026-10-23
+
+- gap_id: G-51-1b
+  truth: "The pre-push API-surface hook renders the baseline with the pinned nightly, as CI and `make api-surface` do"
+  status: resolved
+  reason: "Found on the second push attempt for Test 1: the `check-api-surface` pre-push hook called scripts/check-api-surface.sh bare, so PUBLIC_API_TOOLCHAIN fell through to floating `nightly`; 1,140 rendering-only diff lines (`alloc::sync::Arc` vs `alloc::rcs::arc::Arc`, `-> Self`), zero public items changed. `make api-surface` (pinned nightly-2026-09-20) reports 4323 items unchanged."
+  severity: minor
+  test: 1
+  root_cause: "Tooling, not Phase 51 code: the hook entry bypassed the Makefile's toolchain pin, the exact drift ci.yml:224 documents."
+  artifacts:
+    - path: ".pre-commit-config.yaml"
+      issue: "check-api-surface entry ran the script directly without PUBLIC_API_TOOLCHAIN"
+  missing: []
+  resolved_by: "inline fix during UAT: hook entry now `make api-surface`"
   resolved_at: 2026-10-23

@@ -541,7 +541,7 @@ impl GeminiAdapter {
 
     /// The request model's profile as this adapter's wire can honour it: the effort data has
     /// whatever Gemini's body cannot carry removed ([`GEMINI_REASONING_WIRE`]), so a caller
-    /// reading [`LlmPort::model_profile`] judges exactly what [`Self::build_request`] will send.
+    /// reading [`LlmPort::model_profile`] judges exactly what `build_request` will send.
     fn wire_profile(&self, model: &str) -> ModelProfile {
         let mut profile = self.model_registry.profile(model);
         profile.effort = mask_effort(std::mem::take(&mut profile.effort), GEMINI_REASONING_WIRE);
@@ -1370,9 +1370,9 @@ impl LlmPort for GeminiAdapter {
         Some(self.wire_profile(model))
     }
 
-    /// The pre-judging twin of the send-time `in_force` + `admit` in [`Self::build_request`]:
+    /// The pre-judging twin of the send-time `in_force` + `admit` in `build_request`:
     /// same precedence over this adapter's `reasoning_effort` / `reasoning_fallback`, same
-    /// [`Self::wire_profile`], same verdict (D-09). The per-model wire form chosen in
+    /// `wire_profile`, same verdict (D-09). The per-model wire form chosen in
     /// `map_reasoning` only ever refuses what `admit` already refused.
     fn check_reasoning(
         &self,

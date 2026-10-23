@@ -3,7 +3,7 @@ status: testing
 phase: 51-adjustable-reasoning-effort
 source: [51-VERIFICATION.md]
 started: 2026-10-23T05:05:00Z
-updated: 2026-10-23T05:05:00Z
+updated: 2026-10-23T13:30:59Z
 ---
 
 ## Current Test
@@ -40,3 +40,17 @@ skipped: 0
 blocked: 0
 
 ## Gaps
+
+- gap_id: G-51-1a
+  truth: "Phase 51 code passes the repo's own pre-push gate (make doc-check, ADR-0033 zero rustdoc warnings)"
+  status: resolved
+  reason: "Found while attempting the push needed for Test 1: `make doc-check` failed with 6 rustdoc warnings — `check_reasoning` docs (plan 51-20) linked private `Self::build_request` / `Self::wire_profile` via intra-doc links in the anthropic, deepseek, gemini and openai adapters."
+  severity: minor
+  test: 1
+  root_cause: "Intra-doc links to private methods warn under `cargo doc --no-deps` without --document-private-items; the house style for private fns is a plain code span."
+  artifacts:
+    - path: "crates/paladin-llm/src/{anthropic,deepseek,gemini,openai}/adapter.rs"
+      issue: "12 `[`Self::build_request`]` / `[`Self::wire_profile`]` links in check_reasoning / model_profile docs"
+  missing: []
+  resolved_by: "inline fix during UAT (plain code spans), commit on this branch"
+  resolved_at: 2026-10-23

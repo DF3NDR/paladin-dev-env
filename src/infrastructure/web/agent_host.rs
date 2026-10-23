@@ -2035,6 +2035,173 @@ mod config_driven_tests {
         );
     }
 
+    /// WR-01 end to end through the host: a provider block that sets only a `reasoning_fallback`
+    /// (no block effort) lets an agent's own effort substitute at build. The block-level check
+    /// does not run (the agent set an effort of its own); the builder's `check_reasoning` on the
+    /// port does, and it honours the provider default fallback.
+    #[tokio::test]
+    async fn a_blocks_fallback_lets_an_agents_own_effort_substitute_at_build() {
+        use paladin_core::platform::container::reasoning::{ReasoningEffort, ReasoningFallback};
+        let block =
+            LlmProviderConfig::new(SECRET).with_reasoning_fallback(ReasoningFallback::NearestLower);
+        let llm = deepseek_block_llm(block, "agent-model-x", Some(&["low", "high"]));
+        let mut def = agent("a1", "deepseek", "agent-model-x");
+        def.reasoning_effort = Some(ReasoningEffort::Medium);
+
+        let Ok((paladin, _, _)) = build(&def, Some(&llm), "openai").await else {
+            panic!("the block's nearest_lower lets the agent's medium step down to low");
+        };
+        assert_eq!(paladin.data.reasoning_effort, Some(ReasoningEffort::Medium));
+        assert_eq!(paladin.data.reasoning_fallback, None);
+
+        // Without the block's fallback the same agent is refused: the fallback is what admits it.
+        let bare = deepseek_block_llm(
+            LlmProviderConfig::new(SECRET),
+            "agent-model-x",
+            Some(&["low", "high"]),
+        );
+        let err = build(&def, Some(&bare), "openai")
+            .await
+            .err()
+            .expect("no fallback anywhere, so medium is refused");
+        assert!(!err.to_string().contains(SECRET), "{err}");
+    }
+
+    /// REASON-01 / D-08 / D-09, at the host: for every combination of the block's and the agent's
+    /// effort and fallback, the host-and-builder verdict (`build_agent`) equals the verdict of the
+    /// adapter the same `llm:` block creates, asked `check_reasoning` with the agent's own values.
+    /// The equal pairs (agent `medium` under block `medium`, agent `refuse` under block `refuse`)
+    /// are rows: no gate merges, doubles or drops a value.
+    #[tokio::test]
+    async fn the_host_and_builder_verdicts_equal_the_adapters_check_for_every_combination() {
+        use paladin_core::platform::container::reasoning::{ReasoningEffort, ReasoningFallback};
+        const MODEL: &str = "agent-model-x";
+
+        let block_efforts = [None, Some(ReasoningEffort::Medium)];
+        let block_fallbacks = [
+            None,
+            Some(ReasoningFallback::Refuse),
+            Some(ReasoningFallback::NearestLower),
+        ];
+        let agent_efforts = [
+            None,
+            Some(ReasoningEffort::Medium),
+            Some(ReasoningEffort::High),
+        ];
+        let agent_fallbacks = [
+            None,
+            Some(ReasoningFallback::Refuse),
+            Some(ReasoningFallback::NearestHigher),
+        ];
+
+        let mut combinations = 0usize;
+        let mut accepted = 0usize;
+        let mut refused = 0usize;
+        for block_effort in block_efforts {
+            for block_fallback in block_fallbacks {
+                let mut block = LlmProviderConfig::new(SECRET);
+                if let Some(effort) = block_effort {
+                    block = block.with_reasoning_effort(effort);
+                }
+                if let Some(fallback) = block_fallback {
+                    block = block.with_reasoning_fallback(fallback);
+                }
+                let llm = deepseek_block_llm(block, MODEL, Some(&["low", "high"]));
+                let adapter = LlmProviderFactory::new()
+                    .create_from_config(&llm, "deepseek", Some(MODEL))
+                    .expect("the deepseek block builds an adapter");
+
+                for agent_effort in agent_efforts {
+                    for agent_fallback in agent_fallbacks {
+                        combinations += 1;
+                        let mut def = agent("a1", "deepseek", MODEL);
+                        def.reasoning_effort = agent_effort;
+                        def.reasoning_fallback = agent_fallback;
+
+                        let built = build(&def, Some(&llm), "openai").await;
+                        let checked = adapter.check_reasoning(MODEL, agent_effort, agent_fallback);
+                        let label = format!(
+                            "block effort {block_effort:?}, block fallback {block_fallback:?}, \
+                             agent effort {agent_effort:?}, agent fallback {agent_fallback:?}"
+                        );
+                        assert_eq!(
+                            built.is_ok(),
+                            checked.is_ok(),
+                            "{label}: host and builder said {:?}, the adapter's check said \
+                             {checked:?}",
+                            built.as_ref().err()
+                        );
+                        if let Err(error) = &built {
+                            assert!(!error.to_string().contains(SECRET), "{label}: {error}");
+                        }
+                        if built.is_ok() {
+                            accepted += 1;
+                        } else {
+                            refused += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(combinations, 2 * 3 * 3 * 3, "the grid shrank");
+        assert!(
+            accepted > 0 && refused > 0,
+            "the grid must contain both verdicts ({accepted} accepted, {refused} refused)"
+        );
+    }
+
+    /// T-51-60: the production composition installs `PricingLlmAdapter` over the adapter, and the
+    /// decorator forwards `check_reasoning`, so the host verdict survives it: a block fallback
+    /// still lets an agent's own effort substitute, and an agent's own `refuse` still refuses.
+    #[tokio::test]
+    async fn the_host_verdict_survives_the_pricing_decorator() {
+        use paladin_core::platform::container::cost::{CurrencyCode, PriceRow};
+        use paladin_core::platform::container::reasoning::{ReasoningEffort, ReasoningFallback};
+        let table = Arc::new(PriceTable::new(CurrencyCode::new("USD").unwrap()).with_row(
+            "agent-model-x",
+            PriceRow::new(1_000_000, 2_000_000).unwrap(),
+        ));
+        assert!(
+            !table.is_empty(),
+            "a non-empty table installs the decorator"
+        );
+
+        let block =
+            LlmProviderConfig::new(SECRET).with_reasoning_fallback(ReasoningFallback::NearestLower);
+        let llm = deepseek_block_llm(block, "agent-model-x", Some(&["low", "high"]));
+        let build_priced = |def: AgentDefinition| {
+            let llm = llm.clone();
+            let table = Arc::clone(&table);
+            async move {
+                build_agent(
+                    &def,
+                    &LlmProviderFactory::new(),
+                    Some(&llm),
+                    "openai",
+                    default_circuit_breaker(),
+                    &table,
+                    None,
+                    TokenBudgetConfig::default(),
+                    None,
+                )
+                .await
+            }
+        };
+
+        let mut own = agent("a1", "deepseek", "agent-model-x");
+        own.reasoning_effort = Some(ReasoningEffort::Medium);
+        assert!(
+            build_priced(own.clone()).await.is_ok(),
+            "the block's nearest_lower lets medium step down to low under the Pricing decorator"
+        );
+
+        own.reasoning_fallback = Some(ReasoningFallback::Refuse);
+        assert!(
+            build_priced(own).await.is_err(),
+            "the agent's own refuse still refuses under the Pricing decorator"
+        );
+    }
+
     #[tokio::test]
     async fn an_agents_own_effort_is_judged_on_its_own_value_only() {
         use paladin_core::platform::container::reasoning::ReasoningEffort;

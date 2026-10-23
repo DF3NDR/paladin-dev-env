@@ -377,6 +377,8 @@ async fn phase_50_surface(llm: Arc<dyn LlmPort>) {
 
     // PARITY-02: the per-model profile, read through `LlmPort::model_profile` (object safe).
     let profile: Option<ModelProfile> = llm.model_profile("m");
+    // Phase 51 gap closure: LlmPort::check_reasoning (object safe, provided)
+    let _verdict: Result<(), LlmError> = llm.check_reasoning("m", None, None);
     let built = ModelProfile::new()
         .with_temperature(ParamSupport::Range(0.0, 1.0))
         .with_stop_sequences(StopSupport::Supported { max: None })

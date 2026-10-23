@@ -1390,6 +1390,26 @@ impl LlmPort for OpenAIAdapter {
     fn model_profile(&self, model: &str) -> Option<ModelProfile> {
         Some(self.wire_profile(model))
     }
+
+    /// The pre-judging twin of the send-time `in_force` + `admit` in [`Self::build_request`]:
+    /// same precedence over this adapter's `reasoning_effort` / `reasoning_fallback`, same
+    /// [`Self::wire_profile`], same verdict (D-09).
+    fn check_reasoning(
+        &self,
+        model: &str,
+        effort: Option<ReasoningEffort>,
+        fallback: Option<ReasoningFallback>,
+    ) -> Result<(), LlmError> {
+        reasoning::check(
+            OPENAI_PROVIDER,
+            model,
+            || self.wire_profile(model),
+            effort,
+            fallback,
+            self.config.reasoning_effort,
+            self.config.reasoning_fallback,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -3105,6 +3125,92 @@ mod tests {
                     .with_base_url(base_url)
                     .with_model_overrides(BTreeMap::from([(ASTRA.to_string(), over)]));
             OpenAIAdapter::new(config).expect("a valid override builds")
+        }
+
+        /// D-09: `check_reasoning` answers with this adapter's own `llm.openai.reasoning_*`
+        /// defaults, and agrees with what `generate` does for the same effort.
+        #[tokio::test]
+        async fn openai_check_reasoning_consults_the_provider_defaults() {
+            const PROBE: &str = "probe-model";
+            let mut server = Server::new_async().await;
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body(ok_body())
+                .expect_at_least(0)
+                .create_async()
+                .await;
+            let over = ModelOverride {
+                effort: Some(EffortSupport::Supported(EffortLevels::new([Low, High]))),
+                ..ModelOverride::default()
+            };
+            let adapter = |effort: Option<ReasoningEffort>, fallback: Option<ReasoningFallback>| {
+                let mut config =
+                    OpenAIConfig::new("test-key".to_string(), OPENAI_DEFAULT_MODEL.to_string())
+                        .with_base_url(server.url())
+                        .with_model_overrides(BTreeMap::from([(PROBE.to_string(), over.clone())]));
+                if let Some(effort) = effort {
+                    config = config.with_reasoning_effort(effort);
+                }
+                if let Some(fallback) = fallback {
+                    config = config.with_reasoning_fallback(fallback);
+                }
+                OpenAIAdapter::new(config).expect("a valid override builds")
+            };
+
+            // A provider fallback substitutes an agent effort the model lacks.
+            let substituting = adapter(None, Some(ReasoningFallback::NearestLower));
+            assert!(
+                substituting
+                    .check_reasoning(PROBE, Some(Medium), None)
+                    .is_ok()
+            );
+            assert!(
+                substituting
+                    .generate(request_for(PROBE).with_reasoning(Medium))
+                    .await
+                    .is_ok()
+            );
+
+            // A provider default effort the model lacks is refused for a caller who sets none.
+            let defaulted = adapter(Some(Medium), None);
+            let LlmError::UnsupportedParameter {
+                reason: checked, ..
+            } = defaulted.check_reasoning(PROBE, None, None).unwrap_err()
+            else {
+                panic!("expected UnsupportedParameter");
+            };
+            let LlmError::UnsupportedParameter {
+                reason: sent,
+                param,
+                ..
+            } = defaulted.generate(request_for(PROBE)).await.unwrap_err()
+            else {
+                panic!("expected UnsupportedParameter");
+            };
+            assert_eq!(param, "reasoning_effort");
+            assert_eq!(checked, sent);
+            assert!(
+                checked.ends_with("(set by `llm.openai.reasoning_effort`)"),
+                "{checked}"
+            );
+
+            // A listed request effort is served under either default.
+            for port in [&substituting, &defaulted] {
+                assert!(port.check_reasoning(PROBE, Some(High), None).is_ok());
+                assert!(
+                    port.generate(request_for(PROBE).with_reasoning(High))
+                        .await
+                        .is_ok()
+                );
+            }
+
+            // Nothing in force anywhere: nothing judged.
+            assert!(
+                adapter(None, None)
+                    .check_reasoning(PROBE, None, None)
+                    .is_ok()
+            );
         }
 
         /// Send `request` through an adapter over a fresh mock; returns the raw request body

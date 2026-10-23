@@ -21,7 +21,9 @@
 //! error that names the provider, the model, the effort and the configuration key that unlocks
 //! the model, and it records a substitution. Because the wire is folded into the profile an
 //! adapter returns from `model_profile` (see `mask_effort`), `PaladinBuilder` and the fallback
-//! chain judge exactly what the wire can send.
+//! chain judge exactly what the wire can send. The crate-private `check` is the pre-judging twin of
+//! `admit`: it runs the same precedence and the same verdict without a request or a substitution
+//! record, which is how `LlmPort::check_reasoning` answers at build time (D-09).
 //!
 //! # Visibility rule
 //!
@@ -290,12 +292,22 @@ fn describe_admitted(support: &EffortSupport) -> String {
     }
 }
 
+/// The hint appended to a refusal that only a substituting fallback could have avoided: the
+/// level is missing and the fallback in force is `Refuse`. Same text as the port's default
+/// `check_reasoning`, so a build-time and a send-time refusal read alike.
+pub(crate) const FALLBACK_HINT: &str = "; set a reasoning_fallback to substitute the nearest level";
+
 /// The refusal text: the rule's own sentence plus the way to unlock the model (D-03, D-04).
+///
+/// `fallback` is the fallback in force after precedence. The "set a reasoning_fallback" hint is
+/// added only when it is `Refuse` and the level is simply not offered, so an operator whose
+/// provider block already sets a fallback is never told to set one.
 fn refusal_reason(
     provider: &str,
     model: &str,
     refusal: EffortRefusal,
     support: &EffortSupport,
+    fallback: ReasoningFallback,
 ) -> String {
     match refusal {
         EffortRefusal::Unmeasured => format!(
@@ -309,6 +321,10 @@ fn refusal_reason(
         EffortRefusal::WireUnsupported => format!(
             "{refusal}; reasoning effort is not verified for this provider in this release; no \
              configuration unlocks it"
+        ),
+        EffortRefusal::LevelUnsupported if fallback == ReasoningFallback::Refuse => format!(
+            "{refusal}; this model accepts: {}{FALLBACK_HINT}",
+            describe_admitted(support)
         ),
         other => format!(
             "{other}; this model accepts: {}",
@@ -382,9 +398,41 @@ pub(crate) fn admit(
     source_key: Option<&str>,
     log: &SubstitutionLog,
 ) -> Result<Option<ResolvedEffort>, LlmError> {
+    let resolved = judge(
+        provider, model, profile, requested, fallback, max_tokens, source_key,
+    )?;
+    if let Some(resolved) = &resolved
+        && resolved.substituted()
+    {
+        log.record(provider, model, resolved.requested, resolved.effective);
+    }
+    Ok(resolved)
+}
+
+/// [`admit`] without the substitution record: the pure verdict (Phase 51, D-09).
+///
+/// Everything `admit` decides -- the profile's admission under the fallback, the unlock and
+/// fallback hints, the budget-versus-`max_tokens` rule -- and nothing it remembers. It takes no
+/// [`SubstitutionLog`], so a judgement made before a request exists can never consume an
+/// adapter's warn-once record or emit a `paladin::reasoning` warning. `admit` is `judge` plus
+/// the record, so the two cannot disagree.
+///
+/// # Errors
+///
+/// [`LlmError::UnsupportedParameter`], as for [`admit`].
+pub(crate) fn judge(
+    provider: &str,
+    model: &str,
+    profile: &ModelProfile,
+    requested: Option<ReasoningEffort>,
+    fallback: Option<ReasoningFallback>,
+    max_tokens: Option<u32>,
+    source_key: Option<&str>,
+) -> Result<Option<ResolvedEffort>, LlmError> {
     let Some(requested) = requested else {
         return Ok(None);
     };
+    let fallback = fallback.unwrap_or_default();
     let refuse = |reason: String| {
         // The effort came from a provider-level default, not from the request: say which line
         // of configuration to change (research Pitfall 6).
@@ -402,8 +450,16 @@ pub(crate) fn admit(
     };
     let resolved = profile
         .effort
-        .resolve(requested, fallback.unwrap_or_default())
-        .map_err(|refusal| refuse(refusal_reason(provider, model, refusal, &profile.effort)))?;
+        .resolve(requested, fallback)
+        .map_err(|refusal| {
+            refuse(refusal_reason(
+                provider,
+                model,
+                refusal,
+                &profile.effort,
+                fallback,
+            ))
+        })?;
     // A budget is part of the output cap: a request whose cap is not above the budget leaves the
     // model no room to answer. Checked on the effective cap, after the profile accepted the
     // budget, so a profile refusal is reported first.
@@ -415,10 +471,50 @@ pub(crate) fn admit(
              max_tokens above the budget or lower the budget"
         )));
     }
-    if resolved.substituted() {
-        log.record(provider, model, resolved.requested, resolved.effective);
-    }
     Ok(Some(resolved))
+}
+
+/// The pre-judging twin of [`admit`]: would an adapter with these provider-level defaults admit
+/// this effort for this model, judged before any request exists (Phase 51, D-09)?
+///
+/// Runs [`in_force`] (a request- or agent-level value first, field by field, then the provider
+/// default) and then the very same [`judge`] `admit` runs, over the `profile` the adapter also
+/// judges at send time. `max_tokens` is not known here, so the budget-versus-cap rule is left to
+/// send time. When no effort is in force the result is `Ok(())` and `profile` is never called
+/// (D-00i). No [`SubstitutionLog`] is taken and no network call is made.
+///
+/// # Errors
+///
+/// [`LlmError::UnsupportedParameter`], with the reason text `admit` would produce.
+pub(crate) fn check(
+    provider: &str,
+    model: &str,
+    profile: impl FnOnce() -> ModelProfile,
+    request_effort: Option<ReasoningEffort>,
+    request_fallback: Option<ReasoningFallback>,
+    default_effort: Option<ReasoningEffort>,
+    default_fallback: Option<ReasoningFallback>,
+) -> Result<(), LlmError> {
+    let forced = in_force(
+        provider,
+        request_effort,
+        request_fallback,
+        default_effort,
+        default_fallback,
+    );
+    if forced.effort.is_none() {
+        return Ok(());
+    }
+    judge(
+        provider,
+        model,
+        &profile(),
+        forced.effort,
+        forced.fallback,
+        None,
+        forced.source_key.as_deref(),
+    )
+    .map(|_| ())
 }
 
 #[cfg(test)]
@@ -885,6 +981,194 @@ mod tests {
         assert_eq!(
             mask_effort(EffortSupport::NoReasoning, caps),
             EffortSupport::NoReasoning
+        );
+    }
+
+    /// The profiles the pre-judge parity grid walks: every support kind, `Supported` with and
+    /// without the optional `off` / `auto` / budget data.
+    fn parity_profiles() -> Vec<ModelProfile> {
+        let levels = || EffortLevels::new([ReasoningEffort::Low, ReasoningEffort::High]);
+        vec![
+            profile(levels()),
+            profile(
+                levels()
+                    .with_off(true)
+                    .with_auto(true)
+                    .with_budget(BudgetBounds::new(1024, 8192)),
+            ),
+            ModelProfile::new().with_effort(EffortSupport::Unmeasured),
+            ModelProfile::new().with_effort(EffortSupport::NoReasoning),
+            ModelProfile::new().with_effort(EffortSupport::WireUnsupported),
+        ]
+    }
+
+    fn parity_efforts() -> Vec<Option<ReasoningEffort>> {
+        vec![
+            None,
+            Some(ReasoningEffort::Minimal),
+            Some(ReasoningEffort::Low),
+            Some(ReasoningEffort::Medium),
+            Some(ReasoningEffort::High),
+            Some(ReasoningEffort::XHigh),
+            Some(ReasoningEffort::Max),
+            Some(ReasoningEffort::Off),
+            Some(ReasoningEffort::Auto),
+            Some(ReasoningEffort::Budget(512)),
+            Some(ReasoningEffort::Budget(2048)),
+        ]
+    }
+
+    fn parity_fallbacks() -> Vec<Option<ReasoningFallback>> {
+        vec![
+            None,
+            Some(ReasoningFallback::Refuse),
+            Some(ReasoningFallback::NearestLower),
+            Some(ReasoningFallback::NearestHigher),
+        ]
+    }
+
+    /// D-09: `check` is `in_force` + `admit` minus the log and the per-request cap, over the whole
+    /// grid: same verdict, same text.
+    #[test]
+    fn check_agrees_with_admit_without_max_tokens_on_every_combination() {
+        let default_efforts = [None, Some(ReasoningEffort::Medium)];
+        let default_fallbacks = [
+            None,
+            Some(ReasoningFallback::Refuse),
+            Some(ReasoningFallback::NearestLower),
+        ];
+        let mut cases = 0_u32;
+        for model in parity_profiles() {
+            for request_effort in parity_efforts() {
+                for request_fallback in parity_fallbacks() {
+                    for default_effort in default_efforts {
+                        for default_fallback in default_fallbacks {
+                            let forced = in_force(
+                                "deepseek",
+                                request_effort,
+                                request_fallback,
+                                default_effort,
+                                default_fallback,
+                            );
+                            let admitted = admit(
+                                "deepseek",
+                                "m",
+                                &model,
+                                forced.effort,
+                                forced.fallback,
+                                None,
+                                forced.source_key.as_deref(),
+                                &SubstitutionLog::new(),
+                            );
+                            let checked = check(
+                                "deepseek",
+                                "m",
+                                || model.clone(),
+                                request_effort,
+                                request_fallback,
+                                default_effort,
+                                default_fallback,
+                            );
+                            assert_eq!(
+                                admitted.is_ok(),
+                                checked.is_ok(),
+                                "{request_effort:?} {request_fallback:?} {default_effort:?} \
+                                 {default_fallback:?} on {model:?}"
+                            );
+                            if let (Err(a), Err(c)) = (&admitted, &checked) {
+                                assert_eq!(a.to_string(), c.to_string());
+                            }
+                            cases += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(cases > 1000, "the grid really ran: {cases}");
+    }
+
+    /// D-00i / REASON-01 empty: with nothing in force the profile closure is never called.
+    #[test]
+    fn check_never_reads_the_profile_when_nothing_is_in_force() {
+        let read = std::cell::Cell::new(false);
+        let result = check(
+            "deepseek",
+            "m",
+            || {
+                read.set(true);
+                ModelProfile::new()
+            },
+            None,
+            Some(ReasoningFallback::NearestLower),
+            None,
+            Some(ReasoningFallback::Refuse),
+        );
+        assert!(result.is_ok());
+        assert!(!read.get(), "the profile must not be read");
+
+        // With an effort in force it is read exactly once.
+        let reads = std::cell::Cell::new(0_u32);
+        let _ = check(
+            "deepseek",
+            "m",
+            || {
+                reads.set(reads.get() + 1);
+                ModelProfile::new()
+            },
+            None,
+            None,
+            Some(ReasoningEffort::High),
+            None,
+        );
+        assert_eq!(reads.get(), 1);
+    }
+
+    /// The fallback hint is appended only when `Refuse` is in force and the level is missing --
+    /// never for a substituting fallback and never for another kind of refusal.
+    #[test]
+    fn the_fallback_hint_appears_only_when_refuse_is_in_force() {
+        let model = profile(EffortLevels::new([
+            ReasoningEffort::Low,
+            ReasoningEffort::High,
+        ]));
+        let reason = |effort: ReasoningEffort, fallback: Option<ReasoningFallback>| {
+            reason_of(judge("openai", "m", &model, Some(effort), fallback, None, None).unwrap_err())
+        };
+        // Level missing, Refuse in force (explicit or by default): the hint.
+        assert!(
+            reason(ReasoningEffort::Medium, None).contains(FALLBACK_HINT),
+            "unset fallback means Refuse"
+        );
+        assert!(
+            reason(ReasoningEffort::Medium, Some(ReasoningFallback::Refuse))
+                .contains(FALLBACK_HINT)
+        );
+        // A substituting fallback that still refuses (nothing below `low`) carries no hint.
+        let reason_low = reason(
+            ReasoningEffort::Minimal,
+            Some(ReasoningFallback::NearestLower),
+        );
+        assert!(
+            !reason_low.contains("set a reasoning_fallback"),
+            "{reason_low}"
+        );
+        // Another refusal kind under Refuse carries no hint either.
+        let off = reason(ReasoningEffort::Off, None);
+        assert!(!off.contains("set a reasoning_fallback"), "{off}");
+        // A provider-level fallback in force through `check` is never told to be set.
+        let error = check(
+            "openai",
+            "m",
+            || model.clone(),
+            Some(ReasoningEffort::Minimal),
+            None,
+            None,
+            Some(ReasoningFallback::NearestLower),
+        )
+        .unwrap_err();
+        assert!(
+            !error.to_string().contains("set a reasoning_fallback"),
+            "{error}"
         );
     }
 }

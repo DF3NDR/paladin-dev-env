@@ -521,6 +521,17 @@ impl LlmPort for QwenAdapter {
     fn model_profile(&self, model: &str) -> Option<ModelProfile> {
         Some(self.engine.model_profile(model))
     }
+
+    /// The pre-judging twin of the engine's send-time `in_force` + `admit`: this preset's
+    /// masked profile and provider defaults, the same verdict (D-09).
+    fn check_reasoning(
+        &self,
+        model: &str,
+        effort: Option<ReasoningEffort>,
+        fallback: Option<ReasoningFallback>,
+    ) -> Result<(), LlmError> {
+        self.engine.check_reasoning(model, effort, fallback)
+    }
 }
 
 #[cfg(test)]
@@ -1548,6 +1559,97 @@ mod tests {
                     }
                 }
             }
+        }
+
+        /// Send `effort` / `fallback` through `adapter`'s `generate` and its `check_reasoning`
+        /// and return the check's verdict as the refusal reason (`None` for admitted), asserting
+        /// the two paths agree on both the verdict and the reason text (D-09).
+        async fn agreed_verdict(
+            adapter: &QwenAdapter,
+            model: &str,
+            effort: Option<ReasoningEffort>,
+            fallback: Option<ReasoningFallback>,
+        ) -> Option<String> {
+            let mut request = plain_request(model);
+            if let Some(effort) = effort {
+                request = request.with_reasoning(effort);
+            }
+            if let Some(fallback) = fallback {
+                request = request.with_reasoning_fallback(fallback);
+            }
+            let sent = adapter.generate(request).await;
+            let checked = adapter.check_reasoning(model, effort, fallback);
+            match (sent, checked) {
+                (Ok(_), Ok(())) => None,
+                (
+                    Err(LlmError::UnsupportedParameter {
+                        reason: sent_reason,
+                        ..
+                    }),
+                    Err(LlmError::UnsupportedParameter {
+                        reason: checked_reason,
+                        ..
+                    }),
+                ) => {
+                    assert_eq!(sent_reason, checked_reason);
+                    Some(checked_reason)
+                }
+                other => panic!("generate and check disagree: {other:?}"),
+            }
+        }
+
+        /// D-09, G-2: the provider-level `reasoning_effort` / `reasoning_fallback` reach the
+        /// pre-judging gate. The `enable_thinking` wire carries no level, so the substitution
+        /// row is out of reach here (nothing is listed to substitute); the defaults are shown by
+        /// a refusal that names the line that set it and by a default that rides the wire.
+        #[tokio::test]
+        async fn qwen_check_reasoning_consults_the_provider_defaults() {
+            const MODEL: &str = "qwen-plus";
+            let mut server = server().await;
+            let _captured = mock_completion(&mut server).await;
+            let build = |effort: Option<ReasoningEffort>, fallback: Option<ReasoningFallback>| {
+                let mut config = QwenConfig::new("test-key".to_string(), MODEL.to_string())
+                    .with_base_url(server.url());
+                if let Some(effort) = effort {
+                    config = config.with_reasoning_effort(effort);
+                }
+                if let Some(fallback) = fallback {
+                    config = config.with_reasoning_fallback(fallback);
+                }
+                QwenAdapter::new(config).unwrap()
+            };
+
+            // A provider default no level exists for refuses a no-effort check, naming its key.
+            let reason = agreed_verdict(&build(Some(Medium), None), MODEL, None, None)
+                .await
+                .expect("a provider default of medium is refused on a level-less wire");
+            assert!(
+                reason.ends_with("(set by `llm.qwen.reasoning_effort`)"),
+                "{reason}"
+            );
+            // The trait default (no provider defaults) would have admitted it.
+            assert!(build(None, None).check_reasoning(MODEL, None, None).is_ok());
+
+            // A provider default the wire carries is admitted, and a request-level effort wins.
+            assert_eq!(
+                agreed_verdict(&build(Some(Off), None), MODEL, None, None).await,
+                None
+            );
+            assert_eq!(
+                agreed_verdict(&build(Some(Medium), None), MODEL, Some(Off), None).await,
+                None
+            );
+            // A provider fallback cannot invent a level the wire lacks: the refusal stands.
+            assert!(
+                agreed_verdict(
+                    &build(Some(Medium), Some(ReasoningFallback::NearestLower)),
+                    MODEL,
+                    None,
+                    None
+                )
+                .await
+                .is_some()
+            );
         }
 
         #[tokio::test]

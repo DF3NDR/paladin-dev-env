@@ -382,6 +382,17 @@ impl LlmPort for OllamaAdapter {
     fn model_profile(&self, model: &str) -> Option<ModelProfile> {
         Some(self.engine.model_profile(model))
     }
+
+    /// The pre-judging twin of the engine's send-time `in_force` + `admit`: this preset's
+    /// declared-wire-masked profile and provider defaults, the same verdict (D-09).
+    fn check_reasoning(
+        &self,
+        model: &str,
+        effort: Option<ReasoningEffort>,
+        fallback: Option<ReasoningFallback>,
+    ) -> Result<(), LlmError> {
+        self.engine.check_reasoning(model, effort, fallback)
+    }
 }
 
 #[cfg(test)]
@@ -1044,5 +1055,79 @@ mod tests {
             other => panic!("expected UnsupportedParameter, got {other:?}"),
         }
         assert!(captured.lock().unwrap().is_none());
+    }
+
+    /// D-09, G-2: a self-hosted preset's pre-judge reads the declared wire and the provider-level
+    /// `reasoning_effort` / `reasoning_fallback`, and `generate` agrees with it case by case.
+    #[tokio::test]
+    async fn ollama_check_reasoning_consults_the_provider_defaults() {
+        use crate::compat::test_support::{agreed_verdict, mock_completion, server};
+        use paladin_ports::output::llm_port::ReasoningEffort::{High, Low, Medium};
+        use paladin_ports::output::model_profile::{EffortLevels, EffortSupport};
+
+        let mut server = server().await;
+        let _captured = mock_completion(&mut server).await;
+        let over = ModelOverride {
+            effort: Some(EffortSupport::Supported(EffortLevels::new([Low, High]))),
+            ..ModelOverride::default()
+        };
+        let build = |effort: Option<ReasoningEffort>, fallback: Option<ReasoningFallback>| {
+            let mut config = knob_config(&server.url(), "llama3")
+                .with_reasoning_wire(ReasoningWire::TopLevelEffort)
+                .with_model_overrides(BTreeMap::from([("llama3".to_string(), over.clone())]));
+            if let Some(effort) = effort {
+                config = config.with_reasoning_effort(effort);
+            }
+            if let Some(fallback) = fallback {
+                config = config.with_reasoning_fallback(fallback);
+            }
+            OllamaAdapter::new(config).unwrap()
+        };
+
+        // A provider-level nearest_lower lets medium substitute on a [low, high] model; without
+        // it the same request is refused.
+        let substituting = build(None, Some(ReasoningFallback::NearestLower));
+        assert_eq!(
+            agreed_verdict(&substituting, "llama3", Some(Medium), None).await,
+            None
+        );
+        assert!(
+            agreed_verdict(&build(None, None), "llama3", Some(Medium), None)
+                .await
+                .is_some()
+        );
+
+        // A provider-level effort medium with no fallback: a no-effort check refuses, naming the
+        // line that set the effort. A request-level effort the model lists beats it.
+        let defaulted = build(Some(Medium), None);
+        let reason = agreed_verdict(&defaulted, "llama3", None, None)
+            .await
+            .expect("a provider default of medium is refused on a [low, high] model");
+        assert!(
+            reason.ends_with("(set by `llm.ollama.reasoning_effort`)"),
+            "{reason}"
+        );
+        assert_eq!(
+            agreed_verdict(&defaulted, "llama3", Some(High), None).await,
+            None
+        );
+    }
+
+    /// D-10, T-51-54: a preset left at its compiled `ReasoningWire::Unsupported` refuses an
+    /// explicit effort in `check_reasoning` exactly as at send time, naming the wire key.
+    #[tokio::test]
+    async fn ollama_check_reasoning_refuses_on_the_undeclared_wire() {
+        use crate::compat::test_support::{agreed_verdict, mock_completion, server};
+        use paladin_ports::output::llm_port::ReasoningEffort::High;
+
+        let mut server = server().await;
+        let _captured = mock_completion(&mut server).await;
+        let adapter = OllamaAdapter::new(knob_config(&server.url(), "llama3")).unwrap();
+        let reason = agreed_verdict(&adapter, "llama3", Some(High), None)
+            .await
+            .expect("an undeclared wire refuses");
+        assert!(reason.contains("llm.ollama.reasoning_wire"), "{reason}");
+        // Nothing in force: admitted on the same adapter.
+        assert_eq!(agreed_verdict(&adapter, "llama3", None, None).await, None);
     }
 }

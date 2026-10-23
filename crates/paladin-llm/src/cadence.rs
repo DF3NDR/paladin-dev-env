@@ -84,7 +84,7 @@ use paladin_ports::output::cadence_port::{
 };
 use paladin_ports::output::llm_port::{
     LlmError, LlmPort, LlmRequest, LlmResponse, ModelProfile, ProviderCapabilities,
-    StreamingResponse,
+    ReasoningEffort, ReasoningFallback, StreamingResponse,
 };
 use paladin_ports::output::rate_limit_hints::RetryDelaySource;
 
@@ -461,6 +461,18 @@ impl LlmPort for CadenceLlmAdapter {
     /// silently disabled by this decorator.
     fn model_profile(&self, model: &str) -> Option<ModelProfile> {
         self.inner.model_profile(model)
+    }
+
+    /// Unchanged -- delegates to `inner`, so the wrapped adapter's provider defaults reach every
+    /// pre-judging gate (D-09): inheriting the trait default would drop them and silently weaken
+    /// the build-time check for every agent behind this decorator.
+    fn check_reasoning(
+        &self,
+        model: &str,
+        effort: Option<ReasoningEffort>,
+        fallback: Option<ReasoningFallback>,
+    ) -> Result<(), LlmError> {
+        self.inner.check_reasoning(model, effort, fallback)
     }
 }
 
@@ -1179,5 +1191,50 @@ mod tests {
         assert_eq!(paced.model_profile("m"), Some(profile));
         assert_eq!(paced.model_profile("other"), None);
         assert_eq!(stub.asked(), vec!["m".to_string(), "other".to_string()]);
+    }
+
+    /// D-09, T-51-52: the Cadence decorator forwards `check_reasoning` to its inner port --
+    /// verdict and question both unchanged -- so the wrapped adapter's provider defaults reach
+    /// every pre-judging gate instead of the trait default's.
+    #[test]
+    fn cadence_forwards_check_reasoning() {
+        use crate::test_support::CheckVerdictPort;
+        use paladin_ports::output::llm_port::{ReasoningEffort, ReasoningFallback};
+
+        let refusing = Arc::new(CheckVerdictPort::refusing("scripted refusal"));
+        let paced = with_cadence(refusing.clone(), Some(&wiring()));
+        let error = paced
+            .check_reasoning(
+                "m",
+                Some(ReasoningEffort::Medium),
+                Some(ReasoningFallback::NearestHigher),
+            )
+            .expect_err("the inner port's refusal is the decorator's");
+        assert!(
+            matches!(&error, LlmError::UnsupportedParameter { reason, provider, model, .. }
+                if reason == "scripted refusal" && provider == "check-stub" && model == "m"),
+            "{error:?}"
+        );
+        assert_eq!(
+            refusing.asked(),
+            vec![(
+                "m".to_string(),
+                Some(ReasoningEffort::Medium),
+                Some(ReasoningFallback::NearestHigher)
+            )]
+        );
+
+        // The trait default would have refused a profile-less port; the forwarded verdict admits.
+        let admitting = Arc::new(CheckVerdictPort::admitting());
+        let paced = with_cadence(admitting.clone(), Some(&wiring()));
+        assert!(
+            paced
+                .check_reasoning("m", Some(ReasoningEffort::High), None)
+                .is_ok()
+        );
+        assert_eq!(
+            admitting.asked(),
+            vec![("m".to_string(), Some(ReasoningEffort::High), None)]
+        );
     }
 }

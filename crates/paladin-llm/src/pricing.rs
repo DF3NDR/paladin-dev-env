@@ -56,7 +56,7 @@ use paladin_core::platform::container::cost::{Cost, PriceTable};
 use paladin_core::platform::container::token_usage::TokenUsage;
 use paladin_ports::output::llm_port::{
     LlmError, LlmPort, LlmRequest, LlmResponse, ModelProfile, ProviderCapabilities,
-    StreamingResponse,
+    ReasoningEffort, ReasoningFallback, StreamingResponse,
 };
 use paladin_ports::output::spend_scope::{HOPPED_BILLS, HoppedBills};
 
@@ -348,6 +348,18 @@ impl LlmPort for PricingLlmAdapter {
     /// silently disabled by this decorator.
     fn model_profile(&self, model: &str) -> Option<ModelProfile> {
         self.inner.model_profile(model)
+    }
+
+    /// Unchanged -- delegates to `inner`, so the wrapped adapter's provider defaults reach every
+    /// pre-judging gate (D-09): inheriting the trait default would drop them and silently weaken
+    /// the build-time check for every agent behind this decorator.
+    fn check_reasoning(
+        &self,
+        model: &str,
+        effort: Option<ReasoningEffort>,
+        fallback: Option<ReasoningFallback>,
+    ) -> Result<(), LlmError> {
+        self.inner.check_reasoning(model, effort, fallback)
     }
 }
 
@@ -933,6 +945,93 @@ mod tests {
 
         assert_eq!(composed.model_profile("m"), Some(sample_profile()));
         assert_eq!(composed.model_profile("unknown"), None);
+    }
+
+    /// D-09, T-51-52: the pricing decorator forwards `check_reasoning` to its inner port --
+    /// verdict and question both unchanged -- so the wrapped adapter's provider defaults reach
+    /// every pre-judging gate instead of the trait default's.
+    #[test]
+    fn pricing_forwards_check_reasoning() {
+        use crate::test_support::CheckVerdictPort;
+        use paladin_ports::output::llm_port::{ReasoningEffort, ReasoningFallback};
+
+        let refusing = Arc::new(CheckVerdictPort::refusing("scripted refusal"));
+        let adapter = PricingLlmAdapter::new(refusing.clone(), usd_table());
+        let error = adapter
+            .check_reasoning(
+                "m",
+                Some(ReasoningEffort::Medium),
+                Some(ReasoningFallback::NearestLower),
+            )
+            .expect_err("the inner port's refusal is the decorator's");
+        assert!(
+            matches!(&error, LlmError::UnsupportedParameter { reason, provider, model, .. }
+                if reason == "scripted refusal" && provider == "check-stub" && model == "m"),
+            "{error:?}"
+        );
+        assert_eq!(
+            refusing.asked(),
+            vec![(
+                "m".to_string(),
+                Some(ReasoningEffort::Medium),
+                Some(ReasoningFallback::NearestLower)
+            )]
+        );
+
+        // The trait default would have refused a profile-less port; the forwarded verdict admits.
+        let admitting = Arc::new(CheckVerdictPort::admitting());
+        let adapter = PricingLlmAdapter::new(admitting.clone(), usd_table());
+        assert!(
+            adapter
+                .check_reasoning("m", Some(ReasoningEffort::High), None)
+                .is_ok()
+        );
+        assert_eq!(
+            admitting.asked(),
+            vec![("m".to_string(), Some(ReasoningEffort::High), None)]
+        );
+    }
+
+    /// D-09, T-51-52: the production composition `Pricing(Cadence(adapter))` returns the
+    /// adapter's own verdict.
+    #[test]
+    fn pricing_over_cadence_forwards_check_reasoning() {
+        use crate::cadence::{CadenceSettings, CadenceWiring, with_cadence};
+        use crate::test_support::CheckVerdictPort;
+        use paladin_ports::output::cadence_port::CadencePolicy;
+        use paladin_ports::output::llm_port::ReasoningEffort;
+        use paladin_storage::cadence::InMemoryCadence;
+
+        let wiring = CadenceWiring::new(
+            Arc::new(InMemoryCadence::new(CadencePolicy::default())),
+            CadenceSettings::default(),
+        );
+
+        let refusing = Arc::new(CheckVerdictPort::refusing("scripted refusal"));
+        let cadence = with_cadence(refusing.clone() as Arc<dyn LlmPort>, Some(&wiring));
+        let composed = with_pricing(cadence, &usd_table());
+        let error = composed
+            .check_reasoning("m", Some(ReasoningEffort::Low), None)
+            .expect_err("the adapter's refusal survives both decorators");
+        assert!(
+            matches!(&error, LlmError::UnsupportedParameter { reason, .. }
+                if reason == "scripted refusal"),
+            "{error:?}"
+        );
+        assert_eq!(
+            refusing.asked(),
+            vec![("m".to_string(), Some(ReasoningEffort::Low), None)]
+        );
+
+        let admitting = Arc::new(CheckVerdictPort::admitting());
+        let cadence = with_cadence(admitting.clone() as Arc<dyn LlmPort>, Some(&wiring));
+        let composed = with_pricing(cadence, &usd_table());
+        assert!(
+            composed
+                .check_reasoning("m", Some(ReasoningEffort::Low), None)
+                .is_ok()
+        );
+        assert_eq!(admitting.asked().len(), 1);
     }
 
     // ---- G-50-5a remainder (a), plan 50-30 ----

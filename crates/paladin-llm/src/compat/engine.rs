@@ -759,6 +759,37 @@ impl CompatEngine {
         profile
     }
 
+    /// The pre-judging verdict for a reasoning `effort` / `fallback` on `model` (Phase 51, D-09):
+    /// whether [`CompatEngine::build_request`] would admit it, without building a request.
+    ///
+    /// The send-time twin of `build_request`'s `in_force` + `admit`: the same
+    /// [`model_profile`](Self::model_profile) (masked by the preset's declared [`ReasoningWire`]),
+    /// the same provider defaults ([`with_default_reasoning`](Self::with_default_reasoning)) and
+    /// the same `judge`, so a preset's build-time check cannot read a different profile, wire
+    /// mask or default than its send path. The per-request budget-versus-`max_tokens` rule is
+    /// left to send time. No [`SubstitutionLog`] is touched
+    /// and no network call is made.
+    ///
+    /// # Errors
+    ///
+    /// [`LlmError::UnsupportedParameter`], with the reason text `build_request` would produce.
+    pub(crate) fn check_reasoning(
+        &self,
+        model: &str,
+        effort: Option<ReasoningEffort>,
+        fallback: Option<ReasoningFallback>,
+    ) -> Result<(), LlmError> {
+        reasoning::check(
+            self.provider_name,
+            model,
+            || self.model_profile(model),
+            effort,
+            fallback,
+            self.default_reasoning.0,
+            self.default_reasoning.1,
+        )
+    }
+
     /// The preset's declared request parameters, for a preset's own position test.
     #[cfg(test)]
     pub(crate) fn request_parameters(&self) -> CompatRequestParameters {

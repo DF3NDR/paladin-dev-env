@@ -192,3 +192,169 @@ pub(crate) async fn attempts_against_a_failing_endpoint_at(
     assert!(port.generate(request).await.is_err());
     mock.assert_async().await;
 }
+
+/// What a [`CheckVerdictPort`] was asked: the `(model, effort, fallback)` of one
+/// `check_reasoning` call.
+pub(crate) type CheckAsked = (
+    String,
+    Option<paladin_ports::output::llm_port::ReasoningEffort>,
+    Option<paladin_ports::output::llm_port::ReasoningFallback>,
+);
+
+/// A minimal [`LlmPort`](paladin_ports::output::llm_port::LlmPort) whose `check_reasoning`
+/// returns a scripted verdict and records what it was asked (Phase 51, D-09), so a decorator
+/// test can prove the question and the answer pass through unchanged. It reports no model
+/// profile and cannot generate or stream, so a decorator that fell back to the trait default
+/// would not reproduce its verdict.
+pub(crate) struct CheckVerdictPort {
+    refusal: Option<String>,
+    asked: Mutex<Vec<CheckAsked>>,
+}
+
+impl CheckVerdictPort {
+    /// A port that refuses every check with an `unsupported_parameter` error carrying `reason`.
+    pub(crate) fn refusing(reason: &str) -> Self {
+        Self {
+            refusal: Some(reason.to_string()),
+            asked: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// A port that admits every check.
+    pub(crate) fn admitting() -> Self {
+        Self {
+            refusal: None,
+            asked: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// The `(model, effort, fallback)` of every `check_reasoning` call, in order.
+    pub(crate) fn asked(&self) -> Vec<CheckAsked> {
+        self.asked
+            .lock()
+            .map(|asked| asked.clone())
+            .unwrap_or_default()
+    }
+}
+
+#[async_trait::async_trait]
+impl paladin_ports::output::llm_port::LlmPort for CheckVerdictPort {
+    async fn generate(
+        &self,
+        _request: paladin_ports::output::llm_port::LlmRequest,
+    ) -> Result<
+        paladin_ports::output::llm_port::LlmResponse,
+        paladin_ports::output::llm_port::LlmError,
+    > {
+        Err(paladin_ports::output::llm_port::LlmError::ProcessingError(
+            "CheckVerdictPort does not generate".to_string(),
+        ))
+    }
+
+    async fn generate_stream(
+        &self,
+        _request: paladin_ports::output::llm_port::LlmRequest,
+    ) -> Result<
+        Box<
+            dyn futures::Stream<
+                    Item = Result<
+                        paladin_ports::output::llm_port::StreamingResponse,
+                        paladin_ports::output::llm_port::LlmError,
+                    >,
+                > + Send,
+        >,
+        paladin_ports::output::llm_port::LlmError,
+    > {
+        Err(paladin_ports::output::llm_port::LlmError::ProcessingError(
+            "CheckVerdictPort does not stream".to_string(),
+        ))
+    }
+
+    async fn validate_model(
+        &self,
+        _model: &str,
+    ) -> Result<bool, paladin_ports::output::llm_port::LlmError> {
+        Ok(true)
+    }
+
+    async fn get_available_models(
+        &self,
+    ) -> Result<Vec<String>, paladin_ports::output::llm_port::LlmError> {
+        Ok(Vec::new())
+    }
+
+    fn get_provider_name(&self) -> &'static str {
+        "check-stub"
+    }
+
+    fn get_capabilities(&self) -> paladin_ports::output::llm_port::ProviderCapabilities {
+        paladin_ports::output::llm_port::ProviderCapabilities::default()
+    }
+
+    fn check_reasoning(
+        &self,
+        model: &str,
+        effort: Option<paladin_ports::output::llm_port::ReasoningEffort>,
+        fallback: Option<paladin_ports::output::llm_port::ReasoningFallback>,
+    ) -> Result<(), paladin_ports::output::llm_port::LlmError> {
+        if let Ok(mut asked) = self.asked.lock() {
+            asked.push((model.to_string(), effort, fallback));
+        }
+        match &self.refusal {
+            Some(reason) => Err(
+                paladin_ports::output::llm_port::LlmError::unsupported_parameter(
+                    "reasoning_effort",
+                    effort.map(|e| e.to_string()).unwrap_or_default(),
+                    "check-stub",
+                    model,
+                    reason.as_str(),
+                ),
+            ),
+            None => Ok(()),
+        }
+    }
+}
+
+/// Send `effort` / `fallback` through `port`'s `generate` and ask its `check_reasoning` the same
+/// question (Phase 51, D-09). Asserts the two paths agree on both the verdict and the refusal
+/// reason text, and returns that reason (`None` when the effort is admitted).
+///
+/// # Panics
+///
+/// When `generate` and `check_reasoning` disagree, or either fails other than with
+/// `UnsupportedParameter`.
+pub(crate) async fn agreed_verdict(
+    port: &dyn paladin_ports::output::llm_port::LlmPort,
+    model: &str,
+    effort: Option<paladin_ports::output::llm_port::ReasoningEffort>,
+    fallback: Option<paladin_ports::output::llm_port::ReasoningFallback>,
+) -> Option<String> {
+    use paladin_ports::output::llm_port::LlmError;
+
+    let mut request = plain_request(model);
+    if let Some(effort) = effort {
+        request = request.with_reasoning(effort);
+    }
+    if let Some(fallback) = fallback {
+        request = request.with_reasoning_fallback(fallback);
+    }
+    let sent = port.generate(request).await;
+    let checked = port.check_reasoning(model, effort, fallback);
+    match (sent, checked) {
+        (Ok(_), Ok(())) => None,
+        (
+            Err(LlmError::UnsupportedParameter {
+                reason: sent_reason,
+                ..
+            }),
+            Err(LlmError::UnsupportedParameter {
+                reason: checked_reason,
+                ..
+            }),
+        ) => {
+            assert_eq!(sent_reason, checked_reason);
+            Some(checked_reason)
+        }
+        other => panic!("generate and check disagree: {other:?}"),
+    }
+}

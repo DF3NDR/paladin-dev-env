@@ -817,6 +817,17 @@ impl LlmPort for OpenAiCompatibleAdapter {
     fn model_profile(&self, model: &str) -> Option<ModelProfile> {
         Some(self.engine.model_profile(model))
     }
+
+    /// The pre-judging twin of the engine's send-time `in_force` + `admit`: this preset's
+    /// declared-wire-masked profile and provider defaults, the same verdict (D-09).
+    fn check_reasoning(
+        &self,
+        model: &str,
+        effort: Option<ReasoningEffort>,
+        fallback: Option<ReasoningFallback>,
+    ) -> Result<(), LlmError> {
+        self.engine.check_reasoning(model, effort, fallback)
+    }
 }
 
 #[cfg(test)]
@@ -1906,6 +1917,75 @@ mod tests {
                 "{reason}"
             );
             assert!(captured.lock().unwrap().is_none());
+        }
+
+        /// D-09, G-2: the pre-judge reads the declared wire and the provider-level
+        /// `reasoning_effort` / `reasoning_fallback`, and `generate` agrees case by case.
+        #[tokio::test]
+        async fn openai_compatible_check_reasoning_consults_the_provider_defaults() {
+            use crate::compat::test_support::agreed_verdict;
+            use paladin_ports::output::llm_port::ReasoningEffort::Medium;
+
+            let mut server = server().await;
+            let _captured = mock_completion(&mut server).await;
+            let build = |effort: Option<ReasoningEffort>, fallback: Option<ReasoningFallback>| {
+                let mut config = knob_config(&server.url(), "m")
+                    .with_reasoning_wire(ReasoningWire::TopLevelEffort)
+                    .with_model_overrides(levels_override());
+                if let Some(effort) = effort {
+                    config = config.with_reasoning_effort(effort);
+                }
+                if let Some(fallback) = fallback {
+                    config = config.with_reasoning_fallback(fallback);
+                }
+                OpenAiCompatibleAdapter::new(config).unwrap()
+            };
+
+            let substituting = build(None, Some(ReasoningFallback::NearestLower));
+            assert_eq!(
+                agreed_verdict(&substituting, "m", Some(Medium), None).await,
+                None
+            );
+            assert!(
+                agreed_verdict(&build(None, None), "m", Some(Medium), None)
+                    .await
+                    .is_some()
+            );
+
+            let defaulted = build(Some(Medium), None);
+            let reason = agreed_verdict(&defaulted, "m", None, None)
+                .await
+                .expect("a provider default of medium is refused on a [low, high] model");
+            assert!(
+                reason.ends_with("(set by `llm.openai-compatible.reasoning_effort`)"),
+                "{reason}"
+            );
+            assert_eq!(
+                agreed_verdict(&defaulted, "m", Some(High), None).await,
+                None
+            );
+        }
+
+        /// D-10, T-51-54: the compiled `ReasoningWire::Unsupported` refuses an explicit effort in
+        /// `check_reasoning` exactly as at send time, naming the wire key.
+        #[tokio::test]
+        async fn openai_compatible_check_reasoning_refuses_on_the_undeclared_wire() {
+            use crate::compat::test_support::agreed_verdict;
+
+            let mut server = server().await;
+            let _captured = mock_completion(&mut server).await;
+            let adapter = OpenAiCompatibleAdapter::new(
+                knob_config(&server.url(), "m").with_model_overrides(levels_override()),
+            )
+            .unwrap();
+            let reason = agreed_verdict(&adapter, "m", Some(High), None)
+                .await
+                .expect("an undeclared wire refuses");
+            assert!(
+                reason.contains("llm.openai-compatible.reasoning_wire"),
+                "{reason}"
+            );
+            assert_eq!(agreed_verdict(&adapter, "m", None, None).await, None);
         }
     }
 }

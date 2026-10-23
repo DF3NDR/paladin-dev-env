@@ -1151,6 +1151,27 @@ impl LlmPort for AnthropicAdapter {
     fn model_profile(&self, model: &str) -> Option<ModelProfile> {
         Some(self.wire_profile(model))
     }
+
+    /// The pre-judging twin of the send-time `in_force` + `admit` in [`Self::build_request`]:
+    /// same precedence over this adapter's `reasoning_effort` / `reasoning_fallback`, same
+    /// [`Self::wire_profile`], same verdict (D-09). The per-model wire form chosen in
+    /// `map_reasoning` only ever refuses what `admit` already refused.
+    fn check_reasoning(
+        &self,
+        model: &str,
+        effort: Option<ReasoningEffort>,
+        fallback: Option<ReasoningFallback>,
+    ) -> Result<(), LlmError> {
+        reasoning::check(
+            ANTHROPIC_PROVIDER,
+            model,
+            || self.wire_profile(model),
+            effort,
+            fallback,
+            self.config.reasoning_effort,
+            self.config.reasoning_fallback,
+        )
+    }
 }
 
 // ── Claude API request/response types ───────────────────────────────────────
@@ -3939,6 +3960,94 @@ stake, so an attacker donating to himself alone is a strict loss.";
             let result = adapter.generate(request).await;
             let body = captured.lock().unwrap().take();
             (body, result)
+        }
+
+        /// D-09: `check_reasoning` answers with this adapter's own `llm.anthropic.reasoning_*`
+        /// defaults, and agrees with what `generate` does for the same effort.
+        #[tokio::test]
+        async fn anthropic_check_reasoning_consults_the_provider_defaults() {
+            const PROBE: &str = "probe-model";
+            let mut server = Server::new_async().await;
+            server
+                .mock("POST", "/messages")
+                .with_status(200)
+                .with_body(TEXT_ONLY_OPUS_4_8_JSON)
+                .expect_at_least(0)
+                .create_async()
+                .await;
+            let over = ModelOverride {
+                effort: Some(EffortSupport::Supported(EffortLevels::new([Low, High]))),
+                ..ModelOverride::default()
+            };
+            let adapter = |effort: Option<ReasoningEffort>, fallback: Option<ReasoningFallback>| {
+                let mut config = AnthropicConfig::new(
+                    "sk-ant-test123".to_string(),
+                    "claude-haiku-5-5".to_string(),
+                )
+                .with_base_url(server.url())
+                .with_model_overrides(BTreeMap::from([(PROBE.to_string(), over.clone())]));
+                if let Some(effort) = effort {
+                    config = config.with_reasoning_effort(effort);
+                }
+                if let Some(fallback) = fallback {
+                    config = config.with_reasoning_fallback(fallback);
+                }
+                AnthropicAdapter::new(config).expect("a valid override builds")
+            };
+
+            // A provider fallback substitutes an agent effort the model lacks.
+            let substituting = adapter(None, Some(ReasoningFallback::NearestLower));
+            assert!(
+                substituting
+                    .check_reasoning(PROBE, Some(Medium), None)
+                    .is_ok()
+            );
+            assert!(
+                substituting
+                    .generate(request_for(PROBE).with_reasoning(Medium))
+                    .await
+                    .is_ok()
+            );
+
+            // A provider default effort the model lacks is refused for a caller who sets none.
+            let defaulted = adapter(Some(Medium), None);
+            let LlmError::UnsupportedParameter {
+                reason: checked, ..
+            } = defaulted.check_reasoning(PROBE, None, None).unwrap_err()
+            else {
+                panic!("expected UnsupportedParameter");
+            };
+            let LlmError::UnsupportedParameter {
+                reason: sent,
+                param,
+                ..
+            } = defaulted.generate(request_for(PROBE)).await.unwrap_err()
+            else {
+                panic!("expected UnsupportedParameter");
+            };
+            assert_eq!(param, "reasoning_effort");
+            assert_eq!(checked, sent);
+            assert!(
+                checked.ends_with("(set by `llm.anthropic.reasoning_effort`)"),
+                "{checked}"
+            );
+
+            // A listed request effort is served under either default.
+            for port in [&substituting, &defaulted] {
+                assert!(port.check_reasoning(PROBE, Some(High), None).is_ok());
+                assert!(
+                    port.generate(request_for(PROBE).with_reasoning(High))
+                        .await
+                        .is_ok()
+                );
+            }
+
+            // Nothing in force anywhere: nothing judged.
+            assert!(
+                adapter(None, None)
+                    .check_reasoning(PROBE, None, None)
+                    .is_ok()
+            );
         }
 
         fn json_of(body: Option<String>) -> Value {

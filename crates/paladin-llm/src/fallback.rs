@@ -157,12 +157,14 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::stream::{self, Stream, StreamExt};
+use paladin_core::platform::container::reasoning::{ReasoningEffort, ReasoningFallback};
 use paladin_core::platform::container::transience::Transience;
 use paladin_ports::output::cadence_port::{CADENCE_LOG_TARGET, CadenceKey, CadencePort};
 use paladin_ports::output::llm_port::{
     BilledUsage, LlmError, LlmPort, LlmRequest, LlmResponse, ModelProfile, ProviderCapabilities,
     StreamingResponse,
 };
+use paladin_ports::output::model_profile::EffortSupport;
 use paladin_ports::output::spend_scope::record_hopped_bill;
 use paladin_ports::output::trace_sink_port::{TraceEmitter, TraceEvent, current_trace_emitter};
 use thiserror::Error;
@@ -336,15 +338,19 @@ type StreamItem = Result<StreamingResponse, LlmError>;
 ///
 /// # Reasoning effort pre-flight (D-08)
 ///
-/// A request that carries a `reasoning` effort is resolved against **every** hop's own
-/// `model_profile` (the step's model, else the request's) before the first call. The first hop,
-/// in chain order, that cannot honour the effort -- or substitute it under the request's
-/// `reasoning_fallback` -- fails the whole request with `LlmError::UnsupportedParameter` naming
-/// that hop's provider and model; no hop is called. A chain therefore never discovers an
-/// incompatible hop only during an outage of an earlier one. A hop that is reached re-admits the
-/// request itself and sends its own resolution, recorded as `paladin.reasoning_requested` /
-/// `paladin.reasoning_effective` on the served response beside `paladin.served_by`. A request
-/// with no effort skips the pre-flight entirely.
+/// Every hop is judged by its **own** [`LlmPort::check_reasoning`] -- against the step's model
+/// (else the request's), under the request's effort and fallback and then that hop's own
+/// provider-level `reasoning_effort` / `reasoning_fallback` -- before the first call. The first
+/// hop, in chain order, that cannot honour the effort (or substitute it under the fallback in
+/// force) fails the whole request with `LlmError::UnsupportedParameter` naming that hop's
+/// provider and model, its reason prefixed `fallback hop <index>: `; no hop is called. A chain
+/// therefore never discovers an incompatible hop only during an outage of an earlier one, and a
+/// hop whose provider default would refuse when reached refuses the chain up front even when the
+/// request sets no effort. A hop that is reached re-admits the request itself and sends its own
+/// resolution, recorded as `paladin.reasoning_requested` / `paladin.reasoning_effective` on the
+/// served response beside `paladin.served_by`. The chain's own `check_reasoning` is the same
+/// call, so `PaladinBuilder::build` over a chain and the pre-flight are one verdict. A request
+/// with no effort in force on any hop is never refused.
 ///
 /// # Example
 ///
@@ -697,51 +703,26 @@ impl FallbackLlmAdapter {
         hop_request
     }
 
-    /// D-08: resolve the request's reasoning effort against **every** hop's own profile before
-    /// the first call, so a chain never discovers an incompatible hop only during an outage of an
-    /// earlier one (REASON-04).
+    /// D-08: judge the request's reasoning effort against **every** hop before the first call, so
+    /// a chain never discovers an incompatible hop only during an outage of an earlier one
+    /// (REASON-04).
     ///
-    /// A request with no effort skips this entirely. Otherwise each hop is visited in chain order
-    /// with the model it will be sent (the step's model, else the request's) and its own
-    /// [`LlmPort::model_profile`]; a hop with no profile, or whose profile cannot honour the
-    /// effort (or substitute it under the request's fallback), fails the whole request with
-    /// [`LlmError::unsupported_parameter`] naming that hop's provider and model and its zero-based
-    /// chain index. The lowest-index refusing hop is the one named, and no hop is called. A hop
-    /// that is later reached re-admits the request itself, so each hop sends its own resolution
-    /// (A2-51-07: a hop adapter's provider-level default is resolved by that adapter at send time).
+    /// This is [`LlmPort::check_reasoning`] on the request's own model, effort and fallback: each
+    /// hop is visited in chain order with the model it will be sent (the step's model, else the
+    /// request's) and judges the request under its own provider-level `reasoning_effort` /
+    /// `reasoning_fallback`. The lowest-index refusing hop is named, its reason prefixed
+    /// `fallback hop <index>: `, and no hop is called. A hop that is later reached re-admits the
+    /// request itself, so each hop sends its own resolution.
     ///
     /// # Errors
     ///
     /// [`LlmError::UnsupportedParameter`] for the first hop that cannot honour the effort.
     fn preflight_reasoning(&self, request: &LlmRequest) -> Result<(), LlmError> {
-        let Some(effort) = request.reasoning else {
-            return Ok(());
-        };
-        let fallback = request.reasoning_fallback.unwrap_or_default();
-        for (index, port) in self.chain.iter().enumerate() {
-            let model = self
-                .models
-                .get(index)
-                .and_then(Option::as_deref)
-                .unwrap_or(request.model.as_str());
-            let reason = match port.model_profile(model) {
-                Some(profile) => match profile.effort.resolve(effort, fallback) {
-                    Ok(_) => continue,
-                    Err(refusal) => refusal.to_string(),
-                },
-                None => "it reports no model profile, so an explicit reasoning effort cannot be \
-                         checked"
-                    .to_string(),
-            };
-            return Err(LlmError::unsupported_parameter(
-                "reasoning_effort",
-                effort.to_string(),
-                port.get_provider_name(),
-                model,
-                format!("fallback hop {index}: {reason}"),
-            ));
-        }
-        Ok(())
+        self.check_reasoning(
+            &request.model,
+            request.reasoning,
+            request.reasoning_fallback,
+        )
     }
 
     /// The error returned when every element of the chain has been asked
@@ -918,26 +899,89 @@ impl LlmPort for FallbackLlmAdapter {
             .unwrap_or_default()
     }
 
-    /// The strictest profile any hop would accept (ADR-0061): the [`ModelProfile::intersect`] of
-    /// every hop's `Some` profile for `model`, so the builder refuses what any hop could not
-    /// honour. `None` when no hop declares a profile.
+    /// The strictest sampling profile any hop would accept (ADR-0061): the
+    /// [`ModelProfile::intersect`] of every hop's `Some` profile for `model`, so the builder
+    /// refuses a sampling value any hop could not honour. `None` when no hop declares a profile.
     ///
-    /// A hop that returns `None` (a third-party adapter with no profile) is skipped and judged
-    /// only by its own request builder. The intersection is order-independent, so the order the
-    /// hops are listed in does not change the answer.
+    /// For sampling, a hop that returns `None` (a third-party adapter with no profile) is skipped:
+    /// each hop's own request builder applies its own limits. For effort the chain's profile is
+    /// [`EffortSupport::Unmeasured`] (with no `effort_verified_on`) whenever any hop has none, so
+    /// no reader can mistake a chain with an unprofiled hop for one that can take an explicit
+    /// effort. The authority for an effort verdict is
+    /// [`check_reasoning`](LlmPort::check_reasoning), which judges every hop against its own
+    /// profile and defaults; this profile is not consulted for it. The intersection is
+    /// order-independent, so the order the hops are listed in does not change the answer.
     ///
     /// Each hop is asked about the model it will be sent (D-15): a
     /// [`FallbackLlmAdapter::from_steps`] chain asks every step about that step's own model and
     /// ignores `model`; a [`FallbackLlmAdapter::new`] chain asks every hop about `model`, which
     /// is what each hop is sent.
     fn model_profile(&self, model: &str) -> Option<ModelProfile> {
-        self.chain
-            .iter()
-            .zip(&self.models)
-            .filter_map(|(provider, step_model)| {
-                provider.model_profile(step_model.as_deref().unwrap_or(model))
-            })
-            .reduce(|combined, next| combined.intersect(&next))
+        let mut any_hop_without_profile = false;
+        let mut combined: Option<ModelProfile> = None;
+        for (provider, step_model) in self.chain.iter().zip(&self.models) {
+            match provider.model_profile(step_model.as_deref().unwrap_or(model)) {
+                Some(next) => {
+                    combined = Some(match combined {
+                        Some(so_far) => so_far.intersect(&next),
+                        None => next,
+                    });
+                }
+                None => any_hop_without_profile = true,
+            }
+        }
+        if any_hop_without_profile && let Some(profile) = combined.as_mut() {
+            profile.effort = EffortSupport::Unmeasured;
+            profile.effort_verified_on = None;
+        }
+        combined
+    }
+
+    /// The AND over hops, in chain order, of each hop's own
+    /// [`check_reasoning`](LlmPort::check_reasoning) (D-08, D-09): hop `index` is asked about the
+    /// model it will be sent (the step's model, else `model`) with the same effort and fallback,
+    /// and judges them under its own provider-level defaults. The first refusal is returned as
+    /// [`LlmError::UnsupportedParameter`] with that hop's provider and model and its reason
+    /// prefixed `fallback hop <index>: `; any other error is returned unchanged. No hop is called
+    /// over the network, and no profile is read for a hop with no effort in force.
+    ///
+    /// The chain's [`model_profile`](LlmPort::model_profile) is an intersection, which skips
+    /// sampling for a hop with no profile and over-refuses level sets that only touch; this
+    /// per-hop verdict is the authority for effort, at build, pre-flight and send alike.
+    fn check_reasoning(
+        &self,
+        model: &str,
+        effort: Option<ReasoningEffort>,
+        fallback: Option<ReasoningFallback>,
+    ) -> Result<(), LlmError> {
+        for (index, port) in self.chain.iter().enumerate() {
+            let hop_model = self
+                .models
+                .get(index)
+                .and_then(Option::as_deref)
+                .unwrap_or(model);
+            match port.check_reasoning(hop_model, effort, fallback) {
+                Ok(()) => {}
+                Err(LlmError::UnsupportedParameter {
+                    param,
+                    value,
+                    provider,
+                    model,
+                    reason,
+                    ..
+                }) => {
+                    return Err(LlmError::unsupported_parameter(
+                        param,
+                        value,
+                        provider,
+                        model,
+                        format!("fallback hop {index}: {reason}"),
+                    ));
+                }
+                Err(other) => return Err(other),
+            }
+        }
+        Ok(())
     }
 }
 
@@ -2196,6 +2240,82 @@ mod tests {
         assert_eq!(single.model_profile("m"), Some(single_profile));
     }
 
+    /// G-2 item 3: a hop that reports no profile can never be said to take an explicit effort, so
+    /// the chain's profile reports `Unmeasured` effort (and no verification date) as soon as any
+    /// hop answers `None`, instead of advertising the reporting hops' intersection.
+    #[test]
+    fn a_chain_profile_is_effort_unmeasured_when_any_hop_reports_none() {
+        use paladin_core::platform::container::reasoning::ReasoningEffort;
+        use paladin_ports::output::model_profile::{EffortLevels, EffortSupport};
+
+        let measured = ModelProfile::new()
+            .with_temperature(ParamSupport::Range(0.0, 2.0))
+            .with_effort(EffortSupport::Supported(EffortLevels::new([
+                ReasoningEffort::Low,
+                ReasoningEffort::High,
+            ])))
+            .with_effort_verified_on("2026-10-21");
+
+        // Every hop reports: today's intersection, effort and its date included.
+        let all = FallbackLlmAdapter::new(vec![
+            hop("a", Some(measured.clone())),
+            hop("b", Some(measured.clone())),
+        ])
+        .expect("chain");
+        let profile = all.model_profile("m").expect("both hops report");
+        assert!(matches!(profile.effort, EffortSupport::Supported(_)));
+        assert_eq!(profile.effort, measured.clone().intersect(&measured).effort);
+
+        // One hop reports nothing: effort fails closed.
+        let some = FallbackLlmAdapter::new(vec![
+            hop("a", Some(measured.clone())),
+            hop("third-party", None),
+        ])
+        .expect("chain");
+        let profile = some.model_profile("m").expect("one hop reports");
+        assert_eq!(profile.effort, EffortSupport::Unmeasured);
+        assert_eq!(profile.effort_verified_on, None);
+
+        // The same whichever side the profile-less hop sits on, and for a single reporting hop.
+        let reversed = FallbackLlmAdapter::new(vec![
+            hop("third-party", None),
+            hop("a", Some(measured.clone())),
+        ])
+        .expect("chain");
+        let profile = reversed.model_profile("m").expect("one hop reports");
+        assert_eq!(profile.effort, EffortSupport::Unmeasured);
+        assert_eq!(profile.effort_verified_on, None);
+    }
+
+    /// The sampling half of the chain profile is unchanged by the effort fail-closed rule: a hop
+    /// with no profile is still skipped for sampling (each hop's own request builder applies its
+    /// own), so the reporting hops' intersection still bounds temperature and the rest.
+    #[test]
+    fn a_chain_profile_keeps_sampling_from_the_hops_that_report_one() {
+        let p1 = ModelProfile::new()
+            .with_temperature(ParamSupport::Range(0.0, 2.0))
+            .with_stop_sequences(StopSupport::Supported { max: Some(16) })
+            .with_context_window(200_000);
+        let p2 = ModelProfile::new()
+            .with_temperature(ParamSupport::Range(0.0, 1.0))
+            .with_stop_sequences(StopSupport::Supported { max: Some(4) })
+            .with_context_window(128_000);
+        let expected = p1.intersect(&p2);
+
+        let chain = FallbackLlmAdapter::new(vec![
+            hop("openai", Some(p1)),
+            hop("third-party", None),
+            hop("anthropic", Some(p2)),
+        ])
+        .expect("chain");
+        let profile = chain.model_profile("m").expect("two hops report");
+
+        assert_eq!(profile.temperature, expected.temperature);
+        assert_eq!(profile.stop_sequences, expected.stop_sequences);
+        assert_eq!(profile.context_window, expected.context_window);
+        assert_eq!(profile.temperature, ParamSupport::Range(0.0, 1.0));
+    }
+
     // -----------------------------------------------------------------------
     // Per-step models, the served model and the refusal opt-in (plan 50-14:
     // D-15, D-10, D-00h, PARITY-06)
@@ -3103,8 +3223,181 @@ mod reasoning_preflight_tests {
         );
     }
 
+    /// A DeepSeek hop over the unreachable `127.0.0.1:9`, whose `mock-model` lists exactly
+    /// `[low, high]`, configured with the given provider-level defaults
+    /// (`llm.deepseek.reasoning_effort` / `reasoning_fallback`). The pre-flight must settle every
+    /// test using it before any request could leave the process.
+    #[cfg(feature = "deepseek")]
+    fn deepseek_hop(
+        default_effort: Option<ReasoningEffort>,
+        default_fallback: Option<ReasoningFallback>,
+    ) -> Arc<dyn LlmPort> {
+        use crate::deepseek::{DeepSeekAdapter, DeepSeekConfig};
+        use crate::registry::ModelOverride;
+        use std::collections::BTreeMap;
+
+        let over = ModelOverride {
+            effort: levels([ReasoningEffort::Low, ReasoningEffort::High]),
+            ..ModelOverride::default()
+        };
+        let mut config = DeepSeekConfig::new("test-key".to_string(), "deepseek-flash".to_string())
+            .with_base_url("http://127.0.0.1:9")
+            .with_model_overrides(BTreeMap::from([("mock-model".to_string(), over)]));
+        if let Some(effort) = default_effort {
+            config = config.with_reasoning_effort(effort);
+        }
+        if let Some(fallback) = default_fallback {
+            config = config.with_reasoning_fallback(fallback);
+        }
+        Arc::new(DeepSeekAdapter::new(config).expect("a valid override builds"))
+    }
+
+    /// WR-01, chain half: a hop's own `llm.<provider>.reasoning_fallback` is honoured before the
+    /// first call. Request `medium` with no fallback: hop 0 lists it, hop 1 would substitute
+    /// `low`, so the chain is admitted and hop 0 serves.
+    #[cfg(feature = "deepseek")]
     #[tokio::test]
-    async fn a_request_with_no_effort_skips_the_pre_flight_entirely() {
+    async fn a_hops_own_provider_fallback_is_honoured_by_the_pre_flight() {
+        let first = serving("hop-a");
+        let adapter = FallbackLlmAdapter::new(vec![
+            EffortHop::new(first.clone(), levels([ReasoningEffort::Medium])) as Arc<dyn LlmPort>,
+            deepseek_hop(None, Some(ReasoningFallback::NearestLower)),
+        ])
+        .expect("a chain");
+
+        let response = adapter
+            .generate(request(Some(ReasoningEffort::Medium)))
+            .await
+            .expect("hop 1 substitutes medium -> low, so the chain is admitted");
+
+        assert_eq!(first.call_count(), 1);
+        assert_eq!(
+            response
+                .metadata
+                .get(SERVED_BY_METADATA_KEY)
+                .map(String::as_str),
+            Some("hop-a")
+        );
+    }
+
+    /// A hop's own provider-default effort is pre-flighted even when the request sets none, so a
+    /// hop that would refuse when reached refuses the chain before hop 0 is called.
+    #[cfg(feature = "deepseek")]
+    #[tokio::test]
+    async fn a_hops_provider_default_effort_is_pre_flighted_even_when_the_request_sets_none() {
+        let first = serving("hop-a");
+        let adapter = FallbackLlmAdapter::new(vec![
+            EffortHop::new(first.clone(), levels([ReasoningEffort::Medium])) as Arc<dyn LlmPort>,
+            deepseek_hop(Some(ReasoningEffort::Medium), None),
+        ])
+        .expect("a chain");
+
+        let error = adapter
+            .generate(request(None))
+            .await
+            .expect_err("hop 1 defaults to medium, which its model lacks");
+
+        let (param, value, provider, rest) = refusal(error);
+        assert_eq!(param, "reasoning_effort");
+        assert_eq!(value, "medium");
+        assert_eq!(provider, "deepseek");
+        assert!(rest.contains("fallback hop 1: "), "{rest}");
+        assert!(
+            rest.ends_with("(set by `llm.deepseek.reasoning_effort`)"),
+            "{rest}"
+        );
+        assert_eq!(first.call_count(), 0, "no hop may be called");
+
+        // The streaming path refuses on the same verdict.
+        assert!(
+            adapter
+                .generate_stream(request(None))
+                .await
+                .is_err_and(|e| matches!(e, LlmError::UnsupportedParameter { .. }))
+        );
+        assert_eq!(first.call_count(), 0);
+    }
+
+    /// D-08 / D-09 contract: for a grid of hop level sets, fallbacks and efforts, the chain's
+    /// `check_reasoning` is `Ok` iff every hop's own `check_reasoning` is `Ok`, and a refusal
+    /// names the lowest refusing index with that hop's own provider, model and reason.
+    #[test]
+    fn a_chain_check_reasoning_is_the_and_of_every_hops_check() {
+        use ReasoningEffort::{High, Low, Max, Medium};
+
+        let supports = || -> Vec<Option<EffortSupport>> {
+            vec![
+                levels([Low, High]),
+                levels([Medium, High]),
+                levels([High, Max]),
+                Some(EffortSupport::Unmeasured),
+                None,
+            ]
+        };
+        let efforts = [None, Some(Low), Some(Medium), Some(High), Some(Max)];
+        let fallbacks = [
+            None,
+            Some(ReasoningFallback::Refuse),
+            Some(ReasoningFallback::NearestLower),
+            Some(ReasoningFallback::NearestHigher),
+        ];
+        let (mut cases, mut refusals) = (0_u32, 0_u32);
+        for first in supports() {
+            for second in supports() {
+                let hops = vec![
+                    EffortHop::new(serving("hop-a"), first.clone()),
+                    EffortHop::new(serving("hop-b"), second.clone()),
+                ];
+                let adapter = chain(hops.clone());
+                for effort in efforts {
+                    for fallback in fallbacks {
+                        cases += 1;
+                        let label = format!("{first:?} / {second:?}, {effort:?}/{fallback:?}");
+                        let own: Vec<Result<(), LlmError>> = hops
+                            .iter()
+                            .map(|hop| hop.check_reasoning("mock-model", effort, fallback))
+                            .collect();
+                        let verdict = adapter.check_reasoning("mock-model", effort, fallback);
+                        match own.iter().position(Result::is_err) {
+                            None => assert!(verdict.is_ok(), "{label}: {verdict:?}"),
+                            Some(index) => {
+                                refusals += 1;
+                                let (param, value, provider, rest) =
+                                    refusal(verdict.expect_err(&label));
+                                let (own_param, own_value, own_provider, own_rest) =
+                                    refusal(own[index].clone().expect_err(&label));
+                                assert_eq!(
+                                    (param, value, provider),
+                                    (own_param, own_value, own_provider),
+                                    "{label}"
+                                );
+                                let (model, reason) = rest.split_once('|').expect("model|reason");
+                                let (own_model, own_reason) =
+                                    own_rest.split_once('|').expect("model|reason");
+                                assert_eq!(model, own_model, "{label}");
+                                assert_eq!(
+                                    reason,
+                                    format!("fallback hop {index}: {own_reason}"),
+                                    "{label}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(cases, 5 * 5 * 5 * 4);
+        assert!(
+            refusals > 0 && refusals < cases,
+            "the grid must cover both verdicts"
+        );
+    }
+
+    /// With no effort in force on any hop -- the request sets none and no hop has a provider
+    /// default -- the pre-flight judges nothing: no profile is read and nothing is refused,
+    /// whatever the hops report.
+    #[tokio::test]
+    async fn a_request_with_no_effort_in_force_on_any_hop_is_never_refused() {
         let first = serving("hop-a");
         let adapter = chain(vec![
             EffortHop::new(first.clone(), None),

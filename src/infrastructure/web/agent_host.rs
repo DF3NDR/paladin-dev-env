@@ -198,9 +198,9 @@ fn check_block_reasoning(
     llm: &dyn LlmPort,
     block: &BlockReasoning,
 ) -> Result<(), HostBuildError> {
-    let fallback = block
-        .fallback
-        .or(def.reasoning_fallback)
+    let fallback = def
+        .reasoning_fallback
+        .or(block.fallback)
         .unwrap_or_default();
     let reason = match llm.model_profile(&def.model) {
         Some(profile) => match profile.effort.resolve(block.effort, fallback) {
@@ -1899,6 +1899,79 @@ mod config_driven_tests {
         assert!(
             build(&lenient, Some(&llm), "openai").await.is_ok(),
             "the agent's nearest_higher substitutes the block's medium"
+        );
+    }
+
+    /// G-2 (a): the agent's own fallback wins over the block's, as `in_force` resolves it at send
+    /// time. Block `nearest_lower` + agent `refuse` on `[low, high]` refuses every call, so the
+    /// load refuses too.
+    #[tokio::test]
+    async fn block_nearest_lower_agent_refuse_is_refused() {
+        use paladin_core::platform::container::reasoning::{ReasoningEffort, ReasoningFallback};
+        let block = LlmProviderConfig::new(SECRET)
+            .with_reasoning_effort(ReasoningEffort::Medium)
+            .with_reasoning_fallback(ReasoningFallback::NearestLower);
+        let llm = deepseek_block_llm(block, "agent-model-x", Some(&["low", "high"]));
+        let mut def = agent("a1", "deepseek", "agent-model-x");
+        def.reasoning_fallback = Some(ReasoningFallback::Refuse);
+
+        let err = build(&def, Some(&llm), "openai")
+            .await
+            .err()
+            .expect("the agent's refuse beats the block's nearest_lower, so medium is refused");
+        assert!(matches!(err, HostBuildError::Build { .. }), "got {err:?}");
+        let text = err.to_string();
+        for needle in ["reasoning_effort", "medium"] {
+            assert!(text.contains(needle), "missing '{needle}' in: {text}");
+        }
+        assert!(
+            text.ends_with("(set by `llm.deepseek.reasoning_effort`)"),
+            "{text}"
+        );
+        assert!(!text.contains(SECRET), "no key in the error: {text}");
+        assert!(!text.contains("agents[a1]"), "{text}");
+    }
+
+    /// G-2 (a), the reverse: block `refuse` + agent `nearest_lower` on `[low, high]` serves every
+    /// call by substituting `low`, so the load accepts it.
+    #[tokio::test]
+    async fn block_refuse_agent_nearest_lower_passes() {
+        use paladin_core::platform::container::reasoning::{ReasoningEffort, ReasoningFallback};
+        let block = LlmProviderConfig::new(SECRET)
+            .with_reasoning_effort(ReasoningEffort::Medium)
+            .with_reasoning_fallback(ReasoningFallback::Refuse);
+        let llm = deepseek_block_llm(block, "agent-model-x", Some(&["low", "high"]));
+        let mut def = agent("a1", "deepseek", "agent-model-x");
+        def.reasoning_fallback = Some(ReasoningFallback::NearestLower);
+
+        let Ok((paladin, _, _)) = build(&def, Some(&llm), "openai").await else {
+            panic!("the agent's nearest_lower substitutes the block's medium with low");
+        };
+        // The provider default still stays below the agent: nothing is copied onto the Paladin.
+        assert_eq!(paladin.data.reasoning_effort, None);
+    }
+
+    /// Boundary: medium on `[high, max]` has no lower level, and the direction is never flipped,
+    /// so the block's `nearest_lower` alone refuses while the agent's `nearest_higher` decides.
+    #[tokio::test]
+    async fn block_nearest_lower_agent_nearest_higher_takes_the_agents_direction() {
+        use paladin_core::platform::container::reasoning::{ReasoningEffort, ReasoningFallback};
+        let block = LlmProviderConfig::new(SECRET)
+            .with_reasoning_effort(ReasoningEffort::Medium)
+            .with_reasoning_fallback(ReasoningFallback::NearestLower);
+        let llm = deepseek_block_llm(block, "agent-model-x", Some(&["high", "max"]));
+
+        let mut higher = agent("a1", "deepseek", "agent-model-x");
+        higher.reasoning_fallback = Some(ReasoningFallback::NearestHigher);
+        assert!(
+            build(&higher, Some(&llm), "openai").await.is_ok(),
+            "the agent's nearest_higher steps medium up to high"
+        );
+
+        let silent = agent("a2", "deepseek", "agent-model-x");
+        assert!(
+            build(&silent, Some(&llm), "openai").await.is_err(),
+            "the block's nearest_lower alone finds no lower level and never flips direction"
         );
     }
 

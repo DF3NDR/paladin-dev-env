@@ -2534,7 +2534,100 @@ pub trait LlmPort: Send + Sync {
     fn model_profile(&self, _model: &str) -> Option<ModelProfile> {
         None
     }
+
+    /// Judge, before any call, whether a reasoning `effort` (with its `fallback`) would be served
+    /// for `model` (Phase 51, D-09).
+    ///
+    /// This is the verdict a build-time or chain-level gate asks for. The `effort` and `fallback`
+    /// are the values a request or an agent carries; the port resolves them against **its own**
+    /// provider-level defaults (`llm.<provider>.reasoning_effort` / `reasoning_fallback`) exactly
+    /// as [`generate`](Self::generate) would -- a request-level value first, field by field -- and
+    /// admits the result against the model's profile. `Ok(())` means `generate` would not refuse
+    /// the effort; no network call is made and nothing is logged or recorded.
+    ///
+    /// The one rule not judged is the per-request check that a reasoning budget stays below
+    /// `max_tokens`: it needs the request's own cap, which a gate that has not built the request
+    /// does not know. The adapter stays the authority for that rule at send time.
+    ///
+    /// # Default
+    ///
+    /// The default knows no provider-level defaults, so it judges `effort` and `fallback` alone:
+    /// `effort: None` is `Ok(())` without reading the profile; otherwise the effort is admitted
+    /// against [`model_profile`](Self::model_profile) with `fallback` (`Refuse` when `None`). A
+    /// port with no profile refuses an explicit effort (nothing was measured, D-03). A third-party
+    /// port therefore behaves as it did before this method existed.
+    ///
+    /// # Decorators
+    ///
+    /// A decorator that wraps another `LlmPort` **must forward** this method to its inner port.
+    /// Keeping the default silently drops the wrapped adapter's provider-level defaults from every
+    /// pre-judging gate: a configured `reasoning_fallback` would again be refused at build time
+    /// with a hint to set what is already set.
+    ///
+    /// # Errors
+    ///
+    /// [`LlmError::UnsupportedParameter`] with `param == "reasoning_effort"`, carrying the same
+    /// reason text `generate` would carry. It is `Permanent`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_ports::output::llm_port::{LlmError, LlmPort, ReasoningEffort};
+    ///
+    /// /// Whether `port` would serve a `high` effort on `model`.
+    /// fn serves_high(port: &dyn LlmPort, model: &str) -> Result<bool, LlmError> {
+    ///     match port.check_reasoning(model, Some(ReasoningEffort::High), None) {
+    ///         Ok(()) => Ok(true),
+    ///         Err(LlmError::UnsupportedParameter { .. }) => Ok(false),
+    ///         Err(other) => Err(other),
+    ///     }
+    /// }
+    /// # let _ = serves_high;
+    /// ```
+    fn check_reasoning(
+        &self,
+        model: &str,
+        effort: Option<ReasoningEffort>,
+        fallback: Option<ReasoningFallback>,
+    ) -> Result<(), LlmError> {
+        let Some(effort) = effort else {
+            return Ok(());
+        };
+        let fallback = fallback.unwrap_or_default();
+        let refuse = |reason: String| {
+            LlmError::unsupported_parameter(
+                "reasoning_effort",
+                effort.to_string(),
+                self.get_provider_name(),
+                model,
+                reason,
+            )
+        };
+        let Some(profile) = self.model_profile(model) else {
+            return Err(refuse(
+                "it reports no model profile, so an explicit reasoning effort cannot be checked"
+                    .to_string(),
+            ));
+        };
+        profile
+            .effort
+            .resolve(effort, fallback)
+            .map(|_| ())
+            .map_err(|refusal| {
+                let mut reason = refusal.to_string();
+                if fallback == ReasoningFallback::Refuse
+                    && matches!(refusal, EffortRefusal::LevelUnsupported)
+                {
+                    reason.push_str(REASONING_FALLBACK_HINT);
+                }
+                refuse(reason)
+            })
+    }
 }
+
+/// The hint appended to a refusal when the fallback in force is `Refuse` and the model simply
+/// lacks the level: the one way out. Kept in step with `paladin_llm::reasoning::FALLBACK_HINT`.
+const REASONING_FALLBACK_HINT: &str = "; set a reasoning_fallback to substitute the nearest level";
 
 #[cfg(test)]
 mod tests {
@@ -2802,6 +2895,137 @@ mod tests {
     fn model_profile_defaults_to_none() {
         assert!(NoProfilePort.model_profile("any-model").is_none());
         assert!(NoProfilePort.model_profile("").is_none());
+    }
+
+    /// A port that reports one profile for every model and keeps the default `check_reasoning`.
+    struct ProfiledPort(ModelProfile);
+
+    #[async_trait]
+    impl LlmPort for ProfiledPort {
+        async fn generate(&self, _request: LlmRequest) -> Result<LlmResponse, LlmError> {
+            Err(LlmError::ProcessingError("unused".to_string()))
+        }
+
+        async fn generate_stream(
+            &self,
+            _request: LlmRequest,
+        ) -> Result<
+            Box<dyn futures::Stream<Item = Result<StreamingResponse, LlmError>> + Send>,
+            LlmError,
+        > {
+            Err(LlmError::ProcessingError("unused".to_string()))
+        }
+
+        async fn validate_model(&self, _model: &str) -> Result<bool, LlmError> {
+            Ok(true)
+        }
+
+        async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
+            Ok(Vec::new())
+        }
+
+        fn get_provider_name(&self) -> &'static str {
+            "profiled"
+        }
+
+        fn get_capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities::default()
+        }
+
+        fn model_profile(&self, _model: &str) -> Option<ModelProfile> {
+            Some(self.0.clone())
+        }
+    }
+
+    /// D-09: the default `check_reasoning` is the builder's pre-gap rule -- the profile and the
+    /// given fallback, no provider defaults.
+    #[test]
+    fn check_reasoning_default_judges_the_profile_alone() {
+        let port = ProfiledPort(ModelProfile::new().with_effort(EffortSupport::Supported(
+            EffortLevels::new([ReasoningEffort::Low, ReasoningEffort::High]),
+        )));
+
+        let error = port
+            .check_reasoning("m", Some(ReasoningEffort::Medium), None)
+            .unwrap_err();
+        let LlmError::UnsupportedParameter {
+            param,
+            value,
+            provider,
+            model,
+            reason,
+            ..
+        } = &error
+        else {
+            panic!("expected UnsupportedParameter, got {error:?}");
+        };
+        assert_eq!(param, "reasoning_effort");
+        assert_eq!(value, "medium");
+        assert_eq!(provider, "profiled");
+        assert_eq!(model, "m");
+        assert!(
+            reason.contains("does not offer that effort level"),
+            "{reason}"
+        );
+        assert!(
+            reason.ends_with("; set a reasoning_fallback to substitute the nearest level"),
+            "{reason}"
+        );
+
+        // An explicit Refuse still gets the hint; a substituting fallback is admitted.
+        assert!(
+            port.check_reasoning(
+                "m",
+                Some(ReasoningEffort::Medium),
+                Some(ReasoningFallback::Refuse)
+            )
+            .is_err()
+        );
+        assert!(
+            port.check_reasoning(
+                "m",
+                Some(ReasoningEffort::Medium),
+                Some(ReasoningFallback::NearestLower)
+            )
+            .is_ok()
+        );
+        // A listed level is admitted; no effort is admitted without judging.
+        assert!(
+            port.check_reasoning("m", Some(ReasoningEffort::High), None)
+                .is_ok()
+        );
+        assert!(port.check_reasoning("m", None, None).is_ok());
+
+        // A refusal that is not "the level is missing" carries no fallback hint.
+        let off = port
+            .check_reasoning("m", Some(ReasoningEffort::Off), None)
+            .unwrap_err();
+        assert!(
+            !off.to_string().contains("set a reasoning_fallback"),
+            "{off}"
+        );
+    }
+
+    /// D-03: with no profile an explicit effort cannot be checked and is refused; no effort is
+    /// still fine.
+    #[test]
+    fn check_reasoning_default_refuses_an_explicit_effort_without_a_profile() {
+        let error = NoProfilePort
+            .check_reasoning("m", Some(ReasoningEffort::High), None)
+            .unwrap_err();
+        let LlmError::UnsupportedParameter { reason, .. } = &error else {
+            panic!("expected UnsupportedParameter, got {error:?}");
+        };
+        assert_eq!(
+            reason,
+            "it reports no model profile, so an explicit reasoning effort cannot be checked"
+        );
+        assert!(NoProfilePort.check_reasoning("m", None, None).is_ok());
+        assert!(
+            NoProfilePort
+                .check_reasoning("m", None, Some(ReasoningFallback::NearestLower))
+                .is_ok()
+        );
     }
 
     fn sample_llm_response() -> LlmResponse {

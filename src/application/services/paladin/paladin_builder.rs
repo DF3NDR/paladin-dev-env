@@ -44,9 +44,9 @@ use paladin_ports::output::arsenal_port::ArsenalRegistry;
 use paladin_ports::output::citadel_port::CitadelPort;
 use paladin_ports::output::embedding_port::EmbeddingPort;
 use paladin_ports::output::garrison_port::GarrisonPort;
-use paladin_ports::output::llm_port::LlmPort;
+use paladin_ports::output::llm_port::{LlmError, LlmPort};
 use paladin_ports::output::model_profile::{
-    EffortRefusal, ModelProfile, ParamSupport, SamplingParam, StopSupport,
+    ModelProfile, ParamSupport, SamplingParam, StopSupport,
 };
 use paladin_ports::output::sanctum_port::SanctumPort;
 use std::path::PathBuf;
@@ -1182,18 +1182,29 @@ impl PaladinBuilder {
         ))
     }
 
-    /// The one refusal message for an explicit agent-level reasoning effort the model cannot
-    /// honour (D-09): same shape as [`Self::parameter_refusal`] -- model, provider, the
-    /// `reasoning_effort` parameter and the value, then why. Built from names and the effort
-    /// only; nothing credential-shaped or request-derived is rendered.
-    fn effort_refusal(&self, value: ReasoningEffort, reason: &str) -> PaladinError {
-        PaladinError::ConfigurationError(format!(
-            "model '{}' on provider '{}' does not accept parameter 'reasoning_effort' = {}: {}",
-            self.data.model,
-            self.llm_port.get_provider_name(),
-            value,
-            reason
-        ))
+    /// The one refusal message for a reasoning effort the port's `check_reasoning` refused
+    /// (D-09): same shape as [`Self::parameter_refusal`] -- model, provider, the
+    /// `reasoning_effort` parameter and the value, then why. The provider and model come from the
+    /// error itself, so a refusing hop of a chain is named. Built from names, effort spellings
+    /// and fixed refusal wording only; nothing credential-shaped or request-derived is rendered.
+    fn effort_refusal(&self, error: LlmError) -> PaladinError {
+        match error {
+            LlmError::UnsupportedParameter {
+                value,
+                provider,
+                model,
+                reason,
+                ..
+            } => PaladinError::ConfigurationError(format!(
+                "model '{model}' on provider '{provider}' does not accept parameter \
+                 'reasoning_effort' = {value}: {reason}"
+            )),
+            other => PaladinError::ConfigurationError(format!(
+                "reasoning_effort for model '{}' on provider '{}' could not be checked: {other}",
+                self.data.model,
+                self.llm_port.get_provider_name(),
+            )),
+        }
     }
 
     /// Why a numeric parameter's support rejected a value.
@@ -1265,14 +1276,18 @@ impl PaladinBuilder {
     ///   the value is omitted from requests by the adapter's wire filter, visibly -- recorded
     ///   as `paladin.params_omitted` on the response.
     /// - **An agent-level reasoning effort the caller expressed** ([`Self::reasoning_effort`]) must
-    ///   be one the selected model can honour (D-09): the builder resolves it against
-    ///   `llm_port.model_profile(model)` with [`Self::reasoning_fallback`] (`Refuse` when unset)
-    ///   through the same `EffortSupport::resolve` rule the adapters use. A refusal is a
-    ///   [`PaladinError::ConfigurationError`] naming the provider, the model, `reasoning_effort`,
-    ///   the value and the reason; a port that reports no profile refuses an explicit effort
-    ///   (D-03: nothing was measured). For a `FallbackLlmAdapter` the profile is the chain's
-    ///   intersection, so a level must be usable on every hop. Nothing is judged when no effort
-    ///   was expressed.
+    ///   be one the selected model can honour (D-09): the builder asks
+    ///   `llm_port.check_reasoning(model, effort, fallback)` with [`Self::reasoning_effort`] and
+    ///   [`Self::reasoning_fallback`]. The port resolves them against its own provider-level
+    ///   defaults (`llm.<provider>.reasoning_effort` / `reasoning_fallback`), the agent's value
+    ///   first, field by field, and admits the result through the same rule the adapter applies
+    ///   at send time -- so a provider-level fallback substitutes at build exactly as on every
+    ///   call, and a provider-level effort the model cannot honour is refused here even when the
+    ///   agent sets none. A refusal is a [`PaladinError::ConfigurationError`] naming the
+    ///   provider, the model, `reasoning_effort`, the value and the reason; a port that reports
+    ///   no profile refuses an explicit effort (D-03: nothing was measured). Nothing is judged
+    ///   when no effort is in force at any level. Only the per-request budget-versus-`max_tokens`
+    ///   rule is left to send time.
     /// - `max_loops` must be in range [1, 100]
     /// - If `autosave_enabled` is true, `state_dir` must be set or Citadel must be configured
     /// - If `sanctum_port` is set, `embedding_port` must also be set (required for RAG)
@@ -1352,39 +1367,22 @@ impl PaladinBuilder {
             }
         }
 
-        // D-09: an EXPLICIT agent-level reasoning effort must be one the model can honour (or,
-        // with a substituting fallback, substitute), or the build is refused by name. The
-        // profile's `EffortSupport::resolve` is the one admission rule the adapters use too, so
-        // the build-time answer and the send-time answer cannot drift. A port with no profile
-        // refuses an explicit effort (D-03: nothing was measured). For a fallback chain the
-        // profile is the chain's intersection (AND semantics): a level must be usable on every
-        // hop here, while at send time each hop resolves against its own model (D-08, A1-51-07).
-        // Nothing is judged when the agent expressed no effort.
-        if let Some(effort) = self.data.reasoning_effort {
-            let fallback = self.data.reasoning_fallback.unwrap_or_default();
-            match &profile {
-                Some(profile) => {
-                    if let Err(refusal) = profile.effort.resolve(effort, fallback) {
-                        let mut reason = refusal.to_string();
-                        if fallback == ReasoningFallback::Refuse
-                            && matches!(refusal, EffortRefusal::LevelUnsupported)
-                        {
-                            reason.push_str(
-                                "; set a reasoning_fallback to substitute the nearest level",
-                            );
-                        }
-                        return Err(self.effort_refusal(effort, &reason));
-                    }
-                }
-                None => {
-                    return Err(self.effort_refusal(
-                        effort,
-                        "it reports no model profile, so an explicit reasoning effort cannot be \
-                         checked",
-                    ));
-                }
-            }
-        }
+        // D-09: the port judges the agent's reasoning effort and fallback itself. Its
+        // `check_reasoning` resolves them against that port's own provider-level defaults
+        // (`llm.<provider>.reasoning_effort` / `reasoning_fallback`) through the same `in_force`
+        // precedence and `EffortSupport::resolve` admission the adapter applies at send time, so
+        // an agent that builds here is served on every call and one refused here would be
+        // refused on every call (a chain judges every hop, plan 51-19). Only the per-request
+        // budget-versus-`max_tokens` rule is left to send time: it needs the request's own cap.
+        // A port with no profile refuses an explicit effort (D-03: nothing was measured), and
+        // nothing is judged when no effort is in force at any level (D-00i).
+        self.llm_port
+            .check_reasoning(
+                &self.data.model,
+                self.data.reasoning_effort,
+                self.data.reasoning_fallback,
+            )
+            .map_err(|error| self.effort_refusal(error))?;
 
         // Validate max_loops is in [1, 100]
         let loops = self.data.max_loops.as_u32();
@@ -1904,6 +1902,162 @@ mod tests {
         );
         assert!(message.contains("reasoning_effort"), "{message}");
         assert!(message.contains("low"), "{message}");
+    }
+
+    // ── Phase 51 (plan 51-17, G-2 / WR-01): the builder judges with the port's own defaults ──
+
+    /// A real DeepSeek adapter whose `probe-model` lists exactly `[low, high]`, configured with
+    /// the given provider-level default effort and fallback (`llm.deepseek.reasoning_*`).
+    fn deepseek_effort_port(
+        default_effort: Option<ReasoningEffort>,
+        default_fallback: Option<ReasoningFallback>,
+    ) -> Arc<dyn LlmPort> {
+        // `ModelOverride` is `#[non_exhaustive]`: build it through serde, as the host does.
+        let over: paladin_llm::registry::ModelOverride = serde_json::from_value(
+            serde_json::json!({ "effort": { "supported": { "levels": ["low", "high"] } } }),
+        )
+        .expect("an effort override parses");
+        let mut config = paladin_llm::deepseek::DeepSeekConfig::new(
+            "test-key".to_string(),
+            "deepseek-flash".to_string(),
+        )
+        .with_model_overrides(std::collections::BTreeMap::from([(
+            "probe-model".to_string(),
+            over,
+        )]));
+        if let Some(effort) = default_effort {
+            config = config.with_reasoning_effort(effort);
+        }
+        if let Some(fallback) = default_fallback {
+            config = config.with_reasoning_fallback(fallback);
+        }
+        Arc::new(paladin_llm::deepseek::DeepSeekAdapter::new(config).unwrap())
+    }
+
+    /// WR-01: a provider-level `reasoning_fallback` is a first-class setting. An agent effort the
+    /// model lacks, with no agent fallback, builds because the port will substitute on every call.
+    #[tokio::test]
+    async fn a_provider_level_fallback_lets_an_agent_effort_substitute_at_build() {
+        PaladinBuilder::new(deepseek_effort_port(
+            None,
+            Some(ReasoningFallback::NearestLower),
+        ))
+        .system_prompt("Test")
+        .model("probe-model")
+        .reasoning_effort(ReasoningEffort::Medium)
+        .build()
+        .await
+        .expect("the provider fallback substitutes medium -> low, as on every call");
+
+        // Without the provider fallback the same agent is refused.
+        let message = configuration_error(
+            PaladinBuilder::new(deepseek_effort_port(None, None))
+                .system_prompt("Test")
+                .model("probe-model")
+                .reasoning_effort(ReasoningEffort::Medium)
+                .build()
+                .await,
+        );
+        assert!(message.contains("reasoning_effort"), "{message}");
+    }
+
+    /// D-09, provider level at build: a default effort the model cannot honour makes every call
+    /// fail, so a builder that sets no effort of its own is refused, naming the key to change.
+    #[tokio::test]
+    async fn a_provider_level_default_effort_the_model_cannot_honour_is_refused_at_build() {
+        let message = configuration_error(
+            PaladinBuilder::new(deepseek_effort_port(Some(ReasoningEffort::Medium), None))
+                .system_prompt("Test")
+                .model("probe-model")
+                .build()
+                .await,
+        );
+        for needle in ["probe-model", "reasoning_effort", "medium"] {
+            assert!(
+                message.contains(needle),
+                "'{needle}' missing from: {message}"
+            );
+        }
+        assert!(
+            message.ends_with("(set by `llm.deepseek.reasoning_effort`)"),
+            "{message}"
+        );
+    }
+
+    /// T-51-49: the agent's own fallback is the more specific value and beats the provider's.
+    #[tokio::test]
+    async fn an_agents_refuse_beats_a_provider_nearest_lower_at_build() {
+        let message = configuration_error(
+            PaladinBuilder::new(deepseek_effort_port(
+                None,
+                Some(ReasoningFallback::NearestLower),
+            ))
+            .system_prompt("Test")
+            .model("probe-model")
+            .reasoning_effort(ReasoningEffort::Medium)
+            .reasoning_fallback(ReasoningFallback::Refuse)
+            .build()
+            .await,
+        );
+        assert!(message.contains("medium"), "{message}");
+    }
+
+    /// T-51-48: the build-time verdict is the port's `check_reasoning` verdict, over the agent's
+    /// effort and fallback and the provider's defaults.
+    #[tokio::test]
+    async fn the_builder_verdict_equals_check_reasoning_for_every_combination() {
+        let default_efforts = [
+            None,
+            Some(ReasoningEffort::Medium),
+            Some(ReasoningEffort::High),
+        ];
+        let default_fallbacks = [
+            None,
+            Some(ReasoningFallback::Refuse),
+            Some(ReasoningFallback::NearestLower),
+        ];
+        let agent_efforts = [
+            None,
+            Some(ReasoningEffort::Low),
+            Some(ReasoningEffort::Medium),
+            Some(ReasoningEffort::XHigh),
+        ];
+        let agent_fallbacks = [
+            None,
+            Some(ReasoningFallback::Refuse),
+            Some(ReasoningFallback::NearestLower),
+        ];
+        let (mut cases, mut built) = (0_u32, 0_u32);
+        for default_effort in default_efforts {
+            for default_fallback in default_fallbacks {
+                let port = deepseek_effort_port(default_effort, default_fallback);
+                for effort in agent_efforts {
+                    for fallback in agent_fallbacks {
+                        let mut builder = PaladinBuilder::new(Arc::clone(&port))
+                            .system_prompt("Test")
+                            .model("probe-model");
+                        if let Some(effort) = effort {
+                            builder = builder.reasoning_effort(effort);
+                        }
+                        if let Some(fallback) = fallback {
+                            builder = builder.reasoning_fallback(fallback);
+                        }
+                        let result = builder.build().await;
+                        let verdict = port.check_reasoning("probe-model", effort, fallback);
+                        assert_eq!(
+                            result.is_ok(),
+                            verdict.is_ok(),
+                            "default {default_effort:?}/{default_fallback:?}, agent \
+                             {effort:?}/{fallback:?}: {result:?} vs {verdict:?}"
+                        );
+                        cases += 1;
+                        built += u32::from(result.is_ok());
+                    }
+                }
+            }
+        }
+        assert_eq!(cases, 3 * 3 * 4 * 3);
+        assert!(built > 0 && built < cases, "both verdicts occurred");
     }
 
     #[tokio::test]

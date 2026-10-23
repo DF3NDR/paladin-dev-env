@@ -1374,6 +1374,26 @@ impl LlmPort for DeepSeekAdapter {
     fn model_profile(&self, model: &str) -> Option<ModelProfile> {
         Some(self.wire_profile(model))
     }
+
+    /// The pre-judging twin of the send-time `in_force` + `admit` in [`Self::build_request`]:
+    /// same precedence over this adapter's `reasoning_effort` / `reasoning_fallback`, same
+    /// [`Self::wire_profile`], same verdict (D-09).
+    fn check_reasoning(
+        &self,
+        model: &str,
+        effort: Option<ReasoningEffort>,
+        fallback: Option<ReasoningFallback>,
+    ) -> Result<(), LlmError> {
+        reasoning::check(
+            DEEPSEEK_PROVIDER,
+            model,
+            || self.wire_profile(model),
+            effort,
+            fallback,
+            self.config.reasoning_effort,
+            self.config.reasoning_fallback,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -3276,6 +3296,104 @@ mod tests {
                     "{model}: {result:?}"
                 );
             }
+        }
+
+        /// D-09, the invariant over the full grid: `check_reasoning` refuses exactly when
+        /// `generate` refuses `reasoning_effort` before any HTTP call, with the same reason,
+        /// whatever the provider-level defaults and the request-level effort and fallback.
+        #[tokio::test]
+        async fn deepseek_check_reasoning_agrees_with_generate_on_every_combination() {
+            const PROBE: &str = "probe-model";
+            let mut server = mockito::Server::new_async().await;
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body(ok_body())
+                .expect_at_least(0)
+                .create_async()
+                .await;
+            let over = ModelOverride {
+                effort: Some(EffortSupport::Supported(EffortLevels::new([Low, High]))),
+                ..ModelOverride::default()
+            };
+            let default_efforts = [None, Some(ReasoningEffort::Medium), Some(High)];
+            let default_fallbacks = [
+                None,
+                Some(ReasoningFallback::Refuse),
+                Some(ReasoningFallback::NearestLower),
+            ];
+            let request_efforts = [
+                None,
+                Some(Low),
+                Some(ReasoningEffort::Medium),
+                Some(ReasoningEffort::XHigh),
+                Some(ReasoningEffort::Off),
+                Some(ReasoningEffort::Auto),
+            ];
+            let request_fallbacks = [
+                None,
+                Some(ReasoningFallback::Refuse),
+                Some(ReasoningFallback::NearestLower),
+                Some(ReasoningFallback::NearestHigher),
+            ];
+            let (mut cases, mut refusals) = (0_u32, 0_u32);
+            for default_effort in default_efforts {
+                for default_fallback in default_fallbacks {
+                    let mut config =
+                        DeepSeekConfig::new("test-key".to_string(), "deepseek-flash".to_string())
+                            .with_base_url(server.url())
+                            .with_model_overrides(BTreeMap::from([(
+                                PROBE.to_string(),
+                                over.clone(),
+                            )]));
+                    if let Some(effort) = default_effort {
+                        config = config.with_reasoning_effort(effort);
+                    }
+                    if let Some(fallback) = default_fallback {
+                        config = config.with_reasoning_fallback(fallback);
+                    }
+                    let adapter = DeepSeekAdapter::new(config).expect("a valid override builds");
+                    for effort in request_efforts {
+                        for fallback in request_fallbacks {
+                            let mut request = request_for(PROBE);
+                            if let Some(effort) = effort {
+                                request = request.with_reasoning(effort);
+                            }
+                            if let Some(fallback) = fallback {
+                                request = request.with_reasoning_fallback(fallback);
+                            }
+                            let sent = adapter.generate(request).await;
+                            let checked = adapter.check_reasoning(PROBE, effort, fallback);
+                            let label = format!(
+                                "default {default_effort:?}/{default_fallback:?}, request \
+                                 {effort:?}/{fallback:?}"
+                            );
+                            match (&sent, &checked) {
+                                (
+                                    Err(LlmError::UnsupportedParameter {
+                                        param,
+                                        reason: sent_reason,
+                                        ..
+                                    }),
+                                    Err(LlmError::UnsupportedParameter {
+                                        reason: checked_reason,
+                                        ..
+                                    }),
+                                ) => {
+                                    assert_eq!(param, "reasoning_effort", "{label}");
+                                    assert_eq!(sent_reason, checked_reason, "{label}");
+                                    refusals += 1;
+                                }
+                                (Ok(_), Ok(())) => {}
+                                other => panic!("{label}: generate and check disagree: {other:?}"),
+                            }
+                            cases += 1;
+                        }
+                    }
+                }
+            }
+            assert_eq!(cases, 3 * 3 * 6 * 4);
+            assert!(refusals > 0 && refusals < cases, "both verdicts occurred");
         }
 
         #[test]

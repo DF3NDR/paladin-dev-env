@@ -180,7 +180,9 @@ struct BlockTemperature {
 struct BlockReasoning {
     /// The value from `llm.<provider>.reasoning_effort`.
     effort: ReasoningEffort,
-    /// The value from `llm.<provider>.reasoning_fallback`, which wins over the agent's own.
+    /// The value from `llm.<provider>.reasoning_fallback`. The agent's own `reasoning_fallback`
+    /// wins over it, field by field, exactly as `paladin_llm::reasoning::in_force` resolves a
+    /// request's fallback over the provider default at send time.
     fallback: Option<ReasoningFallback>,
     /// The key that set the effort, named in a refusal (`llm.<provider>.reasoning_effort`).
     key: String,
@@ -189,19 +191,22 @@ struct BlockReasoning {
 /// Check a provider block's default effort against the agent's own model (Pitfall 6).
 ///
 /// Resolved through `EffortSupport::resolve` -- the one admission rule the adapter applies at send
-/// time -- with the block's fallback, else the agent's, else `Refuse`. A model that reports no
-/// profile refuses (D-03: nothing was measured). A refusal is a [`HostBuildError::Build`] naming
-/// provider, model, `reasoning_effort`, the value, the reason and the block's YAML key. Text is
-/// built from names and the effort only; no credential is rendered.
+/// time -- with the agent's fallback, else the block's, else `Refuse`. That is the precedence
+/// `paladin_llm::reasoning::in_force` applies at send time, where the agent's value rides on every
+/// request, so this load-time verdict equals the verdict of every call the agent will make for the
+/// same model. A model that reports no profile refuses (D-03: nothing was measured). A refusal is
+/// a [`HostBuildError::Build`] naming provider, model, `reasoning_effort`, the value, the reason
+/// and the block's YAML key. Text is built from names and the effort only; no credential is
+/// rendered.
 fn check_block_reasoning(
     def: &AgentDefinition,
     llm: &dyn LlmPort,
     block: &BlockReasoning,
 ) -> Result<(), HostBuildError> {
-    let fallback = block
-        .fallback
-        .or(def.reasoning_fallback)
-        .unwrap_or_default();
+    // The agent's value first, the block's second, `Refuse` last: `in_force`'s field-by-field
+    // precedence, with the agent's fallback in the request slot.
+    let chosen = def.reasoning_fallback.or(block.fallback);
+    let fallback = chosen.unwrap_or_default();
     let reason = match llm.model_profile(&def.model) {
         Some(profile) => match profile.effort.resolve(block.effort, fallback) {
             Ok(_) => return Ok(()),
@@ -244,7 +249,9 @@ fn check_block_reasoning(
 /// `reasoning_effort` / `reasoning_fallback` go to the builder, and a refusal of the effort ends
 /// with ``(set by `agents[<id>].reasoning_effort`)``. When the definition sets no effort but
 /// `block_reasoning` does, the block's value is only *checked* against the agent's model profile
-/// (never passed to the builder or copied onto the Paladin): a refusal is a
+/// (never passed to the builder or copied onto the Paladin), and it is checked under the agent's
+/// own `reasoning_fallback` when the agent sets one, else under the block's, as
+/// `paladin_llm::reasoning::in_force` resolves them at send time: a refusal is a
 /// [`HostBuildError::Build`] naming `llm.<provider>.reasoning_effort`.
 async fn build_agent_with_llm_and_block_temperature(
     def: &AgentDefinition,
@@ -1899,6 +1906,132 @@ mod config_driven_tests {
         assert!(
             build(&lenient, Some(&llm), "openai").await.is_ok(),
             "the agent's nearest_higher substitutes the block's medium"
+        );
+    }
+
+    /// G-2 (a): the agent's own fallback wins over the block's, as `in_force` resolves it at send
+    /// time. Block `nearest_lower` + agent `refuse` on `[low, high]` refuses every call, so the
+    /// load refuses too.
+    #[tokio::test]
+    async fn block_nearest_lower_agent_refuse_is_refused() {
+        use paladin_core::platform::container::reasoning::{ReasoningEffort, ReasoningFallback};
+        let block = LlmProviderConfig::new(SECRET)
+            .with_reasoning_effort(ReasoningEffort::Medium)
+            .with_reasoning_fallback(ReasoningFallback::NearestLower);
+        let llm = deepseek_block_llm(block, "agent-model-x", Some(&["low", "high"]));
+        let mut def = agent("a1", "deepseek", "agent-model-x");
+        def.reasoning_fallback = Some(ReasoningFallback::Refuse);
+
+        let err = build(&def, Some(&llm), "openai")
+            .await
+            .err()
+            .expect("the agent's refuse beats the block's nearest_lower, so medium is refused");
+        assert!(matches!(err, HostBuildError::Build { .. }), "got {err:?}");
+        let text = err.to_string();
+        for needle in ["reasoning_effort", "medium"] {
+            assert!(text.contains(needle), "missing '{needle}' in: {text}");
+        }
+        assert!(
+            text.ends_with("(set by `llm.deepseek.reasoning_effort`)"),
+            "{text}"
+        );
+        assert!(!text.contains(SECRET), "no key in the error: {text}");
+        assert!(!text.contains("agents[a1]"), "{text}");
+    }
+
+    /// G-2 (a), the reverse: block `refuse` + agent `nearest_lower` on `[low, high]` serves every
+    /// call by substituting `low`, so the load accepts it.
+    #[tokio::test]
+    async fn block_refuse_agent_nearest_lower_passes() {
+        use paladin_core::platform::container::reasoning::{ReasoningEffort, ReasoningFallback};
+        let block = LlmProviderConfig::new(SECRET)
+            .with_reasoning_effort(ReasoningEffort::Medium)
+            .with_reasoning_fallback(ReasoningFallback::Refuse);
+        let llm = deepseek_block_llm(block, "agent-model-x", Some(&["low", "high"]));
+        let mut def = agent("a1", "deepseek", "agent-model-x");
+        def.reasoning_fallback = Some(ReasoningFallback::NearestLower);
+
+        let Ok((paladin, _, _)) = build(&def, Some(&llm), "openai").await else {
+            panic!("the agent's nearest_lower substitutes the block's medium with low");
+        };
+        // The provider default still stays below the agent: nothing is copied onto the Paladin.
+        assert_eq!(paladin.data.reasoning_effort, None);
+    }
+
+    /// Boundary: medium on `[high, max]` has no lower level, and the direction is never flipped,
+    /// so the block's `nearest_lower` alone refuses while the agent's `nearest_higher` decides.
+    #[tokio::test]
+    async fn block_nearest_lower_agent_nearest_higher_takes_the_agents_direction() {
+        use paladin_core::platform::container::reasoning::{ReasoningEffort, ReasoningFallback};
+        let block = LlmProviderConfig::new(SECRET)
+            .with_reasoning_effort(ReasoningEffort::Medium)
+            .with_reasoning_fallback(ReasoningFallback::NearestLower);
+        let llm = deepseek_block_llm(block, "agent-model-x", Some(&["high", "max"]));
+
+        let mut higher = agent("a1", "deepseek", "agent-model-x");
+        higher.reasoning_fallback = Some(ReasoningFallback::NearestHigher);
+        assert!(
+            build(&higher, Some(&llm), "openai").await.is_ok(),
+            "the agent's nearest_higher steps medium up to high"
+        );
+
+        let silent = agent("a2", "deepseek", "agent-model-x");
+        assert!(
+            build(&silent, Some(&llm), "openai").await.is_err(),
+            "the block's nearest_lower alone finds no lower level and never flips direction"
+        );
+    }
+
+    /// The host's "set a reasoning_fallback" hint is shown only when `Refuse` is the fallback in
+    /// force (the agent's, else the block's) and the level is unsupported; never when a
+    /// substituting fallback is already set.
+    #[tokio::test]
+    async fn the_host_fallback_hint_appears_only_when_refuse_is_in_force() {
+        use paladin_core::platform::container::reasoning::{ReasoningEffort, ReasoningFallback};
+        const HINT: &str = "set a reasoning_fallback to substitute the nearest level";
+
+        // Block nearest_lower, agent refuse: refuse is in force, the hint is shown.
+        let block = LlmProviderConfig::new(SECRET)
+            .with_reasoning_effort(ReasoningEffort::Medium)
+            .with_reasoning_fallback(ReasoningFallback::NearestLower);
+        let llm = deepseek_block_llm(block, "agent-model-x", Some(&["low", "high"]));
+        let mut refusing = agent("a1", "deepseek", "agent-model-x");
+        refusing.reasoning_fallback = Some(ReasoningFallback::Refuse);
+        let text = build(&refusing, Some(&llm), "openai")
+            .await
+            .err()
+            .expect("refuse is in force")
+            .to_string();
+        assert!(text.contains(HINT), "{text}");
+
+        // No fallback anywhere: the default `Refuse` is in force, the hint is shown.
+        let block = LlmProviderConfig::new(SECRET).with_reasoning_effort(ReasoningEffort::Medium);
+        let llm = deepseek_block_llm(block, "agent-model-x", Some(&["low", "high"]));
+        let silent = agent("a2", "deepseek", "agent-model-x");
+        let text = build(&silent, Some(&llm), "openai")
+            .await
+            .err()
+            .expect("no fallback, so medium is refused")
+            .to_string();
+        assert!(text.contains(HINT), "{text}");
+
+        // Block refuse, agent nearest_higher on [low]: a substituting fallback is in force and
+        // finds no level above; the hint would ask for what is already set, so it is absent.
+        let block = LlmProviderConfig::new(SECRET)
+            .with_reasoning_effort(ReasoningEffort::Medium)
+            .with_reasoning_fallback(ReasoningFallback::Refuse);
+        let llm = deepseek_block_llm(block, "agent-model-x", Some(&["low"]));
+        let mut higher = agent("a3", "deepseek", "agent-model-x");
+        higher.reasoning_fallback = Some(ReasoningFallback::NearestHigher);
+        let text = build(&higher, Some(&llm), "openai")
+            .await
+            .err()
+            .expect("no level above medium in [low]")
+            .to_string();
+        assert!(!text.contains(HINT), "{text}");
+        assert!(
+            text.contains("no offered effort level lies in the chosen fallback direction"),
+            "{text}"
         );
     }
 

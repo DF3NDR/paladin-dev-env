@@ -47,6 +47,9 @@ use paladin_core::platform::container::heartbeat::HeartbeatHandle;
 use paladin_core::platform::container::herald::Herald;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::parley::{ParleyRequest, ParleyResponse};
+use paladin_core::platform::container::reasoning::{
+    REASONING_EFFECTIVE_METADATA_KEY, REASONING_REQUESTED_METADATA_KEY,
+};
 use paladin_core::platform::container::run::{
     ForkSpec, Run, RunEventKind, RunId, RunStatus, RunStreamEventKind, RunStreamMode,
 };
@@ -1540,7 +1543,12 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// [`AGENT_RUN_FINGERPRINT`]), one superstep-0 `NodeStarted`/
     /// `NodeFinished` pair for the agent call -- carrying its `PaladinResult`
     /// usage and cost, so the dispatcher's `total_usage()`/`total_cost()`
-    /// are real -- and `RunFinished { total_supersteps: 0 }`. The live SSE
+    /// are real. On success that `NodeFinished` also carries
+    /// `reasoning_requested` / `reasoning_effective`, copied from the call's own
+    /// `run_metadata` (the adapter-stamped `paladin.reasoning_*` keys, the
+    /// engine's `AttemptReasoning` rule), never the agent's configured effort;
+    /// on failure both are `None`. The run ends with
+    /// `RunFinished { total_supersteps: 0 }`. The live SSE
     /// `node_started`/`node_finished`/`done`|`error` events therefore come
     /// from the ONE `map_trace_event` mapping, never a hand-published event.
     ///
@@ -1723,8 +1731,17 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                     duration_ms,
                     usage: result.usage.clone(),
                     cost: result.cost.clone(),
-                    reasoning_requested: None,
-                    reasoning_effective: None,
+                    // D-11 (REASON-05): the call's own adapter-stamped strings,
+                    // copied verbatim (never parsed, never read from the agent's
+                    // configuration) -- the engine's `AttemptReasoning` rule.
+                    reasoning_requested: result
+                        .run_metadata
+                        .get(REASONING_REQUESTED_METADATA_KEY)
+                        .cloned(),
+                    reasoning_effective: result
+                        .run_metadata
+                        .get(REASONING_EFFECTIVE_METADATA_KEY)
+                        .cloned(),
                     cache_hit: false,
                 });
                 // D-12: a crossed derived budget is a halt, not a completion. The partial output

@@ -1385,6 +1385,291 @@ fn agent_pool(
     (pool, repository, queue, bus)
 }
 
+// --- 51-15 (G-1, D-11): the single-agent NodeFinished carries the call's effort ---
+
+/// Like [`agent_pool`], but with the persisted trace store wired in and no
+/// event bus -- the `agent_kind_run_streams_done_live` setup minus the live
+/// stream, for the tests that read the persisted `run_traces` rows.
+#[allow(clippy::type_complexity)]
+fn agent_pool_with_traces(
+    port: Arc<dyn PaladinPort>,
+    resolver: Arc<dyn AssistantResolver>,
+) -> (
+    RunWorkerPool<InMemoryWaypointStore>,
+    Arc<dyn RunRepositoryPort>,
+    Arc<dyn RunQueuePort>,
+    Arc<InMemoryRunTraceStore>,
+) {
+    let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+    let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+    let store = Arc::new(InMemoryWaypointStore::new());
+    let engine = Arc::new(WarEngine::new(Arc::new(UnusedPaladinPort), store.clone()));
+    let traces = Arc::new(InMemoryRunTraceStore::new());
+    let pool = RunWorkerPool::new(
+        engine,
+        store,
+        repository.clone(),
+        queue.clone(),
+        resolver,
+        Duration::from_secs(30),
+    )
+    .with_paladin_port(port)
+    .with_trace_config(crate::config::trace::TraceConfig {
+        log_sink: false,
+        persist: true,
+        ..crate::config::trace::TraceConfig::default()
+    })
+    .with_run_trace_port(traces.clone());
+    (pool, repository, queue, traces)
+}
+
+/// A [`PaladinPort`] that succeeds with a fixed `run_metadata`, standing in
+/// for an adapter that stamped (or did not stamp) the `paladin.reasoning_*`
+/// keys on the call's result.
+struct ReasoningStampingPaladinPort {
+    run_metadata: std::collections::BTreeMap<String, String>,
+}
+
+#[async_trait]
+impl PaladinPort for ReasoningStampingPaladinPort {
+    async fn execute(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinResult, PaladinError> {
+        Ok(PaladinResult {
+            output: "agent completed".to_string(),
+            usage: TokenUsage::new(11, 7),
+            run_metadata: self.run_metadata.clone(),
+            ..Default::default()
+        })
+    }
+
+    async fn execute_stream(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinStream, PaladinError> {
+        unreachable!("this test never calls execute_stream")
+    }
+
+    fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+        Ok(())
+    }
+}
+
+/// Poll the persisted trace of `thread_id` (up to 2 s) until the terminal
+/// `RunFinished` row lands, then return every row.
+async fn read_agent_trace(
+    traces: &InMemoryRunTraceStore,
+    thread_id: &ThreadId,
+) -> Vec<paladin_core::platform::container::trace::TraceRecord> {
+    let mut rows = Vec::new();
+    for _ in 0..100 {
+        rows = traces.read(thread_id, 0, 100).await.unwrap();
+        if rows
+            .iter()
+            .any(|r| matches!(r.event, TraceEvent::RunFinished { .. }))
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    rows
+}
+
+/// The `(reasoning_requested, reasoning_effective)` pair of the one
+/// persisted `NodeFinished` row, with the row's outcome.
+fn node_finished_reasoning(
+    rows: &[paladin_core::platform::container::trace::TraceRecord],
+) -> (
+    paladin_core::platform::container::waypoint::NodeOutcomeKind,
+    Option<String>,
+    Option<String>,
+) {
+    let mut finished = rows.iter().filter_map(|r| match &r.event {
+        TraceEvent::NodeFinished {
+            outcome,
+            reasoning_requested,
+            reasoning_effective,
+            ..
+        } => Some((
+            outcome.clone(),
+            reasoning_requested.clone(),
+            reasoning_effective.clone(),
+        )),
+        _ => None,
+    });
+    let one = finished
+        .next()
+        .expect("an agent run persists one NodeFinished row");
+    assert!(finished.next().is_none(), "exactly one NodeFinished row");
+    one
+}
+
+/// Build a `run_metadata` map from `(key, value)` pairs.
+fn metadata(pairs: &[(&str, &str)]) -> std::collections::BTreeMap<String, String> {
+    pairs
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+        .collect()
+}
+
+/// REASON-05, D-11 (G-1): a single-agent run's persisted `NodeFinished`
+/// carries `reasoning_requested` / `reasoning_effective` copied byte for byte
+/// from the call's own `run_metadata` -- a substituted pair (`xhigh`/`high`),
+/// an equal pair (`high`/`high`, never merged) and the `Budget` spelling
+/// (`budget:2048`, never parsed) -- and the trace is still the four gapless
+/// rows `RunStarted`, `NodeStarted`, `NodeFinished`, `RunFinished`.
+#[tokio::test]
+async fn agent_run_node_finished_carries_the_calls_own_reasoning_metadata() {
+    use paladin_core::platform::container::reasoning::{
+        REASONING_EFFECTIVE_METADATA_KEY, REASONING_REQUESTED_METADATA_KEY,
+    };
+
+    for (requested, effective) in [
+        ("xhigh", "high"),
+        ("high", "high"),
+        ("budget:2048", "budget:2048"),
+    ] {
+        let port = Arc::new(ReasoningStampingPaladinPort {
+            run_metadata: metadata(&[
+                (REASONING_REQUESTED_METADATA_KEY, requested),
+                (REASONING_EFFECTIVE_METADATA_KEY, effective),
+            ]),
+        });
+        let (worker, repository, queue, traces) =
+            agent_pool_with_traces(port, Arc::new(AgentOnlyResolver));
+        let (run_id, thread_id) = submit(&repository, &queue, "code-agent").await;
+
+        assert!(worker.run_once().await.unwrap());
+        let run = repository.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.status, RunStatus::Completed);
+
+        let rows = read_agent_trace(&traces, &thread_id).await;
+        let (_, got_requested, got_effective) = node_finished_reasoning(&rows);
+        assert_eq!(got_requested.as_deref(), Some(requested), "requested");
+        assert_eq!(got_effective.as_deref(), Some(effective), "effective");
+
+        let seqs: Vec<u64> = rows.iter().map(|r| r.seq).collect();
+        assert_eq!(seqs, vec![1, 2, 3, 4], "the trace stays gapless");
+        assert!(matches!(rows[0].event, TraceEvent::RunStarted { .. }));
+        assert!(matches!(rows[1].event, TraceEvent::NodeStarted { .. }));
+        assert!(matches!(rows[2].event, TraceEvent::NodeFinished { .. }));
+        assert!(matches!(rows[3].event, TraceEvent::RunFinished { .. }));
+    }
+}
+
+/// An [`AssistantResolver`] identical to [`AgentOnlyResolver`] except that the
+/// agent it wraps CONFIGURES `reasoning_effort: High` and `reasoning_fallback:
+/// NearestLower` -- the fixture proving the single-agent trace never reads
+/// configuration (D-11, REASON-05 transparency).
+struct ConfiguredEffortAgentResolver;
+
+#[async_trait]
+impl AssistantResolver for ConfiguredEffortAgentResolver {
+    async fn resolve(
+        &self,
+        assistant_id: &str,
+        version: Option<u32>,
+    ) -> Result<super::resolver::ResolvedAssistant, super::resolver::ResolveError> {
+        use paladin_core::base::entity::Entity;
+        use paladin_core::platform::container::paladin::PaladinData;
+        use paladin_core::platform::container::reasoning::{ReasoningEffort, ReasoningFallback};
+
+        let data = PaladinData {
+            reasoning_effort: Some(ReasoningEffort::High),
+            reasoning_fallback: Some(ReasoningFallback::NearestLower),
+            ..PaladinData::default()
+        };
+        Ok(super::resolver::ResolvedAssistant {
+            reference: AssistantRef {
+                assistant_id: assistant_id.to_string(),
+                version: version.unwrap_or(1),
+            },
+            runnable: super::resolver::Runnable::Agent(Arc::new(Entity::new(
+                data,
+                Some(assistant_id.to_string()),
+            ))),
+            allowed_roles: vec![],
+            source: paladin_core::platform::container::assistant::AssistantSource::Code,
+        })
+    }
+}
+
+/// REASON-05 / T-51-44: only the two `paladin.reasoning_*` keys are read. A
+/// result holding the requested key and an unrelated `paladin.served_by` key
+/// (and no effective key) emits `(Some("high"), None)`.
+#[tokio::test]
+async fn agent_run_node_finished_reads_only_the_two_reasoning_keys() {
+    use paladin_core::platform::container::reasoning::REASONING_REQUESTED_METADATA_KEY;
+
+    let port = Arc::new(ReasoningStampingPaladinPort {
+        run_metadata: metadata(&[
+            (REASONING_REQUESTED_METADATA_KEY, "high"),
+            ("paladin.served_by", "deepseek"),
+        ]),
+    });
+    let (worker, repository, queue, traces) =
+        agent_pool_with_traces(port, Arc::new(AgentOnlyResolver));
+    let (_run_id, thread_id) = submit(&repository, &queue, "code-agent").await;
+
+    assert!(worker.run_once().await.unwrap());
+    let rows = read_agent_trace(&traces, &thread_id).await;
+    let (_, requested, effective) = node_finished_reasoning(&rows);
+    assert_eq!(requested.as_deref(), Some("high"));
+    assert_eq!(effective, None, "no effective key was stamped");
+    let json = serde_json::to_string(&rows).unwrap();
+    assert!(
+        !json.contains("deepseek"),
+        "an unrelated paladin.* key must never reach the trace: {json}"
+    );
+}
+
+/// REASON-05 / T-51-43: the trace shows what the CALL reported, never what the
+/// agent is configured with. A configured-but-unstamped agent emits `(None, None)`.
+#[tokio::test]
+async fn agent_run_node_finished_never_reads_the_agents_configured_effort() {
+    let (worker, repository, queue, traces) = agent_pool_with_traces(
+        Arc::new(AlwaysSucceedsPaladinPort),
+        Arc::new(ConfiguredEffortAgentResolver),
+    );
+    let (_run_id, thread_id) = submit(&repository, &queue, "code-agent").await;
+
+    assert!(worker.run_once().await.unwrap());
+    let rows = read_agent_trace(&traces, &thread_id).await;
+    let (_, requested, effective) = node_finished_reasoning(&rows);
+    assert_eq!(requested, None);
+    assert_eq!(effective, None);
+}
+
+/// D-11: a failed attempt carries no effort (as `cost` is `None`), and the
+/// failure text reaches no persisted trace row (T-51-44).
+#[tokio::test]
+async fn failed_agent_run_node_finished_carries_no_reasoning() {
+    use paladin_core::platform::container::waypoint::NodeOutcomeKind;
+
+    let (worker, repository, queue, traces) = agent_pool_with_traces(
+        Arc::new(AlwaysFailsPaladinPort),
+        Arc::new(AgentOnlyResolver),
+    );
+    let (_run_id, thread_id) = submit(&repository, &queue, "code-agent").await;
+
+    assert!(worker.run_once().await.unwrap());
+    let rows = read_agent_trace(&traces, &thread_id).await;
+    let (outcome, requested, effective) = node_finished_reasoning(&rows);
+    assert_eq!(outcome, NodeOutcomeKind::Failed);
+    assert_eq!(requested, None);
+    assert_eq!(effective, None);
+    for row in &rows {
+        let json = serde_json::to_string(row).unwrap();
+        assert!(
+            !json.contains(AGENT_FAILURE_TEXT),
+            "the failure text must reach no trace row: {json}"
+        );
+    }
+}
+
 /// Drain every event currently buffered on `rx`.
 fn drain_events(
     rx: &mut tokio::sync::broadcast::Receiver<

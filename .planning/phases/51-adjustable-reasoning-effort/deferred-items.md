@@ -19,3 +19,17 @@ The three findings above were fixed in plan 51-14 (one line each) so `make clean
 | Where | Finding | Introduced by |
 |-------|---------|---------------|
 | `crates/paladin-llm/src/provider_factory.rs` line 1935 (test module `reasoning_defaults`) | `unused import: ReasoningFallback` in the `paladin-llm` lib test build with its default feature set (a plain `warning:`; the import is used when a feature that exercises it is on). `make clean-code` is unaffected because clippy and the doc build run with all features. | plan 51-06 |
+
+## Review items deferred by the gap-closure plans (51-15 to 51-20)
+
+Dispositions for the 51-REVIEW.md findings that are not verification gaps (CR-01, WR-01, WR-02 and WR-03 are G-1 / G-2 and were closed in code by plans 51-15 to 51-19).
+
+| Finding | Where | Reason | Revisit |
+|---------|-------|--------|---------|
+| WR-04 provider-level default effort is not in the node-cache key | `crates/paladin-battalion/src/engine/cache_key.rs`; guide "The node cache" | A documented design choice (51-09 Known Stubs, A2-51-09; the guide tells operators to rotate `key_prefix`). Folding the provider default into the key needs a port read at fingerprint time inside `paladin-battalion`'s engine (a Paladin node holds `PaladinData`, not an `LlmPort`) and a `NODE_CACHE_KEY_VERSION` decision that would invalidate every effort-bearing key: a design change outside both gaps. | A phase that revisits `NODE_CACHE_KEY_VERSION` (decide together with IN-02). |
+| IN-01 duplicate self-hosted provider list | `crates/paladin-llm/src/reasoning.rs` and `crates/paladin-llm/src/config/layers.rs` | `config/layers.rs` is opened by no gap task; a two-site constant consolidation with no behaviour change. | The Phase 46 hygiene pass. |
+| IN-02 cache key `unwrap_or_default()` on a serde string | `crates/paladin-battalion/src/engine/cache_key.rs` | `cache_key.rs` is opened by no gap task; cannot fail for the current shapes (verifier INFO). Switching to `Display` changes the bytes of every effort-bearing key (quoted serde string versus bare spelling), so it needs the same cache-version decision as WR-04. | With WR-04. |
+
+IN-03 (contradictory "nothing public changed" CHANGELOG sentences in `crates/paladin-llm/CHANGELOG.md`) was folded into plan 51-20 and reworded there.
+
+Also noted by plan 51-20: the "set a reasoning_fallback to substitute the nearest level" hint text exists in three copies (`paladin_llm::reasoning::FALLBACK_HINT`, `paladin-ports` `REASONING_FALLBACK_HINT`, and `agent_host::check_block_reasoning`). The wording is identical and each copy is pinned by a test (`the_host_fallback_hint_appears_only_when_refuse_is_in_force` for the host); sharing one constant would need a new public item, so the copies were left alone.

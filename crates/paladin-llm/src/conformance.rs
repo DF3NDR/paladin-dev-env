@@ -46,7 +46,10 @@
 //! more, for twenty-four: `explicit_reasoning_on_an_unprofiled_model_refuses_before_http`
 //! (REASON-02), `seeded_effort_levels_reach_the_wire` (REASON-03) and
 //! `every_seeded_effort_level_round_trips_to_its_wire_body` (the assumption-delta invariant), the
-//! last two driven by [`ConformanceFixture::effort_wire_value`]. A
+//! last two driven by [`ConformanceFixture::effort_wire_value`]. Plan 51-20 (gap closure G-2)
+//! added `check_reasoning_agrees_with_send_time_admission`, for twenty-five: on every adapter,
+//! [`LlmPort::check_reasoning`] refuses exactly when `generate` refuses `reasoning_effort`, with
+//! equal error text, across models, efforts and fallbacks. A
 //! vendor that
 //! lacks a feature never skips a case: it states its documented alternative shape through the
 //! fixture ([`RefusalShape::ContentFilterOnly`], [`MalformedFrame::SkippedWithWarning`]), so every
@@ -66,7 +69,7 @@ use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserProm
 use paladin_core::platform::container::transience::Transience;
 use paladin_ports::output::llm_port::{
     FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ModelProfile, ParamSupport,
-    ReasoningEffort, ResponseFormat, SamplingParam, StopSupport,
+    ReasoningEffort, ReasoningFallback, ResponseFormat, SamplingParam, StopSupport,
 };
 use paladin_ports::output::model_profile::EffortSupport;
 use serde_json::Value;
@@ -2119,19 +2122,100 @@ pub mod cases {
             }
         }
     }
+
+    /// Case (Phase 51 gap closure, G-2, D-08 / D-09): the pre-judging verdict equals the send-time
+    /// verdict. For the adapter's default model and an unprofiled id, every effort the grid names
+    /// (`None`, `Off`, `Auto` and the six levels) and every request-level fallback (`None` and
+    /// the three policies), [`LlmPort::check_reasoning`] refuses exactly when
+    /// [`LlmPort::generate`] returns [`LlmError::UnsupportedParameter`] for `reasoning_effort`,
+    /// and the two errors render the same text. `Budget` is left out on purpose: its
+    /// `max_tokens` rule is the one send-time-only check (a request's own cap is not known to
+    /// `check_reasoning`).
+    pub async fn check_reasoning_agrees_with_send_time_admission<F: ConformanceFixture>() {
+        let provider = F::provider_name();
+        let mut server = Server::new_async().await;
+        let _mock = server
+            .mock("POST", Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(F::success_body())
+            .expect_at_least(0)
+            .create_async()
+            .await;
+        let adapter = F::adapter(&server.url());
+
+        let mut efforts: Vec<Option<ReasoningEffort>> = vec![
+            None,
+            Some(ReasoningEffort::Off),
+            Some(ReasoningEffort::Auto),
+        ];
+        efforts.extend(ReasoningEffort::LEVELS.into_iter().map(Some));
+        let fallbacks = [
+            None,
+            Some(ReasoningFallback::Refuse),
+            Some(ReasoningFallback::NearestLower),
+            Some(ReasoningFallback::NearestHigher),
+        ];
+
+        let mut combinations = 0usize;
+        for model in [F::default_model(), UNPROFILED_MODEL] {
+            for effort in &efforts {
+                for fallback in &fallbacks {
+                    combinations += 1;
+                    let mut request = request_for_model(model);
+                    if let Some(effort) = effort {
+                        request = request.with_reasoning(*effort);
+                    }
+                    if let Some(fallback) = fallback {
+                        request = request.with_reasoning_fallback(*fallback);
+                    }
+                    let label =
+                        format!("{provider}/{model}: effort {effort:?}, fallback {fallback:?}");
+
+                    let checked = adapter.check_reasoning(model, *effort, *fallback);
+                    let sent = adapter.generate(request).await;
+                    let refused_at_send = match &sent {
+                        Err(LlmError::UnsupportedParameter { param, .. }) => {
+                            assert_eq!(param, "reasoning_effort", "{label}");
+                            true
+                        }
+                        _ => false,
+                    };
+                    assert_eq!(
+                        checked.is_err(),
+                        refused_at_send,
+                        "{label}: check_reasoning said {checked:?}, generate said {sent:?}"
+                    );
+                    if let (Err(check_error), Err(send_error)) = (&checked, &sent) {
+                        assert!(
+                            matches!(check_error, LlmError::UnsupportedParameter { .. }),
+                            "{label}: check_reasoning refused with {check_error:?}"
+                        );
+                        assert_eq!(
+                            check_error.to_string(),
+                            send_error.to_string(),
+                            "{label}: the two refusals read differently"
+                        );
+                    }
+                }
+            }
+        }
+        assert_eq!(combinations, 2 * 9 * 4, "{provider}: the grid shrank");
+    }
 }
 
 /// Generate one `#[tokio::test]` per fixed case in [`cases`] for a concrete
 /// [`ConformanceFixture`], plus a `CASE_COUNT` derived from the SAME identifier lists the tests
 /// are generated from -- so a case silently dropped from the lists shrinks `CASE_COUNT` too,
 /// which `suite_generates_the_full_case_list_for_a_fixture` (below) pins against the documented
-/// `24`, turning a silently-dropped case into a build/test failure rather than a quiet pass.
+/// `25`, turning a silently-dropped case into a build/test failure rather than a quiet pass.
 ///
 /// The lists are split in two groups: the ten transport cases (status mapping, streaming
-/// framing, redaction, redirects, rate limits) and the fourteen behaviour cases
+/// framing, redaction, redirects, rate limits) and the fifteen behaviour cases
 /// (capability truthfulness, structured output, empty completion, refusal, usage, vendor-total
 /// reconciliation, billed failures, the parameter policy, the unset-effort golden body, the
-/// unprofiled-model effort refusal, the seeded effort wire body and the seeded round trip).
+/// unprofiled-model effort refusal, the seeded effort wire body, the seeded round trip and the
+/// pre-judging-equals-send-time parity).
 /// `llm_conformance_suite!(Fixture)` generates both.
 /// `llm_conformance_suite!(Fixture, transport_only)` generates only the first group and exists
 /// for one caller, the macro's own
@@ -2176,6 +2260,7 @@ macro_rules! llm_conformance_suite {
                 explicit_reasoning_on_an_unprofiled_model_refuses_before_http,
                 seeded_effort_levels_reach_the_wire,
                 every_seeded_effort_level_round_trips_to_its_wire_body,
+                check_reasoning_agrees_with_send_time_admission,
             ]
         );
     };
@@ -2468,8 +2553,8 @@ mod tests {
     #[test]
     fn suite_generates_the_full_case_list_for_a_fixture() {
         assert_eq!(
-            CASE_COUNT, 24,
-            "llm_conformance_suite! must generate exactly the documented 24 fixed cases -- if this \
+            CASE_COUNT, 25,
+            "llm_conformance_suite! must generate exactly the documented 25 fixed cases -- if this \
              fails, a case was added to or removed from the macro's list without updating this \
              pinned expectation"
         );

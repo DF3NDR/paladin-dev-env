@@ -1847,9 +1847,9 @@ Plans:
 
 **Wave 12** *(blocked on Wave 11 completion)*
 
-- [ ] 51-15-PLAN.md — G-1: single-agent `NodeFinished` carries the call's requested / effective effort from `run_metadata` (gap closure, wave 12)
-- [ ] 51-16-PLAN.md — G-2 (a): agent-host load check takes the agent's `reasoning_fallback` before the provider block's (gap closure, wave 12)
-- [ ] 51-17-PLAN.md — G-2 (b): provided `LlmPort::check_reasoning`; DeepSeek, OpenAI, Anthropic, Gemini overrides; `PaladinBuilder::build` delegates (gap closure, wave 12)
+- [x] 51-15-PLAN.md — G-1: single-agent `NodeFinished` carries the call's requested / effective effort from `run_metadata` (gap closure, wave 12)
+- [x] 51-16-PLAN.md — G-2 (a): agent-host load check takes the agent's `reasoning_fallback` before the provider block's (gap closure, wave 12)
+- [x] 51-17-PLAN.md — G-2 (b): provided `LlmPort::check_reasoning`; DeepSeek, OpenAI, Anthropic, Gemini overrides; `PaladinBuilder::build` delegates (gap closure, wave 12)
 
 **Wave 13** *(blocked on Wave 12 completion)*
 

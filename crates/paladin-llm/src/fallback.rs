@@ -164,6 +164,7 @@ use paladin_ports::output::llm_port::{
     BilledUsage, LlmError, LlmPort, LlmRequest, LlmResponse, ModelProfile, ProviderCapabilities,
     StreamingResponse,
 };
+use paladin_ports::output::model_profile::EffortSupport;
 use paladin_ports::output::spend_scope::record_hopped_bill;
 use paladin_ports::output::trace_sink_port::{TraceEmitter, TraceEvent, current_trace_emitter};
 use thiserror::Error;
@@ -898,26 +899,42 @@ impl LlmPort for FallbackLlmAdapter {
             .unwrap_or_default()
     }
 
-    /// The strictest profile any hop would accept (ADR-0061): the [`ModelProfile::intersect`] of
-    /// every hop's `Some` profile for `model`, so the builder refuses what any hop could not
-    /// honour. `None` when no hop declares a profile.
+    /// The strictest sampling profile any hop would accept (ADR-0061): the
+    /// [`ModelProfile::intersect`] of every hop's `Some` profile for `model`, so the builder
+    /// refuses a sampling value any hop could not honour. `None` when no hop declares a profile.
     ///
-    /// A hop that returns `None` (a third-party adapter with no profile) is skipped and judged
-    /// only by its own request builder. The intersection is order-independent, so the order the
-    /// hops are listed in does not change the answer.
+    /// For sampling, a hop that returns `None` (a third-party adapter with no profile) is skipped:
+    /// each hop's own request builder applies its own limits. For effort the chain's profile is
+    /// [`EffortSupport::Unmeasured`] (with no `effort_verified_on`) whenever any hop has none, so
+    /// no reader can mistake a chain with an unprofiled hop for one that can take an explicit
+    /// effort. The authority for an effort verdict is
+    /// [`check_reasoning`](LlmPort::check_reasoning), which judges every hop against its own
+    /// profile and defaults; this profile is not consulted for it. The intersection is
+    /// order-independent, so the order the hops are listed in does not change the answer.
     ///
     /// Each hop is asked about the model it will be sent (D-15): a
     /// [`FallbackLlmAdapter::from_steps`] chain asks every step about that step's own model and
     /// ignores `model`; a [`FallbackLlmAdapter::new`] chain asks every hop about `model`, which
     /// is what each hop is sent.
     fn model_profile(&self, model: &str) -> Option<ModelProfile> {
-        self.chain
-            .iter()
-            .zip(&self.models)
-            .filter_map(|(provider, step_model)| {
-                provider.model_profile(step_model.as_deref().unwrap_or(model))
-            })
-            .reduce(|combined, next| combined.intersect(&next))
+        let mut any_hop_without_profile = false;
+        let mut combined: Option<ModelProfile> = None;
+        for (provider, step_model) in self.chain.iter().zip(&self.models) {
+            match provider.model_profile(step_model.as_deref().unwrap_or(model)) {
+                Some(next) => {
+                    combined = Some(match combined {
+                        Some(so_far) => so_far.intersect(&next),
+                        None => next,
+                    });
+                }
+                None => any_hop_without_profile = true,
+            }
+        }
+        if any_hop_without_profile && let Some(profile) = combined.as_mut() {
+            profile.effort = EffortSupport::Unmeasured;
+            profile.effort_verified_on = None;
+        }
+        combined
     }
 
     /// The AND over hops, in chain order, of each hop's own
@@ -2221,6 +2238,82 @@ mod tests {
         let single = FallbackLlmAdapter::new(vec![hop("only", Some(single_profile.clone()))])
             .expect("chain");
         assert_eq!(single.model_profile("m"), Some(single_profile));
+    }
+
+    /// G-2 item 3: a hop that reports no profile can never be said to take an explicit effort, so
+    /// the chain's profile reports `Unmeasured` effort (and no verification date) as soon as any
+    /// hop answers `None`, instead of advertising the reporting hops' intersection.
+    #[test]
+    fn a_chain_profile_is_effort_unmeasured_when_any_hop_reports_none() {
+        use paladin_core::platform::container::reasoning::ReasoningEffort;
+        use paladin_ports::output::model_profile::{EffortLevels, EffortSupport};
+
+        let measured = ModelProfile::new()
+            .with_temperature(ParamSupport::Range(0.0, 2.0))
+            .with_effort(EffortSupport::Supported(EffortLevels::new([
+                ReasoningEffort::Low,
+                ReasoningEffort::High,
+            ])))
+            .with_effort_verified_on("2026-10-21");
+
+        // Every hop reports: today's intersection, effort and its date included.
+        let all = FallbackLlmAdapter::new(vec![
+            hop("a", Some(measured.clone())),
+            hop("b", Some(measured.clone())),
+        ])
+        .expect("chain");
+        let profile = all.model_profile("m").expect("both hops report");
+        assert!(matches!(profile.effort, EffortSupport::Supported(_)));
+        assert_eq!(profile.effort, measured.clone().intersect(&measured).effort);
+
+        // One hop reports nothing: effort fails closed.
+        let some = FallbackLlmAdapter::new(vec![
+            hop("a", Some(measured.clone())),
+            hop("third-party", None),
+        ])
+        .expect("chain");
+        let profile = some.model_profile("m").expect("one hop reports");
+        assert_eq!(profile.effort, EffortSupport::Unmeasured);
+        assert_eq!(profile.effort_verified_on, None);
+
+        // The same whichever side the profile-less hop sits on, and for a single reporting hop.
+        let reversed = FallbackLlmAdapter::new(vec![
+            hop("third-party", None),
+            hop("a", Some(measured.clone())),
+        ])
+        .expect("chain");
+        let profile = reversed.model_profile("m").expect("one hop reports");
+        assert_eq!(profile.effort, EffortSupport::Unmeasured);
+        assert_eq!(profile.effort_verified_on, None);
+    }
+
+    /// The sampling half of the chain profile is unchanged by the effort fail-closed rule: a hop
+    /// with no profile is still skipped for sampling (each hop's own request builder applies its
+    /// own), so the reporting hops' intersection still bounds temperature and the rest.
+    #[test]
+    fn a_chain_profile_keeps_sampling_from_the_hops_that_report_one() {
+        let p1 = ModelProfile::new()
+            .with_temperature(ParamSupport::Range(0.0, 2.0))
+            .with_stop_sequences(StopSupport::Supported { max: Some(16) })
+            .with_context_window(200_000);
+        let p2 = ModelProfile::new()
+            .with_temperature(ParamSupport::Range(0.0, 1.0))
+            .with_stop_sequences(StopSupport::Supported { max: Some(4) })
+            .with_context_window(128_000);
+        let expected = p1.intersect(&p2);
+
+        let chain = FallbackLlmAdapter::new(vec![
+            hop("openai", Some(p1)),
+            hop("third-party", None),
+            hop("anthropic", Some(p2)),
+        ])
+        .expect("chain");
+        let profile = chain.model_profile("m").expect("two hops report");
+
+        assert_eq!(profile.temperature, expected.temperature);
+        assert_eq!(profile.stop_sequences, expected.stop_sequences);
+        assert_eq!(profile.context_window, expected.context_window);
+        assert_eq!(profile.temperature, ParamSupport::Range(0.0, 1.0));
     }
 
     // -----------------------------------------------------------------------

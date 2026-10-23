@@ -425,6 +425,17 @@ impl LlmPort for GrokAdapter {
     fn model_profile(&self, model: &str) -> Option<ModelProfile> {
         Some(self.engine.model_profile(model))
     }
+
+    /// The pre-judging twin of the engine's send-time `in_force` + `admit`: this preset's
+    /// masked profile and provider defaults, the same verdict (D-09).
+    fn check_reasoning(
+        &self,
+        model: &str,
+        effort: Option<ReasoningEffort>,
+        fallback: Option<ReasoningFallback>,
+    ) -> Result<(), LlmError> {
+        self.engine.check_reasoning(model, effort, fallback)
+    }
 }
 
 #[cfg(test)]
@@ -1564,6 +1575,81 @@ mod tests {
                     "{model}"
                 );
             }
+        }
+
+        /// D-09, G-2: the provider-level `reasoning_effort` / `reasoning_fallback` reach the
+        /// pre-judging gate of a compat preset, and `generate` agrees with it case by case.
+        #[tokio::test]
+        async fn grok_check_reasoning_consults_the_provider_defaults() {
+            const PROBE: &str = "probe-model";
+            let mut server = server().await;
+            let _captured = mock_completion(&mut server).await;
+            let over = ModelOverride {
+                effort: Some(EffortSupport::Supported(EffortLevels::new([Low, High]))),
+                ..ModelOverride::default()
+            };
+            let build = |effort: Option<ReasoningEffort>, fallback: Option<ReasoningFallback>| {
+                let mut config = GrokConfig::new("test-key".to_string(), "grok-4.3".to_string())
+                    .with_base_url(server.url())
+                    .with_model_overrides(std::collections::BTreeMap::from([(
+                        PROBE.to_string(),
+                        over.clone(),
+                    )]));
+                if let Some(effort) = effort {
+                    config = config.with_reasoning_effort(effort);
+                }
+                if let Some(fallback) = fallback {
+                    config = config.with_reasoning_fallback(fallback);
+                }
+                GrokAdapter::new(config).unwrap()
+            };
+            async fn agreed(
+                adapter: &GrokAdapter,
+                effort: Option<ReasoningEffort>,
+            ) -> Result<(), String> {
+                let mut request = plain_request(PROBE);
+                if let Some(effort) = effort {
+                    request = request.with_reasoning(effort);
+                }
+                let sent = adapter.generate(request).await;
+                let checked = adapter.check_reasoning(PROBE, effort, None);
+                match (sent, checked) {
+                    (Ok(_), Ok(())) => Ok(()),
+                    (
+                        Err(LlmError::UnsupportedParameter {
+                            reason: sent_reason,
+                            ..
+                        }),
+                        Err(LlmError::UnsupportedParameter {
+                            reason: checked_reason,
+                            ..
+                        }),
+                    ) => {
+                        assert_eq!(sent_reason, checked_reason);
+                        Err(checked_reason)
+                    }
+                    other => panic!("generate and check disagree: {other:?}"),
+                }
+            }
+
+            // A provider-level nearest_lower lets medium substitute on a [low, high] model.
+            let substituting = build(None, Some(ReasoningFallback::NearestLower));
+            assert_eq!(agreed(&substituting, Some(Medium)).await, Ok(()));
+            // Without it the same request is refused, and the trait default would have said so
+            // for the substituting adapter too.
+            assert!(agreed(&build(None, None), Some(Medium)).await.is_err());
+
+            // A provider-level effort medium, no fallback: a no-effort check refuses, naming the
+            // line that set the effort.
+            let reason = agreed(&build(Some(Medium), None), None)
+                .await
+                .expect_err("a provider default of medium is refused on a [low, high] model");
+            assert!(
+                reason.ends_with("(set by `llm.grok.reasoning_effort`)"),
+                "{reason}"
+            );
+            // A request-level effort the model lists beats the refused provider default.
+            assert_eq!(agreed(&build(Some(Medium), None), Some(High)).await, Ok(()));
         }
 
         #[tokio::test]

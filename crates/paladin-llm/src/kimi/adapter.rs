@@ -442,6 +442,17 @@ impl LlmPort for KimiAdapter {
     fn model_profile(&self, model: &str) -> Option<ModelProfile> {
         Some(self.engine.model_profile(model))
     }
+
+    /// The pre-judging twin of the engine's send-time `in_force` + `admit`: this preset's
+    /// masked profile and provider defaults, the same verdict (D-09).
+    fn check_reasoning(
+        &self,
+        model: &str,
+        effort: Option<ReasoningEffort>,
+        fallback: Option<ReasoningFallback>,
+    ) -> Result<(), LlmError> {
+        self.engine.check_reasoning(model, effort, fallback)
+    }
 }
 
 #[cfg(test)]
@@ -2326,6 +2337,90 @@ mod tests {
                 captured.lock().unwrap().is_none(),
                 "nothing may reach the endpoint"
             );
+        }
+
+        /// D-09, the invariant over the full grid for a compat preset: `check_reasoning` refuses
+        /// exactly when `generate` refuses `reasoning_effort` before any HTTP call, with the same
+        /// reason, whatever the provider-level defaults and the request-level effort and fallback.
+        #[tokio::test]
+        async fn kimi_check_reasoning_agrees_with_generate_on_every_combination() {
+            const PROBE: &str = "probe-model";
+            let mut server = server().await;
+            let _captured = mock_completion(&mut server).await;
+            let over = effort_override(EffortSupport::Supported(EffortLevels::new([Low, High])));
+            let default_efforts = [None, Some(Medium), Some(High)];
+            let default_fallbacks = [
+                None,
+                Some(ReasoningFallback::Refuse),
+                Some(ReasoningFallback::NearestLower),
+            ];
+            let request_efforts = [
+                None,
+                Some(Low),
+                Some(Medium),
+                Some(XHigh),
+                Some(Off),
+                Some(Auto),
+            ];
+            let request_fallbacks = [
+                None,
+                Some(ReasoningFallback::Refuse),
+                Some(ReasoningFallback::NearestLower),
+                Some(ReasoningFallback::NearestHigher),
+            ];
+            let (mut cases, mut refusals) = (0_u32, 0_u32);
+            for default_effort in default_efforts {
+                for default_fallback in default_fallbacks {
+                    let mut config = kimi_config(&server.url(), "kimi-k3")
+                        .with_model_overrides(BTreeMap::from([(PROBE.to_string(), over.clone())]));
+                    if let Some(effort) = default_effort {
+                        config = config.with_reasoning_effort(effort);
+                    }
+                    if let Some(fallback) = default_fallback {
+                        config = config.with_reasoning_fallback(fallback);
+                    }
+                    let adapter = KimiAdapter::new(config).expect("a valid override builds");
+                    for effort in request_efforts {
+                        for fallback in request_fallbacks {
+                            let mut request = plain_request(PROBE);
+                            if let Some(effort) = effort {
+                                request = request.with_reasoning(effort);
+                            }
+                            if let Some(fallback) = fallback {
+                                request = request.with_reasoning_fallback(fallback);
+                            }
+                            let sent = adapter.generate(request).await;
+                            let checked = adapter.check_reasoning(PROBE, effort, fallback);
+                            let label = format!(
+                                "default {default_effort:?}/{default_fallback:?}, request \
+                                 {effort:?}/{fallback:?}"
+                            );
+                            match (&sent, &checked) {
+                                (
+                                    Err(LlmError::UnsupportedParameter {
+                                        param,
+                                        reason: sent_reason,
+                                        ..
+                                    }),
+                                    Err(LlmError::UnsupportedParameter {
+                                        reason: checked_reason,
+                                        ..
+                                    }),
+                                ) => {
+                                    assert_eq!(param, "reasoning_effort", "{label}");
+                                    assert_eq!(sent_reason, checked_reason, "{label}");
+                                    refusals += 1;
+                                }
+                                (Ok(_), Ok(())) => {}
+                                other => panic!("{label}: generate and check disagree: {other:?}"),
+                            }
+                            cases += 1;
+                        }
+                    }
+                }
+            }
+            assert_eq!(cases, 3 * 3 * 6 * 4);
+            assert!(refusals > 0 && refusals < cases, "both verdicts occurred");
         }
 
         #[test]

@@ -1853,8 +1853,8 @@ Plans:
 
 **Wave 13** *(blocked on Wave 12 completion)*
 
-- [ ] 51-18-PLAN.md — G-2 (b): compat-engine `check_reasoning` for the five presets; Pricing and Cadence forward it (gap closure, wave 13)
-- [ ] 51-19-PLAN.md — G-2 (b, c): per-hop `FallbackLlmAdapter::check_reasoning`, pre-flight with hop defaults, chain profile effort fails closed (gap closure, wave 13)
+- [x] 51-18-PLAN.md — G-2 (b): compat-engine `check_reasoning` for the five presets; Pricing and Cadence forward it (gap closure, wave 13)
+- [x] 51-19-PLAN.md — G-2 (b, c): per-hop `FallbackLlmAdapter::check_reasoning`, pre-flight with hop defaults, chain profile effort fails closed (gap closure, wave 13)
 
 **Wave 14** *(blocked on Wave 13 completion)*
 

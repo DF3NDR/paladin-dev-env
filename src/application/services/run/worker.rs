@@ -1543,7 +1543,12 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// [`AGENT_RUN_FINGERPRINT`]), one superstep-0 `NodeStarted`/
     /// `NodeFinished` pair for the agent call -- carrying its `PaladinResult`
     /// usage and cost, so the dispatcher's `total_usage()`/`total_cost()`
-    /// are real -- and `RunFinished { total_supersteps: 0 }`. The live SSE
+    /// are real. On success that `NodeFinished` also carries
+    /// `reasoning_requested` / `reasoning_effective`, copied from the call's own
+    /// `run_metadata` (the adapter-stamped `paladin.reasoning_*` keys, the
+    /// engine's `AttemptReasoning` rule), never the agent's configured effort;
+    /// on failure both are `None`. The run ends with
+    /// `RunFinished { total_supersteps: 0 }`. The live SSE
     /// `node_started`/`node_finished`/`done`|`error` events therefore come
     /// from the ONE `map_trace_event` mapping, never a hand-published event.
     ///

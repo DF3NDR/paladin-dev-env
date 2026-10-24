@@ -386,7 +386,102 @@ herald:
 **Env vars:** `APP_HERALD_DEFAULT_FORMATTER`, `APP_HERALD_JSON_PRETTY`,
 `APP_HERALD_MARKDOWN_INCLUDE_COLORS`, `APP_HERALD_TABLE_BORDER_STYLE`
 
-## Treasurer allowances
+## Treasurer
+
+The `treasurer:` subtree configures two of the token economy's three officers: the Treasurer's
+price table and allowances, and Cadence's rate pacing. The third, the Commissary, rations one call's
+input window and has no key here (see [Token Budget Terminology](#token-budget-terminology)).
+It has four parts -- `currency`, `pricing`, `allowance` and `cadence` -- and every struct under it rejects an unknown key at load, so a misspelled key
+(`allowence:`, `perid:`, `cache_reads:`) is a boot error, never a setting that silently does
+nothing. Omit `treasurer:` entirely and the server boots as it did without it: nothing is priced,
+nothing is enforced, and Cadence pacing is on. The concept page is
+[Treasurer](../architecture/treasurer.md).
+
+### Treasurer key reference
+
+One table covers every key. The Validation column is the rule `paladin-server` applies at load or
+boot, and a rejected value is an error naming the key's full path and the offending value, never
+rounded or clamped. An environment variable that cannot be parsed (for example
+`APP_TREASURER_CADENCE_BASE_BACKOFF_MS=fast`) is ignored and the file value stays.
+
+| Key | Type | Default | Validation | Env override |
+| --- | --- | --- | --- | --- |
+| `treasurer.currency` | string | `"USD"` | exactly three ASCII uppercase letters, never case-folded; an override is applied verbatim and a lowercase one is rejected like a file value | `APP_TREASURER_CURRENCY` |
+| `treasurer.pricing.<model>` | map of price rows | empty map (nothing priced) | key non-empty; matched exactly and case-sensitively against the model string the provider's response reports | none (config file only) |
+| row `prompt` (required) | decimal string, currency units per 1M tokens | none | digits with an optional fraction of at most nine places; non-negative; at most `9223372036.854775807` | none |
+| row `completion` (required) | decimal string, currency units per 1M tokens | none | same as `prompt` | none |
+| row `cache_read` | decimal string, currency units per 1M tokens | omitted: bills at `prompt` | same as `prompt` | none |
+| row `cache_write` | decimal string, currency units per 1M tokens | omitted: bills at `prompt` | same as `prompt` | none |
+| row `reasoning` | decimal string, currency units per 1M tokens | omitted: bills at `completion` | same as `prompt` | none |
+| `treasurer.allowance.warn_at` | integer percent | `80` | `0` to `100`; `0` disables warnings; above `100` is rejected, never clamped | `APP_TREASURER_ALLOWANCE_WARN_AT` |
+| `treasurer.allowance.webhook.url` | non-empty `http(s)` URL | none | non-empty; passes the run-webhook address guard at boot (a private address needs `webhooks.allow_private: true`) | none |
+| `treasurer.allowance.webhook.secret` | string, redacted from `Debug`, never serialised | none | never echoed in an error; a `${VAR}` placeholder in YAML is not expanded | `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET` (applied only when a `webhook` exists) |
+| `treasurer.allowance.tenants.<id>` | entry | none | key is a valid id; names a tenant that `http.auth` maps to; needs a run store | none (config file only) |
+| `treasurer.allowance.api_keys.<name>` | entry | none | key is a valid name; names a key in `http.auth.api_keys`; needs a run store | none (config file only) |
+| entry `period` (required) | `<integer><m\|h\|d>` | none | `1m` to `366d` (60 to 31,622,400 seconds); `0m` and `367d` are rejected, as is any other unit | none |
+| entry `amount` (required) | decimal string, whole currency units | none | positive; at most nine places; at most `9223372036.854775807` | none |
+| entry `lifetime` | decimal string, whole currency units | none | positive; at most nine places; at most `9223372036.854775807` | none |
+| entry `warn_at` | integer percent | the global `warn_at` | `0` to `100`; above `100` is rejected | none |
+| `treasurer.cadence.enabled` | bool | `true` | none beyond the type | `APP_TREASURER_CADENCE_ENABLED` |
+| `treasurer.cadence.backend` | `in_process` or `{ redis: { url_env: NAME } }` | `in_process` | one of the two forms; a misspelled key inside `redis:` is a load error | none (config file only) |
+| `treasurer.cadence.backend.redis.url_env` | name of an environment variable | none | non-empty; names a variable that is set at boot; the `redis` backend needs a binary built with `--features redis-cadence` | none |
+| `treasurer.cadence.base_backoff_ms` | integer | `500` | greater than zero; not above `max_backoff_ms` | `APP_TREASURER_CADENCE_BASE_BACKOFF_MS` |
+| `treasurer.cadence.max_backoff_ms` | integer | `30000` | greater than zero; at least `base_backoff_ms` | `APP_TREASURER_CADENCE_MAX_BACKOFF_MS` |
+| `treasurer.cadence.max_wait_secs` | integer | `300` | greater than zero | `APP_TREASURER_CADENCE_MAX_WAIT_SECS` |
+| `treasurer.cadence.degraded_multiplier` | number | `2.0` | finite; at least `1.0` | `APP_TREASURER_CADENCE_DEGRADED_MULTIPLIER` |
+| `treasurer.cadence.fallback_pace_budget_secs` | integer | `60` | greater than zero | `APP_TREASURER_CADENCE_FALLBACK_PACE_BUDGET_SECS` |
+| `treasurer.cadence.lock_ttl_secs` | integer | `120` | greater than zero | `APP_TREASURER_CADENCE_LOCK_TTL_SECS` |
+
+### Treasurer pricing
+
+`treasurer.pricing` is the price table that turns a call's token usage into a cost. Without a row
+for a model, nothing about that model can be metered, so a model an allowance should bound needs
+one. Prices are copied from the provider's published price sheet.
+
+```yaml
+treasurer:
+  currency: "USD"
+  pricing:
+    gpt-4:
+      prompt: "2.50"
+      completion: "10.00"
+      cache_read: "0.25"
+    claude-3-5-sonnet-20241022:
+      prompt: "3.00"
+      completion: "15.00"
+```
+
+**The numeric contract.** A price is a decimal string in currency units per one million tokens:
+digits with an optional fractional part of at most nine places. A tenth fractional digit is a load
+error, never rounded; a sign, exponent, separator or whitespace is a load error; the value is
+non-negative and at most `9223372036.854775807`. A value that does not fit names its full path
+(`treasurer.pricing.<model>.<axis>`) and is never clamped. Every row needs `prompt` and
+`completion`; an omitted `cache_read` or `cache_write` bills at `prompt` and an omitted
+`reasoning` at `completion`, because a call's prompt tokens already include its cache tokens and
+its completion tokens already include its reasoning tokens. A model key matches the model string
+the provider's response reports, exactly and case-sensitively: there is no normalisation and no
+`provider/model` key. When a fallback chain serves a call, the model that actually served it is
+the one priced. Allowance amounts follow the same nine-place rule, in whole currency units rather
+than per million tokens.
+
+**The cost rule.** A call's cost is the sum of five axis products (base prompt, cache read, cache
+write, base completion, reasoning), each token count multiplied by its axis price, and that sum is
+rounded exactly once, half-up, to the nearest nano-unit -- not once per axis. Sums saturate
+rather than overflow. For example, 1,000 prompt and 2,000 completion tokens at `"2.50"` and
+`"10.00"` cost `0.0225` currency units (22,500,000 nano-units). Token counts that a malformed
+response reports above their parent count are billed at the parent's count.
+
+**A missing row.** A model with no row keeps `cost: None` and logs one warning per model name;
+no price is ever invented. What that means depends on the path:
+
+- A principal with an allowance ceiling calling an agent whose model has no row is refused
+  `422 model_unpriced` at admission, naming the model and carrying no `Retry-After`, because spend
+  that cannot be metered cannot be bounded. A principal with no ceiling is unaffected.
+- A call made by a WarGraph node on an unpriced model settles nothing, so an allowance cannot
+  bound it: the spend is not metered and does not reach the ledger. This is a known, open gap
+  (`.planning/WINDOWS.md` row 67), not a guarantee; give every model a graph can reach a row.
+
+### Treasurer allowances
 
 `treasurer.allowance` caps how much an API key or a tenant may spend, enforced when a run is
 submitted: a request whose scope has already reached a ceiling is refused with
@@ -412,18 +507,6 @@ treasurer:
         warn_at: 90
 ```
 
-| Key | Type | Default | Env override |
-| --- | --- | --- | --- |
-| `treasurer.allowance.warn_at` | integer percent `0..=100` | `80` | `APP_TREASURER_ALLOWANCE_WARN_AT` |
-| `treasurer.allowance.webhook.url` | non-empty `http(s)` URL | none | none |
-| `treasurer.allowance.webhook.secret` | string, never rendered or serialised | none | `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET` (applied only when a `webhook` exists) |
-| `treasurer.allowance.tenants.<id>` | entry | none | none (config file only) |
-| `treasurer.allowance.api_keys.<name>` | entry | none | none (config file only) |
-| entry `period` (required) | `<integer><m\|h\|d>`, `1m` to `366d` | none | none |
-| entry `amount` (required) | decimal string, whole currency units | none | none |
-| entry `lifetime` | decimal string, whole currency units | none | none |
-| entry `warn_at` | integer percent `0..=100` | the global `warn_at` | none |
-
 Decimal strings are exact: up to nine digits after the point, no sign, exponent, separator or
 whitespace, positive, and at most `9223372036.854775807`. `"25.00"` is twenty-five units;
 `"0.000000001"` is one nano-unit. A value that does not fit is a boot error naming its full path,
@@ -431,7 +514,13 @@ never rounded or clamped. A `${VAR}` placeholder in the YAML file is **not** exp
 `webhook.secret` is supplied with `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET`. A lifetime-only entry
 is not expressible: every entry carries a window `period` and `amount`.
 
-### Window and limit model
+An entry's `period` is `<integer><m|h|d>` and is accepted from `1m` to `366d` (60 to 31,622,400
+seconds). One step outside either end -- `0m` below, `367d` above -- is a boot error, never
+clamped to the nearest accepted value, and so is any other unit (`s`, `w`). A scope's spend is
+checked again at every boundary of a running run, not only at submission; the
+[Treasurer](../architecture/treasurer.md) page describes both checks and their bounded overshoot.
+
+#### Window and limit model
 
 Windows are tumbling and aligned to the UTC epoch, computed from the ledger's own clock, so a
 scope's spend resets on the boundary and can reach twice an allowance across one boundary. A
@@ -439,13 +528,19 @@ caller can hold up to four ceilings, evaluated in a fixed order: API-key window,
 lifetime, tenant window, tenant lifetime. A balance at or above a ceiling is exhausted (`>=`),
 and the first exhausted ceiling decides the refusal. Admin keys are bound like any other key.
 
-### Warn threshold
+#### Warn threshold
 
-`warn_at` is a percent of a ceiling. `0` disables warnings for the entry. `100` never notifies,
-because a balance at the ceiling is refused rather than warned about. A value above `100` is
-rejected, never clamped.
+`warn_at` is a whole percent of a ceiling, applied to each ceiling the entry holds. A ceiling
+warns when `balance x 100 >= ceiling x warn_at`, in integer arithmetic and inclusive. With
+`warn_at: 80` on a ceiling of `25.00`, a balance of `19.75` (79 %) does not warn, `20.00` (80 %)
+does, and `20.25` (81 %) does. A notice is claimed once per window and never gates the request.
 
-### Boot coherence
+- `0` disables warnings for the entry: it never warns.
+- `100` never warns, because a balance at or above the ceiling is exhausted and refused (`>=`)
+  rather than warned about.
+- A value above `100` is rejected at load, never clamped.
+
+#### Boot coherence
 
 `paladin-server` refuses to start, naming the offending path, when:
 
@@ -459,7 +554,7 @@ rejected, never clamped.
 With `http.auth.enabled: false` the open-access principal is the key `anonymous` in the tenant
 `open-access`, so `api_keys.anonymous` and `tenants.open-access` are accepted.
 
-### The derived token budget on agent routes
+#### The derived token budget on agent routes
 
 On `POST /v1/agents/{id}/execute`, `execute/stream` and `jobs`, a principal with an `allowance`
 ceiling gets a per-run token budget derived at admission: the **tightest** remaining headroom
@@ -500,7 +595,7 @@ Two limits to know about:
 
 A derived figure of zero tokens is refused `429 allowance_exhausted`, like an exhausted ceiling.
 
-### Caveats
+#### Caveats
 
 Changing `treasurer.currency` while allowances are in force makes every allowanced principal's
 admission fail closed until the ledger is migrated: its history is in the old currency. The
@@ -513,7 +608,7 @@ notices](../api-reference/platform-api.md#operator-allowance-notices)). Enable `
 every replica runs the release that understands `allowance_warning` (see the [HTTP service
 host](../deployment-topologies/http-service-host.md#treasurer-allowances) rollout note).
 
-## Treasurer rate pacing (Cadence)
+### Treasurer rate pacing (Cadence)
 
 `treasurer.cadence` paces every LLM call `paladin-server` makes after a provider answers
 `429 Too Many Requests`. It is **reactive**: nothing is gated until a provider says slow down.
@@ -551,18 +646,6 @@ without it `paladin-server` refuses to start, naming the feature, rather than qu
 in-process. See [Fleet-wide pacing with
 Redis](../deployment-topologies/http-service-host.md#fleet-wide-pacing-with-redis) for the
 rollout and outage behaviour.
-
-| Key | Type | Default | Env override |
-| --- | --- | --- | --- |
-| `treasurer.cadence.enabled` | bool | `true` | `APP_TREASURER_CADENCE_ENABLED` |
-| `treasurer.cadence.backend` | `in_process` or `{ redis: { url_env: NAME } }` | `in_process` | none (config file only) |
-| `treasurer.cadence.backend.redis.url_env` | non-empty name of an environment variable that is set at boot | none | none |
-| `treasurer.cadence.base_backoff_ms` | integer, greater than zero | `500` | `APP_TREASURER_CADENCE_BASE_BACKOFF_MS` |
-| `treasurer.cadence.max_backoff_ms` | integer, at least `base_backoff_ms` | `30000` | `APP_TREASURER_CADENCE_MAX_BACKOFF_MS` |
-| `treasurer.cadence.max_wait_secs` | integer, greater than zero | `300` | `APP_TREASURER_CADENCE_MAX_WAIT_SECS` |
-| `treasurer.cadence.degraded_multiplier` | finite number, at least `1.0` | `2.0` | `APP_TREASURER_CADENCE_DEGRADED_MULTIPLIER` |
-| `treasurer.cadence.fallback_pace_budget_secs` | integer, greater than zero | `60` | `APP_TREASURER_CADENCE_FALLBACK_PACE_BUDGET_SECS` |
-| `treasurer.cadence.lock_ttl_secs` | integer, greater than zero | `120` | `APP_TREASURER_CADENCE_LOCK_TTL_SECS` |
 
 - **`base_backoff_ms` / `max_backoff_ms`:** a 429 with no usable retry delay gates the key for a
   random time up to `base_backoff_ms`, doubling per consecutive 429 on that key up to

@@ -65,7 +65,7 @@ allowance across one boundary. This page does not promise an allowance can never
 | `TreasuryLedgerPort` | The whole contract every ledger backend (in-memory, SQLite, Postgres) implements: reserve, settle, release, balance and the store clock. Append-only, derive-on-read, policy-free. |
 
 This page names exactly this surface -- no more. The configuration structs under `treasurer:` are
-documented in the [Treasurer configuration reference](../getting-started/configuration.md#treasurer-allowances),
+documented in the [Treasurer configuration reference](../getting-started/configuration.md#treasurer),
 not here.
 
 ## Flow
@@ -175,7 +175,7 @@ The webhook signing secret is supplied only through the environment variable
 
 ## See also
 
-- [Treasurer configuration reference](../getting-started/configuration.md#treasurer-allowances) -- every
+- [Treasurer configuration reference](../getting-started/configuration.md#treasurer) -- every
   `treasurer:` key with its type, default, validation rule and environment override.
 - [Commissary](commissary.md) -- the input-side officer: per-call window rationing.
 - [Architecture Decisions](../contributing/adr-index.md) -- the index these records appear in.

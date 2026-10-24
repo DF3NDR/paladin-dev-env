@@ -323,6 +323,23 @@ treasurer:
   #       amount: "2.50"
   #       warn_at: 90
 
+  # Rate pacing (Cadence, PACE-01..04, Phase 43) is ON by default when this section is omitted;
+  # these are the defaults. `enabled: false` turns it off.
+  # cadence:
+  #   enabled: true
+  #   backend: in_process
+  #   base_backoff_ms: 500
+  #   max_backoff_ms: 30000
+  #   max_wait_secs: 300
+  #   degraded_multiplier: 2.0
+  #   fallback_pace_budget_secs: 60
+  #   lock_ttl_secs: 120
+  #
+  # To share pacing state across a worker fleet instead (needs a binary built with
+  # `--features redis-cadence`), replace `backend: in_process` with the form below. The URL is
+  # read ONLY from the environment variable named by `url_env`; it never appears in this file.
+  #   backend: { redis: { url_env: PALADIN_CADENCE_REDIS_URL } }
+
 # Runtime trace pipeline configuration (X-09, D-36). Every field below is
 # written out explicitly and is IDENTICAL to what TraceConfig::default()
 # produces -- the whole `trace:` section may be OMITTED ENTIRELY with no

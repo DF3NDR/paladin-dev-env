@@ -4,7 +4,7 @@ title: web3sec moves once, straight to v0.11.0, after Phases 50 and 51
 area: downstream-consumer
 severity: major
 files:
-  - MIGRATION.md (section 9.8, "Library consumers: v0.10.1 -> v0.11.0")
+  - MIGRATION.md (section 10.8, "Library consumers: v0.10.1 -> v0.11.0")
   - tests/consumer_surface_muster.rs
   - .planning/phases/49-downstream-adoption-of-v0-10-1-web3sec-consumer-bump/49-HANDOFF-web3sec.md
 owner: repo maintainer (relay to web3sec)
@@ -80,3 +80,16 @@ after Phase 50 and before Phase 51. Consequences for this todo:
   recorded); the consumer returns its real import inventory against that muster.
 - web3sec starts its adaptation when 50.1 seals, on a branch pinned to the sealed SHA, and reports
   divergences before Phase 46 freezes the guide; the return list in step 5 is unchanged.
+
+## Update 2026-10-24 (Phase 46)
+
+The "report divergences before Phase 46 freezes the guide" step is satisfied by
+`.planning/phases/46-docs-currency-hygiene/46-FEEDBACK-web3sec.md`. Its seven guide corrections
+(G-1..G-7) and four muster gaps are folded in (plans 46-11 and 46-06). The adaptation spec is now
+`MIGRATION.md` section 10.8, "Library consumers: v0.10.1 -> v0.11.0" (and "Operators: v0.10.1 ->
+v0.11.0"), frozen on 2026-10-24 by commit `fc48c010` (plan 46-11); the earlier mentions of section
+9.8 above are history, since section 9 is now the v0.10 record.
+
+The remaining steps belong to web3sec after Phase 47: re-pin the `paladin` submodule detached on the
+`v0.11.0` tag, run the consumer's gates on the new pin, and send the return report (step 5). Status
+stays pending (D-25).

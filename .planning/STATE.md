@@ -690,9 +690,15 @@ carry-forward) was disposed by Phases 5-16 and is preserved in this file's git h
 - **`cargo-semver-checks` 0.50.0 coverage gap** for inherent-method return-type and tool-coverage
   classes — covered by `MIGRATION.md` §9.2 rows instead (Phases 32/33).
 
-- **Nyquist validation** — seven v0.10.0 phases at `VALIDATION.md` `status: draft` (22, 24, 29,
-  30, 34, 36, 36.1) and Phase 28 at `nyquist_compliant: false`; archived phases 05-21 likewise
+- ~~**Nyquist validation**~~ — **resolved for the eight v0.10.0 phases by Phase 46 (2026-10-24, plans
+  46-02..46-04, D-14..D-17):** 22, 24, 29, 30, 34, 36 and 36.1 now read `status: validated` with
+  `nyquist_compliant: true`, and 28 is promoted to `nyquist_compliant: true` (D-15); any residual
+  gap is listed in each file's `## Gaps`. **Still open:** archived phases 05-21 likewise
   unreconciled. `/gsd-validate-phase <N>` each; coverage TODO, not a compliance failure.
+
+- **Open WINDOWS rows at Phase 46 close:** 13 (ids 56, 58, 62, 63, 64, 65, 66, 67, 68, 69, 73, 77,
+  79, per `windows status`) -- none are Phase 46's; `/gsd-ship` blocks while `open_count > 0`, so
+  Phase 47 dispositions them or records an override.
 
 - **Bookkeeping drift in the corpus acceptance audit** — the seven §11 judgment-tier sign-off boxes
   and the `v0.10.0` tag box in `.project/v0.10.0/09-program-acceptance-audit.md` are still `- [ ]`
@@ -764,7 +770,7 @@ with `recheck_by: 2026-10-16`. Closeout type `override_closeout`.
 | todo | `2026-09-13-evaluate-rustfs-replacement-for-minio` | Open — owner: repo maintainer; FUT-10 in the archived requirements. The quay.io MinIO pin (quick task 260913-15w) is terminal | Phase 36.1 (2026-09-18); acknowledged v0.10.0 close |
 | phase | Phase 37 plans 37-09..37-11 | Superseded by Phase 37.1 — never executed; scope (post-publish verification, milestone-close recording for `v0.10.0`) delivered under `v0.10.1` | Phase 37.1 (2026-09-19) |
 | requirement | SHIP-05 | Superseded by SHIP-06; amend-at-source note dated 2026-09-22 in `milestones/v0.10.0-REQUIREMENTS.md` | Phase 37.1 |
-| testing | Nyquist validation unreconciled for Phases 22, 24, 29, 30, 34, 36, 36.1 (`draft`) and 28 (`nyquist_compliant: false`) | Coverage TODO, not a compliance failure — `/gsd-validate-phase <N>`. Joins the same open item for archived Phases 05-21 | v0.10.0 close |
+| testing | Nyquist validation unreconciled for Phases 22, 24, 29, 30, 34, 36, 36.1 (`draft`) and 28 (`nyquist_compliant: false`) | Reconciled by Phase 46 (plans 46-02..46-04, D-14..D-17): 22 `nyquist_compliant: true`, 24 true, 29 true, 30 true, 34 true, 36 true, 36.1 true, all now `status: validated`; 28 promoted to `nyquist_compliant: true` (D-15). Gaps listed in each file's `## Gaps`. Archived Phases 05-21 remain open (rows below) | v0.10.0 close; resolved Phase 46 (2026-10-24) |
 | debt | Audit `tech_debt` register (tracing overhead D-16; `WINDOWS.md` waived rows 23-25, 29-35, 45, 51-55; §11 sign-off boxes; IN-01/IN-02; SSE `done` collapse; three roadmap-level v2 lines; Milestone 14 reserved) | Inventoried with owners in `milestones/v0.10.0-MILESTONE-AUDIT.md`, not duplicated here | v0.10.0 close |
 
 ### Acknowledged at v0.9.0 milestone close (2026-09-01)

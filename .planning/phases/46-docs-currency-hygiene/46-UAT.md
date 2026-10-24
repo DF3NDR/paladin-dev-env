@@ -3,16 +3,16 @@ status: testing
 phase: 46-docs-currency-hygiene
 source: 46-01-SUMMARY.md, 46-02-SUMMARY.md, 46-03-SUMMARY.md, 46-04-SUMMARY.md, 46-05-SUMMARY.md, 46-06-SUMMARY.md, 46-07-SUMMARY.md, 46-08-SUMMARY.md, 46-09-SUMMARY.md, 46-10-SUMMARY.md, 46-11-SUMMARY.md, 46-12-SUMMARY.md, 46-13-SUMMARY.md, 46-14-SUMMARY.md
 started: 2026-10-24T17:16:32Z
-updated: 2026-10-24T18:54:44Z
+updated: 2026-10-24T19:00:03Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 5
-name: Stored v0.10 configs with removed keys are refused with a guiding error
+number: 6
+name: Maneuver warns once when ignored aegis policies are set
 expected: |
-  Deserializing a BattalionConfig document that still carries `timeout_seconds`, `retry_policy` or `error_strategy` fails with one error that names each key present, its aegis.* replacement and MIGRATION row M-B-06 (never a value). A ConclaveConfig with `timeout_seconds` is refused the same way, pointing at battalion_config.aegis.timeout.run_timeout. A v0.11 document, or one with an unrelated unknown key, still loads, and the CLI's own conclave YAML `timeout_seconds` still works. `cargo test -p paladin-battalion legacy_keys` passes.
+  Running a Commander with the Maneuver strategy and a BattalionConfig whose `aegis.on_error` or `aegis.retry` is set logs exactly one warn per execution reading "Maneuver {name} ignores aegis.on_error and aegis.retry: Maneuver reads only aegis.timeout.run_timeout, as one whole-flow clock". With neither field set no warning appears. The BattalionConfig.aegis rustdoc has a Maneuver bullet, and Commander, CommanderBuilder and build() rustdoc state the Commander adds no bound of its own. `cargo test -p paladin-battalion maneuver_ignored` passes.
 awaiting: user response
 
 ## Tests
@@ -35,7 +35,7 @@ result: pass
 
 ### 5. Stored v0.10 configs with removed keys are refused with a guiding error
 expected: Deserializing a BattalionConfig document that still carries `timeout_seconds`, `retry_policy` or `error_strategy` fails with one error that names each key present, its aegis.* replacement and MIGRATION row M-B-06 (never a value). A ConclaveConfig with `timeout_seconds` is refused the same way, pointing at battalion_config.aegis.timeout.run_timeout. A v0.11 document, or one with an unrelated unknown key, still loads, and the CLI's own conclave YAML `timeout_seconds` still works. `cargo test -p paladin-battalion legacy_keys` passes.
-result: [pending]
+result: pass
 
 ### 6. Maneuver warns once when ignored aegis policies are set
 expected: Running a Commander with the Maneuver strategy and a BattalionConfig whose `aegis.on_error` or `aegis.retry` is set logs exactly one warn per execution reading "Maneuver {name} ignores aegis.on_error and aegis.retry: Maneuver reads only aegis.timeout.run_timeout, as one whole-flow clock". With neither field set no warning appears. The BattalionConfig.aegis rustdoc has a Maneuver bullet, and Commander, CommanderBuilder and build() rustdoc state the Commander adds no bound of its own. `cargo test -p paladin-battalion maneuver_ignored` passes.
@@ -84,9 +84,9 @@ coverage_id: D4
 ## Summary
 
 total: 14
-passed: 8
+passed: 9
 issues: 0
-pending: 6
+pending: 5
 skipped: 0
 blocked: 0
 

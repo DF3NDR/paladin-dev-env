@@ -1,5 +1,8 @@
 //! Input port modules — port traits for data ingestion and processing pipelines.
 
+/// Allowance admission port (ALLOW-02, C1) -- the Treasurer's admission-time check, core-typed
+/// only so `paladin-web` can call it without naming the facade.
+pub mod allowance_admission_port;
 /// Assistant admin port (D-28, D-31, D-46) — validate-then-publish assistant
 /// definitions, no update method by construction (D-29).
 pub mod assistant_admin_port;

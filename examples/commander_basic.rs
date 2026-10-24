@@ -9,11 +9,13 @@
 use async_trait::async_trait;
 use paladin::application::services::battalion::commander::CommanderBuilder;
 use paladin::application::services::paladin::error::PaladinError;
-use paladin::core::base::entity::node::Node;
+use paladin::core::base::entity::Entity;
+use paladin::core::platform::container::aegis::{Aegis, TimeoutPolicy};
 use paladin::core::platform::container::battalion::{BattalionConfig, BattalionStrategy};
 use paladin::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream, StopReason};
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Simple mock PaladinPort for demonstration
 /// In production, this would connect to real LLM APIs
@@ -22,14 +24,14 @@ struct MockPaladinPort;
 #[async_trait]
 impl PaladinPort for MockPaladinPort {
     async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
-        println!("\n🎯 {} executing...", paladin.node.name);
+        println!("\n🎯 {} executing...", paladin.data.name);
         println!("   📝 Input: {}", input);
 
         // Simulate processing delay
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
         // Generate mock output based on Paladin role
-        let output = format!("{} processed: {}", paladin.node.name, input);
+        let output = format!("{} processed: {}", paladin.data.name, input);
         println!("   ✅ Output: {}", output);
 
         Ok(PaladinResult {
@@ -69,7 +71,7 @@ fn create_paladin(name: &str) -> Paladin {
         vision_enabled: false,
         ..Default::default()
     };
-    Node::new(data, None)
+    Entity::new(data, None)
 }
 
 #[tokio::main]
@@ -88,21 +90,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let reviewer = create_paladin("Reviewer");
 
     println!("\n📋 Created 3 Paladins:");
-    println!("   1. {} - First stage processing", analyzer.node.name);
-    println!("   2. {} - Enhancement stage", enhancer.node.name);
-    println!("   3. {} - Final review stage", reviewer.node.name);
+    println!("   1. {} - First stage processing", analyzer.data.name);
+    println!("   2. {} - Enhancement stage", enhancer.data.name);
+    println!("   3. {} - Final review stage", reviewer.data.name);
 
     // Step 3: Create a Battalion configuration
-    // This defines behavior like timeouts and error handling
-    let config = BattalionConfig::new("basic_formation")
-        .with_timeout(60) // 60 second timeout
-        .with_error_strategy(
-            paladin::core::platform::container::battalion::ErrorStrategy::FailFast,
-        );
+    // This defines behavior like timeouts and error handling. With no on_error
+    // handler the first failure aborts the Formation (fail fast, the default).
+    let config = BattalionConfig::new("basic_formation").with_aegis(Aegis {
+        timeout: Some(TimeoutPolicy {
+            run_timeout: Some(Duration::from_secs(60)), // bounds each Paladin attempt
+            idle_timeout: None,
+        }),
+        ..Aegis::default()
+    });
 
     println!("\n⚙️  Configuration:");
     println!("   Battalion: {}", config.name);
-    println!("   Timeout: {} seconds", config.timeout_seconds);
+    println!(
+        "   Per-attempt Timeout: {} seconds",
+        config
+            .aegis
+            .timeout
+            .as_ref()
+            .and_then(|t| t.run_timeout)
+            .map_or(0, |d| d.as_secs())
+    );
     println!("   Strategy: Formation (sequential execution)");
 
     // Step 4: Build the Commander using the builder pattern

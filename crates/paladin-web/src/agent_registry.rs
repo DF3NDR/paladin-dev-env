@@ -353,8 +353,8 @@ mod tests {
         )]);
 
         let entry = registry.get("r").expect("agent should be present");
-        assert_eq!(entry.paladin.node.name, "Researcher");
-        assert_eq!(entry.paladin.node.model, "gpt-4o");
+        assert_eq!(entry.paladin.data.name, "Researcher");
+        assert_eq!(entry.paladin.data.model, "gpt-4o");
         assert!(entry.streamer.is_none(), "from_agents leaves streamer None");
         assert!(registry.get("nope").is_none());
     }
@@ -404,7 +404,7 @@ mod tests {
         assert!(!duplicate, "duplicate id must be refused");
         // The original entry must be untouched.
         let entry = registry.get("a").expect("agent present");
-        assert_eq!(entry.paladin.node.name, "A");
+        assert_eq!(entry.paladin.data.name, "A");
     }
 
     #[test]

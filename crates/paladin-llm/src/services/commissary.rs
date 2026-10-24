@@ -43,7 +43,7 @@ use paladin_ports::output::llm_port::{LlmPort, ProviderCapabilities};
 use paladin_ports::output::token_counter_port::TokenCounterPort;
 use thiserror::Error;
 
-use crate::window::{WindowFallbackPolicy, resolve_context_window};
+use crate::window::{WindowFallbackPolicy, effective_capabilities, resolve_context_window};
 
 /// Planning-only tokens-per-1000-bytes ratio used ONLY internally by
 /// [`Commissary::dispense`] to decide how many bytes each item may keep while
@@ -408,6 +408,74 @@ impl Commissary {
         Self::new(
             llm.get_provider_name().to_string(),
             llm.get_capabilities(),
+            counter,
+            config,
+        )
+    }
+
+    /// Constructs a `Commissary` that rations against `model`'s own window: the port's
+    /// capabilities with `max_context_tokens` replaced by the per-model profile's
+    /// `context_window` ([`effective_capabilities`]), so a 1M-token model is not rationed at
+    /// the adapter-wide figure (ADR-0061, D-05).
+    ///
+    /// `config.model_hint` is set to `model`, and the provider label is `port`'s own
+    /// [`LlmPort::get_provider_name`] (a decorated port reports its inner provider's name).
+    /// Everything else -- validation, the strict window resolution, the reservation check --
+    /// is [`Commissary::new`]'s, unchanged.
+    ///
+    /// The window is resolved once, here. A Commissary built for one model does not follow a
+    /// later model change; build a new one for the new model.
+    ///
+    /// # Errors
+    ///
+    /// See [`Commissary::new`]. In particular [`CommissaryError::UndeclaredContextWindow`] when
+    /// neither the model's profile nor the port declares a window and
+    /// `config.fallback_context_tokens` is `None`, and
+    /// [`CommissaryError::ReservationExceedsWindow`] when
+    /// `config.reserved_completion_tokens` reaches the model's window.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use paladin_llm::mock::MockLlmAdapter;
+    /// use paladin_llm::services::commissary::{Commissary, CommissaryPlan};
+    /// use paladin_ports::output::token_counter_port::TokenCounterPort;
+    ///
+    /// struct Chars;
+    ///
+    /// impl TokenCounterPort for Chars {
+    ///     fn count(&self, text: &str, _model: &str) -> u32 {
+    ///         (text.chars().count() as u32).div_ceil(4)
+    ///     }
+    ///     fn name(&self) -> &str { "chars" }
+    ///     fn is_exact(&self) -> bool { false }
+    /// }
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// // The mock port declares a 4,096-token window and no per-model profile, so the
+    /// // allowance is that window; a port with a profile window would use that instead.
+    /// let port = MockLlmAdapter::new();
+    /// let commissary = Commissary::for_model(
+    ///     &port,
+    ///     "any-model",
+    ///     Arc::new(Chars),
+    ///     CommissaryPlan::default(),
+    /// )?;
+    /// assert_eq!(commissary.allotted_tokens(), 4_096);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn for_model(
+        port: &dyn LlmPort,
+        model: &str,
+        counter: Arc<dyn TokenCounterPort>,
+        mut config: CommissaryPlan,
+    ) -> Result<Self, CommissaryError> {
+        config.model_hint = model.to_string();
+        Self::new(
+            port.get_provider_name(),
+            effective_capabilities(port, model),
             counter,
             config,
         )
@@ -1087,5 +1155,351 @@ mod tests {
         // from the port, not hardcoded, so the two allowances differ with no source
         // change other than which port was consulted.
         assert!(mock_commissary.allotted_tokens() < big_commissary.allotted_tokens());
+    }
+
+    // ---- Commissary::for_model (ADR-0061, D-05, plan 50-07) -------------------------------
+
+    /// An in-memory port with a configurable adapter-wide window and an optional per-model
+    /// profile for the model id `"m"`, so the `for_model` tests need no network and no
+    /// adapter.
+    struct ProfiledPort {
+        adapter_window: Option<u32>,
+        profile_window: Option<u32>,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmPort for ProfiledPort {
+        async fn generate(
+            &self,
+            _request: paladin_ports::output::llm_port::LlmRequest,
+        ) -> Result<
+            paladin_ports::output::llm_port::LlmResponse,
+            paladin_ports::output::llm_port::LlmError,
+        > {
+            Err(paladin_ports::output::llm_port::LlmError::ProcessingError(
+                "not used".to_string(),
+            ))
+        }
+
+        async fn generate_stream(
+            &self,
+            _request: paladin_ports::output::llm_port::LlmRequest,
+        ) -> Result<
+            Box<
+                dyn futures::Stream<
+                        Item = Result<
+                            paladin_ports::output::llm_port::StreamingResponse,
+                            paladin_ports::output::llm_port::LlmError,
+                        >,
+                    > + Send,
+            >,
+            paladin_ports::output::llm_port::LlmError,
+        > {
+            Err(paladin_ports::output::llm_port::LlmError::ProcessingError(
+                "not used".to_string(),
+            ))
+        }
+
+        async fn validate_model(
+            &self,
+            _model: &str,
+        ) -> Result<bool, paladin_ports::output::llm_port::LlmError> {
+            Ok(true)
+        }
+
+        async fn get_available_models(
+            &self,
+        ) -> Result<Vec<String>, paladin_ports::output::llm_port::LlmError> {
+            Ok(Vec::new())
+        }
+
+        fn get_provider_name(&self) -> &'static str {
+            "profiled-test-port"
+        }
+
+        fn get_capabilities(&self) -> ProviderCapabilities {
+            capabilities_with_window(self.adapter_window)
+        }
+
+        fn model_profile(
+            &self,
+            model: &str,
+        ) -> Option<paladin_ports::output::llm_port::ModelProfile> {
+            (model == "m").then(|| {
+                let profile = paladin_ports::output::llm_port::ModelProfile::new();
+                match self.profile_window {
+                    Some(window) => profile.with_context_window(window),
+                    None => profile,
+                }
+            })
+        }
+    }
+
+    /// The per-model window, not the adapter-wide one, is what the Commissary rations
+    /// against, and the model hint it carries is the requested model.
+    #[test]
+    fn for_model_reads_the_profile_window_and_sets_the_model_hint() {
+        let port = ProfiledPort {
+            adapter_window: Some(8_192),
+            profile_window: Some(100_000),
+        };
+
+        let commissary =
+            Commissary::for_model(&port, "m", counter(), CommissaryPlan::default()).unwrap();
+
+        assert_eq!(commissary.window(), 100_000);
+        assert_eq!(commissary.config.model_hint, "m");
+        assert_eq!(commissary.provider, "profiled-test-port");
+
+        // A model the port has no profile for keeps the adapter-wide window.
+        let other =
+            Commissary::for_model(&port, "other", counter(), CommissaryPlan::default()).unwrap();
+        assert_eq!(other.window(), 8_192);
+        assert_eq!(other.config.model_hint, "other");
+    }
+
+    /// Boundary: over a profile window W, a reservation of W is refused and W - 1 is accepted;
+    /// the refusal reports the profile window, not the adapter-wide one.
+    #[test]
+    fn for_model_reservation_boundary() {
+        let window = 100_000_u32;
+        let port = ProfiledPort {
+            adapter_window: Some(8_192),
+            profile_window: Some(window),
+        };
+        let plan = |reserved: u32| CommissaryPlan {
+            reserved_completion_tokens: reserved,
+            ..CommissaryPlan::default()
+        };
+
+        let refused = Commissary::for_model(&port, "m", counter(), plan(window)).unwrap_err();
+        assert_eq!(
+            refused,
+            CommissaryError::ReservationExceedsWindow {
+                reserved: window,
+                window,
+            }
+        );
+
+        let accepted = Commissary::for_model(&port, "m", counter(), plan(window - 1)).unwrap();
+        assert_eq!(accepted.allotted_tokens(), 1);
+    }
+
+    /// D-07: Strict refusal is unchanged. With no profile window, no adapter window and no
+    /// caller fallback the Commissary still refuses, naming the provider; a caller fallback
+    /// still rescues it.
+    #[test]
+    fn strict_still_refuses_without_any_window() {
+        let port = ProfiledPort {
+            adapter_window: None,
+            profile_window: None,
+        };
+
+        let refused =
+            Commissary::for_model(&port, "m", counter(), CommissaryPlan::default()).unwrap_err();
+        assert_eq!(
+            refused,
+            CommissaryError::UndeclaredContextWindow {
+                provider: "profiled-test-port".to_string(),
+            }
+        );
+
+        let rescued = Commissary::for_model(
+            &port,
+            "m",
+            counter(),
+            CommissaryPlan {
+                fallback_context_tokens: Some(2_000),
+                ..CommissaryPlan::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(rescued.window(), 2_000);
+    }
+
+    /// An unknown model falls back to the adapter-wide window (D-07); it is never refused.
+    #[test]
+    fn an_unknown_model_uses_the_adapter_wide_window() {
+        let port = ProfiledPort {
+            adapter_window: Some(8_192),
+            profile_window: Some(100_000),
+        };
+
+        let commissary = Commissary::for_model(
+            &port,
+            "never-heard-of-it",
+            counter(),
+            CommissaryPlan::default(),
+        )
+        .unwrap();
+
+        assert_eq!(commissary.window(), 8_192);
+    }
+
+    /// `Commissary::new` is untouched: it still resolves from the capabilities it is handed
+    /// and ignores any per-model profile (the consumer muster pins its signature).
+    #[test]
+    fn new_still_reads_only_the_capabilities_it_is_given() {
+        let commissary = Commissary::new(
+            "p",
+            capabilities_with_window(Some(8_192)),
+            counter(),
+            CommissaryPlan::default(),
+        )
+        .unwrap();
+
+        assert_eq!(commissary.window(), 8_192);
+    }
+
+    #[cfg(feature = "kimi")]
+    mod kimi_windows {
+        use super::*;
+        use crate::kimi::adapter::{KimiAdapter, KimiConfig};
+        use crate::registry::{ModelOverride, ModelRegistry, seeded};
+        use paladin_ports::output::llm_port::ModelProfile;
+        use std::collections::BTreeMap;
+
+        /// The Kimi adapter's own seeded `kimi-k3` window, read through the port a caller
+        /// holds -- no network is touched at construction.
+        fn kimi_adapter() -> KimiAdapter {
+            KimiAdapter::new(
+                KimiConfig::new("test-key".to_string(), "kimi-k3".to_string())
+                    .with_base_url("http://127.0.0.1:9"),
+            )
+            .unwrap()
+        }
+
+        /// The seeded window `seeded::KIMI` carries for `kimi-k3`, read straight from the
+        /// table so the test pins "the window that reaches the Commissary equals the seeded
+        /// value exactly" rather than a second copy of the number.
+        fn seeded_k3_window() -> u32 {
+            crate::registry::seeded_window(seeded::KIMI, "kimi-k3")
+                .expect("kimi-k3 is seeded with a context window")
+        }
+
+        #[test]
+        fn kimi_k3_is_rationed_against_its_seeded_window() {
+            let adapter = kimi_adapter();
+            // 50-SEED-PROBE.md, 2026-10-15 Moonshot listing: context_length=1048576.
+            assert_eq!(seeded_k3_window(), 1_048_576);
+
+            let commissary =
+                Commissary::for_model(&adapter, "kimi-k3", counter(), CommissaryPlan::default())
+                    .unwrap();
+
+            assert_eq!(commissary.window(), seeded_k3_window());
+            // The default model's (smaller) window is what the adapter declares adapter-wide;
+            // the per-model figure is what `new` through `from_port` would have missed.
+            let adapter_wide =
+                Commissary::from_port(&adapter, counter(), CommissaryPlan::default()).unwrap();
+            assert!(adapter_wide.window() < commissary.window());
+        }
+
+        /// A `ModelOverride` window for the model beats the seeded one. The adapter takes no
+        /// overrides until plan 50-08, so the port is built over a `ModelRegistry` carrying
+        /// one -- the same registry type the adapter holds.
+        struct OverriddenKimi {
+            registry: ModelRegistry,
+        }
+
+        #[async_trait::async_trait]
+        impl LlmPort for OverriddenKimi {
+            async fn generate(
+                &self,
+                _request: paladin_ports::output::llm_port::LlmRequest,
+            ) -> Result<
+                paladin_ports::output::llm_port::LlmResponse,
+                paladin_ports::output::llm_port::LlmError,
+            > {
+                Err(paladin_ports::output::llm_port::LlmError::ProcessingError(
+                    "not used".to_string(),
+                ))
+            }
+
+            async fn generate_stream(
+                &self,
+                _request: paladin_ports::output::llm_port::LlmRequest,
+            ) -> Result<
+                Box<
+                    dyn futures::Stream<
+                            Item = Result<
+                                paladin_ports::output::llm_port::StreamingResponse,
+                                paladin_ports::output::llm_port::LlmError,
+                            >,
+                        > + Send,
+                >,
+                paladin_ports::output::llm_port::LlmError,
+            > {
+                Err(paladin_ports::output::llm_port::LlmError::ProcessingError(
+                    "not used".to_string(),
+                ))
+            }
+
+            async fn validate_model(
+                &self,
+                _model: &str,
+            ) -> Result<bool, paladin_ports::output::llm_port::LlmError> {
+                Ok(true)
+            }
+
+            async fn get_available_models(
+                &self,
+            ) -> Result<Vec<String>, paladin_ports::output::llm_port::LlmError> {
+                Ok(Vec::new())
+            }
+
+            fn get_provider_name(&self) -> &'static str {
+                "kimi"
+            }
+
+            fn get_capabilities(&self) -> ProviderCapabilities {
+                capabilities_with_window(Some(262_144))
+            }
+
+            fn model_profile(&self, model: &str) -> Option<ModelProfile> {
+                Some(self.registry.profile(model))
+            }
+        }
+
+        #[test]
+        fn for_model_reads_the_adapter_wide_window_knob_over_a_seeded_window() {
+            // The operator's `context_window` is the most specific statement, so it beats the
+            // compiled seeded window for `kimi-k3` -- and reaches the Commissary through the
+            // same profile.
+            let adapter = KimiAdapter::new(
+                KimiConfig::new("test-key".to_string(), "kimi-k3".to_string())
+                    .with_base_url("http://127.0.0.1:9")
+                    .with_context_window(500_000),
+            )
+            .unwrap();
+            let commissary =
+                Commissary::for_model(&adapter, "kimi-k3", counter(), CommissaryPlan::default())
+                    .unwrap();
+            assert_eq!(commissary.window(), 500_000);
+            assert_ne!(commissary.window(), seeded_k3_window());
+        }
+
+        #[test]
+        fn for_model_prefers_an_override_over_the_seed() {
+            let over = ModelOverride {
+                context_window: Some(200_000),
+                ..ModelOverride::default()
+            };
+            let registry = ModelRegistry::new("kimi", seeded::KIMI, ModelProfile::new())
+                .with_overrides(BTreeMap::from([("kimi-k3".to_string(), over)]))
+                .unwrap();
+            let port = OverriddenKimi { registry };
+
+            let overridden =
+                Commissary::for_model(&port, "kimi-k3", counter(), CommissaryPlan::default())
+                    .unwrap();
+            assert_eq!(overridden.window(), 200_000);
+
+            // The override is per model: the other seeded model keeps its own window.
+            let untouched =
+                Commissary::for_model(&port, "kimi-k2.6", counter(), CommissaryPlan::default())
+                    .unwrap();
+            assert_eq!(untouched.window(), 262_144);
+        }
     }
 }

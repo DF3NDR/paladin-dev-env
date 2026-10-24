@@ -210,9 +210,11 @@ impl LlmPort for MockLlmPort {
             content: self.response.clone(),
             finish_reason: FinishReason::Stop,
             usage: TokenUsage::new(20, 60),
+            cost: None,
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
+            reasoning: None,
         })
     }
 

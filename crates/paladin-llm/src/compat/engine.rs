@@ -15,29 +15,54 @@
 //!
 //! [`LlmPort`]: paladin_ports::output::llm_port::LlmPort
 
-use chrono::Utc;
 use futures::{Stream, StreamExt};
 use reqwest::{
     Client,
     header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue},
 };
-use std::collections::HashMap;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tokio::sync::OnceCell;
-use uuid::Uuid;
 
 use paladin_core::platform::container::prompt::{PromptItem, PromptType};
 use paladin_ports::output::llm_port::{
-    FinishReason, LlmError, LlmRequest, LlmResponse, ProviderCapabilities, ResponseFormat,
-    StreamingResponse, TokenUsage,
+    FinishReason, LlmError, LlmRequest, LlmResponse, ProviderCapabilities, ReasoningEffort,
+    ReasoningFallback, StreamingResponse, TokenUsage,
 };
+use paladin_ports::output::model_profile::{ModelProfile, ResolvedEffort, StopSupport};
+use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
 use super::types::{
     CompatMessage, CompatModelsResponse, CompatRequest, CompatResponse, CompatResponseFormat,
-    CompatStreamOptions, CompatUsage,
+    CompatStreamOptions, CompatThinking, CompatUsage,
 };
-use crate::http_status::map_http_status;
+use crate::backoff::exponential_backoff;
+use crate::http_status::map_http_status_with_hints;
+use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
+use crate::reasoning::{self, ReasoningWire, SubstitutionLog, WireCaps, mask_effort};
 use crate::redaction::diagnostic_excerpt as redact_and_bound;
+use crate::registry::{ModelRegistry, fallback_from_compat};
+use crate::response_guards::{StreamCompletion, bill, classify_completion};
+use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
+use crate::sse::SseLines;
+use crate::usage_reconcile::{USAGE_UNRECONCILED_METADATA_KEY, UsageLog};
+
+/// Parse a `429` response's rate-limit headers through the generic family (PACE-01).
+///
+/// Must run BEFORE `response.text()` consumes the response (research Pitfall 2). Only a 429
+/// is parsed, and no credential header is read: the generic family looks at `Retry-After`,
+/// `retry-after-ms` and the `x-ratelimit-*` names only, so a preset that is not one of the
+/// named providers still surfaces the delay its endpoint sent.
+fn snapshot_rate_limit_hints(
+    status: reqwest::StatusCode,
+    headers: &HeaderMap,
+) -> Option<RateLimitHints> {
+    if status != reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return None;
+    }
+    hints_from_headers(RateLimitHeaderFamily::Generic, SystemTime::now(), |name| {
+        headers.get(name).and_then(|v| v.to_str().ok())
+    })
+}
 
 /// Capabilities a preset declares for its own request path.
 ///
@@ -105,6 +130,11 @@ impl From<CompatCapabilities> for ProviderCapabilities {
 /// author states a position for every field, one at a time. Silent
 /// inheritance of "everything is supported" is exactly how the shipped
 /// Grok preset came to send a parameter xAI rejects.
+///
+/// The same rule now covers reasoning effort (Phase 51, REASON-02): the
+/// non-`bool` [`reasoning`](Self::reasoning) field names the one request
+/// field this preset's vendor parses an effort in, so a preset cannot be built
+/// without stating it, and no wire is ever inherited from another preset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompatRequestParameters {
     /// Whether this preset's request path carries `temperature`.
@@ -119,8 +149,13 @@ pub struct CompatRequestParameters {
     /// happened."* Declaring this field `false` is not that: no value is
     /// swapped in for another, the key is simply absent from the JSON body,
     /// and the vendor's own single legal value applies server-side. The
-    /// caller's declared-unsupported value is still discoverable — see the
-    /// `debug` log this method emits when a value is dropped. First used by
+    /// caller's declared-unsupported value is still discoverable — the
+    /// omission is logged as a `warn!` (target `paladin::sampling`, once per
+    /// instance per model) and recorded on the response as
+    /// `paladin.params_omitted` (ADR-0061; it was a `debug!` before Phase
+    /// 50). Since Phase 50 the **per-model profile** decides what is sent;
+    /// this flag now feeds the adapter-wide fallback profile derived from it
+    /// (`registry::fallback_from_compat`), not a separate gate. First used by
     /// Kimi's fixed-temperature preset (`kimi::adapter::KimiAdapter`, plan
     /// 17-19), whose live-measured constraint made the framework's
     /// fabricated `0.7` default temperature (`PaladinData::default()`)
@@ -134,19 +169,46 @@ pub struct CompatRequestParameters {
     pub frequency_penalty: bool,
     /// Whether this preset's request path carries `presence_penalty`.
     pub presence_penalty: bool,
+    /// Where this preset's vendor parses a reasoning effort in the request body (Phase 51,
+    /// REASON-02, D-04).
+    ///
+    /// The wire is vendor-wide and lives here on the preset; which levels a given model accepts
+    /// is per model and lives on that model's profile (`ModelProfile::effort`). It is a closed
+    /// enum, never a bool and never a free-form field name: [`ReasoningWire::Unsupported`] makes
+    /// every explicit effort fail before any HTTP call, and no wire ever sends a second effort
+    /// field beside its own. A preset with no verified form declares `Unsupported` (ADR-0061,
+    /// handoff section 5: a shared default of top-level `reasoning_effort` is the silent no-op
+    /// this field exists to prevent).
+    pub reasoning: ReasoningWire,
 }
 
 impl CompatRequestParameters {
     /// Every optional sampling parameter carried — the OpenAI-compatible
     /// baseline every preset except Grok's xAI preset declares in this
-    /// plan (T-17-75's behaviour-preservation requirement).
-    pub const fn all() -> Self {
+    /// plan (T-17-75's behaviour-preservation requirement) — with the
+    /// reasoning wire the caller states.
+    ///
+    /// The wire has no default on purpose (REASON-02): passing it here is how a preset that
+    /// takes the baseline still states its reasoning position.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_llm::compat::CompatRequestParameters;
+    /// use paladin_llm::reasoning::ReasoningWire;
+    ///
+    /// let parameters = CompatRequestParameters::all(ReasoningWire::Unsupported);
+    /// assert!(parameters.temperature && parameters.max_tokens);
+    /// assert_eq!(parameters.reasoning, ReasoningWire::Unsupported);
+    /// ```
+    pub const fn all(reasoning: ReasoningWire) -> Self {
         Self {
             temperature: true,
             max_tokens: true,
             top_p: true,
             frequency_penalty: true,
             presence_penalty: true,
+            reasoning,
         }
     }
 }
@@ -166,8 +228,9 @@ pub struct CompatEngineConfig {
     /// What this preset's own request path implements (D-04 posture).
     pub capabilities: CompatCapabilities,
     /// Which optional sampling parameters this preset's own request path
-    /// carries (17-18). Gates `build_request`'s five optional fields — see
-    /// [`CompatRequestParameters`]. Sits beside `error_override` and
+    /// carries (17-18). Gates `max_tokens` and seeds the adapter-wide fallback
+    /// profile `build_request` filters the other four through (ADR-0061) —
+    /// see [`CompatRequestParameters`]. Sits beside `error_override` and
     /// `redirect_policy` as a per-vendor protocol knob the engine reads
     /// off its own config rather than branching on provider identity.
     pub request_parameters: CompatRequestParameters,
@@ -262,7 +325,7 @@ fn classify_fetch_failure(error: &LlmError) -> FetchFailureClass {
 
         // A rate limit says "you called too often", not "you configured the
         // wrong thing" — the credential and the endpoint are both fine.
-        LlmError::RateLimitExceeded => FetchFailureClass::Supported,
+        LlmError::RateLimitExceeded { .. } => FetchFailureClass::Supported,
         // An exhausted quota is an account-billing state, not a
         // credential/endpoint mismatch — nothing about the CONFIGURATION is
         // wrong here either.
@@ -279,7 +342,13 @@ fn classify_fetch_failure(error: &LlmError) -> FetchFailureClass {
         LlmError::TokenLimitExceeded => FetchFailureClass::Supported,
         // Never produced by a model-list fetch either (no completion is
         // requested) — same reason.
-        LlmError::EmptyCompletion(_) => FetchFailureClass::Supported,
+        LlmError::EmptyCompletion { .. } => FetchFailureClass::Supported,
+        // A refusal is a policy decision by a model about a prompt; a
+        // model-list fetch sends no prompt, so a vendor answering `/models`
+        // with one means the endpoint is not the OpenAI-compatible service
+        // the configuration claims. That is a configuration problem, not a
+        // transient availability one, so it is audible (D-09).
+        LlmError::Refusal { .. } => FetchFailureClass::Misconfiguration,
         // A malformed prompt cannot reach a model-list fetch at all — this
         // arm exists only so the match stays exhaustive.
         LlmError::InvalidPrompt(_) => FetchFailureClass::Supported,
@@ -295,6 +364,9 @@ fn classify_fetch_failure(error: &LlmError) -> FetchFailureClass {
         // exhausted fallback chain is classified the same way.
         LlmError::ProviderError { .. } => FetchFailureClass::Supported,
         LlmError::AllProvidersFailed { .. } => FetchFailureClass::Supported,
+        // A refused reasoning effort is a statement about the request's configuration, never a
+        // fetch condition; a model-list fetch sends no effort, so this is never produced by one.
+        LlmError::UnsupportedParameter { .. } => FetchFailureClass::Misconfiguration,
         // X-10.2 (D-04): `LlmError` is `#[non_exhaustive]`; required by the
         // compiler, not reachable by any variant known today. See the
         // rustdoc above for why this stays `Supported` rather than a panic.
@@ -340,6 +412,32 @@ fn base_url_without_userinfo(base_url: &str) -> String {
     out
 }
 
+/// How a preset's vendor reports reasoning tokens relative to `completion_tokens` (G-50-5a).
+///
+/// [`TokenUsage`] is inclusive: `completion_tokens` carries every billed output token, reasoning
+/// included. Vendors on the OpenAI chat wire do not all report it that way, so each preset
+/// declares its vendor's contract through [`CompatEngine::with_usage_semantics`] and the engine
+/// folds accordingly -- declared, never branched on provider identity. The vendor's own
+/// `total_tokens` is the check on the declaration: a wrong one is recorded under
+/// [`USAGE_UNRECONCILED_METADATA_KEY`] on every reasoning call, never silently priced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum CompatUsageSemantics {
+    /// OpenAI's documented contract: `completion_tokens` already includes
+    /// `completion_tokens_details.reasoning_tokens`, so `completion_tokens` is copied as is and
+    /// the vendor total is `prompt_tokens + completion_tokens`. The engine default; Kimi, Qwen,
+    /// Ollama and OpenAI-compatible keep it.
+    #[default]
+    ReasoningInsideCompletion,
+    /// The vendor reports `completion_tokens_details.reasoning_tokens` beside
+    /// `completion_tokens` (vendor total = prompt + completion + reasoning), so the engine adds
+    /// the reasoning into `completion_tokens` (saturating) and keeps the reasoning sub-count as
+    /// reported. Grok declares it (live-measured 2026-10-18, `50-USAGE-PROBE.md`; see
+    /// `GrokAdapter::new`).
+    // Declared by the Grok preset only; a build without it never constructs this variant.
+    #[cfg_attr(not(feature = "grok"), allow(dead_code))]
+    ReasoningBesideCompletion,
+}
+
 /// The shared OpenAI-compatible engine every preset built on this core
 /// delegates to.
 ///
@@ -370,6 +468,163 @@ pub struct CompatEngine {
     /// [`DEFAULT_PROVIDER_NAME`] so an engine built without a preset still
     /// carries a truthful, if generic, name.
     provider_name: &'static str,
+    /// The per-model profile registry the preset attached through
+    /// [`CompatEngine::with_model_registry`] (ADR-0061). Private and **not** a field of the
+    /// public [`CompatEngineConfig`], which stays constructible exactly as before. `None` for an
+    /// engine built without a preset: [`CompatEngine::model_profile`] then derives one profile
+    /// from the config's own declarations.
+    model_registry: Option<ModelRegistry>,
+    /// The output budget sent when a request leaves `max_tokens` unset, from the preset's config
+    /// ([`CompatEngine::with_default_max_tokens`]). Private and **not** a field of the public
+    /// [`CompatEngineConfig`], which stays constructible exactly as before. `None` sends no
+    /// `max_tokens` key (the engine's behaviour before PARITY-03).
+    default_max_tokens: Option<u32>,
+    /// The provider-level default reasoning effort and fallback from the preset's config
+    /// ([`CompatEngine::with_default_reasoning`], Phase 51 D-00e). Private and **not** a field of
+    /// the public [`CompatEngineConfig`]. `None` sends nothing for a request that sets none.
+    default_reasoning: (Option<ReasoningEffort>, Option<ReasoningFallback>),
+    /// Which (model, parameter) omissions this instance has already warned about.
+    omissions: OmissionLog,
+    /// Which (model, adjustment) `response_format` changes this instance has already warned
+    /// about.
+    format_log: FormatLog,
+    /// How the preset's vendor reports reasoning against `completion_tokens`
+    /// ([`CompatEngine::with_usage_semantics`]). Private and **not** a field of the public
+    /// [`CompatEngineConfig`], which stays constructible exactly as before.
+    usage_semantics: CompatUsageSemantics,
+    /// Which (model, check) usage findings this instance has already warned about (G-50-5a).
+    usage_log: UsageLog,
+    /// Which (model, requested, effective) reasoning substitutions this instance has already
+    /// warned about (Phase 51, D-06).
+    substitutions: SubstitutionLog,
+}
+
+/// What each reasoning wire's request body can carry of a profile's effort data (Phase 51,
+/// D-00f). The profile an engine reports is masked by this, and `reasoning::admit` then refuses
+/// before HTTP whatever the masked profile does not admit.
+///
+/// - [`ReasoningWire::TopLevelEffort`]: a level (`reasoning_effort: "L"`) and `off`
+///   (`reasoning_effort: "none"`), plus `auto` (nothing sent). No budget field.
+/// - [`ReasoningWire::ThinkingObject`]: a level (`thinking.effort`), `off` (`type: disabled`) and
+///   `auto` (`type: enabled`). No budget field.
+/// - [`ReasoningWire::EnableThinking`]: `off`, `auto` and a budget (`enable_thinking` with
+///   `thinking_budget`). It has no level field, so levels and the coerced list are masked away.
+/// - anything else, [`ReasoningWire::Unsupported`] included: [`WireCaps::NONE`], so every explicit
+///   effort is refused with `WireUnsupported`. `ReasoningWire` is `#[non_exhaustive]`: a wire this
+///   engine does not know carries nothing rather than something wrong.
+fn wire_caps(wire: ReasoningWire) -> WireCaps {
+    match wire {
+        ReasoningWire::TopLevelEffort | ReasoningWire::ThinkingObject => WireCaps {
+            levels: true,
+            off: true,
+            auto: true,
+            budget: false,
+        },
+        ReasoningWire::EnableThinking => WireCaps {
+            levels: false,
+            off: true,
+            auto: true,
+            budget: true,
+        },
+        _ => WireCaps::NONE,
+    }
+}
+
+/// The four request fields an admitted reasoning effort can set; each is absent unless the
+/// declared wire names it, and no wire sets a field of another.
+#[derive(Debug, Default)]
+struct CompatReasoningFields {
+    reasoning_effort: Option<&'static str>,
+    thinking: Option<CompatThinking>,
+    enable_thinking: Option<bool>,
+    thinking_budget: Option<u32>,
+}
+
+/// Turn an admitted effort into the one wire form `wire` names.
+///
+/// # Errors
+///
+/// [`LlmError::UnsupportedParameter`] for a (wire, effort) pair this engine has no mapping for.
+/// Masking and `admit` already refuse those, so this is the last line of defence: it fails closed
+/// and can never put a field on the wire that the request did not ask for.
+fn map_reasoning(
+    provider: &'static str,
+    model: &str,
+    wire: ReasoningWire,
+    resolved: &ResolvedEffort,
+) -> Result<CompatReasoningFields, LlmError> {
+    if !resolved.on_wire {
+        return Ok(CompatReasoningFields::default());
+    }
+    let level = reasoning::level_spelling(resolved.effective);
+    let fields = match wire {
+        // `reasoning_effort: "L"`; `Off` is the vendor's `"none"`; `Auto` sends nothing (the
+        // vendor's own default depth) but is still stamped on the response.
+        ReasoningWire::TopLevelEffort => match (level, resolved.effective) {
+            (Some(level), _) => Some(CompatReasoningFields {
+                reasoning_effort: Some(level),
+                ..CompatReasoningFields::default()
+            }),
+            (None, ReasoningEffort::Off) => Some(CompatReasoningFields {
+                reasoning_effort: Some("none"),
+                ..CompatReasoningFields::default()
+            }),
+            (None, ReasoningEffort::Auto) => Some(CompatReasoningFields::default()),
+            _ => None,
+        },
+        // `thinking: {type, effort}`: a level enables thinking at that effort, `Off` disables
+        // it, `Auto` enables it with no effort.
+        ReasoningWire::ThinkingObject => match (level, resolved.effective) {
+            (Some(level), _) => Some(CompatThinking {
+                kind: "enabled",
+                effort: Some(level),
+            }),
+            (None, ReasoningEffort::Off) => Some(CompatThinking {
+                kind: "disabled",
+                effort: None,
+            }),
+            (None, ReasoningEffort::Auto) => Some(CompatThinking {
+                kind: "enabled",
+                effort: None,
+            }),
+            _ => None,
+        }
+        .map(|thinking| CompatReasoningFields {
+            thinking: Some(thinking),
+            ..CompatReasoningFields::default()
+        }),
+        // `enable_thinking` switch plus an optional `thinking_budget`; the wire has no level
+        // field, so a level never reaches this arm (masked out of the profile).
+        ReasoningWire::EnableThinking => match resolved.effective {
+            ReasoningEffort::Off => Some(CompatReasoningFields {
+                enable_thinking: Some(false),
+                ..CompatReasoningFields::default()
+            }),
+            ReasoningEffort::Auto => Some(CompatReasoningFields {
+                enable_thinking: Some(true),
+                ..CompatReasoningFields::default()
+            }),
+            ReasoningEffort::Budget(budget) => Some(CompatReasoningFields {
+                enable_thinking: Some(true),
+                thinking_budget: Some(budget),
+                ..CompatReasoningFields::default()
+            }),
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(fields) = fields {
+        return Ok(fields);
+    }
+    // `Unsupported` (masked away upstream) and any pair without a mapping: fail closed, no field
+    // is sent.
+    Err(LlmError::unsupported_parameter(
+        "reasoning_effort",
+        resolved.effective.to_string(),
+        provider,
+        model,
+        format!("the '{wire}' wire has no form for that effort"),
+    ))
 }
 
 /// The provider name a [`CompatEngine`] reports until a preset names it via
@@ -409,6 +664,14 @@ impl CompatEngine {
             config,
             models_cache: OnceCell::new(),
             provider_name: DEFAULT_PROVIDER_NAME,
+            model_registry: None,
+            default_max_tokens: None,
+            default_reasoning: (None, None),
+            omissions: OmissionLog::new(),
+            format_log: FormatLog::new(),
+            usage_semantics: CompatUsageSemantics::default(),
+            usage_log: UsageLog::new(),
+            substitutions: SubstitutionLog::new(),
         })
     }
 
@@ -423,6 +686,116 @@ impl CompatEngine {
         self
     }
 
+    /// Attach the per-model profile registry this engine resolves every request's model through
+    /// (ADR-0061, D-05). Each thin preset calls this with a registry over its adapter-wide
+    /// fallback profile, in the [`with_provider_name`](Self::with_provider_name) style.
+    #[must_use]
+    pub(crate) fn with_model_registry(mut self, registry: ModelRegistry) -> Self {
+        self.model_registry = Some(registry);
+        self
+    }
+
+    /// Set the output budget sent when a request leaves `max_tokens` unset (PARITY-03, D-12).
+    ///
+    /// It is the effective `max_tokens` from then on: it is gated by the preset's
+    /// `request_parameters.max_tokens` declaration and checked against the request model's
+    /// profiled maximum output by [`sampling::check_max_tokens`], exactly as a request's own
+    /// value is. A request's own `max_tokens` always wins over it.
+    #[must_use]
+    pub(crate) fn with_default_max_tokens(mut self, max_tokens: Option<u32>) -> Self {
+        self.default_max_tokens = max_tokens;
+        self
+    }
+
+    /// Set the provider-level default reasoning effort and fallback (Phase 51, D-00e), from the
+    /// preset config's `reasoning_effort` / `reasoning_fallback`.
+    ///
+    /// Applied per request, below the request's own value and against the request's own model: a
+    /// request that sets an effort (or a fallback) always wins field by field, and with both
+    /// unset here and on the request nothing changes. A refusal of the default names
+    /// `llm.<provider>.reasoning_effort`.
+    #[must_use]
+    pub(crate) fn with_default_reasoning(
+        mut self,
+        effort: Option<ReasoningEffort>,
+        fallback: Option<ReasoningFallback>,
+    ) -> Self {
+        self.default_reasoning = (effort, fallback);
+        self
+    }
+
+    /// Declare how this preset's vendor reports reasoning tokens against `completion_tokens`
+    /// (G-50-5a), in the [`with_model_registry`](Self::with_model_registry) style. Without it the
+    /// engine reads OpenAI's inclusive contract
+    /// ([`CompatUsageSemantics::ReasoningInsideCompletion`]).
+    #[must_use]
+    // Called by the Grok preset only today; the other presets keep the default.
+    #[cfg_attr(not(feature = "grok"), allow(dead_code))]
+    pub(crate) fn with_usage_semantics(mut self, semantics: CompatUsageSemantics) -> Self {
+        self.usage_semantics = semantics;
+        self
+    }
+
+    /// The profile that decides what reaches the wire for `model`: the registry's (override over
+    /// seeded entry over adapter-wide fallback), or, when no registry was attached, one derived
+    /// from this config's own capabilities and `request_parameters` with stop sequences not sent.
+    ///
+    /// Its `effort` data is masked by this preset's declared [`ReasoningWire`] (Phase 51, D-00f):
+    /// whatever the wire has no field for is removed, so a caller reading this profile (the
+    /// builder, the fallback chain) judges exactly what [`CompatEngine::build_request`] will send.
+    pub(crate) fn model_profile(&self, model: &str) -> ModelProfile {
+        let mut profile = match &self.model_registry {
+            Some(registry) => registry.profile(model),
+            None => fallback_from_compat(
+                &self.capabilities(),
+                &self.config.request_parameters,
+                StopSupport::NotSent,
+            ),
+        };
+        profile.effort = mask_effort(
+            std::mem::take(&mut profile.effort),
+            wire_caps(self.config.request_parameters.reasoning),
+        );
+        profile
+    }
+
+    /// The pre-judging verdict for a reasoning `effort` / `fallback` on `model` (Phase 51, D-09):
+    /// whether [`CompatEngine::build_request`] would admit it, without building a request.
+    ///
+    /// The send-time twin of `build_request`'s `in_force` + `admit`: the same
+    /// [`model_profile`](Self::model_profile) (masked by the preset's declared [`ReasoningWire`]),
+    /// the same provider defaults ([`with_default_reasoning`](Self::with_default_reasoning)) and
+    /// the same `judge`, so a preset's build-time check cannot read a different profile, wire
+    /// mask or default than its send path. The per-request budget-versus-`max_tokens` rule is
+    /// left to send time. No [`SubstitutionLog`] is touched
+    /// and no network call is made.
+    ///
+    /// # Errors
+    ///
+    /// [`LlmError::UnsupportedParameter`], with the reason text `build_request` would produce.
+    pub(crate) fn check_reasoning(
+        &self,
+        model: &str,
+        effort: Option<ReasoningEffort>,
+        fallback: Option<ReasoningFallback>,
+    ) -> Result<(), LlmError> {
+        reasoning::check(
+            self.provider_name,
+            model,
+            || self.model_profile(model),
+            effort,
+            fallback,
+            self.default_reasoning.0,
+            self.default_reasoning.1,
+        )
+    }
+
+    /// The preset's declared request parameters, for a preset's own position test.
+    #[cfg(test)]
+    pub(crate) fn request_parameters(&self) -> CompatRequestParameters {
+        self.config.request_parameters
+    }
+
     /// The name this engine stamps on its [`LlmError::ProviderError`]s.
     pub fn provider_name(&self) -> &'static str {
         self.provider_name
@@ -433,82 +806,121 @@ impl CompatEngine {
         self.config.capabilities.clone().into()
     }
 
-    /// Build the outgoing request body from a port-level [`LlmRequest`].
+    /// Build the outgoing request body from a port-level [`LlmRequest`], plus the notes the
+    /// buffered path records on its response.
     ///
-    /// Each of the five optional sampling parameters is gated on this
-    /// engine's own [`CompatRequestParameters`] declaration (17-18): a
-    /// carried parameter passes the caller's `Option` through unchanged; a
-    /// parameter the preset does not carry resolves to `None`, which
-    /// `CompatRequest`'s existing `skip_serializing_if = "Option::is_none"`
-    /// turns into an absent JSON key — never a `null`. The gate reads only
-    /// `self.config.request_parameters`, never the provider name or base
-    /// URL, so the same mechanism serves the next vendor without editing
-    /// this method.
+    /// What reaches the wire is decided by the request model's [`ModelProfile`] (ADR-0061),
+    /// resolved through [`CompatEngine::model_profile`]: [`sampling::apply`] sends a sampling
+    /// parameter only when the profile admits it, and a set parameter it does not admit is
+    /// **omitted** -- the key is absent from the JSON body (`CompatRequest`'s
+    /// `skip_serializing_if = "Option::is_none"`), never `null`, never a substituted legal value
+    /// -- and recorded: one `warn!` per instance per (model, parameter), and
+    /// `paladin.params_omitted` on the response. Stop sequences ride the same filter and reach
+    /// the wire in the order the caller declared them.
     ///
-    /// This method backs **five presets** sharing this one engine: Kimi,
-    /// Qwen, Grok, Ollama and the generic OpenAI-compatible preset — a
-    /// change here (e.g. the `response_format` mapping below, D-28) is
-    /// shared by all five, not per-vendor.
-    fn build_request(&self, request: &LlmRequest) -> Result<CompatRequest, LlmError> {
+    /// `max_tokens` is the one parameter still gated by this engine's own
+    /// [`CompatRequestParameters`] declaration; an effective `max_tokens` above the profile's
+    /// `max_output_tokens` is refused by [`sampling::check_max_tokens`] before anything is built.
+    ///
+    /// The gate reads only the profile and `self.config.request_parameters`, never the provider
+    /// name or base URL, so the same mechanism serves the next vendor without editing this method.
+    ///
+    /// This method backs **five presets** sharing this one engine: Kimi, Qwen, Grok, Ollama and
+    /// the generic OpenAI-compatible preset -- a change here (e.g. the `response_format` mapping
+    /// below, D-28) is shared by all five, not per-vendor.
+    fn build_request(
+        &self,
+        request: &LlmRequest,
+    ) -> Result<(CompatRequest, RequestNotes), LlmError> {
         let messages = Self::convert_prompt_to_messages(&request.prompt)?;
-        let params = &request.prompt.node.node.parameters;
-        let allowed = &self.config.request_parameters;
+        let params = &request.prompt.entity.data.parameters;
+        let profile = self.model_profile(&request.model);
 
-        let temperature = params.temperature.filter(|_| allowed.temperature);
-        let max_tokens = params.max_tokens.filter(|_| allowed.max_tokens);
-        let top_p = params.top_p.filter(|_| allowed.top_p);
-        let frequency_penalty = params
-            .frequency_penalty
-            .filter(|_| allowed.frequency_penalty);
-        let presence_penalty = params.presence_penalty.filter(|_| allowed.presence_penalty);
-
-        let mut dropped: Vec<&'static str> = Vec::new();
-        if params.temperature.is_some() && temperature.is_none() {
-            dropped.push("temperature");
-        }
+        // The configured default output budget (PARITY-03) stands in for a request that sets
+        // none; either way the effective value is gated by this preset's declaration and checked
+        // against the profile below, so a default is held to the same limit as a caller's value.
+        let max_tokens = params
+            .max_tokens
+            .or(self.default_max_tokens)
+            .filter(|_| self.config.request_parameters.max_tokens);
+        sampling::check_max_tokens(self.provider_name, &request.model, &profile, max_tokens)?;
         if params.max_tokens.is_some() && max_tokens.is_none() {
-            dropped.push("max_tokens");
-        }
-        if params.top_p.is_some() && top_p.is_none() {
-            dropped.push("top_p");
-        }
-        if params.frequency_penalty.is_some() && frequency_penalty.is_none() {
-            dropped.push("frequency_penalty");
-        }
-        if params.presence_penalty.is_some() && presence_penalty.is_none() {
-            dropped.push("presence_penalty");
-        }
-        if !dropped.is_empty() {
-            log::debug!(
-                "this preset's request_parameters declaration does not carry {:?}; \
-                 dropped from the outgoing body although the caller supplied a value",
-                dropped
+            log::warn!(
+                target: "paladin::sampling",
+                "provider '{}' model '{}': this preset's request path does not carry \
+                 'max_tokens'; the caller's value was dropped from the outgoing body",
+                self.provider_name,
+                request.model
             );
         }
 
-        // D-28: every `ResponseFormat` variant degrades to this engine's
-        // plain JSON-object form — these five presets speak the de-facto
-        // chat-completions dialect without OpenAI's schema-carrying
-        // extension. The field is present whenever the caller asked for
-        // JSON (never omitted, EDGE(RT-05/wire shape)); correctness never
-        // depends on it because the caller also appends the
-        // schema-conformance instruction block (D-27).
-        let response_format =
-            request
-                .response_format
-                .as_ref()
-                .map(|_: &ResponseFormat| CompatResponseFormat {
-                    kind: "json_object",
-                });
+        // Phase 51 (D-00f): an explicit effort is sent exactly or refused here, before any HTTP
+        // call and before any retry loop -- never routed through the omit-and-log path below.
+        // `profile` is already masked by this preset's declared wire.
+        let in_force = reasoning::in_force(
+            self.provider_name,
+            request.reasoning,
+            request.reasoning_fallback,
+            self.default_reasoning.0,
+            self.default_reasoning.1,
+        );
+        let resolved = reasoning::admit(
+            self.provider_name,
+            &request.model,
+            &profile,
+            in_force.effort,
+            in_force.fallback,
+            max_tokens,
+            in_force.source_key.as_deref(),
+            &self.substitutions,
+        )?;
+        let fields = match &resolved {
+            Some(resolved) => map_reasoning(
+                self.provider_name,
+                &request.model,
+                self.config.request_parameters.reasoning,
+                resolved,
+            )?,
+            None => CompatReasoningFields::default(),
+        };
 
-        Ok(CompatRequest {
+        let applied = sampling::apply(&profile, params);
+        let params_omitted = self
+            .omissions
+            .record(self.provider_name, &request.model, &applied);
+
+        // D-28 / ADR-0061 (i): the effective `response_format` follows the profile. These five
+        // presets speak the de-facto chat-completions dialect without OpenAI's schema-carrying
+        // extension, so an effective format -- object or schema -- maps to this engine's plain
+        // JSON-object wire form; the compat fallback profile (`json_object` true, `json_schema`
+        // false) makes a schema request a recorded downgrade. The field is present whenever an
+        // effective format exists (never `null`, EDGE(RT-05/wire shape)); correctness never
+        // depends on it because the caller also appends the schema-conformance instruction block
+        // (D-27).
+        let (effective_format, adjustment) =
+            sampling::apply_response_format(&profile, request.response_format.as_ref());
+        let format_adjusted =
+            self.format_log
+                .record(self.provider_name, &request.model, adjustment);
+        let response_format = effective_format.map(|_| CompatResponseFormat {
+            kind: "json_object",
+        });
+
+        let unprofiled_model = self
+            .model_registry
+            .as_ref()
+            .is_some_and(|registry| registry.note_unprofiled(&request.model))
+            .then(|| request.model.clone());
+
+        let body = CompatRequest {
             model: request.model.clone(),
             messages,
-            temperature,
+            temperature: applied.temperature,
             max_tokens,
-            top_p,
-            frequency_penalty,
-            presence_penalty,
+            top_p: applied.top_p,
+            frequency_penalty: applied.frequency_penalty,
+            presence_penalty: applied.presence_penalty,
+            stop: applied.stop,
             stream: request.stream,
             response_format,
             // Set unconditionally to `None` here; `generate_stream` forces
@@ -519,7 +931,19 @@ impl CompatEngine {
             // the `LlmRequest` and only decide to call `generate_stream`
             // afterward.
             stream_options: None,
-        })
+            reasoning_effort: fields.reasoning_effort,
+            thinking: fields.thinking,
+            enable_thinking: fields.enable_thinking,
+            thinking_budget: fields.thinking_budget,
+        };
+        let notes = RequestNotes {
+            params_omitted,
+            format_adjusted,
+            unprofiled_model,
+            reasoning_requested: resolved.map(|r| r.requested.to_string()),
+            reasoning_effective: resolved.map(|r| r.effective.to_string()),
+        };
+        Ok((body, notes))
     }
 
     /// Map a wire-reported [`CompatUsage`] into [`TokenUsage`], applying the
@@ -528,21 +952,45 @@ impl CompatEngine {
     /// `None`, never a fabricated `Some(0)`). Shared by both the
     /// non-streaming usage-construction site and the streaming terminal
     /// -chunk usage, so the two paths cannot drift.
-    fn map_compat_usage(usage: CompatUsage) -> TokenUsage {
-        let mut mapped = TokenUsage::new(usage.prompt_tokens, usage.completion_tokens);
-        if let Some(cached) = usage
-            .prompt_tokens_details
-            .and_then(|details| details.cached_tokens)
-        {
-            mapped = mapped.with_cache_read(cached);
-        }
-        if let Some(reasoning) = usage
+    ///
+    /// Cache-read, cache-write and reasoning counts are copied from the vendor's fields exactly
+    /// as reported. `completion_tokens` follows the preset's declared `semantics`: copied as is
+    /// when the vendor reports reasoning inside it, and with the reported reasoning added
+    /// (saturating) when the vendor reports it beside it, so the mapped `prompt + completion`
+    /// equals what the vendor bills. A reasoning figure of `None` or `Some(0)` leaves
+    /// completion unchanged.
+    ///
+    /// Returns the mapped usage together with the vendor's own `total_tokens` (when it reported
+    /// one). The vendor total is parsed and handed to the reconciliation, never copied:
+    /// [`TokenUsage`] guarantees `total_tokens == prompt_tokens + completion_tokens` (D-02), so
+    /// a disagreement is recorded under [`USAGE_UNRECONCILED_METADATA_KEY`], not written over
+    /// the mapped total.
+    fn map_compat_usage(
+        usage: CompatUsage,
+        semantics: CompatUsageSemantics,
+    ) -> (TokenUsage, Option<u32>) {
+        let reasoning = usage
             .completion_tokens_details
-            .and_then(|details| details.reasoning_tokens)
-        {
+            .and_then(|details| details.reasoning_tokens);
+        let completion = match semantics {
+            CompatUsageSemantics::ReasoningInsideCompletion => usage.completion_tokens,
+            CompatUsageSemantics::ReasoningBesideCompletion => usage
+                .completion_tokens
+                .saturating_add(reasoning.unwrap_or(0)),
+        };
+        let mut mapped = TokenUsage::new(usage.prompt_tokens, completion);
+        if let Some(details) = usage.prompt_tokens_details {
+            if let Some(cached) = details.cached_tokens {
+                mapped = mapped.with_cache_read(cached);
+            }
+            if let Some(written) = details.cache_write_tokens {
+                mapped = mapped.with_cache_write(written);
+            }
+        }
+        if let Some(reasoning) = reasoning {
             mapped = mapped.with_reasoning(reasoning);
         }
-        mapped
+        (mapped, usage.total_tokens)
     }
 
     /// Convert a `PromptItem` into the wire message list. Provider-agnostic
@@ -550,19 +998,21 @@ impl CompatEngine {
     fn convert_prompt_to_messages(prompt: &PromptItem) -> Result<Vec<CompatMessage>, LlmError> {
         let mut messages = Vec::new();
 
-        match &prompt.node.node.prompt_type {
+        match &prompt.entity.data.prompt_type {
             PromptType::System(system_prompt) => {
                 messages.push(CompatMessage {
                     role: "system".to_string(),
                     content: system_prompt.instructions.clone(),
                     reasoning_content: None,
+                    refusal: None,
                 });
             }
             PromptType::User(user_prompt) => {
                 messages.push(CompatMessage {
                     role: "user".to_string(),
-                    content: user_prompt.query.clone(),
+                    content: crate::turn::user_turn_text(user_prompt),
                     reasoning_content: None,
+                    refusal: None,
                 });
             }
             PromptType::Text(text_prompt) => {
@@ -580,6 +1030,7 @@ impl CompatEngine {
                     .to_string(),
                     content: text_prompt.content.clone(),
                     reasoning_content: None,
+                    refusal: None,
                 });
             }
             PromptType::Assistant(assistant_prompt) => {
@@ -587,6 +1038,7 @@ impl CompatEngine {
                     role: "assistant".to_string(),
                     content: assistant_prompt.response.clone(),
                     reasoning_content: None,
+                    refusal: None,
                 });
             }
             PromptType::Function(function_prompt) => {
@@ -594,6 +1046,7 @@ impl CompatEngine {
                     role: "function".to_string(),
                     content: function_prompt.function_name.clone(),
                     reasoning_content: None,
+                    refusal: None,
                 });
             }
         }
@@ -624,22 +1077,6 @@ impl CompatEngine {
         }
     }
 
-    /// Detect a completion truncated before any content was produced (the
-    /// reasoning-model truncation signature — see
-    /// `deepseek/adapter.rs::detect_empty_completion`, the source this was
-    /// generalized from).
-    fn detect_empty_completion(content: &str, finish_reason: &FinishReason) -> Option<LlmError> {
-        if matches!(finish_reason, FinishReason::Length) && content.trim().is_empty() {
-            Some(LlmError::EmptyCompletion(format!(
-                "finish_reason=length with empty content ({} raw chars) — reasoning likely \
-                 consumed the entire max_tokens budget; retry with a larger max_tokens",
-                content.len()
-            )))
-        } else {
-            None
-        }
-    }
-
     /// Render untrusted provider text as a log-safe diagnostic excerpt.
     /// Redaction runs before truncation — see [`crate::redaction`].
     fn diagnostic_excerpt(&self, body: &str) -> String {
@@ -651,12 +1088,28 @@ impl CompatEngine {
     /// Checks the preset's `error_override` first (handed the redacted,
     /// bounded excerpt, as before) so a preset-specific status can be added
     /// without editing this engine. Everything else is the crate-wide
-    /// [`map_http_status`] (Phase 25 D-03, FT-FR-01): it redacts `body`
+    /// [`map_http_status_with_hints`] (Phase 25 D-03, FT-FR-01): it redacts `body`
     /// before bounding it and emits a typed `ProviderError { status }` for
     /// every status without a dedicated variant — which is why callers pass
     /// the raw body here rather than a pre-built excerpt (bounding twice
     /// would truncate the first elision marker).
+    ///
+    /// A thin wrapper over [`Self::map_error_with_hints`], kept so the status-mapping unit
+    /// tests read the same as before PACE-01. Production paths call the hints variant.
+    #[cfg(test)]
     fn map_error(&self, status: u16, body: &str) -> LlmError {
+        self.map_error_with_hints(status, body, None)
+    }
+
+    /// Map a non-2xx HTTP status + RAW response body to [`LlmError`], carrying the parsed
+    /// rate-limit headers of a `429` (PACE-01). See `map_error` for the rules; the
+    /// preset's `error_override` still runs first and is handed no hints.
+    fn map_error_with_hints(
+        &self,
+        status: u16,
+        body: &str,
+        hints: Option<RateLimitHints>,
+    ) -> LlmError {
         if let Some(override_fn) = self.config.error_override
             && let Some(err) = override_fn(status, &self.diagnostic_excerpt(body))
         {
@@ -692,17 +1145,32 @@ impl CompatEngine {
                     self.diagnostic_excerpt(body)
                 ),
             },
-            _ => map_http_status(self.provider_name, status, body, &self.config.api_key),
+            _ => map_http_status_with_hints(
+                self.provider_name,
+                status,
+                body,
+                &self.config.api_key,
+                hints,
+            ),
         }
     }
 
     /// Perform an API call with exponential-backoff-plus-jitter retry.
     ///
     /// Non-retryable set: `AuthenticationError | InvalidPrompt |
-    /// EmptyCompletion | UsageLimitExceeded` — matching
+    /// EmptyCompletion | Refusal | UsageLimitExceeded | RateLimitExceeded` — matching
     /// `deepseek/adapter.rs::call_api_with_retry`'s rationale: these need
     /// operator intervention or will not clear on backoff, so retrying
     /// burns attempts for no benefit.
+    ///
+    /// `RateLimitExceeded` is in the set for a different reason (Phase 43
+    /// D-02): a 429 is the one error whose cure is *waiting*, and the
+    /// Cadence decorator above this engine owns waiting, with a gate shared
+    /// by every caller of the same provider and model. Retrying it here would
+    /// re-send into a limit the provider just announced and hide the thrash
+    /// below the decorator, so the first 429 is surfaced carrying the
+    /// provider's own `Retry-After`. Network, timeout and 5xx retries are
+    /// unchanged.
     async fn call_api_with_retry<F, Fut, T>(
         &self,
         operation: F,
@@ -722,8 +1190,11 @@ impl CompatEngine {
                         e,
                         LlmError::AuthenticationError(_)
                             | LlmError::InvalidPrompt(_)
-                            | LlmError::EmptyCompletion(_)
+                            | LlmError::EmptyCompletion { .. }
+                            | LlmError::Refusal { .. }
                             | LlmError::UsageLimitExceeded { .. }
+                            // D-02: surface the first 429; the Cadence decorator waits.
+                            | LlmError::RateLimitExceeded { .. }
                     ) {
                         return Err(e);
                     }
@@ -732,7 +1203,11 @@ impl CompatEngine {
                         return Err(e);
                     }
 
-                    let backoff = Duration::from_millis(100 * 2_u64.pow(attempt));
+                    let backoff = exponential_backoff(
+                        Duration::from_millis(100),
+                        attempt,
+                        Duration::from_secs(10),
+                    );
                     let jitter = Duration::from_millis(rand::random::<u64>() % 100);
                     tokio::time::sleep(backoff + jitter).await;
                     last_error = Some(e);
@@ -747,7 +1222,10 @@ impl CompatEngine {
 
     /// Generate a completion. POSTs to `{base_url}/chat/completions`.
     pub async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
-        let api_request = self.build_request(&request)?;
+        let (api_request, notes) = self.build_request(&request)?;
+        // ADR-0061 visibility rule: whatever the filter omitted or adjusted is stamped on every
+        // response this request yields, built once and cloned per retry attempt.
+        let metadata = notes.into_metadata();
         let url = format!("{}/chat/completions", self.config.base_url);
 
         let operation = || async {
@@ -771,11 +1249,14 @@ impl CompatEngine {
             let status = response.status();
 
             if !status.is_success() {
+                // Snapshot the 429 headers BEFORE `.text()` consumes the response
+                // (research Pitfall 2).
+                let hints = snapshot_rate_limit_hints(status, response.headers());
                 let error_text = response
                     .text()
                     .await
                     .unwrap_or_else(|_| "Unknown error".to_string());
-                return Err(self.map_error(status.as_u16(), &error_text));
+                return Err(self.map_error_with_hints(status.as_u16(), &error_text, hints));
             }
 
             // Read the body to text FIRST, then deserialize it separately —
@@ -800,32 +1281,81 @@ impl CompatEngine {
                 ))
             })?;
 
-            let choice = api_response.choices.first().ok_or_else(|| {
-                LlmError::EmptyCompletion("Response contained no choices".to_string())
-            })?;
+            // G-50-5a: usage is mapped BEFORE the guard (and before the no-choices check), so a
+            // call the vendor billed but that is classified as empty or refused still carries
+            // its bill on the error. The billed model is the served model the body names, else
+            // the request model (A3-50-26). No usage object means no bill, never a fabricated
+            // zero (D-00c).
+            let mapped = api_response
+                .usage
+                .map(|usage| Self::map_compat_usage(usage, self.usage_semantics));
+            let billed_model = if api_response.model.is_empty() {
+                request.model.as_str()
+            } else {
+                api_response.model.as_str()
+            };
+
+            let Some(choice) = api_response.choices.first() else {
+                return Err(bill(
+                    LlmError::empty_completion("Response contained no choices".to_string()),
+                    billed_model,
+                    mapped.map(|(usage, _)| usage),
+                ));
+            };
 
             let finish_reason = Self::map_finish_reason(choice.finish_reason.clone());
 
-            if let Some(err) =
-                Self::detect_empty_completion(&choice.message.content, &finish_reason)
-            {
-                return Err(err);
-            }
+            // One rule for refusal, content filter, function call and empty text on any
+            // finish reason (PARITY-05, D-09/D-11a).
+            classify_completion(
+                self.provider_name(),
+                &request.model,
+                &choice.message.content,
+                &finish_reason,
+                choice.message.refusal.as_deref(),
+                &self.config.api_key,
+            )
+            .map_err(|err| {
+                bill(
+                    err,
+                    billed_model,
+                    mapped.as_ref().map(|(usage, _)| usage.clone()),
+                )
+            })?;
 
-            let content = choice.message.content.clone();
-            let usage = Self::map_compat_usage(api_response.usage);
+            // A successful response must still report its usage: the field was required
+            // before G-50-5a made it optional for billed failures, and the same schema-mismatch
+            // error is kept for a body without it.
+            let Some((usage, vendor_total)) = mapped else {
+                return Err(LlmError::ProcessingError(format!(
+                    "Failed to parse response (schema mismatch — field: missing field `usage`) — \
+                     body excerpt: {}",
+                    self.diagnostic_excerpt(&body)
+                )));
+            };
+            // G-50-5a: the vendor's own total is the check on the mapping -- a disagreement is
+            // warned once and recorded, never written over the mapped total (D-02).
+            let unreconciled =
+                self.usage_log
+                    .record(self.provider_name(), &request.model, &usage, vendor_total);
 
-            Ok(LlmResponse {
-                id: Uuid::new_v4(),
-                request_id: request.id,
-                model: api_response.model,
-                content,
+            let mut llm_response = LlmResponse::new(
+                request.id,
+                api_response.model,
+                choice.message.content.clone(),
                 finish_reason,
                 usage,
-                created_at: Utc::now(),
-                metadata: HashMap::new(),
-                function_call: None,
-            })
+            );
+            llm_response.metadata = metadata.clone();
+            if let Some(value) = unreconciled {
+                llm_response
+                    .metadata
+                    .insert(USAGE_UNRECONCILED_METADATA_KEY.to_string(), value);
+            }
+            if let Some(reasoning) = &choice.message.reasoning_content {
+                llm_response = llm_response.with_reasoning(reasoning.as_str());
+            }
+            Ok(llm_response)
         };
 
         self.call_api_with_retry(operation, self.config.max_retries)
@@ -857,11 +1387,39 @@ impl CompatEngine {
     /// the provider, so a transient failure can bill the prompt more than
     /// once. The non-retryable set above exists precisely so a failure the
     /// provider has already answered definitively is never retried.
+    ///
+    /// ## Terminal item (D-09, D-11a)
+    ///
+    /// Each delta carries the vendor's reasoning text for that chunk on
+    /// [`StreamingResponse::reasoning`], in wire order. At the `[DONE]`
+    /// sentinel the stream is classified by the same rule as
+    /// [`generate`](Self::generate): a refusal ends the stream with
+    /// `Err(LlmError::Refusal)`, and a stream that carried no text that is
+    /// non-empty after trimming ends with `Err(LlmError::EmptyCompletion)`
+    /// instead of the `Ok` terminal chunk (a `content_filter` or function-call
+    /// finish stays `Ok`). Deltas already yielded, reasoning deltas included,
+    /// stay yielded: only the terminal item changes.
+    ///
+    /// The `Ok` terminal chunk carries the usage frame mapped with the preset's
+    /// usage semantics (G-50-5a), and, when that usage does not reconcile with
+    /// the vendor's own total or breaks containment, the
+    /// [`USAGE_UNRECONCILED_METADATA_KEY`] finding in its
+    /// [`StreamingResponse::metadata`] -- beside any ADR-0061 omission keys.
+    /// Content chunks never carry it, and an `Err` terminal item carries no
+    /// metadata at all. An `Err(EmptyCompletion)` or `Err(Refusal)` terminal
+    /// item carries the usage frame's figures as its billed usage
+    /// ([`LlmError::billed_usage`], G-50-5a) on the request model, or `None`
+    /// when the stream reported no usage.
     pub async fn generate_stream(
         &self,
         request: LlmRequest,
     ) -> Result<Box<dyn Stream<Item = Result<StreamingResponse, LlmError>> + Send>, LlmError> {
-        let mut api_request = self.build_request(&request)?;
+        // ADR-0061 (h), owner reading R-1 (option-b): the omissions, adjustments and unprofiled
+        // model `build_request` already `warn!`ed about are also stamped on the stream's
+        // terminal chunk (and only that chunk), exactly as the buffered path stamps them on
+        // `LlmResponse.metadata`.
+        let (mut api_request, notes) = self.build_request(&request)?;
+        let stream_metadata = notes.into_metadata();
         api_request.stream = true;
         api_request.stream_options = Some(CompatStreamOptions {
             include_usage: true,
@@ -894,11 +1452,13 @@ impl CompatEngine {
 
             let status = response.status();
             if !status.is_success() {
+                // Same header snapshot as the buffered path, taken before the body read.
+                let hints = snapshot_rate_limit_hints(status, response.headers());
                 let error_text = response
                     .text()
                     .await
                     .unwrap_or_else(|_| "Unknown error".to_string());
-                return Err(self.map_error(status.as_u16(), &error_text));
+                return Err(self.map_error_with_hints(status.as_u16(), &error_text, hints));
             }
 
             Ok(response)
@@ -929,59 +1489,126 @@ impl CompatEngine {
         // still emitted immediately, in wire order, carrying neither.
         let mut held_finish_reason: Option<FinishReason> = None;
         let mut held_usage: Option<TokenUsage> = None;
+        // The vendor's own total from the held usage frame, reconciled at the terminal chunk
+        // (G-50-5a) against the usage mapped with this preset's semantics.
+        let mut held_vendor_total: Option<u32> = None;
+        let usage_semantics = self.usage_semantics;
+        let usage_log = self.usage_log.clone();
 
-        let llm_stream = stream.flat_map(move |chunk_result| {
-            let items: Vec<Result<StreamingResponse, LlmError>> = match chunk_result {
-                Ok(bytes) => {
-                    let text = String::from_utf8_lossy(&bytes).into_owned();
-                    let mut items = Vec::new();
+        // D-11a / D-09 on the streaming path: the terminal chunk is decided by the same
+        // `classify_completion` the buffered path uses, over what the stream accumulated.
+        let provider = self.provider_name();
+        let model = request.model.clone();
+        let api_key = self.config.api_key.clone();
+        let mut completion = StreamCompletion::default();
 
-                    for line in text.lines() {
-                        let Some(json_str) = line.strip_prefix("data: ") else {
-                            continue;
-                        };
+        // A network read can end inside a `data:` line (or inside a multi-byte character), so the
+        // bytes are reassembled into whole lines before any line is parsed (CR-02).
+        let mut sse = SseLines::default();
+        let llm_stream = stream
+            .map(Some)
+            .chain(futures::stream::iter([None]))
+            .flat_map(move |chunk_option| {
+                // `None` is the end of the body: it releases a final line that had no newline.
+                let chunk_result = match chunk_option {
+                    Some(read) => read.map(|bytes| sse.push(&bytes)),
+                    None => Ok(sse.finish()),
+                };
+                let items: Vec<Result<StreamingResponse, LlmError>> = match chunk_result {
+                    Ok(lines) => {
+                        let mut items = Vec::new();
 
-                        if json_str.trim() == "[DONE]" {
-                            let mut terminal = StreamingResponse::terminal(
-                                held_finish_reason.take().unwrap_or(FinishReason::Stop),
-                            );
-                            if let Some(usage) = held_usage.take() {
-                                terminal = terminal.with_usage(usage);
-                            }
-                            items.push(Ok(terminal));
-                            continue;
-                        }
+                        for line in &lines {
+                            let Some(json_str) = line.strip_prefix("data: ") else {
+                                continue;
+                            };
 
-                        match serde_json::from_str::<super::types::CompatStreamResponse>(json_str) {
-                            Ok(response) => {
-                                if let Some(usage) = response.usage {
-                                    held_usage = Some(Self::map_compat_usage(usage));
-                                }
-                                if let Some(choice) = response.choices.first() {
-                                    if let Some(reason) = &choice.finish_reason {
-                                        held_finish_reason =
-                                            Some(Self::map_finish_reason(Some(reason.clone())));
+                            if json_str.trim() == "[DONE]" {
+                                let finish_reason =
+                                    held_finish_reason.take().unwrap_or(FinishReason::Stop);
+                                match completion.finish(provider, &model, &finish_reason, &api_key)
+                                {
+                                    Ok(()) => {
+                                        let mut terminal =
+                                            StreamingResponse::terminal(finish_reason);
+                                        if let Some(usage) = held_usage.take() {
+                                            // G-50-5a: only the `Ok` terminal chunk carries
+                                            // a finding; an `Err` terminal carries no
+                                            // metadata (50-18 rule).
+                                            if let Some(value) = usage_log.record(
+                                                provider,
+                                                &model,
+                                                &usage,
+                                                held_vendor_total.take(),
+                                            ) {
+                                                terminal = terminal.with_metadata(
+                                                    USAGE_UNRECONCILED_METADATA_KEY,
+                                                    value,
+                                                );
+                                            }
+                                            terminal = terminal.with_usage(usage);
+                                        }
+                                        for (key, value) in &stream_metadata {
+                                            terminal = terminal
+                                                .with_metadata(key.as_str(), value.as_str());
+                                        }
+                                        items.push(Ok(terminal));
                                     }
-                                    let content = choice.delta.content.clone().unwrap_or_default();
-                                    items.push(Ok(StreamingResponse::delta(content)));
+                                    // A refusal or an empty answer replaces the terminal chunk;
+                                    // deltas already yielded (reasoning included) stay yielded.
+                                    // G-50-5a: the error carries the usage frame's bill on the
+                                    // request model, `None` when the stream reported none.
+                                    Err(error) => {
+                                        items.push(Err(bill(error, &model, held_usage.take())))
+                                    }
+                                }
+                                continue;
+                            }
+
+                            match serde_json::from_str::<super::types::CompatStreamResponse>(
+                                json_str,
+                            ) {
+                                Ok(response) => {
+                                    if let Some(usage) = response.usage {
+                                        let (mapped, vendor_total) =
+                                            Self::map_compat_usage(usage, usage_semantics);
+                                        held_usage = Some(mapped);
+                                        held_vendor_total = vendor_total;
+                                    }
+                                    if let Some(choice) = response.choices.first() {
+                                        if let Some(reason) = &choice.finish_reason {
+                                            held_finish_reason =
+                                                Some(Self::map_finish_reason(Some(reason.clone())));
+                                        }
+                                        let content =
+                                            choice.delta.content.clone().unwrap_or_default();
+                                        completion.observe_content(&content);
+                                        if let Some(refusal) = &choice.delta.refusal {
+                                            completion.observe_refusal(refusal);
+                                        }
+                                        let mut delta = StreamingResponse::delta(content);
+                                        if let Some(reasoning) = &choice.delta.reasoning_content {
+                                            delta = delta.with_reasoning(reasoning.as_str());
+                                        }
+                                        items.push(Ok(delta));
+                                    }
+                                }
+                                Err(e) => {
+                                    items.push(Err(LlmError::ProcessingError(format!(
+                                        "Failed to parse streaming response: {}",
+                                        e
+                                    ))));
                                 }
                             }
-                            Err(e) => {
-                                items.push(Err(LlmError::ProcessingError(format!(
-                                    "Failed to parse streaming response: {}",
-                                    e
-                                ))));
-                            }
                         }
+
+                        items
                     }
+                    Err(e) => vec![Err(LlmError::NetworkError(format!("Stream error: {}", e)))],
+                };
 
-                    items
-                }
-                Err(e) => vec![Err(LlmError::NetworkError(format!("Stream error: {}", e)))],
-            };
-
-            futures::stream::iter(items)
-        });
+                futures::stream::iter(items)
+            });
 
         Ok(Box::new(llm_stream))
     }
@@ -1003,11 +1630,12 @@ impl CompatEngine {
 
         let status = response.status();
         if !status.is_success() {
+            let hints = snapshot_rate_limit_hints(status, response.headers());
             let error_text = response
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(self.map_error(status.as_u16(), &error_text));
+            return Err(self.map_error_with_hints(status.as_u16(), &error_text, hints));
         }
 
         let body = response
@@ -1092,8 +1720,12 @@ impl CompatEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::registry::UNPROFILED_MODEL_METADATA_KEY;
+    use crate::sampling::{PARAMS_OMITTED_METADATA_KEY, RESPONSE_FORMAT_ADJUSTED_METADATA_KEY};
     use mockito::Server;
     use paladin_core::platform::container::prompt::UserPrompt;
+    use paladin_ports::output::llm_port::ResponseFormat;
+    use std::collections::HashMap;
 
     fn test_config() -> CompatEngineConfig {
         CompatEngineConfig {
@@ -1115,10 +1747,68 @@ mod tests {
             // Unchanged pre-existing behaviour: no vendor-specific
             // restriction has been measured for this synthetic test
             // preset, so it declares full support (17-18).
-            request_parameters: CompatRequestParameters::all(),
+            request_parameters: CompatRequestParameters::all(ReasoningWire::Unsupported),
             fallback_models: vec!["fallback-model".to_string()],
             error_override: None,
             redirect_policy: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn compat_engine_honours_configured_max_retries() {
+        // `CompatEngineConfig.max_retries` is the number of retries after the first attempt:
+        // 0 sends once, 2 sends three times (a retryable 5xx each time).
+        for retries in [0_u32, 2] {
+            let server = crate::compat::test_support::server().await;
+            let mut config = test_config();
+            config.base_url = server.url();
+            config.max_retries = retries;
+            let engine = CompatEngine::new(config).unwrap();
+            crate::compat::test_support::attempts_against_a_failing_endpoint(
+                server,
+                &engine_port::EnginePort(engine),
+                "test-model",
+                retries as usize + 1,
+            )
+            .await;
+        }
+    }
+
+    /// An `LlmPort` over a bare engine, so the shared retry helper can drive it.
+    mod engine_port {
+        use super::super::CompatEngine;
+        use async_trait::async_trait;
+        use futures::Stream;
+        use paladin_ports::output::llm_port::{
+            LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities, StreamingResponse,
+        };
+
+        pub(super) struct EnginePort(pub(super) CompatEngine);
+
+        #[async_trait]
+        impl LlmPort for EnginePort {
+            async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
+                self.0.generate(request).await
+            }
+            async fn generate_stream(
+                &self,
+                request: LlmRequest,
+            ) -> Result<Box<dyn Stream<Item = Result<StreamingResponse, LlmError>> + Send>, LlmError>
+            {
+                self.0.generate_stream(request).await
+            }
+            async fn validate_model(&self, model: &str) -> Result<bool, LlmError> {
+                Ok(self.0.validate_model(model).await)
+            }
+            async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
+                Ok(self.0.available_models().await)
+            }
+            fn get_provider_name(&self) -> &'static str {
+                self.0.provider_name()
+            }
+            fn get_capabilities(&self) -> ProviderCapabilities {
+                self.0.capabilities()
+            }
         }
     }
 
@@ -1163,28 +1853,6 @@ mod tests {
     }
 
     #[test]
-    fn detect_empty_completion_length_and_empty_is_truncation() {
-        let result = CompatEngine::detect_empty_completion("", &FinishReason::Length);
-        assert!(matches!(result, Some(LlmError::EmptyCompletion(_))));
-    }
-
-    #[test]
-    fn detect_empty_completion_non_empty_content_is_never_truncation() {
-        assert!(
-            CompatEngine::detect_empty_completion("some answer", &FinishReason::Length).is_none()
-        );
-        assert!(
-            CompatEngine::detect_empty_completion("some answer", &FinishReason::Stop).is_none()
-        );
-    }
-
-    #[test]
-    fn detect_empty_completion_empty_but_stop_is_not_truncation() {
-        let result = CompatEngine::detect_empty_completion("", &FinishReason::Stop);
-        assert!(result.is_none());
-    }
-
-    #[test]
     fn map_error_status_codes() {
         let engine = CompatEngine::new(test_config()).unwrap();
         assert!(matches!(
@@ -1193,7 +1861,7 @@ mod tests {
         ));
         assert!(matches!(
             engine.map_error(429, "slow down"),
-            LlmError::RateLimitExceeded
+            LlmError::RateLimitExceeded { .. }
         ));
         assert!(matches!(
             engine.map_error(404, "no model"),
@@ -1316,7 +1984,7 @@ mod tests {
                     let calls = Arc::clone(&calls_clone);
                     async move {
                         calls.fetch_add(1, Ordering::SeqCst);
-                        Err(LlmError::EmptyCompletion("no text".to_string()))
+                        Err(LlmError::empty_completion("no text".to_string()))
                     }
                 },
                 3,
@@ -1501,6 +2169,109 @@ mod tests {
         }
     }
 
+    // ── PACE-01 / D-02: a 429 is surfaced on the FIRST attempt, with its delay ──
+    //
+    // The decorator above this engine (the Cadence) owns waiting. A private
+    // retry loop that re-sent a 429 would hide thrash below it, so a 429 is
+    // never retried here; network, timeout and 5xx retries are unchanged
+    // (`call_api_with_retry_retries_network_error_up_to_max_retries_plus_one`).
+
+    #[tokio::test(start_paused = true)]
+    async fn call_api_with_retry_surfaces_rate_limit_exceeded_on_the_first_attempt() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let engine = CompatEngine::new(test_config()).unwrap();
+        let calls = Arc::new(AtomicU32::new(0));
+        let calls_clone = Arc::clone(&calls);
+
+        let result: Result<(), LlmError> = engine
+            .call_api_with_retry(
+                move || {
+                    let calls = Arc::clone(&calls_clone);
+                    async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        Err(LlmError::rate_limited(None))
+                    }
+                },
+                3,
+            )
+            .await;
+
+        assert!(matches!(result, Err(LlmError::RateLimitExceeded { .. })));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn compat_429_is_surfaced_on_the_first_attempt_with_its_retry_delay() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("POST", "/chat/completions")
+            .with_status(429)
+            .with_header("retry-after", "7")
+            .with_body(r#"{"error":{"message":"slow down"}}"#)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let engine = CompatEngine::new(test_config_at(&server.url())).unwrap();
+        let err = engine
+            .generate(build_request("test-model"))
+            .await
+            .expect_err("a 429 must surface as an error");
+
+        mock.assert_async().await;
+        assert!(matches!(err, LlmError::RateLimitExceeded { .. }));
+        assert_eq!(err.retry_after(), Some(Duration::from_secs(7)));
+    }
+
+    #[tokio::test]
+    async fn compat_stream_open_429_is_surfaced_once_with_its_retry_delay() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("POST", "/chat/completions")
+            .with_status(429)
+            .with_header("retry-after", "7")
+            .with_body(r#"{"error":{"message":"slow down"}}"#)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let engine = CompatEngine::new(test_config_at(&server.url())).unwrap();
+        let result = engine.generate_stream(build_request("test-model")).await;
+
+        mock.assert_async().await;
+        match &result {
+            Err(err @ LlmError::RateLimitExceeded { .. }) => {
+                assert_eq!(err.retry_after(), Some(Duration::from_secs(7)));
+            }
+            Ok(_) => panic!("expected a rate-limit error, got Ok(<stream>)"),
+            Err(other) => panic!("expected a rate-limit error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn compat_429_without_retry_after_carries_no_delay() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("POST", "/chat/completions")
+            .with_status(429)
+            .with_body("{}")
+            .expect(1)
+            .create_async()
+            .await;
+
+        let engine = CompatEngine::new(test_config_at(&server.url())).unwrap();
+        let err = engine
+            .generate(build_request("test-model"))
+            .await
+            .expect_err("a 429 must surface as an error");
+
+        mock.assert_async().await;
+        assert!(matches!(err, LlmError::RateLimitExceeded { .. }));
+        assert_eq!(err.retry_after(), None);
+    }
+
     #[tokio::test]
     async fn generate_stream_opens_exactly_once_and_yields_its_deltas_in_order_on_success() {
         let sse_body = concat!(
@@ -1591,7 +2362,7 @@ mod tests {
 
     fn build_request_with_parameters(model: &str, parameters: PromptParameters) -> LlmRequest {
         let mut request = build_request(model);
-        request.prompt.node.node.parameters = parameters;
+        request.prompt.entity.data.parameters = parameters;
         request
     }
 
@@ -1605,6 +2376,16 @@ mod tests {
         config: CompatEngineConfig,
         request: LlmRequest,
     ) -> (Value, String) {
+        let (body, text, _metadata) = generate_and_capture_all(config, request).await;
+        (body, text)
+    }
+
+    /// [`generate_and_capture_body`] plus the response's metadata map, for the tests that pin
+    /// what an omission recorded (ADR-0061).
+    async fn generate_and_capture_all(
+        config: CompatEngineConfig,
+        request: LlmRequest,
+    ) -> (Value, String, HashMap<String, String>) {
         // `server` must outlive the call to `generate()` below (it is
         // dropped at the end of this function's scope, after `.await`
         // returns), so it cannot be constructed inside a nested block.
@@ -1647,6 +2428,7 @@ mod tests {
             result.is_ok(),
             "mock server returned a well-formed response: {result:?}"
         );
+        let metadata = result.map(|response| response.metadata).unwrap_or_default();
 
         let body_text = captured
             .lock()
@@ -1655,7 +2437,35 @@ mod tests {
             .expect("mock must have been called exactly once");
         let body_json: Value =
             serde_json::from_str(&body_text).expect("captured body must be valid JSON");
-        (body_json, body_text)
+        (body_json, body_text, metadata)
+    }
+
+    /// Phase 50 (PARITY-08): one test for the engine covers Kimi, Qwen, Grok, Ollama and the
+    /// OpenAI-compatible provider, which all build their request here. A present context is
+    /// appended to the query by the shared `user_turn_text` helper; an absent one leaves the
+    /// query unchanged.
+    #[tokio::test]
+    async fn compat_engine_user_turn_appends_context() {
+        async fn user_content(context: Option<&str>) -> Value {
+            let request = LlmRequest::new(
+                "test-model",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "What is 2+2?".to_string(),
+                    context: context.map(str::to_string),
+                }))
+                .unwrap(),
+            );
+            let (body, _) =
+                generate_and_capture_body(test_config_at("https://example.invalid/v1"), request)
+                    .await;
+            body["messages"][0]["content"].clone()
+        }
+
+        assert_eq!(user_content(None).await, "What is 2+2?");
+        assert_eq!(
+            user_content(Some("Extra context.")).await,
+            "What is 2+2?\n\nExtra context."
+        );
     }
 
     // Test 1 — mechanism is data-driven: a preset declaring
@@ -1663,19 +2473,26 @@ mod tests {
     // that key while carrying the caller's values for the rest.
     #[tokio::test]
     async fn build_request_omits_exactly_the_declared_unsupported_parameter() {
-        let mut request_parameters = CompatRequestParameters::all();
+        let mut request_parameters = CompatRequestParameters::all(ReasoningWire::Unsupported);
         request_parameters.presence_penalty = false;
 
         let config =
             test_config_with_request_parameters("https://example.invalid/v1", request_parameters);
         let request = build_request_with_parameters("test-model", fully_specified_parameters());
 
-        let (body, _) = generate_and_capture_body(config, request).await;
+        let (body, _, metadata) = generate_and_capture_all(config, request).await;
         let obj = body.as_object().expect("body must be a JSON object");
 
         assert!(
             !obj.contains_key("presence_penalty"),
             "declared-unsupported parameter must be absent from the wire body, got: {obj:?}"
+        );
+        assert_eq!(
+            metadata
+                .get(PARAMS_OMITTED_METADATA_KEY)
+                .map(String::as_str),
+            Some("presence_penalty"),
+            "the omission must be recorded, not silent (ADR-0061)"
         );
         assert_eq!(obj.get("temperature").and_then(Value::as_f64), Some(0.5));
         assert_eq!(obj.get("max_tokens").and_then(Value::as_u64), Some(123));
@@ -1694,7 +2511,7 @@ mod tests {
     async fn build_request_with_all_declared_carries_every_caller_value_unchanged() {
         let config = test_config_with_request_parameters(
             "https://example.invalid/v1",
-            CompatRequestParameters::all(),
+            CompatRequestParameters::all(ReasoningWire::Unsupported),
         );
         let request = build_request_with_parameters("test-model", fully_specified_parameters());
 
@@ -1722,7 +2539,7 @@ mod tests {
     // "present with a null value that happened to parse oddly".
     #[tokio::test]
     async fn build_request_omission_is_absence_never_a_null_value() {
-        let mut request_parameters = CompatRequestParameters::all();
+        let mut request_parameters = CompatRequestParameters::all(ReasoningWire::Unsupported);
         request_parameters.presence_penalty = false;
 
         let config =
@@ -1742,7 +2559,7 @@ mod tests {
     // protocol, not about whether the caller happened to supply a value.
     #[tokio::test]
     async fn build_request_declared_unsupported_wins_even_when_caller_sets_a_value() {
-        let mut request_parameters = CompatRequestParameters::all();
+        let mut request_parameters = CompatRequestParameters::all(ReasoningWire::Unsupported);
         request_parameters.presence_penalty = false;
 
         let config =
@@ -1751,7 +2568,7 @@ mod tests {
         parameters.presence_penalty = Some(1.5);
         let request = build_request_with_parameters("test-model", parameters);
 
-        let (body, body_text) = generate_and_capture_body(config, request).await;
+        let (body, body_text, metadata) = generate_and_capture_all(config, request).await;
         let obj = body.as_object().expect("body must be a JSON object");
 
         assert!(
@@ -1760,6 +2577,12 @@ mod tests {
              parameter, got: {obj:?}"
         );
         assert!(!body_text.contains("presence_penalty"));
+        assert_eq!(
+            metadata
+                .get(PARAMS_OMITTED_METADATA_KEY)
+                .map(String::as_str),
+            Some("presence_penalty")
+        );
     }
 
     // Test 5 — unset stays unset: a preset declaring a parameter carried,
@@ -1770,7 +2593,7 @@ mod tests {
     async fn build_request_carried_but_caller_unset_parameter_stays_omitted() {
         let config = test_config_with_request_parameters(
             "https://example.invalid/v1",
-            CompatRequestParameters::all(),
+            CompatRequestParameters::all(ReasoningWire::Unsupported),
         );
         let mut parameters = fully_specified_parameters();
         parameters.presence_penalty = None;
@@ -1805,19 +2628,26 @@ mod tests {
     // without generalizing to `temperature` would be caught here.
     #[tokio::test]
     async fn build_request_omits_exactly_a_declared_absent_temperature() {
-        let mut request_parameters = CompatRequestParameters::all();
+        let mut request_parameters = CompatRequestParameters::all(ReasoningWire::Unsupported);
         request_parameters.temperature = false;
 
         let config =
             test_config_with_request_parameters("https://example.invalid/v1", request_parameters);
         let request = build_request_with_parameters("test-model", fully_specified_parameters());
 
-        let (body, body_text) = generate_and_capture_body(config, request).await;
+        let (body, body_text, metadata) = generate_and_capture_all(config, request).await;
         let obj = body.as_object().expect("body must be a JSON object");
 
         assert!(
             !obj.contains_key("temperature"),
             "declared-absent temperature must not appear on the wire, got: {obj:?}"
+        );
+        assert_eq!(
+            metadata
+                .get(PARAMS_OMITTED_METADATA_KEY)
+                .map(String::as_str),
+            Some("temperature"),
+            "the omission must be recorded, not silent (ADR-0061)"
         );
         assert!(
             !body_text.contains("temperature"),
@@ -1874,7 +2704,7 @@ mod tests {
     #[test]
     fn classify_fetch_failure_rate_limit_exceeded_is_supported() {
         assert_eq!(
-            classify_fetch_failure(&LlmError::RateLimitExceeded),
+            classify_fetch_failure(&LlmError::rate_limited(None)),
             FetchFailureClass::Supported
         );
     }
@@ -1909,8 +2739,16 @@ mod tests {
     #[test]
     fn classify_fetch_failure_empty_completion_is_supported() {
         assert_eq!(
-            classify_fetch_failure(&LlmError::EmptyCompletion("no text".to_string())),
+            classify_fetch_failure(&LlmError::empty_completion("no text".to_string())),
             FetchFailureClass::Supported
+        );
+    }
+
+    #[test]
+    fn classify_fetch_failure_refusal_is_misconfiguration() {
+        assert_eq!(
+            classify_fetch_failure(&LlmError::refusal("kimi", "m", "no")),
+            FetchFailureClass::Misconfiguration
         );
     }
 
@@ -2066,6 +2904,393 @@ mod tests {
         assert!(
             !obj.contains_key("response_format"),
             "absent response_format must not appear on the wire, got: {obj:?}"
+        );
+    }
+
+    // ── Phase 50 (ADR-0061): the per-model profile decides what reaches the wire ────────────
+    //
+    // One set of cases for all five presets that share this engine. The registry is attached
+    // the way a preset attaches it, over a fallback profile derived from the config.
+
+    /// A registry over the test config's own declaration, with stop sequences supported.
+    fn test_registry(overrides: Vec<(&str, crate::registry::ModelOverride)>) -> ModelRegistry {
+        let config = test_config();
+        let fallback = fallback_from_compat(
+            &config.capabilities.clone().into(),
+            &config.request_parameters,
+            StopSupport::Supported { max: None },
+        );
+        ModelRegistry::new("test-preset", &[], fallback)
+            .with_overrides(
+                overrides
+                    .into_iter()
+                    .map(|(model, over)| (model.to_string(), over))
+                    .collect(),
+            )
+            .expect("the test overrides are valid")
+    }
+
+    /// Run `generate` through a mock endpoint, returning the outcome, the captured body (if any
+    /// request arrived) and how many requests arrived.
+    async fn generate_through(
+        engine_for: impl FnOnce(String) -> CompatEngine,
+        request: LlmRequest,
+    ) -> (Result<LlmResponse, LlmError>, Option<Value>, usize) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let mut server = Server::new_async().await;
+        let captured: Arc<Mutex<Option<Value>>> = Arc::new(Mutex::new(None));
+        let hits = Arc::new(AtomicUsize::new(0));
+        let (captured_clone, hits_clone) = (Arc::clone(&captured), Arc::clone(&hits));
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_body_from_request(move |req| {
+                hits_clone.fetch_add(1, Ordering::SeqCst);
+                let text = req.utf8_lossy_body().unwrap_or_default().into_owned();
+                *captured_clone.lock().unwrap() = serde_json::from_str(&text).ok();
+                json!({
+                    "id": "cmpl-1",
+                    "model": "test-model",
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+                })
+                .to_string()
+                .into_bytes()
+            })
+            .expect_at_least(0)
+            .create_async()
+            .await;
+
+        let engine = engine_for(server.url());
+        let outcome = engine.generate(request).await;
+        let body = captured.lock().unwrap().take();
+        (outcome, body, hits.load(Ordering::SeqCst))
+    }
+
+    fn engine_with(registry: ModelRegistry) -> impl FnOnce(String) -> CompatEngine {
+        move |url| {
+            CompatEngine::new(test_config_at(&url))
+                .unwrap()
+                .with_provider_name("test-preset")
+                .with_model_registry(registry)
+        }
+    }
+
+    /// Drain a compat stream against a mock SSE endpoint and return its chunks.
+    async fn stream_through(
+        engine_for: impl FnOnce(String) -> CompatEngine,
+        request: LlmRequest,
+    ) -> Vec<StreamingResponse> {
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_body_with_usage_frame())
+            .create_async()
+            .await;
+        let engine = engine_for(server.url());
+        let stream = engine.generate_stream(request).await.unwrap();
+        let mut stream = Box::into_pin(stream);
+        let mut chunks = Vec::new();
+        while let Some(item) = stream.next().await {
+            chunks.push(item.expect("every item of the scripted stream is Ok"));
+        }
+        chunks
+    }
+
+    /// Phase 50, owner reading R-1 (option-b): a streamed call stamps the visibility keys the
+    /// buffered path would, on the terminal chunk only.
+    #[tokio::test]
+    async fn compat_stream_terminal_chunk_carries_metadata() {
+        let mut parameters = fully_specified_parameters();
+        parameters.temperature = Some(1.5); // above the declared (0.0, 1.0)
+        let request = build_request_with_parameters("some-new-model", parameters);
+
+        let chunks = stream_through(engine_with(test_registry(vec![])), request).await;
+
+        let terminal = chunks.last().expect("a terminal chunk");
+        assert!(terminal.finish_reason.is_some());
+        assert_eq!(
+            terminal
+                .metadata
+                .get(PARAMS_OMITTED_METADATA_KEY)
+                .map(String::as_str),
+            Some("temperature")
+        );
+        assert_eq!(
+            terminal
+                .metadata
+                .get(UNPROFILED_MODEL_METADATA_KEY)
+                .map(String::as_str),
+            Some("some-new-model")
+        );
+        for content in &chunks[..chunks.len() - 1] {
+            assert!(content.metadata.is_empty(), "content chunk: {content:?}");
+        }
+    }
+
+    /// A streamed call that adjusted nothing ends with an empty metadata map -- the terminal
+    /// chunk is byte-identical to before the field existed.
+    #[tokio::test]
+    async fn compat_stream_terminal_chunk_has_no_metadata_when_nothing_was_adjusted() {
+        let request = build_request_with_parameters("test-model", fully_specified_parameters());
+
+        let chunks = stream_through(
+            |url| CompatEngine::new(test_config_at(&url)).unwrap(),
+            request,
+        )
+        .await;
+
+        assert!(chunks.iter().all(|c| c.metadata.is_empty()), "{chunks:?}");
+    }
+
+    #[tokio::test]
+    async fn compat_omission_is_recorded_in_metadata() {
+        let mut parameters = fully_specified_parameters();
+        parameters.temperature = Some(1.5); // above the declared (0.0, 1.0)
+        parameters.top_p = Some(0.25); // admitted
+        let request = build_request_with_parameters("test-model", parameters);
+
+        let (outcome, body, _) =
+            generate_through(engine_with(test_registry(vec![])), request).await;
+        let response = outcome.expect("the request is well-formed");
+        let body = body.expect("a request was sent");
+
+        assert!(
+            body.get("temperature").is_none(),
+            "an inadmissible temperature is omitted -- absent, never null or swapped: {body}"
+        );
+        assert_eq!(body.get("top_p").and_then(Value::as_f64), Some(0.25));
+        assert_eq!(
+            response
+                .metadata
+                .get(PARAMS_OMITTED_METADATA_KEY)
+                .map(String::as_str),
+            Some("temperature")
+        );
+    }
+
+    #[tokio::test]
+    async fn compat_nothing_omitted_leaves_the_metadata_key_absent() {
+        let request = build_request_with_parameters("test-model", fully_specified_parameters());
+
+        let (outcome, _, _) = generate_through(engine_with(test_registry(vec![])), request).await;
+        let response = outcome.expect("the request is well-formed");
+
+        assert!(
+            !response.metadata.contains_key(PARAMS_OMITTED_METADATA_KEY),
+            "nothing was omitted, so the key must be absent: {:?}",
+            response.metadata
+        );
+    }
+
+    #[tokio::test]
+    async fn compat_stop_reaches_the_wire_in_order() {
+        let mut parameters = fully_specified_parameters();
+        parameters.stop_sequences = Some(vec!["END".into(), "STOP".into(), "END".into()]);
+        let request = build_request_with_parameters("test-model", parameters);
+
+        let (outcome, body, _) =
+            generate_through(engine_with(test_registry(vec![])), request).await;
+        let response = outcome.expect("the request is well-formed");
+
+        assert_eq!(
+            body.expect("a request was sent").get("stop"),
+            Some(&json!(["END", "STOP", "END"])),
+            "stop sequences keep the caller's order and duplicates"
+        );
+        assert!(!response.metadata.contains_key(PARAMS_OMITTED_METADATA_KEY));
+    }
+
+    #[tokio::test]
+    async fn compat_stop_is_omitted_and_recorded_when_the_profile_does_not_take_it() {
+        // No registry attached: the profile derives from the config with stop NotSent.
+        let mut parameters = fully_specified_parameters();
+        parameters.stop_sequences = Some(vec!["END".into()]);
+        let request = build_request_with_parameters("test-model", parameters);
+
+        let (outcome, body, _) = generate_through(
+            |url| CompatEngine::new(test_config_at(&url)).unwrap(),
+            request,
+        )
+        .await;
+        let response = outcome.expect("the request is well-formed");
+
+        let body = body.expect("a request was sent");
+        assert!(body.get("stop").is_none(), "no stop key at all: {body}");
+        assert_eq!(
+            response
+                .metadata
+                .get(PARAMS_OMITTED_METADATA_KEY)
+                .map(String::as_str),
+            Some("stop")
+        );
+    }
+
+    #[tokio::test]
+    async fn compat_unprofiled_model_is_recorded() {
+        let request = build_request("some-new-model");
+
+        let (outcome, _, _) = generate_through(engine_with(test_registry(vec![])), request).await;
+        let response = outcome.expect("an unknown model is never a refusal (D-07)");
+
+        assert_eq!(
+            response
+                .metadata
+                .get(UNPROFILED_MODEL_METADATA_KEY)
+                .map(String::as_str),
+            Some("some-new-model")
+        );
+    }
+
+    #[tokio::test]
+    async fn compat_an_overridden_model_is_not_reported_unprofiled() {
+        let request = build_request("tuned-model");
+        let registry = test_registry(vec![(
+            "tuned-model",
+            crate::registry::ModelOverride {
+                max_output_tokens: Some(1000),
+                ..crate::registry::ModelOverride::default()
+            },
+        )]);
+
+        let (outcome, _, _) = generate_through(engine_with(registry), request).await;
+        let response = outcome.expect("the request is well-formed");
+
+        assert!(
+            !response
+                .metadata
+                .contains_key(UNPROFILED_MODEL_METADATA_KEY)
+        );
+    }
+
+    #[tokio::test]
+    async fn compat_response_format_follows_the_profile() {
+        let schema = || ResponseFormat::JsonSchema {
+            name: "answer".to_string(),
+            schema: json!({"type": "object"}),
+            strict: true,
+        };
+
+        // JsonObject still reaches the wire as json_object, unrecorded.
+        let request = build_request("test-model").with_response_format(ResponseFormat::JsonObject);
+        let (outcome, body, _) =
+            generate_through(engine_with(test_registry(vec![])), request).await;
+        let response = outcome.expect("well-formed");
+        assert_eq!(
+            body.expect("sent").get("response_format"),
+            Some(&json!({"type": "json_object"}))
+        );
+        assert!(
+            !response
+                .metadata
+                .contains_key(RESPONSE_FORMAT_ADJUSTED_METADATA_KEY)
+        );
+
+        // JsonSchema is still sent as json_object, and the downgrade is now recorded.
+        let request = build_request("test-model").with_response_format(schema());
+        let (outcome, body, _) =
+            generate_through(engine_with(test_registry(vec![])), request).await;
+        let response = outcome.expect("well-formed");
+        assert_eq!(
+            body.expect("sent").get("response_format"),
+            Some(&json!({"type": "json_object"}))
+        );
+        assert_eq!(
+            response
+                .metadata
+                .get(RESPONSE_FORMAT_ADJUSTED_METADATA_KEY)
+                .map(String::as_str),
+            Some("json_object")
+        );
+
+        // An override that says the model has no JSON mode drops the field and records it.
+        let registry = test_registry(vec![(
+            "no-json-model",
+            crate::registry::ModelOverride {
+                json_object: Some(false),
+                ..crate::registry::ModelOverride::default()
+            },
+        )]);
+        let request =
+            build_request("no-json-model").with_response_format(ResponseFormat::JsonObject);
+        let (outcome, body, _) = generate_through(engine_with(registry), request).await;
+        let response = outcome.expect("well-formed");
+        let body = body.expect("sent");
+        assert!(
+            body.get("response_format").is_none(),
+            "no response_format key at all: {body}"
+        );
+        assert_eq!(
+            response
+                .metadata
+                .get(RESPONSE_FORMAT_ADJUSTED_METADATA_KEY)
+                .map(String::as_str),
+            Some("omitted")
+        );
+    }
+
+    #[tokio::test]
+    async fn compat_max_tokens_above_the_profile_is_refused() {
+        let registry = test_registry(vec![(
+            "small-output-model",
+            crate::registry::ModelOverride {
+                max_output_tokens: Some(1000),
+                ..crate::registry::ModelOverride::default()
+            },
+        )]);
+        let mut parameters = fully_specified_parameters();
+        parameters.max_tokens = Some(1001);
+        let request = build_request_with_parameters("small-output-model", parameters);
+
+        let (outcome, _, hits) = generate_through(engine_with(registry), request).await;
+
+        let Err(LlmError::InvalidPrompt(message)) = outcome else {
+            panic!("max_tokens 1001 above a limit of 1000 must be InvalidPrompt: {outcome:?}");
+        };
+        for needle in [
+            "test-preset",
+            "small-output-model",
+            "max_tokens",
+            "1001",
+            "1000",
+        ] {
+            assert!(
+                message.contains(needle),
+                "'{needle}' missing from: {message}"
+            );
+        }
+        assert_eq!(hits, 0, "nothing may be sent for a refused request");
+    }
+
+    #[tokio::test]
+    async fn compat_max_tokens_at_the_profile_limit_is_sent() {
+        let registry = test_registry(vec![(
+            "small-output-model",
+            crate::registry::ModelOverride {
+                max_output_tokens: Some(1000),
+                ..crate::registry::ModelOverride::default()
+            },
+        )]);
+        let mut parameters = fully_specified_parameters();
+        parameters.max_tokens = Some(1000);
+        let request = build_request_with_parameters("small-output-model", parameters);
+
+        let (outcome, body, hits) = generate_through(engine_with(registry), request).await;
+
+        outcome.expect("exactly the limit is allowed");
+        assert_eq!(hits, 1);
+        assert_eq!(
+            body.expect("sent")
+                .get("max_tokens")
+                .and_then(Value::as_u64),
+            Some(1000)
         );
     }
 
@@ -2311,5 +3536,866 @@ mod tests {
             !obj.contains_key("stream_options"),
             "a non-streaming request must never carry stream_options, got: {obj:?}"
         );
+    }
+
+    // ---- PARITY-05: refusal, empty output, reasoning text and cache-write tokens ----
+
+    /// POST a canned non-streaming body to a mock endpoint and return what `generate` made of it.
+    async fn generate_from_body(body: Value) -> Result<LlmResponse, LlmError> {
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body.to_string())
+            .create_async()
+            .await;
+        CompatEngine::new(test_config_at(&server.url()))
+            .unwrap()
+            .with_provider_name("test-preset")
+            .generate(build_request("test-model"))
+            .await
+    }
+
+    fn buffered_body(message: Value, finish_reason: &str) -> Value {
+        json!({
+            "id": "cmpl-1",
+            "model": "test-model",
+            "choices": [{"index": 0, "message": message, "finish_reason": finish_reason}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+        })
+    }
+
+    /// Drain `generate_stream` over a canned SSE body into its ordered items.
+    async fn stream_from_sse(sse: &str) -> Vec<Result<StreamingResponse, LlmError>> {
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse)
+            .create_async()
+            .await;
+        let engine = CompatEngine::new(test_config_at(&server.url()))
+            .unwrap()
+            .with_provider_name("test-preset");
+        let stream = engine
+            .generate_stream(build_request("test-model"))
+            .await
+            .unwrap();
+        let mut stream = Box::into_pin(stream);
+        let mut items = Vec::new();
+        while let Some(item) = stream.next().await {
+            items.push(item);
+        }
+        items
+    }
+
+    /// G-50-5a (plan 50-26 tracer): a call the vendor answered and billed but that returned no
+    /// text -- a reasoning model that spent its whole budget thinking -- reaches the caller with
+    /// its usage on the error: the body's served model, the mapped usage and no cost (pricing it
+    /// is plan 50-27). With no usage reported there is no bill, never a fabricated zero (D-00c).
+    #[tokio::test]
+    async fn compat_billed_empty_completion_carries_its_usage() {
+        let mut body = json!({
+            "id": "cmpl-1",
+            "model": "kimi-served-test",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": ""},
+                "finish_reason": "length"
+            }],
+            "usage": {"prompt_tokens": 1_000, "completion_tokens": 62_000, "total_tokens": 63_000}
+        });
+
+        let err = generate_from_body(body.clone())
+            .await
+            .expect_err("an empty length completion is an error");
+        assert!(
+            matches!(err, LlmError::EmptyCompletion { .. }),
+            "expected EmptyCompletion, got {err:?}"
+        );
+        let billed = err
+            .billed_usage()
+            .expect("a billed empty completion carries its usage");
+        assert_eq!(billed.model, "kimi-served-test");
+        assert_eq!(billed.usage.prompt_tokens, 1_000);
+        assert_eq!(billed.usage.completion_tokens, 62_000);
+        assert_eq!(billed.usage.total_tokens, 63_000);
+        assert_eq!(billed.cost, None);
+
+        body.as_object_mut()
+            .expect("the body is a JSON object")
+            .remove("usage");
+        let err = generate_from_body(body)
+            .await
+            .expect_err("an empty length completion is an error");
+        assert!(
+            matches!(err, LlmError::EmptyCompletion { .. }),
+            "expected EmptyCompletion, got {err:?}"
+        );
+        assert_eq!(err.billed_usage(), None);
+    }
+
+    /// D-11a: empty text on a `stop` finish is an `EmptyCompletion`, no longer `Ok("")`.
+    #[tokio::test]
+    async fn empty_stop_completion_is_empty_completion() {
+        let result = generate_from_body(buffered_body(
+            json!({"role": "assistant", "content": ""}),
+            "stop",
+        ))
+        .await;
+        match result {
+            Err(LlmError::EmptyCompletion { detail: msg, .. }) => {
+                assert!(msg.contains("finish_reason=stop"), "{msg}");
+                assert!(!msg.contains("larger max_tokens"), "{msg}");
+            }
+            other => panic!("expected EmptyCompletion, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn whitespace_only_completion_is_empty_and_null_content_too() {
+        for message in [
+            json!({"role": "assistant", "content": "  \n\t"}),
+            json!({"role": "assistant", "content": null}),
+        ] {
+            let result = generate_from_body(buffered_body(message, "stop")).await;
+            assert!(
+                matches!(result, Err(LlmError::EmptyCompletion { .. })),
+                "got {result:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_length_completion_keeps_the_larger_max_tokens_advice() {
+        let result = generate_from_body(buffered_body(
+            json!({"role": "assistant", "content": ""}),
+            "length",
+        ))
+        .await;
+        match result {
+            Err(LlmError::EmptyCompletion { detail: msg, .. }) => {
+                assert!(msg.contains("finish_reason=length"), "{msg}");
+                assert!(msg.contains("larger max_tokens"), "{msg}");
+            }
+            other => panic!("expected EmptyCompletion, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn non_empty_content_is_never_an_empty_completion() {
+        for finish in ["stop", "length"] {
+            let response = generate_from_body(buffered_body(
+                json!({"role": "assistant", "content": "some answer"}),
+                finish,
+            ))
+            .await
+            .expect("text is a complete answer on any finish reason");
+            assert_eq!(response.content, "some answer");
+        }
+    }
+
+    /// D-09 / adjacency: a `content_filter` finish with no text stays `Ok`.
+    #[tokio::test]
+    async fn content_filter_with_empty_text_stays_ok() {
+        let response = generate_from_body(buffered_body(
+            json!({"role": "assistant", "content": ""}),
+            "content_filter",
+        ))
+        .await
+        .expect("a content filter is a finish reason, not an error");
+        assert!(matches!(
+            response.finish_reason,
+            FinishReason::ContentFilter
+        ));
+    }
+
+    #[tokio::test]
+    async fn compat_buffered_refusal_is_typed_and_names_provider_and_model() {
+        let result = generate_from_body(buffered_body(
+            json!({"role": "assistant", "content": "", "refusal": "I can't help with that."}),
+            "stop",
+        ))
+        .await;
+        match result {
+            Err(LlmError::Refusal {
+                provider,
+                model,
+                detail,
+                ..
+            }) => {
+                assert_eq!(provider, "test-preset");
+                assert_eq!(model, "test-model");
+                assert_eq!(detail, "I can't help with that.");
+            }
+            other => panic!("expected Refusal, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn compat_buffered_refusal_redacts_the_configured_key() {
+        // `test_config` carries the key "test-key".
+        let result = generate_from_body(buffered_body(
+            json!({"role": "assistant", "content": null, "refusal": "no, test-key is mine"}),
+            "stop",
+        ))
+        .await;
+        match result {
+            Err(LlmError::Refusal { detail, .. }) => {
+                assert!(!detail.contains("test-key"), "{detail}");
+                assert!(detail.contains("[REDACTED]"), "{detail}");
+            }
+            other => panic!("expected Refusal, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn compat_buffered_reasoning_text_is_surfaced_and_empty_is_none() {
+        let with_reasoning = generate_from_body(buffered_body(
+            json!({"role": "assistant", "content": "ok", "reasoning_content": "think"}),
+            "stop",
+        ))
+        .await
+        .unwrap();
+        assert_eq!(with_reasoning.reasoning.as_deref(), Some("think"));
+
+        for blank in ["", "   "] {
+            let response = generate_from_body(buffered_body(
+                json!({"role": "assistant", "content": "ok", "reasoning_content": blank}),
+                "stop",
+            ))
+            .await
+            .unwrap();
+            assert_eq!(response.reasoning, None, "blank reasoning {blank:?}");
+        }
+
+        let absent = generate_from_body(buffered_body(
+            json!({"role": "assistant", "content": "ok"}),
+            "stop",
+        ))
+        .await
+        .unwrap();
+        assert_eq!(absent.reasoning, None);
+        assert!(
+            !absent.metadata.contains_key("reasoning_content"),
+            "reasoning text never travels through metadata"
+        );
+    }
+
+    #[tokio::test]
+    async fn compat_buffered_cache_write_tokens_are_mapped() {
+        let mut body = buffered_body(json!({"role": "assistant", "content": "ok"}), "stop");
+        body["usage"] = json!({
+            "prompt_tokens": 30,
+            "completion_tokens": 2,
+            "total_tokens": 32,
+            "prompt_tokens_details": {"cached_tokens": 4, "cache_write_tokens": 7}
+        });
+        let response = generate_from_body(body).await.unwrap();
+        assert_eq!(response.usage.cache_write_tokens, Some(7));
+        assert_eq!(response.usage.cache_read_tokens, Some(4));
+    }
+
+    /// Edge PARITY-05/precision: sub-counts are copied exactly as the vendor reported them, and
+    /// a vendor total that disagrees is recorded, not discarded (G-50-5a, owner decision
+    /// 2026-10-17; this test previously pinned the discard). `total_tokens` stays
+    /// `prompt_tokens + completion_tokens` (D-02): the disagreement is surfaced under
+    /// `paladin.usage_unreconciled`, never written over the mapped total.
+    #[tokio::test]
+    async fn compat_vendor_total_disagreement_is_recorded() {
+        let mut body = buffered_body(json!({"role": "assistant", "content": "ok"}), "stop");
+        body["usage"] = json!({
+            "prompt_tokens": 1234,
+            "completion_tokens": 567,
+            "total_tokens": 9999,
+            "prompt_tokens_details": {"cached_tokens": 1000, "cache_write_tokens": 200},
+            "completion_tokens_details": {"reasoning_tokens": 321}
+        });
+        let response = generate_from_body(body).await.unwrap();
+        assert_eq!(
+            response
+                .metadata
+                .get(USAGE_UNRECONCILED_METADATA_KEY)
+                .map(String::as_str),
+            Some("total:vendor=9999,mapped=1801")
+        );
+        let usage = response.usage;
+        assert_eq!(usage.prompt_tokens, 1234);
+        assert_eq!(usage.completion_tokens, 567);
+        assert_eq!(usage.cache_read_tokens, Some(1000));
+        assert_eq!(usage.cache_write_tokens, Some(200));
+        assert_eq!(usage.reasoning_tokens, Some(321));
+        assert_eq!(usage.total_tokens, 1234 + 567);
+
+        // An absent sub-count stays `None`, never a fabricated `Some(0)` (D-03).
+        let bare = generate_from_body(buffered_body(
+            json!({"role": "assistant", "content": "ok"}),
+            "stop",
+        ))
+        .await
+        .unwrap()
+        .usage;
+        assert_eq!(bare.cache_write_tokens, None);
+        assert_eq!(bare.cache_read_tokens, None);
+        assert_eq!(bare.reasoning_tokens, None);
+    }
+
+    /// Edge PARITY-05/ordering: reasoning deltas arrive in wire order, interleaved with content
+    /// exactly as sent, and only the terminal chunk carries the finish reason and usage.
+    #[tokio::test]
+    async fn compat_stream_reasoning_keeps_wire_order() {
+        let sse = concat!(
+            "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"reasoning_content\":\"think \"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"reasoning_content\":\"harder\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"An\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"reasoning_content\":\" more\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"swer\"},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":6,\"total_tokens\":10}}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let chunks: Vec<StreamingResponse> = stream_from_sse(sse)
+            .await
+            .into_iter()
+            .map(|item| item.expect("a stream with text has no error item"))
+            .collect();
+
+        let reasoning: Vec<Option<&str>> = chunks.iter().map(|c| c.reasoning.as_deref()).collect();
+        assert_eq!(
+            reasoning,
+            vec![
+                Some("think "),
+                Some("harder"),
+                None,
+                Some(" more"),
+                None,
+                None
+            ],
+            "reasoning deltas stay on the chunk that carried them, in wire order"
+        );
+        let content: Vec<&str> = chunks.iter().map(|c| c.delta.as_str()).collect();
+        assert_eq!(content, vec!["", "", "An", "", "swer", ""]);
+
+        let terminal_indices: Vec<usize> = chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.finish_reason.is_some())
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(terminal_indices, vec![chunks.len() - 1]);
+        let terminal = chunks.last().unwrap();
+        assert!(matches!(terminal.finish_reason, Some(FinishReason::Stop)));
+        assert_eq!(terminal.usage, Some(TokenUsage::new(4, 6)));
+        assert!(chunks[..chunks.len() - 1].iter().all(|c| c.usage.is_none()));
+    }
+
+    /// D-11a on the streaming path: reasoning, then a `stop` with no content, ends in
+    /// `Err(EmptyCompletion)` instead of the `Ok` terminal chunk; the reasoning stays yielded.
+    #[tokio::test]
+    async fn compat_empty_stream_is_empty_completion() {
+        let sse = concat!(
+            "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"reasoning_content\":\"hmm\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"  \"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"1\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let items = stream_from_sse(sse).await;
+
+        let (last, yielded) = items.split_last().expect("the stream yields items");
+        assert!(
+            matches!(last, Err(LlmError::EmptyCompletion { .. })),
+            "the last item must be EmptyCompletion, got {last:?}"
+        );
+        assert!(
+            yielded.iter().all(|item| item.is_ok()),
+            "everything before the terminal item stays Ok"
+        );
+        assert_eq!(
+            yielded[0].as_ref().unwrap().reasoning.as_deref(),
+            Some("hmm"),
+            "reasoning already yielded stays yielded"
+        );
+        assert!(
+            items
+                .iter()
+                .all(|item| !matches!(item, Ok(chunk) if chunk.finish_reason.is_some())),
+            "no Ok terminal chunk is emitted"
+        );
+    }
+
+    #[tokio::test]
+    async fn compat_content_filter_stream_with_no_text_stays_an_ok_terminal_chunk() {
+        let sse = concat!(
+            "data: {\"id\":\"1\",\"choices\":[{\"delta\":{},\"finish_reason\":\"content_filter\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let items = stream_from_sse(sse).await;
+        let terminal = items.last().unwrap().as_ref().expect("no error item");
+        assert!(matches!(
+            terminal.finish_reason,
+            Some(FinishReason::ContentFilter)
+        ));
+    }
+
+    #[tokio::test]
+    async fn compat_stream_refusal_is_the_last_item_and_wins_over_partial_text() {
+        let sse = concat!(
+            "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"Sure, \"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"refusal\":\"I can't \"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"refusal\":\"help.\"},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let items = stream_from_sse(sse).await;
+        match items.last().unwrap() {
+            Err(LlmError::Refusal {
+                provider,
+                model,
+                detail,
+                ..
+            }) => {
+                assert_eq!(provider, "test-preset");
+                assert_eq!(model, "test-model");
+                assert_eq!(detail, "I can't help.");
+            }
+            other => panic!("expected Refusal as the last item, got {other:?}"),
+        }
+        assert_eq!(
+            items[0].as_ref().unwrap().delta,
+            "Sure, ",
+            "partial content already yielded stays yielded"
+        );
+    }
+    // ── Phase 51 (REASON-02, REASON-03, D-00f): the reasoning wires, exactly or refused ──
+    //
+    // One set of cases for every preset that shares this engine, against a synthetic preset that
+    // declares each wire in turn. The wire is the only difference between the three accepted
+    // cases, so a body that carries another wire's field fails them.
+
+    mod reasoning_wires {
+        use super::*;
+        use crate::reasoning::{
+            REASONING_EFFECTIVE_METADATA_KEY, REASONING_REQUESTED_METADATA_KEY,
+        };
+        use crate::registry::ModelOverride;
+        use paladin_ports::output::llm_port::ReasoningEffort::{
+            Auto, Budget, High, Low, Max, Medium, Minimal, Off, XHigh,
+        };
+        use paladin_ports::output::model_profile::{BudgetBounds, EffortLevels, EffortSupport};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        /// The four request fields an effort can set; every other key is outside this module's
+        /// business.
+        const REASONING_KEYS: [&str; 4] = [
+            "reasoning_effort",
+            "thinking",
+            "enable_thinking",
+            "thinking_budget",
+        ];
+
+        fn engine_for(
+            wire: ReasoningWire,
+            effort: EffortSupport,
+        ) -> impl FnOnce(String) -> CompatEngine {
+            move |url| {
+                let mut config = test_config_at(&url);
+                config.request_parameters = CompatRequestParameters::all(wire);
+                let registry = test_registry(vec![(
+                    "test-model",
+                    ModelOverride {
+                        effort: Some(effort),
+                        ..ModelOverride::default()
+                    },
+                )]);
+                CompatEngine::new(config)
+                    .unwrap()
+                    .with_provider_name("test-preset")
+                    .with_model_registry(registry)
+            }
+        }
+
+        fn levels() -> EffortSupport {
+            EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High])
+                    .with_off(true)
+                    .with_auto(true)
+                    .with_budget(BudgetBounds::new(1, 32_768)),
+            )
+        }
+
+        fn budget_only() -> EffortSupport {
+            EffortSupport::Supported(
+                EffortLevels::new([])
+                    .with_off(true)
+                    .with_auto(true)
+                    .with_budget(BudgetBounds::new(1, 32_768)),
+            )
+        }
+
+        async fn send(
+            wire: ReasoningWire,
+            effort: EffortSupport,
+            requested: paladin_ports::output::llm_port::ReasoningEffort,
+        ) -> (Result<LlmResponse, LlmError>, Option<Value>, usize) {
+            generate_through(
+                engine_for(wire, effort),
+                build_request("test-model").with_reasoning(requested),
+            )
+            .await
+        }
+
+        fn reasoning_keys(body: &Value) -> Vec<&'static str> {
+            REASONING_KEYS
+                .into_iter()
+                .filter(|key| body.get(key).is_some())
+                .collect()
+        }
+
+        #[tokio::test]
+        async fn top_level_effort_sends_the_level_and_nothing_else() {
+            let (result, body, _) = send(ReasoningWire::TopLevelEffort, levels(), Medium).await;
+            let metadata = result.expect("a listed level is accepted").metadata;
+            let body = body.unwrap();
+            assert_eq!(body["reasoning_effort"], "medium", "{body}");
+            assert_eq!(reasoning_keys(&body), ["reasoning_effort"], "{body}");
+            assert_eq!(metadata[REASONING_REQUESTED_METADATA_KEY], "medium");
+            assert_eq!(metadata[REASONING_EFFECTIVE_METADATA_KEY], "medium");
+        }
+
+        #[tokio::test]
+        async fn top_level_effort_off_is_none_and_auto_sends_nothing() {
+            let (result, body, _) = send(ReasoningWire::TopLevelEffort, levels(), Off).await;
+            result.expect("off is accepted");
+            assert_eq!(body.unwrap()["reasoning_effort"], "none");
+
+            let (result, body, hits) = send(ReasoningWire::TopLevelEffort, levels(), Auto).await;
+            let metadata = result.expect("auto is accepted").metadata;
+            assert_eq!(hits, 1);
+            assert_eq!(reasoning_keys(&body.unwrap()), Vec::<&str>::new());
+            assert_eq!(metadata[REASONING_REQUESTED_METADATA_KEY], "auto");
+            assert_eq!(metadata[REASONING_EFFECTIVE_METADATA_KEY], "auto");
+        }
+
+        #[tokio::test]
+        async fn top_level_effort_has_no_budget_field_so_a_budget_is_refused() {
+            let (result, body, hits) =
+                send(ReasoningWire::TopLevelEffort, levels(), Budget(100)).await;
+            assert!(matches!(result, Err(LlmError::UnsupportedParameter { .. })));
+            assert_eq!((hits, body), (0, None));
+        }
+
+        #[tokio::test]
+        async fn thinking_object_sends_level_off_and_auto_in_its_own_field() {
+            for (requested, expected) in [
+                (High, json!({"type": "enabled", "effort": "high"})),
+                (Off, json!({"type": "disabled"})),
+                (Auto, json!({"type": "enabled"})),
+            ] {
+                let (result, body, _) =
+                    send(ReasoningWire::ThinkingObject, levels(), requested).await;
+                result.expect("accepted");
+                let body = body.unwrap();
+                assert_eq!(body["thinking"], expected, "{requested}: {body}");
+                assert_eq!(reasoning_keys(&body), ["thinking"], "{requested}: {body}");
+            }
+            let (result, _, hits) =
+                send(ReasoningWire::ThinkingObject, levels(), Budget(100)).await;
+            assert!(matches!(result, Err(LlmError::UnsupportedParameter { .. })));
+            assert_eq!(hits, 0);
+        }
+
+        #[tokio::test]
+        async fn enable_thinking_sends_the_switch_and_a_bounded_budget() {
+            let (result, body, _) =
+                send(ReasoningWire::EnableThinking, budget_only(), Budget(512)).await;
+            result.expect("an in-bounds budget is accepted");
+            let body = body.unwrap();
+            assert_eq!(body["enable_thinking"], true, "{body}");
+            assert_eq!(body["thinking_budget"], 512, "{body}");
+            assert_eq!(
+                reasoning_keys(&body),
+                ["enable_thinking", "thinking_budget"],
+                "{body}"
+            );
+
+            let (result, body, _) = send(ReasoningWire::EnableThinking, budget_only(), Off).await;
+            result.expect("off is accepted");
+            let body = body.unwrap();
+            assert_eq!(body["enable_thinking"], false, "{body}");
+            assert_eq!(reasoning_keys(&body), ["enable_thinking"], "{body}");
+
+            let (result, body, _) = send(ReasoningWire::EnableThinking, budget_only(), Auto).await;
+            result.expect("auto is accepted");
+            let body = body.unwrap();
+            assert_eq!(body["enable_thinking"], true, "{body}");
+            assert_eq!(reasoning_keys(&body), ["enable_thinking"], "{body}");
+        }
+
+        #[tokio::test]
+        async fn enable_thinking_refuses_an_out_of_bounds_budget_and_every_level() {
+            let (result, _, hits) =
+                send(ReasoningWire::EnableThinking, budget_only(), Budget(32_769)).await;
+            assert!(matches!(result, Err(LlmError::UnsupportedParameter { .. })));
+            assert_eq!(hits, 0);
+
+            // The wire has no level field, so even an override listing levels cannot unlock one.
+            let (result, _, hits) = send(ReasoningWire::EnableThinking, levels(), Low).await;
+            assert!(matches!(result, Err(LlmError::UnsupportedParameter { .. })));
+            assert_eq!(hits, 0);
+        }
+
+        #[tokio::test]
+        async fn a_budget_not_below_max_tokens_is_refused_before_http() {
+            // The synthetic request carries a 1000-token output cap; a 2048-token budget leaves
+            // the model no room to answer.
+            let (result, _, hits) =
+                send(ReasoningWire::EnableThinking, budget_only(), Budget(2048)).await;
+            match result {
+                Err(LlmError::UnsupportedParameter { reason, .. }) => {
+                    assert!(reason.contains("below max_tokens"), "{reason}");
+                }
+                other => panic!("expected UnsupportedParameter, got {other:?}"),
+            }
+            assert_eq!(hits, 0);
+        }
+
+        #[tokio::test]
+        async fn the_budget_bound_comes_from_the_profile_not_a_constant() {
+            let narrow = EffortSupport::Supported(
+                EffortLevels::new([]).with_budget(BudgetBounds::new(10, 20)),
+            );
+            let (result, _, _) =
+                send(ReasoningWire::EnableThinking, narrow.clone(), Budget(20)).await;
+            result.expect("the profile's upper bound is inclusive");
+            let (result, _, hits) = send(ReasoningWire::EnableThinking, narrow, Budget(21)).await;
+            assert!(matches!(result, Err(LlmError::UnsupportedParameter { .. })));
+            assert_eq!(hits, 0);
+        }
+
+        #[tokio::test]
+        async fn an_unsupported_wire_refuses_all_nine_values_with_zero_http_hits() {
+            for requested in [
+                Off,
+                Auto,
+                Minimal,
+                Low,
+                Medium,
+                High,
+                XHigh,
+                Max,
+                Budget(1024),
+            ] {
+                // An override that lists everything still cannot unlock a wire with no form.
+                let (result, body, hits) =
+                    send(ReasoningWire::Unsupported, levels(), requested).await;
+                match result {
+                    Err(LlmError::UnsupportedParameter { reason, .. }) => {
+                        assert!(reason.contains("not verified"), "{requested}: {reason}");
+                    }
+                    other => panic!("{requested}: expected UnsupportedParameter, got {other:?}"),
+                }
+                assert_eq!((hits, body), (0, None), "{requested}");
+            }
+        }
+
+        #[tokio::test]
+        async fn an_unsupported_wire_with_no_effort_set_sends_and_stamps_nothing() {
+            let (result, body, hits) = generate_through(
+                engine_for(ReasoningWire::Unsupported, levels()),
+                build_request("test-model"),
+            )
+            .await;
+            let metadata = result.expect("an unset effort is untouched").metadata;
+            assert_eq!(hits, 1);
+            assert_eq!(reasoning_keys(&body.unwrap()), Vec::<&str>::new());
+            assert!(!metadata.contains_key(REASONING_REQUESTED_METADATA_KEY));
+            assert!(!metadata.contains_key(REASONING_EFFECTIVE_METADATA_KEY));
+        }
+
+        /// REASON-03 / T-51-13: no body ever carries a field of a wire the preset did not
+        /// declare, for any effort that wire admits.
+        #[tokio::test]
+        async fn no_wire_ever_sends_a_second_wires_field() {
+            let cases: [(ReasoningWire, EffortSupport, &[&str]); 3] = [
+                (
+                    ReasoningWire::TopLevelEffort,
+                    levels(),
+                    &["reasoning_effort"],
+                ),
+                (ReasoningWire::ThinkingObject, levels(), &["thinking"]),
+                (
+                    ReasoningWire::EnableThinking,
+                    budget_only(),
+                    &["enable_thinking", "thinking_budget"],
+                ),
+            ];
+            for (wire, effort, own) in cases {
+                for requested in [Off, Auto, Low, Medium, High, Budget(512)] {
+                    let (result, body, _) = send(wire, effort.clone(), requested).await;
+                    if result.is_err() {
+                        continue; // refused: nothing was sent at all
+                    }
+                    for key in reasoning_keys(&body.unwrap()) {
+                        assert!(
+                            own.contains(&key),
+                            "{wire} sent '{key}' for {requested}, which is not its own field"
+                        );
+                    }
+                }
+            }
+        }
+
+        /// Run `generate_stream` against a mock SSE endpoint, capturing the request body.
+        async fn stream_capture(
+            wire: ReasoningWire,
+            effort: EffortSupport,
+            requested: paladin_ports::output::llm_port::ReasoningEffort,
+        ) -> (
+            Option<Value>,
+            usize,
+            Result<Vec<StreamingResponse>, LlmError>,
+        ) {
+            let mut server = Server::new_async().await;
+            let captured: Arc<Mutex<Option<Value>>> = Arc::new(Mutex::new(None));
+            let hits = Arc::new(AtomicUsize::new(0));
+            let (slot, counter) = (Arc::clone(&captured), Arc::clone(&hits));
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body_from_request(move |req| {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    let text = req.utf8_lossy_body().unwrap_or_default().into_owned();
+                    *slot.lock().unwrap() = serde_json::from_str(&text).ok();
+                    sse_body_with_usage_frame().into_bytes()
+                })
+                .expect_at_least(0)
+                .create_async()
+                .await;
+            let engine = engine_for(wire, effort)(server.url());
+            let outcome = match engine
+                .generate_stream(build_request("test-model").with_reasoning(requested))
+                .await
+            {
+                Ok(stream) => {
+                    let mut stream = Box::into_pin(stream);
+                    let mut chunks = Vec::new();
+                    while let Some(item) = stream.next().await {
+                        chunks.push(item.expect("every scripted item is Ok"));
+                    }
+                    Ok(chunks)
+                }
+                Err(error) => Err(error),
+            };
+            let body = captured.lock().unwrap().take();
+            (body, hits.load(Ordering::SeqCst), outcome)
+        }
+
+        #[tokio::test]
+        async fn the_stream_sends_the_same_fields_as_generate_for_each_wire() {
+            let cases: [(ReasoningWire, EffortSupport, _, &str); 3] = [
+                (
+                    ReasoningWire::TopLevelEffort,
+                    levels(),
+                    High,
+                    "reasoning_effort",
+                ),
+                (ReasoningWire::ThinkingObject, levels(), High, "thinking"),
+                (
+                    ReasoningWire::EnableThinking,
+                    budget_only(),
+                    Budget(512),
+                    "thinking_budget",
+                ),
+            ];
+            for (wire, effort, requested, key) in cases {
+                let (buffered, buffered_body, _) = send(wire, effort.clone(), requested).await;
+                buffered.expect("accepted");
+                let buffered_body = buffered_body.unwrap();
+
+                let (body, hits, outcome) = stream_capture(wire, effort, requested).await;
+                let body = body.expect("the stream request reached the wire");
+                assert_eq!(hits, 1, "{wire}");
+                assert_eq!(body[key], buffered_body[key], "{wire}: {body}");
+                assert_eq!(
+                    reasoning_keys(&body),
+                    reasoning_keys(&buffered_body),
+                    "{wire}"
+                );
+
+                let chunks = outcome.expect("the stream opens");
+                let (terminal, earlier) = chunks.split_last().expect("a terminal chunk");
+                assert_eq!(
+                    terminal.metadata[REASONING_REQUESTED_METADATA_KEY],
+                    requested.to_string(),
+                    "{wire}"
+                );
+                assert_eq!(
+                    terminal.metadata[REASONING_EFFECTIVE_METADATA_KEY],
+                    requested.to_string(),
+                    "{wire}"
+                );
+                for chunk in earlier {
+                    assert!(
+                        !chunk
+                            .metadata
+                            .contains_key(REASONING_REQUESTED_METADATA_KEY),
+                        "{wire}: only the terminal chunk is stamped: {chunk:?}"
+                    );
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn a_refused_effort_fails_the_stream_before_any_http_call() {
+            let (body, hits, outcome) =
+                stream_capture(ReasoningWire::Unsupported, levels(), High).await;
+            assert!(matches!(
+                outcome,
+                Err(LlmError::UnsupportedParameter { .. })
+            ));
+            assert_eq!((hits, body), (0, None));
+        }
+
+        #[test]
+        fn the_masked_profile_carries_only_what_each_wire_can_send() {
+            let profile_for = |wire: ReasoningWire, effort: EffortSupport| {
+                let engine = engine_for(wire, effort)("https://example.invalid/v1".to_string());
+                engine.model_profile("test-model").effort
+            };
+            match profile_for(ReasoningWire::TopLevelEffort, levels()) {
+                EffortSupport::Supported(l) => {
+                    assert_eq!(l.levels, vec![Low, Medium, High]);
+                    assert_eq!(l.budget, None);
+                }
+                other => panic!("expected Supported, got {other:?}"),
+            }
+            match profile_for(ReasoningWire::EnableThinking, levels()) {
+                EffortSupport::Supported(l) => {
+                    assert!(l.levels.is_empty() && l.coerced.is_empty());
+                    assert!(l.budget.is_some() && l.off && l.auto);
+                }
+                other => panic!("expected Supported, got {other:?}"),
+            }
+            assert_eq!(
+                profile_for(ReasoningWire::Unsupported, levels()),
+                EffortSupport::WireUnsupported
+            );
+        }
+
+        #[test]
+        fn a_refused_effort_is_a_configuration_statement_not_a_fetch_condition() {
+            let error = LlmError::unsupported_parameter(
+                "reasoning_effort",
+                "high",
+                "test-preset",
+                "test-model",
+                "reason",
+            );
+            assert_eq!(
+                classify_fetch_failure(&error),
+                FetchFailureClass::Misconfiguration
+            );
+        }
     }
 }

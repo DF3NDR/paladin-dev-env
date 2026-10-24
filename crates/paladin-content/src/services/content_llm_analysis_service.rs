@@ -284,9 +284,11 @@ mod tests {
                     .to_string(),
                 finish_reason: FinishReason::Stop,
                 usage: TokenUsage::new(100, 50),
+                cost: None,
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: None,
+                reasoning: None,
             })
         }
 

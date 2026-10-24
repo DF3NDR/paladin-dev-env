@@ -11,6 +11,8 @@ pub mod formation;
 pub mod grove;
 pub mod phalanx;
 
+mod legacy_keys;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -18,6 +20,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use uuid::Uuid;
 
+use crate::platform::container::aegis::{Aegis, ErrorHandlerSpec, RetryPredicate};
 use crate::platform::container::execution_result::PaladinResult;
 use crate::platform::container::paladin_error::PaladinError;
 use crate::platform::container::registry_error::RegistryError;
@@ -27,13 +30,43 @@ use crate::platform::container::registry_error::RegistryError;
 /// # Examples
 ///
 /// ```
-/// use paladin_core::platform::container::battalion::{BattalionConfig, ErrorStrategy};
+/// use paladin_core::platform::container::aegis::{
+///     Aegis, ErrorHandlerSpec, RetryPolicy, TimeoutPolicy,
+/// };
+/// use paladin_core::platform::container::battalion::BattalionConfig;
+/// use paladin_core::platform::container::battlefield::StateDelta;
+/// use std::time::Duration;
 ///
-/// let config = BattalionConfig::new("research_battalion")
-///     .with_timeout(300)
-///     .with_error_strategy(ErrorStrategy::FailFast);
+/// let config = BattalionConfig::new("research_battalion").with_aegis(Aegis {
+///     retry: Some(RetryPolicy {
+///         max_attempts: 3,
+///         ..RetryPolicy::default()
+///     }),
+///     timeout: Some(TimeoutPolicy {
+///         run_timeout: Some(Duration::from_secs(300)),
+///         idle_timeout: None,
+///     }),
+///     on_error: Some(ErrorHandlerSpec::Absorb {
+///         fallback_delta: StateDelta::new(),
+///     }),
+///     ..Aegis::default()
+/// });
+/// config.validate_aegis()?;
+/// # Ok::<(), paladin_core::platform::container::battalion::BattalionError>(())
 /// ```
+///
+/// # Removed v0.10 keys
+///
+/// A stored document that still carries `timeout_seconds`, `retry_policy` or
+/// `error_strategy` is refused at load: deserialization fails with one error that
+/// names every such key present, the `aegis.*` setting that replaces it
+/// (`aegis.timeout.run_timeout`, `aegis.retry`, `aegis.on_error`) and `MIGRATION.md`
+/// row `M-B-06`; a key present with a `null` value is refused the same way, and no
+/// value is ever echoed. Nothing maps a removed key onto its replacement. Unrelated
+/// unknown keys are still ignored, and a document without `aegis` loads with
+/// [`Aegis::default`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "legacy_keys::BattalionConfigWire")]
 pub struct BattalionConfig {
     /// Name of the Battalion
     pub name: String,
@@ -41,14 +74,49 @@ pub struct BattalionConfig {
     /// Optional description
     pub description: Option<String>,
 
-    /// Maximum execution time in seconds
-    pub timeout_seconds: u64,
-
-    /// Retry policy for failed operations
-    pub retry_policy: RetryPolicy,
-
-    /// Strategy for handling errors
-    pub error_strategy: ErrorStrategy,
+    /// Per-attempt fault-tolerance policy (retry, timeout, error handler).
+    ///
+    /// This is the contract every Battalion pattern implements. Absent from a
+    /// serialized document means [`Aegis::default`], which arms no timeout, no
+    /// retry and no error handler. Which fields each pattern honours:
+    ///
+    /// - **Formation, Phalanx and Campaign** honour `timeout`, applied per attempt:
+    ///   `run_timeout` is a per-attempt wall clock, `idle_timeout` degrades to
+    ///   one because `PaladinPort::execute` reports no progress, and the
+    ///   tighter of the two applies (a tie counts as `Run`).
+    /// - **Formation, Phalanx and Campaign** honour `retry`: `max_attempts`
+    ///   counts total attempts including the first, `retry_on` gates a retry by
+    ///   `PaladinError::transience()`, and the wait between attempts is the
+    ///   engine's `backoff_delay`.
+    /// - **Formation and Phalanx** honour `on_error`: `None` fails fast, and
+    ///   `Some(ErrorHandlerSpec::Absorb { .. })` continues and records each
+    ///   failure in `BattalionResult.node_errors` (its `fallback_delta` is a
+    ///   no-op for a string pipeline; a Formation continues with an empty
+    ///   input). Only `Absorb` and no handler are supported.
+    /// - **Campaign** ignores `on_error`: it has no continue mode, so a
+    ///   failing node fails the run.
+    /// - **Conclave** applies `timeout` to every expert and aggregator attempt,
+    ///   takes its retry count from `ConclaveConfig.retry_attempts` and only
+    ///   the backoff shape from `retry`, and retries `Transient` failures only
+    ///   regardless of `retry_on`.
+    /// - **Maneuver**, run through the Commander, reads only `timeout.run_timeout`, as one
+    ///   whole-flow clock rather than per attempt, and ignores `retry` and `on_error` (the
+    ///   Commander logs a one-time warning per execution when either is set). An explicit
+    ///   `ManeuverConfig` given to the `CommanderBuilder` replaces the one derived from `aegis`.
+    /// - `cache` is ignored by every Battalion pattern.
+    /// - **ChainOfCommand, Grove and Council** do not read `aegis` at all and
+    ///   are not time-bounded by it.
+    ///
+    /// There is no whole-Battalion wall clock: a ten-step Formation may run ten
+    /// times `run_timeout`. A timed-out attempt surfaces as
+    /// `BattalionError::Node` with a `NodeErrorSource::Timeout(_)` source on
+    /// Formation and Campaign. [`BattalionConfig::new`] uses
+    /// [`Aegis::default`], which arms no timeout; a caller that wants a bound
+    /// sets one with [`BattalionConfig::with_aegis`]. Call
+    /// [`BattalionConfig::validate_aegis`] to reject unsupported policies
+    /// before any Paladin runs.
+    #[serde(default)]
+    pub aegis: Aegis,
 
     /// Directory for saving metadata output
     pub metadata_output_dir: Option<PathBuf>,
@@ -66,9 +134,7 @@ impl BattalionConfig {
         Self {
             name: name.into(),
             description: None,
-            timeout_seconds: 300,
-            retry_policy: RetryPolicy::default(),
-            error_strategy: ErrorStrategy::default(),
+            aegis: Aegis::default(),
             metadata_output_dir: None,
         }
     }
@@ -83,26 +149,112 @@ impl BattalionConfig {
         self
     }
 
-    /// Set the timeout in seconds (builder pattern).
+    /// Set the Aegis fault-tolerance policy (builder pattern).
     ///
-    /// # Arguments
+    /// The `timeout` policy bounds each Paladin attempt (never the whole
+    /// Battalion run) and the `retry` policy governs re-attempts of a failed
+    /// Paladin.
     ///
-    /// * `seconds` - Maximum execution time before timing out
-    pub fn with_timeout(mut self, seconds: u64) -> Self {
-        self.timeout_seconds = seconds;
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_core::platform::container::aegis::{Aegis, TimeoutPolicy};
+    /// use paladin_core::platform::container::battalion::BattalionConfig;
+    /// use std::time::Duration;
+    ///
+    /// let config = BattalionConfig::new("bounded").with_aegis(Aegis {
+    ///     timeout: Some(TimeoutPolicy {
+    ///         run_timeout: Some(Duration::from_secs(30)),
+    ///         idle_timeout: None,
+    ///     }),
+    ///     ..Aegis::default()
+    /// });
+    /// assert_eq!(
+    ///     config.aegis.timeout.and_then(|t| t.run_timeout),
+    ///     Some(Duration::from_secs(30))
+    /// );
+    /// ```
+    pub fn with_aegis(mut self, aegis: Aegis) -> Self {
+        self.aegis = aegis;
         self
     }
 
-    /// Set the retry policy
-    pub fn with_retry_policy(mut self, policy: RetryPolicy) -> Self {
-        self.retry_policy = policy;
-        self
-    }
+    /// Reject Aegis policies the Battalion patterns cannot honour.
+    ///
+    /// Pure and dependency-free. Runs [`Aegis::validate`] and then rejects what
+    /// a Battalion pattern would otherwise silently ignore or mis-run: an
+    /// `on_error` of `Route` or `Custom` (only `Absorb`, or no handler, is
+    /// supported), a `RetryPredicate::Custom` (it would never retry outside the
+    /// graph engine), and a zero `run_timeout` or `idle_timeout`. `cache` is
+    /// accepted and ignored.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BattalionError::ValidationError`] naming the offending policy.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_core::platform::container::aegis::{Aegis, ErrorHandlerSpec};
+    /// use paladin_core::platform::container::battalion::BattalionConfig;
+    ///
+    /// assert!(BattalionConfig::new("ok").validate_aegis().is_ok());
+    ///
+    /// let rejected = BattalionConfig::new("bad").with_aegis(Aegis {
+    ///     on_error: Some(ErrorHandlerSpec::Custom("escalate".to_string())),
+    ///     ..Aegis::default()
+    /// });
+    /// assert!(rejected.validate_aegis().is_err());
+    /// ```
+    pub fn validate_aegis(&self) -> Result<(), BattalionError> {
+        self.aegis
+            .validate()
+            .map_err(|e| BattalionError::ValidationError(format!("aegis: {e}")))?;
 
-    /// Set the error strategy
-    pub fn with_error_strategy(mut self, strategy: ErrorStrategy) -> Self {
-        self.error_strategy = strategy;
-        self
+        if let Some(handler) = &self.aegis.on_error {
+            match handler {
+                ErrorHandlerSpec::Absorb { .. } => {}
+                ErrorHandlerSpec::Route { to, .. } => {
+                    return Err(BattalionError::ValidationError(format!(
+                        "aegis.on_error: Route (to '{to}') is not supported on the Battalion \
+                         patterns; only Absorb or no handler is supported"
+                    )));
+                }
+                ErrorHandlerSpec::Custom(name) => {
+                    return Err(BattalionError::ValidationError(format!(
+                        "aegis.on_error: Custom handler '{name}' is not supported on the \
+                         Battalion patterns; only Absorb or no handler is supported"
+                    )));
+                }
+            }
+        }
+
+        if let Some(retry) = &self.aegis.retry {
+            match &retry.retry_on {
+                RetryPredicate::TransientOnly | RetryPredicate::TransientAndUnknown => {}
+                RetryPredicate::Custom(name) => {
+                    return Err(BattalionError::ValidationError(format!(
+                        "aegis.retry.retry_on: Custom predicate '{name}' is not supported on \
+                         the Battalion patterns (it would never retry)"
+                    )));
+                }
+            }
+        }
+
+        if let Some(timeout) = &self.aegis.timeout {
+            if timeout.run_timeout == Some(Duration::ZERO) {
+                return Err(BattalionError::ValidationError(
+                    "aegis.timeout.run_timeout must be greater than zero".to_string(),
+                ));
+            }
+            if timeout.idle_timeout == Some(Duration::ZERO) {
+                return Err(BattalionError::ValidationError(
+                    "aegis.timeout.idle_timeout must be greater than zero".to_string(),
+                ));
+            }
+        }
+
+        Ok(())
     }
 
     /// Set the metadata output directory
@@ -158,95 +310,11 @@ impl Default for BattalionConfig {
     ///
     /// # Default Values
     /// - `name`: "default_battalion"
-    /// - `timeout_seconds`: 300 (5 minutes)
-    /// - `retry_policy`: RetryPolicy::default()
-    /// - `error_strategy`: ErrorStrategy::FailFast
+    /// - `description` and `metadata_output_dir`: `None`
+    /// - `aegis`: `Aegis::default()` (no retry, no timeout, no error handler)
     fn default() -> Self {
         Self::new("default_battalion")
     }
-}
-
-/// Retry policy configuration for Battalion operations.
-///
-/// Defines how failed operations should be retried with exponential backoff
-/// and jitter to prevent thundering herd problems.
-///
-/// # Examples
-///
-/// ```
-/// use paladin_core::platform::container::battalion::RetryPolicy;
-/// use std::time::Duration;
-///
-/// let policy = RetryPolicy {
-///     max_attempts: 5,
-///     base_delay: Duration::from_millis(200),
-///     max_delay: Duration::from_secs(30),
-///     exponential_backoff: true,
-///     jitter: true,
-/// };
-/// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RetryPolicy {
-    /// Maximum number of retry attempts
-    pub max_attempts: u32,
-
-    /// Base delay between retries
-    pub base_delay: Duration,
-
-    /// Maximum delay between retries
-    pub max_delay: Duration,
-
-    /// Whether to use exponential backoff
-    pub exponential_backoff: bool,
-
-    /// Whether to add jitter to prevent thundering herd
-    pub jitter: bool,
-}
-
-impl Default for RetryPolicy {
-    /// Creates a RetryPolicy with sensible defaults.
-    ///
-    /// # Default Values
-    /// - `max_attempts`: 3
-    /// - `base_delay`: 100ms
-    /// - `max_delay`: 10s
-    /// - `exponential_backoff`: true
-    /// - `jitter`: true
-    fn default() -> Self {
-        Self {
-            max_attempts: 3,
-            base_delay: Duration::from_millis(100),
-            max_delay: Duration::from_secs(10),
-            exponential_backoff: true,
-            jitter: true,
-        }
-    }
-}
-
-/// Strategy for handling errors during Battalion execution.
-///
-/// Determines how the Battalion should respond when individual Paladin executions fail.
-///
-/// # Examples
-///
-/// ```
-/// use paladin_core::platform::container::battalion::ErrorStrategy;
-///
-/// let fail_fast = ErrorStrategy::FailFast; // Stop on first error
-/// let continue_on_error = ErrorStrategy::ContinueOnError; // Collect all errors
-/// let retry = ErrorStrategy::RetryThenContinue; // Retry then proceed
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum ErrorStrategy {
-    /// Stop immediately on first error
-    #[default]
-    FailFast,
-
-    /// Continue execution despite errors, collect all at end
-    ContinueOnError,
-
-    /// Retry failed operations, then continue
-    RetryThenContinue,
 }
 
 /// Battalion orchestration strategy
@@ -493,37 +561,6 @@ pub enum BattalionStatus {
 // canonical definition (ADR-0016 / DEBT-05) so this path keeps resolving.
 pub use crate::platform::container::token_usage::TokenUsage;
 
-/// Per-node failure detail for a Battalion execution.
-///
-/// Carries the failed Paladin's name and its error text, so an operator can
-/// diagnose WHICH node failed and WHY, instead of only an aggregate
-/// success/failure count. Populated for any strategy that continues past a
-/// failure (`ContinueOnError`, `RetryThenContinue`) — see
-/// `FormationExecutionService::execute_internal` and
-/// `PhalanxExecutionService::execute_internal`; empty for a fully-successful
-/// run and for strategies that do not collect it.
-///
-/// A new plain-data struct (mirroring [`TokenUsage`]'s shape) rather than a
-/// reuse of [`BattalionError`], since `BattalionError` does not derive
-/// `Serialize`/`Deserialize` and `BattalionResult` does.
-///
-/// **Not the same type as [`crate::platform::container::node_error::NodeError`]
-/// (D-06):** this is the pre-existing v0.9 plain-data summary carried on
-/// [`BattalionResult`] (name + error text only) for the legacy
-/// Formation/Phalanx/Campaign patterns. The structured, engine-execution
-/// `NodeError` landed by Phase 25 for the superstep engine's per-node retry
-/// loop is a different, unrelated type in a different module -- it is never
-/// aliased here and this summary is never reshaped to match it (X-03).
-/// [`BattalionError::Node`] wraps the STRUCTURED type, path-qualified, never
-/// this summary.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NodeError {
-    /// Name of the Paladin node that failed
-    pub node_name: String,
-    /// The error text produced by that node's failure
-    pub error: String,
-}
-
 /// Result of a Battalion execution
 ///
 /// Contains the final output, individual Paladin results, and execution metadata.
@@ -575,11 +612,28 @@ pub struct BattalionResult {
     /// Count of Paladins that failed
     pub paladin_failure_count: usize,
 
-    /// Per-node failure detail (name + error text) for any strategy that
-    /// continues past a failure. Empty for a fully-successful run and for
-    /// strategies that do not collect it.
+    /// Structured per-node failure record (D-06) for any strategy that
+    /// continues past a failure.
+    ///
+    /// Each element is the one
+    /// [`crate::platform::container::node_error::NodeError`] the Aegis runner
+    /// recorded for a Paladin that failed outright: `node_id` is the Paladin's
+    /// name, `attempt` is the (1-indexed) attempt that produced the final
+    /// failure, and `transience` and `source` are exactly as the runner
+    /// recorded them.
+    ///
+    /// Populated by Formation and Phalanx under `aegis.on_error = Absorb`;
+    /// empty for a fully-successful run and for patterns that do not continue
+    /// past a failure. A run that continued past failures still reports
+    /// [`BattalionStatus::Completed`], with a non-zero
+    /// [`paladin_failure_count`](Self::paladin_failure_count) (D-07).
+    ///
+    /// `#[serde(default)]` keeps an absent or empty list readable. Deserialization
+    /// of an element is strict: a v0.10 `{ "node_name": .., "error": .. }`
+    /// element is rejected, and no compatibility deserializer, untagged enum or
+    /// alias exists for it (D-00c).
     #[serde(default)]
-    pub node_errors: Vec<NodeError>,
+    pub node_errors: Vec<crate::platform::container::node_error::NodeError>,
 }
 
 impl BattalionResult {
@@ -809,10 +863,6 @@ pub enum BattalionError {
     #[error("Metadata export failed: {0}")]
     MetadataExportFailed(String),
 
-    /// Timeout error
-    #[error("Battalion execution timed out after {0} seconds")]
-    Timeout(u64),
-
     /// Validation error
     #[error("Validation error: {0}")]
     ValidationError(String),
@@ -829,12 +879,13 @@ pub enum BattalionError {
     #[error("Execution error: {0}")]
     ExecutionError(String),
 
-    /// A structured node-execution failure from the superstep engine
-    /// (Doc 04 FT-FR-02, D-06). Path-qualified to the NEW structured
-    /// `paladin_core::platform::container::node_error::NodeError` -- never
-    /// this module's legacy `NodeError { node_name, error }` summary, which
-    /// is a different, pre-existing v0.9 type left untouched (see its own
-    /// rustdoc cross-link above).
+    /// A structured per-attempt failure (Doc 04 FT-FR-02, D-06): the node id,
+    /// the 1-indexed attempt, the failure's transience and its typed source.
+    /// A Battalion attempt that exceeds its `aegis.timeout` surfaces as this
+    /// variant with a `NodeErrorSource::Timeout(_)` source, and the superstep
+    /// engine reports its own node failures through it. The payload is
+    /// `paladin_core::platform::container::node_error::NodeError`, the same
+    /// type [`BattalionResult::node_errors`] carries per failed Paladin.
     #[error("Node error: {0}")]
     Node(crate::platform::container::node_error::NodeError),
 }
@@ -874,53 +925,201 @@ impl From<PaladinError> for BattalionError {
 mod tests {
     use super::*;
 
+    // ---- Aegis (Phase 44) ----
+
+    fn aegis_config(aegis: Aegis) -> BattalionConfig {
+        BattalionConfig::new("aegis_test").with_aegis(aegis)
+    }
+
+    fn aegis_message(config: &BattalionConfig) -> String {
+        match config.validate_aegis() {
+            Err(BattalionError::ValidationError(msg)) => msg,
+            other => panic!("expected ValidationError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_aegis_accepts_supported_policies() {
+        use crate::platform::container::aegis::{
+            CacheKeySpec, CachePolicy, RetryPolicy as AegisRetry, TimeoutPolicy,
+        };
+        use crate::platform::container::battlefield::StateDelta;
+
+        assert!(BattalionConfig::default().validate_aegis().is_ok());
+
+        let config = aegis_config(Aegis {
+            retry: Some(AegisRetry {
+                max_attempts: 3,
+                retry_on: RetryPredicate::TransientAndUnknown,
+                ..AegisRetry::default()
+            }),
+            timeout: Some(TimeoutPolicy {
+                run_timeout: Some(Duration::from_secs(10)),
+                idle_timeout: Some(Duration::from_secs(2)),
+            }),
+            on_error: Some(ErrorHandlerSpec::Absorb {
+                fallback_delta: StateDelta::new(),
+            }),
+            cache: Some(CachePolicy {
+                ttl: Duration::from_secs(60),
+                key: CacheKeySpec::Default,
+            }),
+        });
+        assert!(config.validate_aegis().is_ok());
+    }
+
+    #[test]
+    fn validate_aegis_rejects_zero_max_attempts() {
+        use crate::platform::container::aegis::RetryPolicy as AegisRetry;
+
+        let config = aegis_config(Aegis {
+            retry: Some(AegisRetry {
+                max_attempts: 0,
+                ..AegisRetry::default()
+            }),
+            ..Aegis::default()
+        });
+        assert!(aegis_message(&config).contains("max_attempts"));
+    }
+
+    #[test]
+    fn validate_aegis_rejects_route_and_custom_handlers() {
+        use crate::platform::container::battlefield::FieldName;
+        use crate::platform::container::waypoint::NodeId;
+
+        let route = aegis_config(Aegis {
+            on_error: Some(ErrorHandlerSpec::Route {
+                to: NodeId::new("cancel"),
+                error_field: FieldName::new("booking_error").expect("valid field name"),
+            }),
+            ..Aegis::default()
+        });
+        assert!(aegis_message(&route).contains("Route"));
+
+        let custom = aegis_config(Aegis {
+            on_error: Some(ErrorHandlerSpec::Custom("h".to_string())),
+            ..Aegis::default()
+        });
+        let msg = aegis_message(&custom);
+        assert!(msg.contains("Custom"), "{msg}");
+        assert!(msg.contains("'h'"), "{msg}");
+    }
+
+    #[test]
+    fn validate_aegis_rejects_custom_retry_predicate() {
+        use crate::platform::container::aegis::RetryPolicy as AegisRetry;
+
+        let config = aegis_config(Aegis {
+            retry: Some(AegisRetry {
+                retry_on: RetryPredicate::Custom("p".to_string()),
+                ..AegisRetry::default()
+            }),
+            ..Aegis::default()
+        });
+        let msg = aegis_message(&config);
+        assert!(msg.contains("retry_on"), "{msg}");
+        assert!(msg.contains("'p'"), "{msg}");
+    }
+
+    #[test]
+    fn validate_aegis_rejects_zero_durations() {
+        use crate::platform::container::aegis::TimeoutPolicy;
+
+        let run = aegis_config(Aegis {
+            timeout: Some(TimeoutPolicy {
+                run_timeout: Some(Duration::ZERO),
+                idle_timeout: None,
+            }),
+            ..Aegis::default()
+        });
+        assert!(aegis_message(&run).contains("run_timeout"));
+
+        let idle = aegis_config(Aegis {
+            timeout: Some(TimeoutPolicy {
+                run_timeout: None,
+                idle_timeout: Some(Duration::ZERO),
+            }),
+            ..Aegis::default()
+        });
+        assert!(aegis_message(&idle).contains("idle_timeout"));
+    }
+
+    #[test]
+    fn battalion_config_aegis_round_trips_through_serde() {
+        use crate::platform::container::aegis::{RetryPolicy as AegisRetry, TimeoutPolicy};
+        use crate::platform::container::battlefield::StateDelta;
+
+        let config = aegis_config(Aegis {
+            retry: Some(AegisRetry {
+                max_attempts: 4,
+                jitter: false,
+                ..AegisRetry::default()
+            }),
+            timeout: Some(TimeoutPolicy {
+                run_timeout: Some(Duration::from_secs(5)),
+                idle_timeout: None,
+            }),
+            on_error: Some(ErrorHandlerSpec::Absorb {
+                fallback_delta: StateDelta::new(),
+            }),
+            cache: None,
+        });
+        let json = serde_json::to_string(&config).expect("serialize");
+        let back: BattalionConfig = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.aegis, config.aegis);
+    }
+
+    #[test]
+    fn battalion_config_without_aegis_key_deserializes_to_default() {
+        let mut value = serde_json::to_value(BattalionConfig::new("legacy")).expect("serialize");
+        let object = value.as_object_mut().expect("config is a JSON object");
+        assert!(object.remove("aegis").is_some());
+        let config: BattalionConfig = serde_json::from_value(value).expect("deserialize");
+        assert_eq!(config.aegis, Aegis::default());
+    }
+
+    #[test]
+    fn battalion_config_v0_10_document_is_refused_naming_each_removed_key() {
+        // A v0.10-shaped document: it carries the three keys Phase 44 removed.
+        // v0.11 refuses it at load (Phase 46, D-23) instead of loading it as a
+        // silently unbounded run.
+        let document = serde_json::json!({
+            "name": "stored_battalion",
+            "description": "written by v0.10",
+            "timeout_seconds": 300,
+            "retry_policy": {
+                "max_attempts": 3,
+                "base_delay": { "secs": 0, "nanos": 100_000_000 },
+                "max_delay": { "secs": 10, "nanos": 0 },
+                "exponential_backoff": true,
+                "jitter": true
+            },
+            "error_strategy": "FailFast",
+            "metadata_output_dir": null
+        });
+        let message = serde_json::from_value::<BattalionConfig>(document)
+            .expect_err("a v0.10 document carrying removed keys is refused")
+            .to_string();
+        for key in ["timeout_seconds", "retry_policy", "error_strategy"] {
+            assert!(message.contains(key), "missing {key}: {message}");
+        }
+        assert!(message.contains("M-B-06"), "{message}");
+    }
+
     #[test]
     fn test_battalion_config_default() {
         let config = BattalionConfig::default();
         assert_eq!(config.name, "default_battalion");
-        assert_eq!(config.timeout_seconds, 300);
-        assert_eq!(config.error_strategy, ErrorStrategy::FailFast);
+        assert_eq!(config.aegis, Aegis::default());
     }
 
     #[test]
     fn test_battalion_config_builder() {
-        let config = BattalionConfig::new("test_battalion")
-            .with_description("Test description")
-            .with_timeout(600)
-            .with_error_strategy(ErrorStrategy::ContinueOnError);
+        let config = BattalionConfig::new("test_battalion").with_description("Test description");
 
         assert_eq!(config.name, "test_battalion");
         assert_eq!(config.description, Some("Test description".to_string()));
-        assert_eq!(config.timeout_seconds, 600);
-        assert_eq!(config.error_strategy, ErrorStrategy::ContinueOnError);
-    }
-
-    #[test]
-    fn test_retry_policy_default() {
-        let policy = RetryPolicy::default();
-        assert_eq!(policy.max_attempts, 3);
-        assert_eq!(policy.base_delay, Duration::from_millis(100));
-        assert_eq!(policy.max_delay, Duration::from_secs(10));
-        assert!(policy.exponential_backoff);
-        assert!(policy.jitter);
-    }
-
-    #[test]
-    fn test_error_strategy_variants() {
-        let fail_fast = ErrorStrategy::FailFast;
-        let continue_on_error = ErrorStrategy::ContinueOnError;
-        let retry_then_continue = ErrorStrategy::RetryThenContinue;
-
-        assert_eq!(fail_fast, ErrorStrategy::FailFast);
-        assert_eq!(continue_on_error, ErrorStrategy::ContinueOnError);
-        assert_eq!(retry_then_continue, ErrorStrategy::RetryThenContinue);
-        assert_ne!(fail_fast, continue_on_error);
-    }
-
-    #[test]
-    fn test_error_strategy_default() {
-        let strategy = ErrorStrategy::default();
-        assert_eq!(strategy, ErrorStrategy::FailFast);
+        assert_eq!(config.aegis, Aegis::default());
     }
 
     #[test]
@@ -984,34 +1183,14 @@ mod tests {
 
     #[test]
     fn test_battalion_config_serialization() {
-        let config = BattalionConfig::new("test").with_timeout(120);
+        let config = BattalionConfig::new("test").with_description("round trip");
 
         let json = serde_json::to_string(&config).unwrap();
         let deserialized: BattalionConfig = serde_json::from_str(&json).unwrap();
 
         assert_eq!(config.name, deserialized.name);
-        assert_eq!(config.timeout_seconds, deserialized.timeout_seconds);
-    }
-
-    #[test]
-    fn test_retry_policy_serialization() {
-        let policy = RetryPolicy::default();
-
-        let json = serde_json::to_string(&policy).unwrap();
-        let deserialized: RetryPolicy = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(policy.max_attempts, deserialized.max_attempts);
-        assert_eq!(policy.exponential_backoff, deserialized.exponential_backoff);
-    }
-
-    #[test]
-    fn test_error_strategy_serialization() {
-        let strategy = ErrorStrategy::ContinueOnError;
-
-        let json = serde_json::to_string(&strategy).unwrap();
-        let deserialized: ErrorStrategy = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(strategy, deserialized);
+        assert_eq!(config.description, deserialized.description);
+        assert_eq!(config.aegis, deserialized.aegis);
     }
 
     #[test]
@@ -1052,7 +1231,6 @@ mod tests {
             BattalionError::CampaignError("test".to_string()),
             BattalionError::InvalidGraph("test".to_string()),
             BattalionError::ChainOfCommandError("test".to_string()),
-            BattalionError::Timeout(300),
             BattalionError::ValidationError("test".to_string()),
             BattalionError::AggregationError("test".to_string()),
             BattalionError::PaladinNotFound("paladin123".to_string()),
@@ -1320,9 +1498,7 @@ fn test_battalion_strategy_serialization() {
 #[test]
 fn test_battalion_config_with_metadata_dir() {
     let dir = std::env::temp_dir().join("paladin_test_metadata_8_0");
-    let config = BattalionConfig::new("meta_test")
-        .with_timeout(120)
-        .with_metadata_dir(dir.clone());
+    let config = BattalionConfig::new("meta_test").with_metadata_dir(dir.clone());
 
     assert_eq!(config.metadata_output_dir, Some(dir.clone()));
     assert!(config.validate_metadata_dir().is_ok());
@@ -1333,7 +1509,7 @@ fn test_battalion_config_with_metadata_dir() {
 
 #[test]
 fn test_battalion_config_without_metadata_dir() {
-    let config = BattalionConfig::new("no_meta_test").with_timeout(120);
+    let config = BattalionConfig::new("no_meta_test");
 
     assert_eq!(config.metadata_output_dir, None);
     assert!(config.validate_metadata_dir().is_ok());
@@ -1345,9 +1521,7 @@ fn test_battalion_config_metadata_dir_not_a_directory() {
     // Create a file (not a directory)
     std::fs::write(&file_path, b"not a directory").unwrap();
 
-    let config = BattalionConfig::new("not_dir_test")
-        .with_timeout(120)
-        .with_metadata_dir(file_path.clone());
+    let config = BattalionConfig::new("not_dir_test").with_metadata_dir(file_path.clone());
 
     let result = config.validate_metadata_dir();
     assert!(result.is_err());
@@ -1364,9 +1538,7 @@ fn test_battalion_config_metadata_dir_auto_creates() {
     let _ = std::fs::remove_dir_all(&dir);
     assert!(!dir.exists());
 
-    let config = BattalionConfig::new("auto_create_test")
-        .with_timeout(120)
-        .with_metadata_dir(dir.clone());
+    let config = BattalionConfig::new("auto_create_test").with_metadata_dir(dir.clone());
 
     // validate_metadata_dir should auto-create
     assert!(config.validate_metadata_dir().is_ok());
@@ -1422,8 +1594,7 @@ fn battalion_error_node_uses_the_core_node_error_not_the_legacy_summary() {
     let battalion_error = BattalionError::Node(node_error);
 
     // A typed binding proves the payload type is the structured
-    // `node_error::NodeError`, never this module's legacy summary struct
-    // (which has no `node_id`/`attempt`/`transience`/`source` fields).
+    // `node_error::NodeError` (`node_id`, `attempt`, `transience`, `source`).
     if let BattalionError::Node(payload) = battalion_error {
         let _typed: StructuredNodeError = payload;
         assert_eq!(_typed.node_id, NodeId::new("summarize"));
@@ -1433,20 +1604,96 @@ fn battalion_error_node_uses_the_core_node_error_not_the_legacy_summary() {
     }
 }
 
+/// A `BattalionResult` with no Paladin results, used to pin the persisted
+/// shape of `node_errors` (D-06).
+#[cfg(test)]
+fn empty_battalion_result() -> BattalionResult {
+    BattalionResult::new(
+        Uuid::new_v4(),
+        "Vanguard".to_string(),
+        Utc::now(),
+        String::new(),
+        Vec::new(),
+    )
+}
+
 #[test]
-fn legacy_battalion_node_error_summary_is_unchanged() {
-    let legacy = NodeError {
-        node_name: "researcher".to_string(),
-        error: "timed out".to_string(),
+fn battalion_result_node_errors_serialize_as_structured_node_errors() {
+    use crate::platform::container::node_error::{
+        NodeError as StructuredNodeError, NodeErrorSource, TimeoutKind,
     };
-    assert_eq!(legacy.node_name, "researcher");
-    assert_eq!(legacy.error, "timed out");
+    use crate::platform::container::transience::Transience;
+    use crate::platform::container::waypoint::NodeId;
 
-    let json = serde_json::to_string(&legacy).expect("serialize");
-    assert!(json.contains("\"node_name\":\"researcher\""));
-    assert!(json.contains("\"error\":\"timed out\""));
+    let mut result = empty_battalion_result();
+    result.node_errors = vec![
+        StructuredNodeError {
+            node_id: NodeId::new("Skirmisher"),
+            attempt: 2,
+            transience: Transience::Unknown,
+            source: NodeErrorSource::Paladin {
+                kind: "ExecutionError".to_string(),
+                status: None,
+                provider: None,
+                message: "Execution error: Skirmisher failed".to_string(),
+            },
+        },
+        StructuredNodeError {
+            node_id: NodeId::new("Scout"),
+            attempt: 1,
+            transience: Transience::Transient,
+            source: NodeErrorSource::Timeout(TimeoutKind::Run),
+        },
+    ];
 
-    let round_tripped: NodeError = serde_json::from_str(&json).expect("deserialize");
-    assert_eq!(round_tripped.node_name, legacy.node_name);
-    assert_eq!(round_tripped.error, legacy.error);
+    // The raw string (not a `serde_json::Value`, which alphabetises keys) pins
+    // both the key set and the declaration order of each element.
+    let json = serde_json::to_string(&result).expect("serialize");
+    let expected = concat!(
+        "\"node_errors\":[",
+        "{\"node_id\":\"Skirmisher\",\"attempt\":2,\"transience\":\"Unknown\",",
+        "\"source\":{\"Paladin\":{\"kind\":\"ExecutionError\",\"status\":null,",
+        "\"provider\":null,\"message\":\"Execution error: Skirmisher failed\"}}},",
+        "{\"node_id\":\"Scout\",\"attempt\":1,\"transience\":\"Transient\",",
+        "\"source\":{\"Timeout\":\"Run\"}}",
+        "]"
+    );
+    assert!(
+        json.contains(expected),
+        "unexpected node_errors shape: {json}"
+    );
+
+    // A serialised result reads back with the same elements.
+    let round_tripped: BattalionResult = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(round_tripped.node_errors, result.node_errors);
+}
+
+#[test]
+fn battalion_result_rejects_v0_10_node_errors_shape() {
+    // A v0.10 document carries `{ "node_name": .., "error": .. }` elements.
+    // Deserialization is strict (D-00c): no compatibility path reads them.
+    let mut value = serde_json::to_value(empty_battalion_result()).expect("to_value");
+    value["node_errors"] = serde_json::json!([{ "node_name": "a", "error": "b" }]);
+
+    let parsed = serde_json::from_value::<BattalionResult>(value);
+    assert!(
+        parsed.is_err(),
+        "a v0.10 node_errors element must not deserialize"
+    );
+}
+
+#[test]
+fn battalion_result_accepts_empty_or_absent_node_errors() {
+    let mut value = serde_json::to_value(empty_battalion_result()).expect("to_value");
+
+    value["node_errors"] = serde_json::json!([]);
+    let empty: BattalionResult = serde_json::from_value(value.clone()).expect("empty list reads");
+    assert!(empty.node_errors.is_empty());
+
+    value
+        .as_object_mut()
+        .expect("a BattalionResult serialises as an object")
+        .remove("node_errors");
+    let absent: BattalionResult = serde_json::from_value(value).expect("absent key reads");
+    assert!(absent.node_errors.is_empty());
 }

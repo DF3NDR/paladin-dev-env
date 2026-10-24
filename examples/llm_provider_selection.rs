@@ -82,11 +82,8 @@ fn show_deepseek_config() {
     println!("   let adapter = DeepSeekAdapter::new(config)?;");
     println!();
     println!("   // Option 2: Custom configuration");
-    println!("   let config = DeepSeekConfig::new(");
-    println!("       api_key,");
-    println!("       \"https://api.deepseek.com/v1\".to_string(),");
-    println!("       \"deepseek-chat\".to_string()");
-    println!("   );");
+    println!("   let config = DeepSeekConfig::new(api_key, \"deepseek-flash\".to_string())");
+    println!("       .with_timeout_seconds(600); // endpoint: .with_base_url(..)");
     println!("   let adapter = DeepSeekAdapter::new(config)?;");
     println!();
 }
@@ -101,8 +98,7 @@ fn show_anthropic_config() {
     println!("   // Option 2: Custom configuration");
     println!("   let config = AnthropicConfig::new(");
     println!("       api_key,");
-    println!("       \"https://api.anthropic.com/v1\".to_string(),");
-    println!("       \"claude-3-5-sonnet-20241022\".to_string()");
+    println!("       \"claude-haiku-5-5\".to_string()");
     println!("   );");
     println!("   let adapter = AnthropicAdapter::new(config)?;");
     println!();
@@ -117,8 +113,9 @@ fn show_openai_config() {
     println!("   // Option 2: Custom configuration");
     println!("   let config = OpenAIConfig::new(");
     println!("       api_key,");
-    println!("       \"https://api.openai.com/v1\".to_string()");
-    println!("   );");
+    println!("       \"gpt-5.4-nano\".to_string()");
+    println!("   )");
+    println!("   .with_base_url(\"https://api.openai.com/v1\");");
     println!("   let adapter = OpenAIAdapter::new(config)?;");
     println!();
 }

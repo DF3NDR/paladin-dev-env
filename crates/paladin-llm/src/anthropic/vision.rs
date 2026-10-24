@@ -90,6 +90,35 @@ enum ClaudeResponseContent {
 struct ClaudeVisionUsage {
     input_tokens: u32,
     output_tokens: u32,
+    /// Cached tokens read for this call, reported **beside** `input_tokens`
+    /// (G-50-5a). `Option` behind `#[serde(default)]` so an absent key is
+    /// `None` ("not reported", D-03), never a fabricated `Some(0)`.
+    #[serde(default)]
+    cache_read_input_tokens: Option<u32>,
+    /// Cached tokens written for this call. Same `Option` reasoning as
+    /// [`Self::cache_read_input_tokens`].
+    #[serde(default)]
+    cache_creation_input_tokens: Option<u32>,
+}
+
+/// Map the vision endpoint's usage onto [`TokenUsage`] with the chat adapter's D-20 correction
+/// (`map_claude_usage`): Anthropic's `input_tokens` excludes cached tokens, so `prompt_tokens`
+/// is `input_tokens + cache_read_input_tokens + cache_creation_input_tokens` (saturating), and
+/// each cache sub-count is set only when the payload reported it. Without the fold the vision
+/// path under-reports billed input once prompt caching applies (G-50-5a).
+fn map_vision_usage(usage: &ClaudeVisionUsage) -> TokenUsage {
+    let prompt_tokens = usage
+        .input_tokens
+        .saturating_add(usage.cache_read_input_tokens.unwrap_or(0))
+        .saturating_add(usage.cache_creation_input_tokens.unwrap_or(0));
+    let mut mapped = TokenUsage::new(prompt_tokens, usage.output_tokens);
+    if let Some(cache_read) = usage.cache_read_input_tokens {
+        mapped = mapped.with_cache_read(cache_read);
+    }
+    if let Some(cache_write) = usage.cache_creation_input_tokens {
+        mapped = mapped.with_cache_write(cache_write);
+    }
+    mapped
 }
 
 #[derive(Debug, Deserialize)]
@@ -419,13 +448,12 @@ impl VisionCapableLlm for AnthropicAdapter {
             model: api_response.model,
             content,
             finish_reason,
-            usage: TokenUsage::new(
-                api_response.usage.input_tokens,
-                api_response.usage.output_tokens,
-            ),
+            usage: map_vision_usage(&api_response.usage),
+            cost: None,
             created_at: Utc::now(),
             metadata: Default::default(),
             function_call: None,
+            reasoning: None,
         })
     }
 
@@ -491,13 +519,16 @@ impl VisionPort for AnthropicAdapter {
                 VisionError::InvalidRequest("No text content in response".to_string())
             })?;
 
+        // The same cache-inclusive mapping as the `LlmResponse` path above, so the two vision
+        // surfaces report one billed input figure.
+        let usage = map_vision_usage(&response.usage);
         Ok(VisionResult {
             content,
             model: response.model,
             token_usage: VisionTokenUsage {
-                prompt_tokens: response.usage.input_tokens,
-                completion_tokens: response.usage.output_tokens,
-                total_tokens: response.usage.input_tokens + response.usage.output_tokens,
+                prompt_tokens: usage.prompt_tokens,
+                completion_tokens: usage.completion_tokens,
+                total_tokens: usage.total_tokens,
             },
             metadata: std::collections::HashMap::new(),
             timestamp: chrono::Utc::now(),
@@ -524,11 +555,40 @@ mod tests {
     fn create_test_adapter() -> AnthropicAdapter {
         let config = super::super::adapter::AnthropicConfig::new(
             "sk-ant-test-key".to_string(),
-            "https://api.anthropic.com/v1".to_string(),
             "claude-3-opus-20240229".to_string(),
-            4096,
         );
         AnthropicAdapter::new(config).unwrap()
+    }
+
+    /// Plan 50-23 (G-50-5a): vision usage folds both cache counts into `prompt_tokens`, as the
+    /// chat adapter's D-20 correction does, and sets each sub-count only when reported.
+    #[test]
+    fn anthropic_vision_usage_counts_cache_tokens() {
+        let response: ClaudeVisionApiResponse = serde_json::from_str(
+            r#"{"id":"msg_1","model":"claude-sonnet-5","content":[{"type":"text","text":"A cat"}],
+                "stop_reason":"end_turn","usage":{"input_tokens":50,"cache_read_input_tokens":30,
+                "cache_creation_input_tokens":20,"output_tokens":10}}"#,
+        )
+        .unwrap();
+        let usage = map_vision_usage(&response.usage);
+        assert_eq!(usage.prompt_tokens, 100);
+        assert_eq!(usage.cache_read_tokens, Some(30));
+        assert_eq!(usage.cache_write_tokens, Some(20));
+        assert_eq!(usage.completion_tokens, 10);
+        assert_eq!(usage.total_tokens, 110);
+
+        let plain: ClaudeVisionApiResponse = serde_json::from_str(
+            r#"{"id":"msg_2","model":"claude-sonnet-5","content":[{"type":"text","text":"A cat"}],
+                "stop_reason":"end_turn","usage":{"input_tokens":50,"output_tokens":10}}"#,
+        )
+        .unwrap();
+        let usage = map_vision_usage(&plain.usage);
+        assert_eq!(usage, TokenUsage::new(50, 10));
+        assert_eq!(
+            usage.cache_read_tokens, None,
+            "absent is None, never Some(0)"
+        );
+        assert_eq!(usage.cache_write_tokens, None);
     }
 
     #[test]

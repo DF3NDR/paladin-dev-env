@@ -182,16 +182,24 @@ in the other three.
 ## Known limitations
 
 - **Superstep-cost overhead is measured, not a passed gate.** PRD 07 acceptance 6's bar is ≤3%
-  superstep overhead versus an untraced run. Measured on this build (`28-BENCH-EVIDENCE.md`):
-  `log_sink` +22.18%, `composite` (log + a no-op sink) +18.46% against a ~110µs untraced baseline
-  — both genuinely **fail** the ≤3% bar. This is recorded here honestly rather than softened; see
-  `.planning/phases/28-observability-tooling/28-BENCH-EVIDENCE.md` for the full measurement and
-  analysis. It is not gated in CI (criterion numbers on shared runners are noise) — the record is
-  the gate. **v0.10.0 disposition:** accepted as a documented deviation for this release — tracing
-  sinks are opt-in (no sink configured means no overhead paid) and `trace.state_values` defaults
-  off, so no default deployment pays this cost — with the acceptance bar re-scoped to an I/O-bound
-  superstep as the tracked follow-up (`.project/v0.10.0/09-program-acceptance-audit.md`'s
-  "Accepted deviation for v0.10.0" section).
+  superstep overhead versus an untraced run. Re-measured in Phase 45 after the `LogTraceSink`
+  enablement guard, the per-thread buffer and the `CompositeSink` last-child move, with the
+  `paladin::trace` target enabled (`45-BENCH-EVIDENCE.md`): `log_sink` +19.36%, `composite` (log
+  + a no-op sink) +16.19% against a ~120µs untraced baseline — both still **fail** the ≤3% bar.
+  The Phase 28 baseline, kept as history, was +22.18% / +18.46% against ~110µs
+  (`.planning/milestones/v0.10.0-phases/28-observability-tooling/28-BENCH-EVIDENCE.md`); the two
+  measurements are not distinguishable from each other given the run-to-run noise on the
+  maintainer's shared machine (a second run of the same tree put the ratio at +6.98% / +7.29%
+  because its untraced baseline read higher, still above the bar). Skipping serialisation
+  entirely, as a filtered target does, still leaves roughly +16% / +19%, so what remains is not
+  serialisation. The full measurement is `.planning/phases/45-rustfs-swap-platform-observability-deviations/45-BENCH-EVIDENCE.md`.
+  This is recorded here honestly rather than softened. It is not gated in CI (criterion numbers
+  on shared runners are noise) — the record is the gate. **Disposition:** the v0.10.0 deviation
+  was accepted for that release — tracing sinks are opt-in (no sink configured means no overhead
+  paid) and `trace.state_values` defaults off, so no default deployment pays this cost
+  (`.project/v0.10.0/09-program-acceptance-audit.md`'s "Accepted deviation for v0.10.0"
+  section). The Phase 45 figure is accepted-pending until the maintainer accepts it at Phase 45
+  UAT; re-scoping the bar to an I/O-bound superstep remains the deferred follow-up.
 - **`trace.heartbeat_interval_secs` is not yet wired into the engine's own rate limiter.** The
   engine hardcodes a 5-second default heartbeat interval per node; threading the configured value
   through is a documented, deliberate scope reduction (28-06), not a bug.

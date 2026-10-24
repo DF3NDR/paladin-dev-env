@@ -29,13 +29,18 @@ data:
       # Enabled by default and fail-closed: the keys below come from the Secret.
       auth:
         enabled: true
+        # `tenant` is REQUIRED on every key (Phase 40, TENANT-01) -- runs and spend are
+        # attributed to it, and a key reads only its own tenant's runs unless its role is
+        # admin. No implicit default tenant; an empty/missing value fails boot.
         api_keys:
           - key: "${PALADIN_API_KEY_CI}"
             name: "ci-runner"
             role: "admin"
+            tenant: "platform-ops"
           - key: "${PALADIN_API_KEY_APP}"
             name: "frontend"
             role: "user"
+            tenant: "web-app"
         # The shipped AuthPort implementation behind this flag is an in-process, per-pod
         # token store: a token issued by one pod does not verify on another. Flipping this
         # to true requires pinning the Deployment to a single replica until the shared-store
@@ -43,6 +48,8 @@ data:
         # the API keys above are byte-identical in every pod.
         bearer_token:
           enabled: false
+          # Required when `enabled` is true (Phase 40, TENANT-01, D-03):
+          # tenant: "bearer-callers"
       # Serve the OpenAPI spec + Swagger UI (set false to disable in production).
       docs:
         enabled: true

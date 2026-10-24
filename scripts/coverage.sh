@@ -24,7 +24,7 @@
 #   * The repo .env also exports TEST_* (localhost:6380 / localhost:9010) for host
 #     use, and that file is auto-sourced into every devcontainer shell. Those ports
 #     are NOT reachable from inside the container, where the compose peers are
-#     redis:6379 / minio:9000. Honouring an unreachable preset is what made
+#     redis:6379 / rustfs:9000. Honouring an unreachable preset is what made
 #     coverage look permanently "unmeasurable" here.
 # Credentials follow the endpoint: each stack has its own, so when this script
 # picks an endpoint it sets the matching credentials rather than inheriting a
@@ -50,9 +50,9 @@ probe_redis() {
     fi
 }
 
-probe_minio() {
+probe_object_store() {
     if command -v curl >/dev/null 2>&1; then
-        curl -sf -o /dev/null "http://$1/minio/health/live" 2>/dev/null
+        curl -sf -o /dev/null "http://$1/health/ready" 2>/dev/null
     else
         probe_tcp "${1%%:*}" "${1##*:}"
     fi
@@ -75,17 +75,18 @@ export TEST_REDIS_HOST TEST_REDIS_PORT
 export REDIS_HOST="$TEST_REDIS_HOST" REDIS_PORT="$TEST_REDIS_PORT"
 export REDIS_URL="redis://${TEST_REDIS_HOST}:${TEST_REDIS_PORT}"
 
-# --- MinIO -----------------------------------------------------------------
-if [ -n "${TEST_MINIO_ENDPOINT:-}" ] && probe_minio "$TEST_MINIO_ENDPOINT"; then
-    : "${TEST_MINIO_ACCESS_KEY:=minioadmin}" "${TEST_MINIO_SECRET_KEY:=minioadmin}"
-elif probe_minio minio:9000; then
-    TEST_MINIO_ENDPOINT=minio:9000
-    TEST_MINIO_ACCESS_KEY=minioadmin TEST_MINIO_SECRET_KEY=minioadmin
-elif probe_minio localhost:9010; then
+# --- Object store (RustFS) -------------------------------------------------
+# The exported names keep the MINIO prefix: they are application-side names (D-04).
+if [ -n "${TEST_MINIO_ENDPOINT:-}" ] && probe_object_store "$TEST_MINIO_ENDPOINT"; then
+    : "${TEST_MINIO_ACCESS_KEY:=paladin-dev}" "${TEST_MINIO_SECRET_KEY:=paladin-dev-secret}"
+elif probe_object_store rustfs:9000; then
+    TEST_MINIO_ENDPOINT=rustfs:9000
+    TEST_MINIO_ACCESS_KEY=paladin-dev TEST_MINIO_SECRET_KEY=paladin-dev-secret
+elif probe_object_store localhost:9010; then
     TEST_MINIO_ENDPOINT=localhost:9010
     TEST_MINIO_ACCESS_KEY=testuser TEST_MINIO_SECRET_KEY=testpass123
 else
-    echo "ERROR: MinIO unreachable at ${TEST_MINIO_ENDPOINT:-<unset>}, minio:9000," >&2
+    echo "ERROR: object store (RustFS) unreachable at ${TEST_MINIO_ENDPOINT:-<unset>}, rustfs:9000," >&2
     echo "       or localhost:9010. Start services with 'make services-up'." >&2
     exit 1
 fi

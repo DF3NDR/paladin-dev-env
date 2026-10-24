@@ -122,14 +122,14 @@ impl CouncilExecutionService {
     ) -> Result<CouncilResult, BattalionError> {
         info!(
             "Convening Council '{}' with {} participants on topic: {}",
-            council.node.name,
-            council.node.participant_ids.len(),
+            council.data.name,
+            council.data.participant_ids.len(),
             topic
         );
 
         // Resolve all participant IDs from registry before starting discussion
         let mut resolved_paladins = std::collections::HashMap::new();
-        for participant_id in &council.node.participant_ids {
+        for participant_id in &council.data.participant_ids {
             match self.registry.get(participant_id) {
                 Some(paladin) => {
                     resolved_paladins.insert(participant_id.clone(), paladin);
@@ -144,7 +144,7 @@ impl CouncilExecutionService {
         }
 
         // Also resolve moderator if present
-        if let Some(ref moderator_id) = council.node.moderator_id
+        if let Some(ref moderator_id) = council.data.moderator_id
             && !resolved_paladins.contains_key(moderator_id)
         {
             match self.registry.get(moderator_id) {
@@ -169,23 +169,23 @@ impl CouncilExecutionService {
         loop {
             // Check termination conditions before each turn
             if self.should_terminate(
-                &council.node.config.termination_condition,
+                &council.data.config.termination_condition,
                 &transcript,
                 current_round,
-                &council.node.config.max_rounds,
+                &council.data.config.max_rounds,
             ) {
                 info!(
                     "Council termination condition met: {:?}",
-                    council.node.config.termination_condition
+                    council.data.config.termination_condition
                 );
                 break;
             }
 
             // Determine next speaker
             let next_speaker_id = self.determine_next_speaker(
-                &council.node.config.turn_strategy,
-                &council.node.participant_ids,
-                &council.node.moderator_id,
+                &council.data.config.turn_strategy,
+                &council.data.participant_ids,
+                &council.data.moderator_id,
                 &mut speaker_index,
                 &transcript,
             )?;
@@ -204,7 +204,7 @@ impl CouncilExecutionService {
             })?;
 
             // Build context with conversation history
-            let context = if council.node.config.include_history {
+            let context = if council.data.config.include_history {
                 self.format_conversation_history(&transcript, topic)
             } else {
                 topic.to_string()
@@ -252,14 +252,14 @@ impl CouncilExecutionService {
             transcript.push(message);
 
             // Check if we should start a new round
-            if speaker_index >= council.node.participant_ids.len() {
+            if speaker_index >= council.data.participant_ids.len() {
                 current_round += 1;
                 speaker_index = 0;
             }
         }
 
         // Extract conclusion
-        let conclusion = self.extract_conclusion(&transcript, &council.node.moderator_id);
+        let conclusion = self.extract_conclusion(&transcript, &council.data.moderator_id);
 
         // Calculate actual rounds completed:
         // If speaker_index > 0, we're in the middle of current_round
@@ -276,12 +276,12 @@ impl CouncilExecutionService {
             transcript,
             conclusion,
             rounds_completed,
-            termination_reason: council.node.config.termination_condition.clone(),
+            termination_reason: council.data.config.termination_condition.clone(),
         };
 
         info!(
             "Council '{}' concluded after {} rounds",
-            council.node.name, result.rounds_completed
+            council.data.name, result.rounds_completed
         );
 
         Ok(result)
@@ -404,7 +404,7 @@ impl CouncilExecutionService {
         paladin: &Paladin,
         context: &str,
     ) -> Result<String, PaladinError> {
-        debug!("Executing speaker: {:?}", paladin.node.name);
+        debug!("Executing speaker: {:?}", paladin.data.name);
 
         // Execute Paladin via PaladinPort
         let result = self.paladin_port.execute(paladin, context).await?;
@@ -685,7 +685,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_council_resolves_participants() {
-        use paladin_core::base::entity::node::Node;
+        use paladin_core::base::entity::Entity;
         use paladin_core::platform::container::battalion::council::CouncilConfig;
 
         // Create test Paladins and registry
@@ -709,7 +709,7 @@ mod tests {
             moderator_id: None,
             config,
         };
-        let council = Node::new(council_data, Some("test_council".to_string()));
+        let council = Entity::new(council_data, Some("test_council".to_string()));
 
         // Execute Council - should resolve participant IDs from registry
         let result = service.convene(&council, "Test topic").await;
@@ -722,7 +722,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_council_paladin_not_found_error() {
-        use paladin_core::base::entity::node::Node;
+        use paladin_core::base::entity::Entity;
         use paladin_core::platform::container::battalion::council::CouncilConfig;
 
         // Create registry with limited Paladins
@@ -747,7 +747,7 @@ mod tests {
             moderator_id: None,
             config,
         };
-        let council = Node::new(council_data, Some("test_council".to_string()));
+        let council = Entity::new(council_data, Some("test_council".to_string()));
 
         // Execute Council - should fail with PaladinNotFound error
         let result = service.convene(&council, "Test topic").await;
@@ -801,7 +801,7 @@ mod tests {
 
     impl MockPaladinRegistry {
         fn new() -> Self {
-            use paladin_core::base::entity::node::Node;
+            use paladin_core::base::entity::Entity;
             use paladin_core::platform::container::paladin::{
                 MaxLoops, PaladinData, PaladinStatus,
             };
@@ -824,8 +824,10 @@ mod tests {
                     autonomous_prompts: false,
                     agent_description: String::new(),
                     dynamic_temperature: false,
+                    reasoning_effort: None,
+                    reasoning_fallback: None,
                 };
-                let paladin = Node::new(data, Some(format!("paladin_{}", i)));
+                let paladin = Entity::new(data, Some(format!("paladin_{}", i)));
                 paladins.insert(format!("paladin_{}", i), Arc::new(paladin));
             }
 

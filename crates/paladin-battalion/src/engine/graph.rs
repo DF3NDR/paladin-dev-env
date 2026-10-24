@@ -44,7 +44,7 @@ pub enum NodeSpec {
     /// into typed state via `input_template` and `output_field` (X-03).
     Paladin {
         /// The Paladin this node wraps. Boxed: `Paladin` is a large value
-        /// type (a `Node<PaladinData>`), and boxing it keeps `NodeSpec`
+        /// type (an `Entity<PaladinData>`), and boxing it keeps `NodeSpec`
         /// itself small regardless of how many `Function` nodes a graph
         /// declares alongside it.
         paladin: Box<Paladin>,
@@ -275,9 +275,9 @@ impl NodeSpec {
     /// use paladin_core::platform::container::battlefield::FieldName;
     /// use paladin_core::platform::container::paladin::{Paladin, PaladinData};
     /// use paladin_core::platform::container::structured::SchemaRef;
-    /// use paladin_core::base::entity::node::Node;
+    /// use paladin_core::base::entity::Entity;
     ///
-    /// let paladin: Paladin = Node::new(PaladinData::default(), None);
+    /// let paladin: Paladin = Entity::new(PaladinData::default(), None);
     /// let node = NodeSpec::paladin(
     ///     paladin,
     ///     InputMapping::new("hi"),
@@ -3265,7 +3265,7 @@ mod tests {
             model: model.to_string(),
             ..Default::default()
         };
-        paladin_core::base::entity::node::Node::new(data, Some(name.to_string()))
+        paladin_core::base::entity::Entity::new(data, Some(name.to_string()))
     }
 
     /// The one-property-at-a-time knobs `golden_fingerprint_fixture`
@@ -4850,8 +4850,10 @@ mod tests {
             &interceptors,
             &None,
             &None,
+            &None,
             None,
             std::time::Duration::from_secs(30),
+            None,
             None,
             None,
             None,

@@ -72,6 +72,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::sync::{RwLock, broadcast};
+use tokio_util::sync::CancellationToken;
 
 use paladin_core::platform::container::run::{
     Run, RunId, RunStatus, RunStreamEvent, RunStreamEventKind, RunStreamMode,
@@ -119,6 +120,13 @@ pub const RUN_EVENT_CHANNEL_CAPACITY: usize = 64;
 /// [`NodeOutcomeKind`](paladin_core::platform::container::waypoint::NodeOutcomeKind),
 /// replacing the `"unknown"` placeholder this bus reported before this
 /// plan.
+///
+/// A spend-halted run's `done` additionally carries `halt_reason`, the
+/// engine's own `RunFinished.halt_reason` rendered through
+/// `HaltReason::wire_json` (Phase 42 D-14, D-16): `allowance_exhausted` with
+/// its ceiling's figures, or `{"reason":"ledger_unavailable"}`. A halt with no
+/// Treasurer reason (a cancel, a token halt) keeps the payload without the
+/// key, and `error` stays reserved for `failed`.
 ///
 /// `parley`'s and `done`/`error`'s payload keep the SAME top-level field
 /// names the published contract documents (`waypoint_id`/`parleys` for
@@ -203,12 +211,25 @@ pub fn map_trace_event(
                 "trace_seq": trace_seq,
             }),
         )),
-        TraceEvent::RunFinished { status, usage, .. } => {
+        TraceEvent::RunFinished {
+            status,
+            usage,
+            halt_reason,
+            ..
+        } => {
             let (kind, status_str) = match status {
                 RunFinishStatus::Completed => (RunStreamEventKind::Done, "completed"),
                 RunFinishStatus::Halted => (RunStreamEventKind::Done, "halted"),
                 RunFinishStatus::AwaitingInput => (RunStreamEventKind::Done, "awaiting_input"),
+                // D-14: a caller-cancelled run's `done` says `cancelled`, equal to
+                // the persisted `Cancelled` status; it carries no `halt_reason`.
+                RunFinishStatus::Cancelled => (RunStreamEventKind::Done, "cancelled"),
                 RunFinishStatus::Failed => (RunStreamEventKind::Error, "failed"),
+                // `RunFinishStatus` is `#[non_exhaustive]`: a status this bus
+                // does not understand is dropped, mirroring the `TraceEvent`
+                // wildcard below; the run row stays the truth and a degraded
+                // reconnect resolves it.
+                _ => return None,
             };
             let payload = match kind {
                 RunStreamEventKind::Error => serde_json::json!({
@@ -218,12 +239,23 @@ pub fn map_trace_event(
                     "usage": usage,
                     "trace_seq": trace_seq,
                 }),
-                _ => serde_json::json!({
-                    "status": status_str,
-                    "waypoint_id": serde_json::Value::Null,
-                    "usage": usage,
-                    "trace_seq": trace_seq,
-                }),
+                _ => {
+                    let mut done = serde_json::json!({
+                        "status": status_str,
+                        "waypoint_id": serde_json::Value::Null,
+                        "usage": usage,
+                        "trace_seq": trace_seq,
+                    });
+                    // D-14, D-16: a spend halt's `done` names the Treasurer
+                    // reason through the one wire builder, the same object
+                    // `GET /runs/{id}` carries. A halt with no reason keeps
+                    // today's payload byte-identical (no key at all); `error`
+                    // stays reserved for `failed` and never carries it.
+                    if let (Some(reason), Some(object)) = (&halt_reason, done.as_object_mut()) {
+                        object.insert("halt_reason".to_owned(), reason.wire_json());
+                    }
+                    done
+                }
             };
             Some((thread_id, kind, payload))
         }
@@ -232,7 +264,8 @@ pub fn map_trace_event(
         | TraceEvent::EdgeEvaluated { .. }
         | TraceEvent::WaypointSaved { .. }
         | TraceEvent::FallbackHop { .. }
-        | TraceEvent::MiddlewareEvent { .. } => None,
+        | TraceEvent::MiddlewareEvent { .. }
+        | TraceEvent::AllowanceWarning { .. } => None,
         // `TraceEvent` is `#[non_exhaustive]` (a future variant this bus
         // does not yet understand is dropped, never a compile break or a
         // panic).
@@ -359,18 +392,69 @@ impl Default for RunEventBus {
 /// [`map_trace_event`].
 pub struct RunEventBusSink {
     bus: Arc<RunEventBus>,
+    shutdown: Option<CancellationToken>,
 }
 
 impl RunEventBusSink {
     /// Wrap `bus` as a `TraceSink`.
     pub fn new(bus: Arc<RunEventBus>) -> Self {
-        Self { bus }
+        Self {
+            bus,
+            shutdown: None,
+        }
+    }
+
+    /// Attach the worker coordinator's shutdown token (Phase 42 D-15): while
+    /// it is cancelled, a `RunFinished { status: Halted }` that carries no
+    /// `halt_reason` is dropped instead of published.
+    ///
+    /// A worker drain halts the run at a boundary, but the run row stays
+    /// `Running` and the message is requeued -- a drain is not a finish, so no
+    /// subscriber may see a terminal `done` for it. A halt that names a spend
+    /// reason is a genuine finish (the row is recorded `Halted`) and is still
+    /// published during shutdown.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use paladin::application::services::run::events::{RunEventBus, RunEventBusSink};
+    /// use tokio_util::sync::CancellationToken;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let bus = Arc::new(RunEventBus::new());
+    /// let shutdown = CancellationToken::new();
+    /// let _sink = RunEventBusSink::new(bus).with_shutdown_token(shutdown);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_shutdown_token(mut self, token: CancellationToken) -> Self {
+        self.shutdown = Some(token);
+        self
     }
 }
 
 #[async_trait]
 impl TraceSink for RunEventBusSink {
     async fn on_event(&self, record: TraceRecord) -> Result<(), TraceSinkError> {
+        // D-15, G1c: a worker drain is not a finish. While shutting down, the
+        // engine's reasonless `Halted` is the drain's own terminal event; the
+        // run row stays `Running` and is requeued, so nothing terminal is
+        // published. A spend halt (it names a reason) still goes out.
+        if let Some(shutdown) = &self.shutdown
+            && shutdown.is_cancelled()
+            && matches!(
+                record.event,
+                TraceEvent::RunFinished {
+                    status: RunFinishStatus::Halted,
+                    halt_reason: None,
+                    ..
+                }
+            )
+        {
+            return Ok(());
+        }
         let Some((thread_id, kind, payload)) = map_trace_event(record) else {
             return Ok(());
         };
@@ -446,7 +530,8 @@ impl DegradedState {
 }
 
 /// The terminal `done`/`error` payload for a `Run` whose status is already
-/// terminal (D-26). The `_` arm is unreachable given every caller only
+/// terminal (D-26). A `Halted` run's `done` carries the row's `halt_reason`
+/// when it has one (Phase 42 D-16). The `_` arm is unreachable given every caller only
 /// invokes this after checking `run.status.is_terminal()`, but returns a
 /// safe generic error rather than panicking (WR-01, Phase 22.1).
 fn terminal_payload(run: &Run) -> (RunStreamEventKind, serde_json::Value) {
@@ -459,10 +544,18 @@ fn terminal_payload(run: &Run) -> (RunStreamEventKind, serde_json::Value) {
             RunStreamEventKind::Done,
             serde_json::json!({ "status": "cancelled", "waypoint_id": run.final_waypoint_id }),
         ),
-        RunStatus::Halted => (
-            RunStreamEventKind::Done,
-            serde_json::json!({ "status": "halted", "waypoint_id": run.final_waypoint_id }),
-        ),
+        RunStatus::Halted => {
+            let mut done =
+                serde_json::json!({ "status": "halted", "waypoint_id": run.final_waypoint_id });
+            // D-16: the degraded path reads the row's `status` and
+            // `halt_reason`; the reason is rendered through the same
+            // `wire_json` builder the live path uses, so the two agree
+            // byte for byte. A halt with no reason keeps today's object.
+            if let (Some(reason), Some(object)) = (&run.halt_reason, done.as_object_mut()) {
+                object.insert("halt_reason".to_owned(), reason.wire_json());
+            }
+            (RunStreamEventKind::Done, done)
+        }
         RunStatus::Failed => (
             RunStreamEventKind::Error,
             serde_json::json!({
@@ -612,6 +705,130 @@ impl ReplayState {
     }
 }
 
+/// What [`replay_stream`] does with a replayed `RunFinished` record once the
+/// run row has been consulted.
+enum ReplayTerminal {
+    /// Emit the (possibly row-corrected) event and end the stream.
+    Emit,
+    /// The record does not end the run; drop it and keep reading.
+    Skip,
+}
+
+/// Apply the replay path's trust-the-row rule to a mapped `RunFinished`
+/// (Phase 42 G10, D-15, T-19).
+///
+/// - Run row terminal: the emitted event's `status` (and its `done`/`error`
+///   kind, chosen exactly as [`terminal_payload`] chooses it) and its
+///   `halt_reason` come from the row; the record's own `usage`, `trace_seq`
+///   and `waypoint_id` are kept, so only the two fields that must agree with
+///   the live and degraded paths change. A pre-phase trace for a
+///   caller-cancelled run, which stored `halted`, therefore converges on
+///   `cancelled`.
+/// - Run row not terminal: the record is skipped. A worker that is draining
+///   on shutdown persists a `RunFinished { Halted }` for a run that stays
+///   `Running` and is requeued, so that record must never end a replay. The
+///   one exception is a record that itself says `awaiting_input`: that is a
+///   suspension the run row reports as `AwaitingInput` (never terminal), and
+///   it keeps ending the replay exactly as before.
+/// - Run row `Completed` or `Failed` but the record says `Halted`: the record
+///   is skipped. A worker that drained on shutdown persisted a reasonless
+///   `RunFinished { Halted }` and the run was then requeued and ran on, so
+///   that stale record is not the end of the run (Phase 42 review WR-2); the
+///   replay keeps reading until the run's own later terminal record, or, when
+///   there is none, the row-synthesized terminal event.
+/// - Row unreadable or absent: today's mapped payload is kept unchanged.
+///
+/// Whether a record that survives these rules really is the END of the run is
+/// decided by the caller with [`later_record_of_run_exists`]: the row status
+/// alone cannot tell a stale drained `Halted` record from a genuine one
+/// (Phase 42 review WR-5).
+async fn replay_terminal_override(
+    state: &ReplayState,
+    finish_status: Option<RunFinishStatus>,
+    kind: &mut RunStreamEventKind,
+    payload: &mut serde_json::Value,
+) -> ReplayTerminal {
+    let Ok(Some(run)) = state.run_repo.get(&state.run_id).await else {
+        return ReplayTerminal::Emit;
+    };
+    if !run.status.is_terminal() {
+        return if finish_status == Some(RunFinishStatus::AwaitingInput) {
+            ReplayTerminal::Emit
+        } else {
+            ReplayTerminal::Skip
+        };
+    }
+    if finish_status == Some(RunFinishStatus::Halted)
+        && matches!(run.status, RunStatus::Completed | RunStatus::Failed)
+    {
+        return ReplayTerminal::Skip;
+    }
+    let (row_kind, row_payload) = terminal_payload(&run);
+    *kind = row_kind;
+    if let (Some(object), Some(status)) = (payload.as_object_mut(), row_payload.get("status")) {
+        object.insert("status".to_owned(), status.clone());
+        if let Some(message) = row_payload.get("message") {
+            object
+                .entry("message".to_owned())
+                .or_insert_with(|| message.clone());
+        }
+        match row_payload.get("halt_reason") {
+            Some(reason) => {
+                object.insert("halt_reason".to_owned(), reason.clone());
+            }
+            None => {
+                object.remove("halt_reason");
+            }
+        }
+    }
+    ReplayTerminal::Emit
+}
+
+/// Whether any record of THIS run (or one with no run id) follows the record
+/// just popped, in `pending` or in the unread remainder of the thread's trace
+/// (Phase 42 review WR-5).
+///
+/// A `RunFinished` is the last record a dispatch writes, so a terminal record
+/// that has a later same-run record behind it is a stale one -- the reasonless
+/// `Halted` record of a drained dispatch whose run was requeued and ran on to
+/// its own `Halted` or `Cancelled` end. The run row's status cannot make that
+/// call: a genuine reasonless `Halted` record (a token halt with a persisted
+/// cancel flag) also sits beside a `Cancelled` row.
+///
+/// Reads further pages from the port (recording only records that could belong
+/// to this run) until a same-run record is found or the port has no more rows.
+/// A read error answers `false`, so the caller emits the terminal record it has
+/// and a persistent store failure is not hidden behind an endless skip.
+async fn later_record_of_run_exists(state: &mut ReplayState) -> bool {
+    loop {
+        if state.pending.iter().any(|record| {
+            record
+                .run_id
+                .as_ref()
+                .is_none_or(|stamped| stamped == &state.run_id)
+        }) {
+            return true;
+        }
+        match state
+            .port
+            .read(&state.thread_id, state.after_seq, REPLAY_PAGE_LIMIT)
+            .await
+        {
+            Ok(rows) if !rows.is_empty() => {
+                state.after_seq = rows.last().map_or(state.after_seq, |r| r.seq);
+                let run_id = state.run_id.clone();
+                state.pending.extend(rows.into_iter().filter(|record| {
+                    record
+                        .run_id
+                        .as_ref()
+                        .is_none_or(|stamped| stamped == &run_id)
+                }));
+            }
+            _ => return false,
+        }
+    }
+}
+
 /// Build the replay stream for a run not bound on this instance, with at
 /// least one already-fetched `first_batch` of persisted records (D-16):
 /// replays every record through [`map_trace_event`] with `mode: replay` and
@@ -623,6 +840,16 @@ impl ReplayState {
 /// `record_engine_failure` exception `worker.rs` documents), synthesizes
 /// the terminal event from [`Run::status`] via [`terminal_payload`] instead
 /// of hanging forever waiting for a record that will never arrive.
+///
+/// Records stamped with a different run's id (a prior run on the same thread,
+/// after a fork) are skipped (Phase 42 review WR-2).
+///
+/// A replayed `RunFinished` takes its terminal `status` and `halt_reason`
+/// from the run row when the row is terminal, and is skipped (replay keeps
+/// reading) when it is not -- see [`replay_terminal_override`] (Phase 42 G10,
+/// D-15). A terminal record followed by a later record of the same run is also
+/// skipped, whatever the row says (Phase 42 review WR-5). For the same terminal run the `status` and `halt_reason` therefore
+/// match the live and degraded paths, and two replays of it are identical.
 fn replay_stream(
     run_id: RunId,
     thread_id: ThreadId,
@@ -650,12 +877,53 @@ fn replay_stream(
             }
 
             if let Some(record) = state.pending.pop_front() {
+                // --- WR-2 (42-REVIEW): the trace store is keyed by THREAD, and
+                // a fork starts a NEW run on the SAME thread, so the rows read
+                // here can belong to a prior run. A record stamped with another
+                // run's id is not this run's event: skip it, so a prior run's
+                // `RunFinished` can never end this replay. A record with no run
+                // id (written by a path that does not know it) is kept.
+                if record
+                    .run_id
+                    .as_ref()
+                    .is_some_and(|stamped| stamped != &state.run_id)
+                {
+                    continue;
+                }
                 let at = record.at;
-                let is_run_finished = matches!(record.event, TraceEvent::RunFinished { .. });
+                let finish_status = match &record.event {
+                    TraceEvent::RunFinished { status, .. } => Some(*status),
+                    _ => None,
+                };
+                let is_run_finished = finish_status.is_some();
                 match map_trace_event(record) {
-                    Some((_, kind, payload)) => {
+                    Some((_, mut kind, mut payload)) => {
                         if is_run_finished {
-                            state.finished = true;
+                            // G10, D-15: a persisted `RunFinished` is trusted
+                            // only as far as the run row agrees with it.
+                            match replay_terminal_override(
+                                &state,
+                                finish_status,
+                                &mut kind,
+                                &mut payload,
+                            )
+                            .await
+                            {
+                                ReplayTerminal::Skip => continue,
+                                ReplayTerminal::Emit => {
+                                    // WR-5 (42-REVIEW): a terminal record with a
+                                    // later record of this run behind it is a
+                                    // stale drained one, whatever the row says.
+                                    // The `awaiting_input` suspension is the one
+                                    // record kept as the end regardless.
+                                    if finish_status != Some(RunFinishStatus::AwaitingInput)
+                                        && later_record_of_run_exists(&mut state).await
+                                    {
+                                        continue;
+                                    }
+                                    state.finished = true;
+                                }
+                            }
                         }
                         let seq = state.next_seq();
                         let event = RunStreamEvent::new_at(
@@ -887,6 +1155,7 @@ mod tests {
     use super::*;
     use futures::StreamExt;
 
+    use paladin_core::platform::container::allowance::HaltReason;
     use paladin_core::platform::container::battlefield::FieldName;
     use paladin_core::platform::container::parley::{ParleyId, ParleyKind};
     use paladin_core::platform::container::token_usage::TokenUsage;
@@ -964,6 +1233,9 @@ mod tests {
                     outcome: NodeOutcomeKind::Succeeded,
                     duration_ms: 5,
                     usage: TokenUsage::new(0, 0),
+                    cost: None,
+                    reasoning_requested: None,
+                    reasoning_effective: None,
                     cache_hit: false,
                 },
                 true,
@@ -1016,6 +1288,8 @@ mod tests {
                     status: RunFinishStatus::Completed,
                     total_supersteps: 1,
                     usage: TokenUsage::new(0, 0),
+                    cost: None,
+                    halt_reason: None,
                     duration_ms: 5,
                     trace_dropped_total: 0,
                 },
@@ -1027,6 +1301,8 @@ mod tests {
                     status: RunFinishStatus::Failed,
                     total_supersteps: 1,
                     usage: TokenUsage::new(0, 0),
+                    cost: None,
+                    halt_reason: None,
                     duration_ms: 5,
                     trace_dropped_total: 0,
                 },
@@ -1071,7 +1347,7 @@ mod tests {
     }
 
     /// `RunFinished` alone produces two of the seven wire names, split on
-    /// its own `status` field: `completed`/`halted`/`awaiting_input` all
+    /// its own `status` field: `completed`/`halted`/`cancelled`/`awaiting_input` all
     /// become `done`, `failed` becomes `error` (D-14).
     #[test]
     fn run_finished_status_splits_done_and_error() {
@@ -1079,6 +1355,7 @@ mod tests {
         let cases = [
             (RunFinishStatus::Completed, RunStreamEventKind::Done),
             (RunFinishStatus::Halted, RunStreamEventKind::Done),
+            (RunFinishStatus::Cancelled, RunStreamEventKind::Done),
             (RunFinishStatus::AwaitingInput, RunStreamEventKind::Done),
             (RunFinishStatus::Failed, RunStreamEventKind::Error),
         ];
@@ -1090,12 +1367,150 @@ mod tests {
                     status,
                     total_supersteps: 3,
                     usage: TokenUsage::new(10, 0),
+                    cost: None,
+                    halt_reason: None,
                     duration_ms: 20,
                     trace_dropped_total: 0,
                 },
             );
             let (_, kind, _) = map_trace_event(record).expect("RunFinished must always map");
             assert_eq!(kind, expected_kind, "status {status:?} mapped wrong");
+        }
+    }
+
+    fn exhausted_reason() -> HaltReason {
+        use chrono::TimeZone;
+        use paladin_core::platform::container::allowance::{
+            AllowanceLimitKind, AllowanceRefusal, AllowanceScopeKind,
+        };
+        use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+        let usd = CurrencyCode::new("USD").unwrap();
+        HaltReason::AllowanceExhausted(AllowanceRefusal {
+            scope_kind: AllowanceScopeKind::ApiKey,
+            limit_kind: AllowanceLimitKind::Window,
+            balance: Cost::new(25_000_000_000, usd.clone()),
+            ceiling: Cost::new(25_000_000_000, usd),
+            window: chrono::Utc
+                .with_ymd_and_hms(2026, 10, 2, 0, 0, 0)
+                .single()
+                .zip(chrono::Utc.with_ymd_and_hms(2026, 10, 3, 0, 0, 0).single()),
+            evaluated_at: chrono::Utc.with_ymd_and_hms(2026, 10, 2, 12, 0, 0).unwrap(),
+        })
+    }
+
+    fn finished(status: RunFinishStatus, halt_reason: Option<HaltReason>) -> TraceRecord {
+        wrap(
+            ThreadId::new("t1").unwrap(),
+            7,
+            TraceEvent::RunFinished {
+                status,
+                total_supersteps: 2,
+                usage: TokenUsage::new(3, 4),
+                cost: None,
+                halt_reason,
+                duration_ms: 5,
+                trace_dropped_total: 0,
+            },
+        )
+    }
+
+    /// D-14, D-16: a spend halt's `done` carries `halt_reason` built by
+    /// `HaltReason::wire_json`; a halt without a reason keeps today's bytes;
+    /// a ledger-unavailable halt is a `done`, never an `error`.
+    #[test]
+    fn map_trace_event_renders_the_halt_reason_on_done() {
+        let reason = exhausted_reason();
+        let (_, kind, payload) =
+            map_trace_event(finished(RunFinishStatus::Halted, Some(reason.clone()))).unwrap();
+        assert_eq!(kind, RunStreamEventKind::Done);
+        assert_eq!(payload["status"], "halted");
+        assert_eq!(payload["halt_reason"], reason.wire_json());
+        assert_eq!(payload["trace_seq"], 7);
+
+        let (_, kind, plain) = map_trace_event(finished(RunFinishStatus::Halted, None)).unwrap();
+        assert_eq!(kind, RunStreamEventKind::Done);
+        assert!(plain.get("halt_reason").is_none(), "{plain}");
+        assert_eq!(
+            plain,
+            serde_json::json!({
+                "status": "halted",
+                "waypoint_id": null,
+                "usage": TokenUsage::new(3, 4),
+                "trace_seq": 7,
+            }),
+            "a reason-less halt keeps today's payload byte-identical"
+        );
+
+        let (_, kind, ledger) = map_trace_event(finished(
+            RunFinishStatus::Halted,
+            Some(HaltReason::LedgerUnavailable),
+        ))
+        .unwrap();
+        assert_eq!(kind, RunStreamEventKind::Done, "never an error event");
+        assert_eq!(
+            ledger["halt_reason"],
+            serde_json::json!({ "reason": "ledger_unavailable" })
+        );
+
+        let (_, kind, failed) = map_trace_event(finished(RunFinishStatus::Failed, None)).unwrap();
+        assert_eq!(kind, RunStreamEventKind::Error);
+        assert!(failed.get("halt_reason").is_none());
+    }
+
+    fn halted_run(reason: Option<HaltReason>) -> Run {
+        use paladin_core::platform::container::run::AssistantRef;
+        let mut run = Run::new(
+            RunId::new_v7(),
+            ThreadId::new("t1").unwrap(),
+            AssistantRef {
+                assistant_id: "a1".to_string(),
+                version: 1,
+            },
+            serde_json::json!({}),
+        )
+        .with_status(RunStatus::Halted);
+        run.halt_reason = reason;
+        run
+    }
+
+    /// D-16: the degraded `done` carries the run row's reason through the
+    /// same builder; without a reason it is today's object.
+    #[test]
+    fn terminal_payload_renders_the_row_reason() {
+        let reason = exhausted_reason();
+        let (kind, payload) = terminal_payload(&halted_run(Some(reason.clone())));
+        assert_eq!(kind, RunStreamEventKind::Done);
+        assert_eq!(payload["status"], "halted");
+        assert_eq!(payload["halt_reason"], reason.wire_json());
+
+        let (kind, plain) = terminal_payload(&halted_run(None));
+        assert_eq!(kind, RunStreamEventKind::Done);
+        assert_eq!(
+            plain,
+            serde_json::json!({ "status": "halted", "waypoint_id": null })
+        );
+
+        let (kind, ledger) = terminal_payload(&halted_run(Some(HaltReason::LedgerUnavailable)));
+        assert_eq!(kind, RunStreamEventKind::Done, "never an error event");
+        assert_eq!(
+            ledger["halt_reason"],
+            serde_json::json!({ "reason": "ledger_unavailable" })
+        );
+    }
+
+    /// The live and degraded builders agree on `status` and `halt_reason`
+    /// for the same reason, byte for byte.
+    #[test]
+    fn live_and_degraded_builders_agree_on_status_and_reason() {
+        for reason in [exhausted_reason(), HaltReason::LedgerUnavailable] {
+            let (_, _, live) =
+                map_trace_event(finished(RunFinishStatus::Halted, Some(reason.clone()))).unwrap();
+            let (_, degraded) = terminal_payload(&halted_run(Some(reason)));
+            assert_eq!(live["status"], degraded["status"]);
+            assert_eq!(
+                serde_json::to_string(&live["halt_reason"]).unwrap(),
+                serde_json::to_string(&degraded["halt_reason"]).unwrap()
+            );
         }
     }
 
@@ -1145,6 +1560,9 @@ mod tests {
                 outcome: NodeOutcomeKind::Failed,
                 duration_ms: 5,
                 usage: TokenUsage::new(0, 0),
+                cost: None,
+                reasoning_requested: None,
+                reasoning_effective: None,
                 cache_hit: false,
             },
         );
@@ -1179,6 +1597,9 @@ mod tests {
                 outcome: NodeOutcomeKind::Succeeded,
                 duration_ms: 5,
                 usage,
+                cost: None,
+                reasoning_requested: None,
+                reasoning_effective: None,
                 cache_hit: false,
             },
         );
@@ -1205,6 +1626,8 @@ mod tests {
                 status: RunFinishStatus::Completed,
                 total_supersteps: 1,
                 usage,
+                cost: None,
+                halt_reason: None,
                 duration_ms: 5,
                 trace_dropped_total: 0,
             },
@@ -1217,6 +1640,64 @@ mod tests {
         assert!(usage_value["cache_read_tokens"].is_null());
         assert!(usage_value["cache_write_tokens"].is_null());
         assert!(usage_value["reasoning_tokens"].is_null());
+    }
+
+    /// D-11: the SSE bridge (`map_trace_event`) exposes no spend on the
+    /// Run API's stream in this phase -- even when the underlying
+    /// `TraceEvent` carries a `Some` cost, the `node_finished` and `done`
+    /// payloads carry exactly their pre-phase keys, with no `cost` key
+    /// anywhere (T-38-19).
+    #[test]
+    fn sse_payloads_carry_no_spend_field() {
+        use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+
+        let thread_id = ThreadId::new("t1").unwrap();
+        let usd = CurrencyCode::new("USD").unwrap();
+        let cost = Cost::new(42_500, usd);
+
+        let node_finished_record = wrap(
+            thread_id.clone(),
+            1,
+            TraceEvent::NodeFinished {
+                superstep: 1,
+                node_id: NodeId::new("n1"),
+                attempt: 1,
+                outcome: NodeOutcomeKind::Succeeded,
+                duration_ms: 5,
+                usage: TokenUsage::new(1_000, 2_000),
+                cost: Some(cost.clone()),
+                reasoning_requested: None,
+                reasoning_effective: None,
+                cache_hit: false,
+            },
+        );
+        let (_, kind, payload) =
+            map_trace_event(node_finished_record).expect("NodeFinished must map");
+        assert_eq!(kind, RunStreamEventKind::NodeFinished);
+        assert!(
+            payload.get("cost").is_none(),
+            "node_finished payload must carry no cost key: {payload}"
+        );
+
+        let done_record = wrap(
+            thread_id,
+            2,
+            TraceEvent::RunFinished {
+                status: RunFinishStatus::Completed,
+                total_supersteps: 1,
+                usage: TokenUsage::new(1_000, 2_000),
+                cost: Some(cost),
+                halt_reason: None,
+                duration_ms: 5,
+                trace_dropped_total: 0,
+            },
+        );
+        let (_, kind, payload) = map_trace_event(done_record).expect("RunFinished must map");
+        assert_eq!(kind, RunStreamEventKind::Done);
+        assert!(
+            payload.get("cost").is_none(),
+            "done payload must carry no cost key: {payload}"
+        );
     }
 
     /// Every mapped wire event's payload carries `trace_seq` equal to the
@@ -1234,6 +1715,110 @@ mod tests {
         );
         let (_, _, payload) = map_trace_event(record).expect("SuperstepStarted must map");
         assert_eq!(payload.get("trace_seq").and_then(|v| v.as_u64()), Some(42));
+    }
+
+    fn run_finished_record(
+        thread_id: ThreadId,
+        status: RunFinishStatus,
+        halt_reason: Option<HaltReason>,
+    ) -> TraceRecord {
+        wrap(
+            thread_id,
+            1,
+            TraceEvent::RunFinished {
+                status,
+                total_supersteps: 1,
+                usage: TokenUsage::new(1, 0),
+                cost: None,
+                halt_reason,
+                duration_ms: 5,
+                trace_dropped_total: 0,
+            },
+        )
+    }
+
+    /// D-14: a cancelled finish maps to `done` with status `cancelled` and no
+    /// `halt_reason` key.
+    #[test]
+    fn cancelled_run_finished_maps_to_done_cancelled_without_a_reason() {
+        let record = run_finished_record(sample_thread(), RunFinishStatus::Cancelled, None);
+        let (_, kind, payload) = map_trace_event(record).expect("Cancelled must map");
+        assert_eq!(kind, RunStreamEventKind::Done);
+        assert_eq!(payload["status"], "cancelled");
+        assert!(payload.get("halt_reason").is_none(), "{payload}");
+    }
+
+    /// Bind `thread_id` on a fresh bus and return it with a subscriber.
+    async fn bound_bus(
+        thread_id: &ThreadId,
+    ) -> (Arc<RunEventBus>, broadcast::Receiver<RunStreamEvent>) {
+        let bus = Arc::new(RunEventBus::new());
+        let run_id = RunId::new_v7();
+        bus.bind(thread_id.clone(), run_id.clone()).await;
+        let rx = bus
+            .subscribe(&run_id)
+            .await
+            .expect("bound run has a channel");
+        (bus, rx)
+    }
+
+    /// D-15, G1c: while the shutdown token is cancelled, a reasonless halt is
+    /// dropped; a halt that names a reason is published; and with the token
+    /// not cancelled a reasonless halt is published as before.
+    #[tokio::test]
+    async fn bus_sink_drops_a_reasonless_halt_while_shutting_down() {
+        let thread_id = sample_thread();
+
+        // Shutting down + reasonless halt -> nothing published.
+        let (bus, mut rx) = bound_bus(&thread_id).await;
+        let shutdown = CancellationToken::new();
+        let sink = RunEventBusSink::new(Arc::clone(&bus)).with_shutdown_token(shutdown.clone());
+        shutdown.cancel();
+        sink.on_event(run_finished_record(
+            thread_id.clone(),
+            RunFinishStatus::Halted,
+            None,
+        ))
+        .await
+        .unwrap();
+        assert!(
+            matches!(rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)),
+            "a drain must publish no terminal event"
+        );
+
+        // Shutting down + spend halt -> published.
+        sink.on_event(run_finished_record(
+            thread_id.clone(),
+            RunFinishStatus::Halted,
+            Some(HaltReason::LedgerUnavailable),
+        ))
+        .await
+        .unwrap();
+        let event = rx.try_recv().expect("a spend halt is a genuine finish");
+        assert_eq!(event.kind, RunStreamEventKind::Done);
+        assert_eq!(event.payload["status"], "halted");
+
+        // Not shutting down + reasonless halt -> published as today.
+        let (bus2, mut rx2) = bound_bus(&thread_id).await;
+        let live = RunEventBusSink::new(bus2).with_shutdown_token(CancellationToken::new());
+        live.on_event(run_finished_record(
+            thread_id.clone(),
+            RunFinishStatus::Halted,
+            None,
+        ))
+        .await
+        .unwrap();
+        assert_eq!(rx2.try_recv().unwrap().payload["status"], "halted");
+
+        // A cancelled finish is never suppressed, even while shutting down.
+        sink.on_event(run_finished_record(
+            thread_id.clone(),
+            RunFinishStatus::Cancelled,
+            None,
+        ))
+        .await
+        .unwrap();
+        assert_eq!(rx.try_recv().unwrap().payload["status"], "cancelled");
     }
 
     #[tokio::test]

@@ -9,14 +9,27 @@
 
 use crate::helpers::FaultyPaladinPort;
 use paladin::application::services::battalion::commander::CommanderBuilder;
-use paladin::core::base::entity::node::Node;
-use paladin::core::platform::container::battalion::{
-    BattalionConfig, BattalionStrategy, ErrorStrategy, RetryPolicy,
-};
+use paladin::core::base::entity::Entity;
+use paladin::core::platform::container::battalion::{BattalionConfig, BattalionStrategy};
 use paladin::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
+use paladin_core::platform::container::aegis::{
+    Aegis, ErrorHandlerSpec, RetryPolicy, RetryPredicate,
+};
+use paladin_core::platform::container::battlefield::StateDelta;
 use paladin_ports::output::paladin_port::PaladinPort;
 use std::sync::Arc;
 use std::time::Duration;
+
+/// The Aegis equivalent of the v0.10 continue-on-error strategy: absorb a failed
+/// Paladin and keep going (`FailFast` is the default, `on_error: None`).
+fn absorb() -> Aegis {
+    Aegis {
+        on_error: Some(ErrorHandlerSpec::Absorb {
+            fallback_delta: StateDelta::new(),
+        }),
+        ..Aegis::default()
+    }
+}
 
 /// Helper to create test Paladins, matching the `Paladin-N` naming convention already
 /// used in `tests/integration/commander_integration_tests.rs`.
@@ -33,7 +46,7 @@ fn create_test_paladin(name: &str) -> Paladin {
         vision_enabled: false,
         ..Default::default()
     };
-    Node::new(data, Some(name.to_string()))
+    Entity::new(data, Some(name.to_string()))
 }
 
 #[tokio::test]
@@ -44,9 +57,7 @@ async fn test_fail_fast_stops_on_first_error() {
     let paladin2 = create_test_paladin("Paladin-2");
     let paladin3 = create_test_paladin("Paladin-3");
 
-    let config = BattalionConfig::new("fail_fast_error_paths")
-        .with_timeout(30)
-        .with_error_strategy(ErrorStrategy::FailFast);
+    let config = BattalionConfig::new("fail_fast_error_paths");
 
     let commander = CommanderBuilder::new(port.clone() as Arc<dyn PaladinPort>)
         .strategy(BattalionStrategy::Formation)
@@ -89,9 +100,7 @@ async fn test_continue_on_error_collects_all_errors() {
     let paladin2 = create_test_paladin("Paladin-2");
     let paladin3 = create_test_paladin("Paladin-3");
 
-    let config = BattalionConfig::new("continue_on_error_error_paths")
-        .with_timeout(30)
-        .with_error_strategy(ErrorStrategy::ContinueOnError);
+    let config = BattalionConfig::new("continue_on_error_error_paths").with_aegis(absorb());
 
     let commander = CommanderBuilder::new(port.clone() as Arc<dyn PaladinPort>)
         .strategy(BattalionStrategy::Formation)
@@ -103,13 +112,13 @@ async fn test_continue_on_error_collects_all_errors() {
     let result = commander
         .execute("Test continue on error")
         .await
-        .expect("ContinueOnError should return a result despite failures");
+        .expect("an Absorb handler should return a result despite failures");
 
     let log = port.execution_log();
     assert_eq!(
         log.len(),
         3,
-        "All Paladins should execute with ContinueOnError: {:?}",
+        "All Paladins should execute under an Absorb handler: {:?}",
         log
     );
 
@@ -123,7 +132,7 @@ async fn test_continue_on_error_collects_all_errors() {
     let failed_names: Vec<&str> = result
         .node_errors
         .iter()
-        .map(|e| e.node_name.as_str())
+        .map(|e| e.node_id.as_str())
         .collect();
     assert!(
         failed_names.contains(&"Paladin-1"),
@@ -148,18 +157,23 @@ async fn test_retry_then_continue_retries_failed_paladins() {
     let paladin2 = create_test_paladin("Paladin-2");
     let paladin3 = create_test_paladin("Paladin-3");
 
-    let retry_policy = RetryPolicy {
-        max_attempts: 3,
-        base_delay: Duration::from_millis(1),
-        max_delay: Duration::from_millis(5),
-        exponential_backoff: false,
+    // v0.10 `RetryPolicy { max_attempts: 3 }` is `max_attempts: 4` under Aegis (the count now
+    // includes the first attempt). `TransientAndUnknown` keeps the v0.10 "retry everything"
+    // meaning: `FaultyPaladinPort` fails with an Unknown `ExecutionError`, which the default
+    // `TransientOnly` would not retry.
+    let retry = RetryPolicy {
+        max_attempts: 4,
+        initial_interval: Duration::from_millis(1),
+        backoff_factor: 1.0,
+        max_interval: Duration::from_millis(5),
         jitter: false,
+        retry_on: RetryPredicate::TransientAndUnknown,
     };
 
-    let config = BattalionConfig::new("retry_then_continue_error_paths")
-        .with_timeout(30)
-        .with_error_strategy(ErrorStrategy::RetryThenContinue)
-        .with_retry_policy(retry_policy);
+    let config = BattalionConfig::new("retry_then_continue_error_paths").with_aegis(Aegis {
+        retry: Some(retry),
+        ..absorb()
+    });
 
     let commander = CommanderBuilder::new(port.clone() as Arc<dyn PaladinPort>)
         .strategy(BattalionStrategy::Formation)
@@ -171,7 +185,7 @@ async fn test_retry_then_continue_retries_failed_paladins() {
     let result = commander
         .execute("Test retry then continue")
         .await
-        .expect("RetryThenContinue should succeed once retries exhaust the configured failures");
+        .expect("retry then Absorb should succeed once retries exhaust the configured failures");
 
     // FaultyPaladinPort's invocation counter is shared across every Paladin, not scoped
     // per Paladin. `fail_until_attempt(2)` fails the first two calls globally: Paladin-1's
@@ -208,9 +222,7 @@ async fn test_partial_results_returned_with_errors() {
     let paladin2 = create_test_paladin("Paladin-2");
     let paladin3 = create_test_paladin("Paladin-3");
 
-    let config = BattalionConfig::new("partial_results_error_paths")
-        .with_timeout(30)
-        .with_error_strategy(ErrorStrategy::ContinueOnError);
+    let config = BattalionConfig::new("partial_results_error_paths").with_aegis(absorb());
 
     let commander = CommanderBuilder::new(port.clone() as Arc<dyn PaladinPort>)
         .strategy(BattalionStrategy::Formation)
@@ -222,7 +234,7 @@ async fn test_partial_results_returned_with_errors() {
     let result = commander
         .execute("Test partial results")
         .await
-        .expect("ContinueOnError should return partial results despite one failure");
+        .expect("an Absorb handler should return partial results despite one failure");
 
     assert_eq!(
         result.paladin_results.len(),
@@ -247,7 +259,7 @@ async fn test_partial_results_returned_with_errors() {
     );
 
     assert_eq!(result.node_errors.len(), 1);
-    assert_eq!(result.node_errors[0].node_name, "Paladin-2");
+    assert_eq!(result.node_errors[0].node_id.as_str(), "Paladin-2");
 
     assert_eq!(result.paladin_success_count, 2);
     assert_eq!(result.paladin_failure_count, 1);

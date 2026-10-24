@@ -34,9 +34,9 @@ services:
       - RUST_BACKTRACE=1
       - RUST_LOG=debug
       - REDIS_URL=redis://redis:6379
-      - MINIO_ENDPOINT=minio:9000
-      - MINIO_ACCESS_KEY=minioadmin
-      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_ENDPOINT=rustfs:9000
+      - MINIO_ACCESS_KEY=paladin-dev
+      - MINIO_SECRET_KEY=paladin-dev-secret
       # Claude Code's .claude.json defaults to $HOME/.claude.json, OUTSIDE the .claude
       # dir above, and Claude Code rewrites it via atomic rename -- so a single-file
       # bind mount or a symlink would be replaced by a plain file and persistence would
@@ -64,7 +64,7 @@ services:
       - GH_TOKEN
     depends_on:
       - redis
-      - minio
+      - rustfs
       - mysql
     networks:
       - paladin-dev-network
@@ -87,22 +87,27 @@ services:
       timeout: 3s
       retries: 5
 
-  # MinIO for object storage
-  minio:
-    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
+  # RustFS for S3-compatible object storage, pinned to an exact tag (Phase 45 D-03).
+  # Manifest-list digest for the pinned tag:
+  # sha256:8cc9801755448b71a786705ce76692c77e14936cccd87cf2fc31842e58f4d1ff
+  # A re-pin is a deliberate commit, never automatic. No `command:` key (the image
+  # entrypoint appends /data) and no bucket-init service (the adapter creates its bucket).
+  # The volume is new on purpose: a MinIO-formatted volume must never be mounted here.
+  rustfs:
+    image: rustfs/rustfs:1.0.0
     ports:
       - "9000:9000"
       - "9001:9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      RUSTFS_ACCESS_KEY: paladin-dev
+      RUSTFS_SECRET_KEY: paladin-dev-secret
+      RUSTFS_CONSOLE_ENABLE: "true"
     volumes:
-      - minio-data:/data
-    command: server /data --console-address ":9001"
+      - rustfs-data:/data
     networks:
       - paladin-dev-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health/ready"]
       interval: 30s
       timeout: 20s
       retries: 3
@@ -135,5 +140,5 @@ volumes:
   paladin-cargo-cache:
   paladin-target-cache:
   redis-data:
-  minio-data:
+  rustfs-data:
   mysql-data:

@@ -39,7 +39,7 @@ use paladin_battalion::engine::{
     EdgeSpec, EngineLimits, InputMapping, NodeContext, NodeSpec, StateNode, StateNodeError,
     WarGraph, WarGraphDoc,
 };
-use paladin_core::base::entity::node::Node;
+use paladin_core::base::entity::Entity;
 use paladin_core::platform::container::battlefield::{
     Battlefield, BattlefieldSchema, DispatchRule, FieldName, FieldSpec, StateDelta,
 };
@@ -113,7 +113,7 @@ fn make_paladin(name: &str) -> Paladin {
         vision_enabled: false,
         ..Default::default()
     };
-    Node::new(data, Some(name.to_string()))
+    Entity::new(data, Some(name.to_string()))
 }
 
 /// A `StateNode` whose `run` body is never exercised here -- this file only
@@ -366,6 +366,9 @@ fn branch_join_trace_records() -> Vec<TraceRecord> {
             outcome: NodeOutcomeKind::Succeeded,
             duration_ms: 120,
             usage: TokenUsage::new(45, 0),
+            cost: None,
+            reasoning_requested: None,
+            reasoning_effective: None,
             cache_hit: false,
         },
         TraceEvent::EdgeEvaluated {
@@ -387,6 +390,9 @@ fn branch_join_trace_records() -> Vec<TraceRecord> {
             outcome: NodeOutcomeKind::Succeeded,
             duration_ms: 80,
             usage: TokenUsage::new(30, 0),
+            cost: None,
+            reasoning_requested: None,
+            reasoning_effective: None,
             cache_hit: false,
         },
         TraceEvent::EdgeEvaluated {
@@ -402,6 +408,9 @@ fn branch_join_trace_records() -> Vec<TraceRecord> {
             outcome: NodeOutcomeKind::Succeeded,
             duration_ms: 60,
             usage: TokenUsage::new(20, 0),
+            cost: None,
+            reasoning_requested: None,
+            reasoning_effective: None,
             cache_hit: false,
         },
     ];

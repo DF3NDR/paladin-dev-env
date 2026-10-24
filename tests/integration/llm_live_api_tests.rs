@@ -125,7 +125,7 @@ async fn test_openai_basic_completion() {
     let api_key = require_api_key("OPENAI_API_KEY", "OpenAI");
 
     // Create OpenAI adapter
-    let config = OpenAIConfig::new(api_key);
+    let config = OpenAIConfig::new(api_key, "gpt-3.5-turbo".to_string());
     let adapter = OpenAIAdapter::new(config).expect("Failed to create OpenAI adapter");
 
     // Create test request
@@ -160,7 +160,7 @@ async fn test_openai_basic_completion() {
 async fn test_openai_streaming_completion() {
     let api_key = require_api_key("OPENAI_API_KEY", "OpenAI");
 
-    let config = OpenAIConfig::new(api_key);
+    let config = OpenAIConfig::new(api_key, "gpt-3.5-turbo".to_string());
     let adapter = OpenAIAdapter::new(config).expect("Failed to create OpenAI adapter");
 
     let prompt = create_test_prompt("Count from 1 to 5, one number per line.");
@@ -216,7 +216,7 @@ async fn test_openai_streaming_completion() {
 async fn test_openai_error_handling() {
     let api_key = require_api_key("OPENAI_API_KEY", "OpenAI");
 
-    let config = OpenAIConfig::new(api_key);
+    let config = OpenAIConfig::new(api_key, "gpt-3.5-turbo".to_string());
     let adapter = OpenAIAdapter::new(config).expect("Failed to create OpenAI adapter");
 
     let prompt = create_test_prompt("This should fail with an invalid model.");
@@ -240,7 +240,7 @@ async fn test_openai_error_handling() {
 async fn test_openai_capabilities() {
     let api_key = require_api_key("OPENAI_API_KEY", "OpenAI");
 
-    let config = OpenAIConfig::new(api_key);
+    let config = OpenAIConfig::new(api_key, "gpt-3.5-turbo".to_string());
     let adapter = OpenAIAdapter::new(config).expect("Failed to create OpenAI adapter");
 
     // Get provider capabilities
@@ -281,11 +281,7 @@ async fn test_openai_capabilities() {
 async fn test_deepseek_basic_completion() {
     let api_key = require_api_key("DEEPSEEK_API_KEY", "DeepSeek");
 
-    let config = DeepSeekConfig::new(
-        api_key,
-        "https://api.deepseek.com/v1".to_string(),
-        "deepseek-chat".to_string(),
-    );
+    let config = DeepSeekConfig::new(api_key, "deepseek-chat".to_string());
     let adapter = DeepSeekAdapter::new(config).expect("Failed to create DeepSeek adapter");
 
     let prompt = create_test_prompt("Say 'Hello from DeepSeek' and nothing else.");
@@ -312,11 +308,7 @@ async fn test_deepseek_basic_completion() {
 async fn test_deepseek_streaming_completion() {
     let api_key = require_api_key("DEEPSEEK_API_KEY", "DeepSeek");
 
-    let config = DeepSeekConfig::new(
-        api_key,
-        "https://api.deepseek.com/v1".to_string(),
-        "deepseek-chat".to_string(),
-    );
+    let config = DeepSeekConfig::new(api_key, "deepseek-chat".to_string());
     let adapter = DeepSeekAdapter::new(config).expect("Failed to create DeepSeek adapter");
 
     let prompt = create_test_prompt("Count from 1 to 5, one number per line.");
@@ -362,11 +354,7 @@ async fn test_deepseek_streaming_completion() {
 async fn test_deepseek_error_handling() {
     let api_key = require_api_key("DEEPSEEK_API_KEY", "DeepSeek");
 
-    let config = DeepSeekConfig::new(
-        api_key,
-        "https://api.deepseek.com/v1".to_string(),
-        "deepseek-chat".to_string(),
-    );
+    let config = DeepSeekConfig::new(api_key, "deepseek-chat".to_string());
     let adapter = DeepSeekAdapter::new(config).expect("Failed to create DeepSeek adapter");
 
     let prompt = create_test_prompt("This should fail with an invalid model.");
@@ -389,11 +377,7 @@ async fn test_deepseek_error_handling() {
 async fn test_deepseek_capabilities() {
     let api_key = require_api_key("DEEPSEEK_API_KEY", "DeepSeek");
 
-    let config = DeepSeekConfig::new(
-        api_key,
-        "https://api.deepseek.com/v1".to_string(),
-        "deepseek-chat".to_string(),
-    );
+    let config = DeepSeekConfig::new(api_key, "deepseek-chat".to_string());
     let adapter = DeepSeekAdapter::new(config).expect("Failed to create DeepSeek adapter");
 
     let capabilities = adapter.get_capabilities();
@@ -423,12 +407,7 @@ async fn test_deepseek_capabilities() {
 async fn test_anthropic_basic_completion() {
     let api_key = require_api_key("ANTHROPIC_API_KEY", "Anthropic");
 
-    let config = AnthropicConfig::new(
-        api_key,
-        "https://api.anthropic.com/v1".to_string(),
-        "claude-3-haiku-20240307".to_string(),
-        4096,
-    );
+    let config = AnthropicConfig::new(api_key, "claude-3-haiku-20240307".to_string());
     let adapter = AnthropicAdapter::new(config).expect("Failed to create Anthropic adapter");
 
     let prompt = create_test_prompt("Say 'Hello from Claude' and nothing else.");
@@ -455,12 +434,7 @@ async fn test_anthropic_basic_completion() {
 async fn test_anthropic_streaming_completion() {
     let api_key = require_api_key("ANTHROPIC_API_KEY", "Anthropic");
 
-    let config = AnthropicConfig::new(
-        api_key,
-        "https://api.anthropic.com/v1".to_string(),
-        "claude-3-haiku-20240307".to_string(),
-        4096,
-    );
+    let config = AnthropicConfig::new(api_key, "claude-3-haiku-20240307".to_string());
     let adapter = AnthropicAdapter::new(config).expect("Failed to create Anthropic adapter");
 
     let prompt = create_test_prompt("Count from 1 to 5, one number per line.");
@@ -513,12 +487,7 @@ async fn test_anthropic_streaming_completion() {
 async fn test_anthropic_error_handling() {
     let api_key = require_api_key("ANTHROPIC_API_KEY", "Anthropic");
 
-    let config = AnthropicConfig::new(
-        api_key,
-        "https://api.anthropic.com/v1".to_string(),
-        "claude-3-5-sonnet-20240620".to_string(),
-        4096,
-    );
+    let config = AnthropicConfig::new(api_key, "claude-3-5-sonnet-20240620".to_string());
     let adapter = AnthropicAdapter::new(config).expect("Failed to create Anthropic adapter");
 
     let prompt = create_test_prompt("This should fail with an invalid model.");
@@ -541,12 +510,7 @@ async fn test_anthropic_error_handling() {
 async fn test_anthropic_capabilities() {
     let api_key = require_api_key("ANTHROPIC_API_KEY", "Anthropic");
 
-    let config = AnthropicConfig::new(
-        api_key,
-        "https://api.anthropic.com/v1".to_string(),
-        "claude-3-5-sonnet-20240620".to_string(),
-        4096,
-    );
+    let config = AnthropicConfig::new(api_key, "claude-3-5-sonnet-20240620".to_string());
     let adapter = AnthropicAdapter::new(config).expect("Failed to create Anthropic adapter");
 
     let capabilities = adapter.get_capabilities();

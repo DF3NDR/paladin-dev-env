@@ -53,7 +53,7 @@ use paladin_battalion::engine::{
     EdgeSpec, EngineError, EngineLimits, InputMapping, NodeContext, NodeSpec, RunOutcome,
     StateNode, StateNodeError, WarEngine, WarGraph,
 };
-use paladin_core::base::entity::node::Node;
+use paladin_core::base::entity::Entity;
 use paladin_core::platform::container::aegis::{Aegis, RetryPolicy, TimeoutPolicy};
 use paladin_core::platform::container::battlefield::{
     Battlefield, BattlefieldSchema, DispatchRule, FieldName, FieldSpec, StateDelta,
@@ -100,7 +100,7 @@ fn make_paladin(name: &str) -> Paladin {
         vision_enabled: false,
         ..Default::default()
     };
-    Node::new(data, Some(name.to_string()))
+    Entity::new(data, Some(name.to_string()))
 }
 
 fn temp_db_url(label: &str) -> String {

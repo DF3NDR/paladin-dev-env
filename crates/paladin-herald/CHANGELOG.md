@@ -7,13 +7,44 @@ and this project follows lockstep workspace versioning.
 
 ## [Unreleased]
 
-## [0.10.1] - 2026-09-20
+### Added
+
+- Phase 42 (halt line, ALLOW-03; ADR-0057 D-19): the markdown, JSON and table heralds each render
+  one halt line beside the allowance line from `ExecutionMetadata::halt_reason_display()`, for
+  example `⛔ halted: allowance exhausted — 25.0000 of 25.0000 USD (api_key, window resets ...)` or
+  `⛔ halted: allowance could not be evaluated (ledger unavailable)`; the JSON herald adds one
+  `halt_reason` key. The line names the scope kind, figures and window end, never a tenant, key
+  name or key value, and a run without a halt reason renders byte-identically.
+
+- Phase 41 (allowance warnings, ALLOW-04): the markdown, JSON and table heralds each render one
+  `allowance:` line (for example `⚠ allowance: 82% of 25.0000 USD (api_key, window resets ...)`) from
+  `ExecutionMetadata::allowance_warning_display()`; a run without a warning renders byte-identically.
+
+
+### Changed
+
+- All three heralds (markdown, JSON, table) render a run's cost exclusively through
+  `ExecutionMetadata::cost_display()`/`cost_currency()`: four decimals plus the ISO currency
+  code (e.g. `0.0450 USD`), never a hard-coded `$` (PRICE-03).
+- `TableHerald::finalize_stream` renders the run's real metadata (model, duration, token split,
+  errors, and a currency-coded cost row when priced) instead of four hard-coded placeholder rows.
+- `JsonHerald::finalize_stream` emits a `currency` field beside `cost_estimate` (`null` for both
+  when the run was unpriced).
+- Phase 44 (LEGACY-01; ADR-0059; see `MIGRATION.md` 10.1 M-B-08): the per-node failure block renders
+  the structured `node_errors` element. The JSON herald emits
+  `{ node_id, attempt, transience, source }` with `source` an externally tagged object (the v0.10
+  `node_name` and `error` keys are gone); the Markdown herald line is
+  `**<node id>:** attempt <n>, <Transience>: <source>` and the Table herald line is
+  `  <node id> (attempt <n>, <Transience>): <source>`. The line adds the node id, attempt and
+  transience to the already-redacted source text and never the provider or HTTP status.
+
+## [0.10.1] - 2026-09-21
 
 Patch release carried by the workspace-wide version bump (0.10.0 -> 0.10.1). No source
 change in this crate — see the root `CHANGELOG.md`'s `[0.10.1]` section for the two
 release-pipeline defects this patch fixes.
 
-## [0.10.0] - 2026-09-10
+## [0.10.0] - 2026-09-18
 
 No functional changes; lockstep version bump (see root `CHANGELOG.md`). The only commits
 touching this crate between the `v0.9.0` tag and this release raise the workspace MSRV floor

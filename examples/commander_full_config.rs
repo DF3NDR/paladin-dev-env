@@ -1,26 +1,33 @@
 //! Commander Full Configuration Example
 //!
 //! Demonstrates comprehensive Commander configuration including:
-//! - Error handling strategies (FailFast, ContinueOnError, RetryThenContinue)
-//! - Timeout configuration
-//! - Retry policies
+//! - The three failure behaviours a Battalion can have, each as an `Aegis` policy:
+//!   fail fast, continue past a failed Paladin, and retry then continue
+//! - A per-attempt timeout
+//! - A retry policy with exponential backoff
 //! - Metadata output directory for checkpointing
 //!
-//! This example shows production-grade configuration for robust deployments.
+//! This example shows production-grade configuration for robust deployments, and
+//! doubles as the migration guide for code that used the earlier error strategies:
+//! every one of them is now a combination of the `retry`, `timeout` and `on_error`
+//! fields of `BattalionConfig.aegis`.
 //!
 //! Run with: cargo run --example commander_full_config
 
 use async_trait::async_trait;
 use paladin::application::services::battalion::commander::CommanderBuilder;
 use paladin::application::services::paladin::error::PaladinError;
-use paladin::core::base::entity::node::Node;
-use paladin::core::platform::container::battalion::{
-    BattalionConfig, BattalionStrategy, ErrorStrategy, RetryPolicy,
+use paladin::core::base::entity::Entity;
+use paladin::core::platform::container::aegis::{
+    Aegis, ErrorHandlerSpec, RetryPolicy, RetryPredicate, TimeoutPolicy,
 };
+use paladin::core::platform::container::battalion::{BattalionConfig, BattalionStrategy};
+use paladin::core::platform::container::battlefield::StateDelta;
 use paladin::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream, StopReason};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Mock PaladinPort with configurable failure simulation
 struct ConfigurableMockPort {
@@ -38,10 +45,10 @@ impl ConfigurableMockPort {
 #[async_trait]
 impl PaladinPort for ConfigurableMockPort {
     async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
-        println!("   ⚙️  {} executing...", paladin.node.name);
+        println!("   ⚙️  {} executing...", paladin.data.name);
 
         // Simulate occasional failures for the second Paladin
-        if paladin.node.name == "ProcessorB" {
+        if paladin.data.name == "ProcessorB" {
             let count = self
                 .fail_count
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -56,7 +63,7 @@ impl PaladinPort for ConfigurableMockPort {
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        let output = format!("{} processed: {}", paladin.node.name, input);
+        let output = format!("{} processed: {}", paladin.data.name, input);
         println!("      ✅ Success: {}", output);
 
         Ok(PaladinResult {
@@ -83,7 +90,7 @@ impl PaladinPort for ConfigurableMockPort {
 }
 
 fn create_paladin(name: &str) -> Paladin {
-    Node::new(
+    Entity::new(
         PaladinData {
             system_prompt: format!("You are {}, a specialized processor.", name),
             name: name.to_string(),
@@ -100,37 +107,44 @@ fn create_paladin(name: &str) -> Paladin {
     )
 }
 
-/// Demonstrate different error handling strategies
-async fn demonstrate_error_strategy(
-    strategy_name: &str,
-    strategy: ErrorStrategy,
-    max_retries: u32,
-) -> Result<(), Box<dyn std::error::Error>> {
+/// Run the three-Paladin Formation under one `Aegis` policy and report the outcome.
+async fn demonstrate_policy(label: &str, aegis: Aegis) -> Result<(), Box<dyn std::error::Error>> {
     println!("\n{}", "═".repeat(70));
-    println!("🔧 Configuration: {}", strategy_name);
+    println!("🔧 Configuration: {}", label);
     println!("{}", "═".repeat(70));
 
     let paladin_port = Arc::new(ConfigurableMockPort::new());
 
     // Create a comprehensive BattalionConfig using builder pattern
-    let config = BattalionConfig::new(format!("config_example_{}", strategy_name.to_lowercase()))
-        .with_timeout(120) // 2 minute timeout for the entire Battalion execution
-        .with_retry_policy(RetryPolicy {
-            max_attempts: max_retries, // Number of retry attempts before giving up
-            ..Default::default()
-        })
-        .with_error_strategy(strategy) // How to handle errors: FailFast, ContinueOnError, RetryThenContinue
+    let config = BattalionConfig::new(format!("config_example_{}", label.replace(' ', "_")))
+        .with_aegis(aegis) // retry, timeout and failure handling for each Paladin
         .with_metadata_dir(PathBuf::from("./battalion_metadata")); // Directory for checkpointing
 
     println!("\n⚙️  Configuration Details:");
     println!("{}", "-".repeat(70));
     println!("   Battalion Name: {}", config.name);
-    println!("   Timeout: {} seconds", config.timeout_seconds);
     println!(
-        "   Max Retry Attempts: {}",
-        config.retry_policy.max_attempts
+        "   Per-attempt Timeout: {}",
+        config
+            .aegis
+            .timeout
+            .as_ref()
+            .and_then(|t| t.run_timeout)
+            .map(|d| format!("{} seconds", d.as_secs()))
+            .unwrap_or_else(|| "None".to_string())
     );
-    println!("   Error Strategy: {:?}", config.error_strategy);
+    println!(
+        "   Max Attempts: {}",
+        config
+            .aegis
+            .retry
+            .as_ref()
+            .map_or(1, |retry| retry.max_attempts)
+    );
+    println!(
+        "   Failures Absorbed: {}",
+        matches!(config.aegis.on_error, Some(ErrorHandlerSpec::Absorb { .. }))
+    );
     println!(
         "   Metadata Dir: {}",
         config
@@ -148,7 +162,7 @@ async fn demonstrate_error_strategy(
 
     println!("\n📋 Paladins: {}", paladins.len());
     for (i, p) in paladins.iter().enumerate() {
-        println!("   {}. {}", i + 1, p.node.name);
+        println!("   {}. {}", i + 1, p.data.name);
     }
 
     // Build Commander with full configuration
@@ -180,11 +194,14 @@ async fn demonstrate_error_strategy(
                 "   Succeeded: {} | Failed: {}",
                 battalion_result.paladin_success_count, battalion_result.paladin_failure_count
             );
+            for node_error in &battalion_result.node_errors {
+                println!("   Recorded failure: {}", node_error);
+            }
             println!("\n   Final Output:");
             println!("      {}", battalion_result.final_output);
         }
         Err(e) => {
-            println!("\n❌ Execution failed (as expected with FailFast)");
+            println!("\n❌ Execution failed (as expected without an on_error handler)");
             println!("{}", "-".repeat(70));
             println!("   Error: {}", e);
         }
@@ -198,30 +215,64 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n🎖️  Commander Full Configuration Example\n");
     println!("Demonstrating production-grade configuration options\n");
 
-    // Example 1: RetryThenContinue (Recommended for production)
-    // Retries failed Paladins, then continues even if they still fail
-    demonstrate_error_strategy(
-        "RetryThenContinue (Resilient)",
-        ErrorStrategy::RetryThenContinue,
-        3, // Retry up to 3 times
+    // The timeout bounds each Paladin attempt, not the whole run. It is the same
+    // in all three configurations below.
+    let per_attempt_timeout = TimeoutPolicy {
+        run_timeout: Some(Duration::from_secs(120)),
+        idle_timeout: None,
+    };
+
+    // Example 1: retry, then continue (recommended for production)
+    // Retries a failed Paladin, then continues even if it still fails.
+    //
+    // `max_attempts` counts TOTAL attempts including the first, so a policy that
+    // allowed three retries is `max_attempts: 4`.
+    //
+    // `TransientAndUnknown` is an opt-in: it also retries failures that cannot be
+    // classified (the mock's plain execution error is one). The default,
+    // `TransientOnly`, retries only failures known to be transient.
+    demonstrate_policy(
+        "retry then continue",
+        Aegis {
+            retry: Some(RetryPolicy {
+                max_attempts: 4,
+                initial_interval: Duration::from_millis(100),
+                backoff_factor: 2.0,
+                max_interval: Duration::from_secs(10),
+                jitter: true,
+                retry_on: RetryPredicate::TransientAndUnknown,
+            }),
+            timeout: Some(per_attempt_timeout.clone()),
+            on_error: Some(ErrorHandlerSpec::Absorb {
+                fallback_delta: StateDelta::new(),
+            }),
+            ..Aegis::default()
+        },
     )
     .await?;
 
-    // Example 2: ContinueOnError
-    // Never retries, just continues to next Paladin
-    demonstrate_error_strategy(
-        "ContinueOnError (Fault-Tolerant)",
-        ErrorStrategy::ContinueOnError,
-        1, // No retries (max_attempts = 1)
+    // Example 2: continue past a failed Paladin
+    // Never retries; an absorbed failure lets the next Paladin run with an empty input.
+    demonstrate_policy(
+        "continue past a failed Paladin",
+        Aegis {
+            timeout: Some(per_attempt_timeout.clone()),
+            on_error: Some(ErrorHandlerSpec::Absorb {
+                fallback_delta: StateDelta::new(),
+            }),
+            ..Aegis::default()
+        },
     )
     .await?;
 
-    // Example 3: FailFast
-    // Stops immediately on first error
-    demonstrate_error_strategy(
-        "FailFast (Strict)",
-        ErrorStrategy::FailFast,
-        1, // No retries
+    // Example 3: fail fast
+    // With no on_error handler the first failure stops the Formation.
+    demonstrate_policy(
+        "fail fast",
+        Aegis {
+            timeout: Some(per_attempt_timeout),
+            ..Aegis::default()
+        },
     )
     .await?;
 
@@ -229,20 +280,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n\n{}", "═".repeat(70));
     println!("📚 Configuration Best Practices");
     println!("{}", "═".repeat(70));
-    println!("\n🔧 Error Handling Strategies:");
-    println!("   • FailFast: Use for critical pipelines where any failure is unacceptable");
-    println!("   • ContinueOnError: Use when some failures are acceptable");
-    println!("   • RetryThenContinue: Recommended for production - resilient and robust");
+    println!("\n🔧 Failure Handling (BattalionConfig.aegis):");
+    println!(
+        "   • No on_error handler: use for critical pipelines where any failure is unacceptable"
+    );
+    println!("   • on_error Absorb: use when some failures are acceptable");
+    println!("   • retry plus Absorb: recommended for production - resilient and robust");
 
     println!("\n⏱️  Timeout Configuration:");
-    println!("   • Set based on expected max execution time");
-    println!("   • Include buffer for retries and network delays");
+    println!("   • The timeout bounds each Paladin attempt, not the whole run");
+    println!("   • Set based on the expected max time of one Paladin call");
     println!("   • Typical values: 60-300 seconds for complex workflows");
 
     println!("\n🔄 Retry Policy:");
-    println!("   • max_attempts = 1: No retries (FailFast, ContinueOnError)");
-    println!("   • max_attempts = 3: Standard retry count for transient failures");
-    println!("   • max_attempts = 5: Aggressive retry for flaky services");
+    println!("   • No retry policy (or max_attempts = 1): a single attempt");
+    println!("   • max_attempts = 4: three retries after the first attempt");
+    println!("   • max_attempts counts total attempts, including the first");
+    println!("   • retry_on TransientOnly is the default; TransientAndUnknown is an opt-in");
 
     println!("\n💾 Metadata Output:");
     println!("   • Enable checkpointing by setting metadata_output_dir");
@@ -251,13 +305,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n🎯 Recommended Production Config:");
     println!("   ```rust");
-    println!("   BattalionConfig {{");
-    println!("       name: \"production_battalion\".to_string(),");
-    println!("       timeout_seconds: 300,  // 5 minutes");
-    println!("       retry_policy: RetryPolicy {{ max_attempts: 3 }},");
-    println!("       error_strategy: ErrorStrategy::RetryThenContinue,");
-    println!("       metadata_output_dir: Some(\"./checkpoints\".to_string()),");
-    println!("   }}");
+    println!("   BattalionConfig::new(\"production_battalion\")");
+    println!("       .with_aegis(Aegis {{");
+    println!("           retry: Some(RetryPolicy {{");
+    println!("               max_attempts: 4,");
+    println!("               retry_on: RetryPredicate::TransientAndUnknown,");
+    println!("               ..RetryPolicy::default()");
+    println!("           }}),");
+    println!("           timeout: Some(TimeoutPolicy {{");
+    println!("               run_timeout: Some(Duration::from_secs(300)), // per attempt");
+    println!("               idle_timeout: None,");
+    println!("           }}),");
+    println!("           on_error: Some(ErrorHandlerSpec::Absorb {{");
+    println!("               fallback_delta: StateDelta::new(),");
+    println!("           }}),");
+    println!("           ..Aegis::default()");
+    println!("       }})");
+    println!("       .with_metadata_dir(\"./checkpoints\".into())");
     println!("   ```");
 
     println!("\n{}", "═".repeat(70));

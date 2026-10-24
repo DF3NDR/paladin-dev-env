@@ -37,15 +37,29 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use paladin_battalion::engine::shutdown::ShutdownCoordinator;
-use paladin_battalion::engine::{EngineError, RunOutcome, TraceDispatcher, WarEngine};
+use paladin_battalion::engine::{
+    EngineError, HaltCause, NodeSpec, RunOutcome, TraceDispatcher, WarEngine, WarGraph,
+};
+use paladin_core::platform::container::allowance::{DerivedTokenBudget, HaltReason};
 use paladin_core::platform::container::battlefield::{FieldName, StateDelta};
+use paladin_core::platform::container::execution_result::StopReason;
+use paladin_core::platform::container::heartbeat::HeartbeatHandle;
+use paladin_core::platform::container::herald::Herald;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::parley::{ParleyRequest, ParleyResponse};
+use paladin_core::platform::container::reasoning::{
+    REASONING_EFFECTIVE_METADATA_KEY, REASONING_REQUESTED_METADATA_KEY,
+};
 use paladin_core::platform::container::run::{
     ForkSpec, Run, RunEventKind, RunId, RunStatus, RunStreamEventKind, RunStreamMode,
 };
-use paladin_core::platform::container::waypoint::{Waypoint, WaypointId};
+use paladin_core::platform::container::run_scope::RunScope;
+use paladin_core::platform::container::token_usage::TokenUsage;
+use paladin_core::platform::container::trace::{RunFinishStatus, TraceEvent};
+use paladin_core::platform::container::treasury_ledger::{LedgerScope, SettlementContext};
+use paladin_core::platform::container::waypoint::{NodeId, NodeOutcomeKind, Waypoint, WaypointId};
 use paladin_core::platform::container::webhook::{WebhookDelivery, WebhookDeliveryId};
+use paladin_ports::input::allowance_admission_port::AdmissionError;
 use paladin_ports::output::cancellation_probe::CancellationProbe;
 use paladin_ports::output::paladin_port::PaladinPort;
 use paladin_ports::output::run_queue_port::{LeaseToken, LeasedRun, RunQueuePort};
@@ -53,14 +67,19 @@ use paladin_ports::output::run_repository_port::{
     RunOutcomeRecord, RunRepositoryError, RunRepositoryPort,
 };
 use paladin_ports::output::run_trace_port::RunTracePort;
-use paladin_ports::output::trace_sink_port::{RUN_TRACE_EMITTER, TraceEmitter, TraceSink};
+use paladin_ports::output::trace_sink_port::{
+    CompositeSink, RUN_TRACE_EMITTER, TraceEmitter, TraceSink,
+};
+use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
+use paladin_ports::output::treasury_notice_port::TreasuryNoticePort;
 use paladin_ports::output::waypoint_port::{WaypointError, WaypointPort};
 use paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryPort;
 
+use crate::application::services::treasurer::Treasurer;
 use crate::config::trace::TraceConfig;
-use crate::infrastructure::telemetry::build_run_sink;
+use crate::infrastructure::telemetry::{HeraldTraceSink, build_run_sink};
 
-use super::cancel::{DbCancellationProbe, LocalRunTokens};
+use super::cancel::{DbCancellationProbe, LocalRunTokens, PerRunCancelProbe};
 use super::events::{RunEventBus, RunEventBusSink};
 use super::resolver::{AssistantResolver, ResolveError, Runnable};
 use super::webhook::{WebhookPayload, WebhookPayloadAssistant};
@@ -89,6 +108,101 @@ async fn with_run_trace_scope<F: std::future::Future>(
         Some(emitter) => RUN_TRACE_EMITTER.scope(Arc::clone(emitter), fut).await,
         None => fut.await,
     }
+}
+
+/// This run's model label for [`HeraldTraceSink`] (D-12, the `model_used`
+/// discretion item): the distinct `paladin.data.model` values of every
+/// [`NodeSpec::Paladin`] node in `graph.node_order()` order -- `"none"` when
+/// the graph has no Paladin node, the bare model name when every Paladin
+/// node declares the SAME model, `"mixed"` when they declare more than one
+/// distinct model. The per-call [`Cost`](paladin_core::platform::container::cost::Cost)
+/// already prices each model correctly regardless of this label; it exists
+/// only to give the produced [`ExecutionMetadata`](paladin_core::platform::container::herald::ExecutionMetadata)'s
+/// `model_used` field a sensible value for a mixed-model graph.
+fn run_model_label(graph: &WarGraph) -> String {
+    let mut models: Vec<&str> = Vec::new();
+    for node_id in graph.node_order() {
+        if let Some(NodeSpec::Paladin { paladin, .. }) = graph.node(node_id) {
+            let model = paladin.data.model.as_str();
+            if !models.contains(&model) {
+                models.push(model);
+            }
+        }
+    }
+    match models.as_slice() {
+        [] => "none".to_string(),
+        [only] => only.to_string(),
+        _ => "mixed".to_string(),
+    }
+}
+
+/// The `graph_fingerprint` an agent run's `TraceEvent::RunStarted` carries.
+/// A legacy `Runnable::Agent` run has no `WarGraph`, hence no fingerprint;
+/// this sentinel stands in. Every sink accepts any string here -- the
+/// bus sink maps `RunStarted` to no wire event at all (D-24), and the
+/// persisting sink stores it verbatim.
+const AGENT_RUN_FINGERPRINT: &str = "agent";
+
+/// This agent run's model label for [`HeraldTraceSink`] (D-12, the
+/// `model_used` discretion item): the paladin's own model string, or
+/// `"none"` when it is empty -- the agent-path twin of [`run_model_label`].
+fn agent_model_label(paladin: &Paladin) -> String {
+    let model = paladin.data.model.as_str();
+    if model.is_empty() {
+        "none".to_string()
+    } else {
+        model.to_string()
+    }
+}
+
+/// Compose a run's `TraceSink` from `build_run_sink`'s own output and the
+/// optional [`HeraldTraceSink`]: neither -> `None` (the untraced path), one
+/// -> that sink alone, both -> a panic-isolated [`CompositeSink`]. Shared by
+/// the graph path ([`RunWorkerPool::run_once`]) and the agent path
+/// ([`RunWorkerPool::run_agent`]) so both assemble sinks identically.
+fn compose_run_sink(
+    base: Option<Arc<dyn TraceSink>>,
+    herald: Option<Arc<dyn TraceSink>>,
+) -> Option<Arc<dyn TraceSink>> {
+    match (base, herald) {
+        (None, None) => None,
+        (Some(sink), None) | (None, Some(sink)) => Some(sink),
+        (Some(base), Some(herald)) => {
+            Some(Arc::new(CompositeSink::new(vec![base, herald])) as Arc<dyn TraceSink>)
+        }
+    }
+}
+
+/// Emit the one terminal [`TraceEvent::RunFinished`] of an agent-kind run (Phase 42 review
+/// IN-9).
+///
+/// An agent-kind run has no engine hosting it, so `run_agent` writes this record itself, on every
+/// exit that reaches the model or decides not to (a completion, a halt, a failure, a dispatch-time
+/// halt or an unpriced model). Building it in one place keeps the "exactly one terminal event per
+/// run" invariant auditable: the usage and cost totals always come from the dispatcher's own
+/// tallies, and an agent loop has no superstep, so `total_supersteps` and the dropped count are
+/// always zero here.
+fn emit_agent_run_finished(
+    dispatcher: &TraceDispatcher,
+    status: RunFinishStatus,
+    halt_reason: Option<HaltReason>,
+    duration_ms: u64,
+) {
+    dispatcher.emit(TraceEvent::RunFinished {
+        status,
+        total_supersteps: 0,
+        usage: dispatcher.total_usage(),
+        cost: dispatcher.total_cost(),
+        duration_ms,
+        halt_reason,
+        trace_dropped_total: 0,
+    });
+}
+
+/// Elapsed wall-clock milliseconds since `started`, saturating rather than
+/// panicking on an (unreachable in practice) overflow.
+fn elapsed_ms(started: std::time::Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 /// The per-run engine [`RunWorkerPool::run_once`] dispatches through, the
@@ -315,6 +429,23 @@ enum OutcomeAction {
     LeaveRunningAndRequeue,
 }
 
+/// What dispatch-time budget derivation decided for a worker-dispatched agent-kind run
+/// (Phase 42, D-12/D-13, G8, A8, ADR-0057 group e).
+#[derive(Debug)]
+enum DispatchBudget {
+    /// No budget applies: no Treasurer is wired, the run records no submitter, the principal has
+    /// no configured ceiling, or the model is free. The run is bounded only by its own limits.
+    Unbounded,
+    /// The run executes under this budget, carried on its `RunScope`.
+    Derived(DerivedTokenBudget),
+    /// The allowance cannot cover a call: the run is recorded `Halted` with this reason and the
+    /// LLM is never called.
+    Halt(HaltReason),
+    /// The model lost its `treasurer.pricing` row between admission and dispatch: the run is
+    /// recorded `Failed` with a typed error naming the model and the LLM is never called.
+    Unpriced(String),
+}
+
 /// Map a terminal/suspension [`RunStatus`] to the [`RunEventKind`] a
 /// webhook subscribes to, or `None` for a non-terminal, non-suspension
 /// status this hook never fires for (`Queued`/`Running`).
@@ -338,6 +469,7 @@ fn webhook_delivery_for_outcome(
     kind: RunEventKind,
     status: RunStatus,
     parleys: Option<&[ParleyRequest]>,
+    halt_reason: Option<&HaltReason>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Option<WebhookDelivery> {
     let webhook = run.webhook.as_ref()?;
@@ -357,6 +489,12 @@ fn webhook_delivery_for_outcome(
         timestamp: now,
         attempt: run.attempt,
         parleys: parleys.map(|p| p.to_vec()),
+        // D-19: the typed reason rides only a `halted` event, through the one wire builder, so
+        // it is byte-identical to `GET /runs` and the 429 details. Every other event omits the
+        // key entirely (its payload bytes are unchanged).
+        halt_reason: halt_reason
+            .filter(|_| status == RunStatus::Halted)
+            .map(HaltReason::wire_json),
     };
     let payload_json = serde_json::to_string(&payload).ok()?;
 
@@ -382,6 +520,7 @@ fn map_outcome(outcome: &RunOutcome, cancel_requested: bool, shutting_down: bool
                 error: None,
                 output: None,
                 final_waypoint_id: Some(waypoint.to_string()),
+                halt_reason: None,
             },
         },
         RunOutcome::Failed { error, waypoint } => OutcomeAction::Transition {
@@ -390,6 +529,7 @@ fn map_outcome(outcome: &RunOutcome, cancel_requested: bool, shutting_down: bool
                 error: Some(error.to_string()),
                 output: None,
                 final_waypoint_id: waypoint.map(|w| w.to_string()),
+                halt_reason: None,
             },
         },
         // D-22: AwaitingInput releases the worker by ACKing -- a suspended
@@ -400,9 +540,45 @@ fn map_outcome(outcome: &RunOutcome, cancel_requested: bool, shutting_down: bool
                 error: None,
                 output: None,
                 final_waypoint_id: Some(waypoint.to_string()),
+                halt_reason: None,
             },
         },
-        RunOutcome::Halted { waypoint } => {
+        // D-05 (Phase 42): the engine's typed cause decides how a halt is recorded.
+        // A spend halt and a probe-observed cancel are decided by the cause alone; only the
+        // residual in-process token halt still consults the side flags (defence in depth, G1a).
+        RunOutcome::Halted {
+            waypoint,
+            cause: HaltCause::Spend(reason),
+        } => OutcomeAction::Transition {
+            // ALLOW-03: an exhausted allowance halts the run at its next boundary. The run is
+            // recorded Halted with NO error -- a halt is a resume point, not a failure -- whether
+            // or not the pool is draining or a cancel flag is set (a drain must not requeue a run
+            // the Treasurer has already stopped). The typed reason is recorded on the run row
+            // (D-06) so `GET /runs`, the webhook and the SSE fallback can say why it halted.
+            to: RunStatus::Halted,
+            outcome: RunOutcomeRecord {
+                error: None,
+                output: None,
+                final_waypoint_id: Some(waypoint.to_string()),
+                halt_reason: Some(reason.clone()),
+            },
+        },
+        RunOutcome::Halted {
+            waypoint,
+            cause: HaltCause::CancelRequested,
+        } => OutcomeAction::Transition {
+            // The durable cancel probe observed the caller's request: the *waypoint* halted,
+            // the *run* is recorded Cancelled (D-16).
+            to: RunStatus::Cancelled,
+            outcome: RunOutcomeRecord {
+                error: None,
+                output: None,
+                final_waypoint_id: Some(waypoint.to_string()),
+                halt_reason: None,
+            },
+        },
+        // `HaltCause::Token` and any future cause: today's three-way logic, unchanged.
+        RunOutcome::Halted { waypoint, .. } => {
             if cancel_requested {
                 // D-16: the caller asked for this. The *waypoint* halted;
                 // the *run* is recorded Cancelled.
@@ -412,6 +588,7 @@ fn map_outcome(outcome: &RunOutcome, cancel_requested: bool, shutting_down: bool
                         error: None,
                         output: None,
                         final_waypoint_id: Some(waypoint.to_string()),
+                        halt_reason: None,
                     },
                 }
             } else if shutting_down {
@@ -429,6 +606,7 @@ fn map_outcome(outcome: &RunOutcome, cancel_requested: bool, shutting_down: bool
                         error: None,
                         output: None,
                         final_waypoint_id: Some(waypoint.to_string()),
+                        halt_reason: None,
                     },
                 }
             }
@@ -477,52 +655,40 @@ pub struct RunWorkerPool<W: WaypointPort> {
     /// own `repository` field.
     cancellation_probe: Option<Arc<dyn CancellationProbe>>,
     /// The D-24 per-run broadcast bus (PLAT-FR-07), when
-    /// [`RunWorkerPool::with_event_bus`] wires one: `run_once` `bind`s the
-    /// dispatch's thread/run before driving the engine, attaches
-    /// [`RunEventBusSink`] to a per-run `engine_factory` engine so all
-    /// seven wire events bridge live through `map_trace_event` alone
-    /// (D-14), then `unbind`s. `None` (the default) preserves every prior
-    /// plan's behavior verbatim -- no bind/publish/unbind call happens
-    /// anywhere in `run_once`.
-    ///
-    /// **(WR-02) Excluded: the legacy `Runnable::Agent` path.** `run_once`
-    /// dispatches `Runnable::Agent` to [`RunWorkerPool::run_agent`] before
-    /// any `bind`/`publish`/`unbind` call on this bus -- a run against a
-    /// code-registered agent never binds a thread here, so `GET
-    /// /runs/{id}/stream` only ever takes the degraded polling path for
-    /// it. This is a recorded, tested limitation (ledger row 31,
-    /// `agent_kind_run_with_a_webhook_enqueues_no_delivery`), not an
-    /// oversight: only a stored `WarGraphDoc` workflow run gets the live
-    /// bus.
+    /// [`RunWorkerPool::with_event_bus`] wires one: both runnable kinds
+    /// `bind` the dispatch's thread/run before the call, publish live through
+    /// [`RunEventBusSink`] -> `map_trace_event` alone (D-14), wait
+    /// [`TRACE_DRAIN_GRACE_PERIOD`], then `unbind`. `run_once` attaches the
+    /// sink to a per-run `engine_factory` engine so all seven wire events
+    /// bridge from the engine's own records; [`Self::run_agent`] has no
+    /// engine, so it emits its own `RunStarted`/`NodeStarted`/`NodeFinished`/
+    /// `RunFinished` records into a standalone per-run `TraceDispatcher`
+    /// feeding the same sink (PLAT-08, ledger row 31). `None` (the default)
+    /// preserves every prior plan's behavior verbatim -- no
+    /// bind/publish/unbind call happens anywhere.
     event_bus: Option<Arc<RunEventBus>>,
     /// The D-40 durable delivery queue, when
-    /// [`RunWorkerPool::with_webhook_deliveries`] wires one: `run_once`
-    /// enqueues a `Pending` [`WebhookDelivery`] on every terminal/suspension
-    /// transition whose run subscribes to that event (PLAT-FR-14). `None`
-    /// (the default) preserves every prior plan's behavior verbatim -- no
-    /// enqueue call happens anywhere in `run_once`. A repository error here
-    /// is logged and NEVER changes the run's own status (prohibition P2):
-    /// it is enqueued strictly after the run's own status write/ack has
-    /// already succeeded.
-    ///
-    /// **(WR-02) Excluded: the legacy `Runnable::Agent` path.** [`Self::run_agent`]
-    /// writes status/outcome and acks directly, never reaching the
-    /// `webhook_delivery_for_outcome` -> `deliveries.enqueue` block below --
-    /// so a run against a code-registered agent that carries a `webhook`
-    /// spec completes (or fails) with ZERO deliveries enqueued, no matter
-    /// which events it subscribed to. Recorded and pinned by
-    /// `agent_kind_run_with_a_webhook_enqueues_no_delivery` (ledger row
-    /// 31): if a future change wires this hook into `run_agent`'s two
-    /// return paths, that test goes red and this doc must move with it. A
-    /// caller needing webhook delivery today should poll the run instead.
+    /// [`RunWorkerPool::with_webhook_deliveries`] wires one: both runnable
+    /// kinds enqueue a `Pending` [`WebhookDelivery`] on every
+    /// terminal/suspension transition whose run subscribes to that event
+    /// (PLAT-FR-14), through the one `webhook_delivery_for_outcome` helper.
+    /// The graph path and the agent's success path enqueue after the status
+    /// write and ack; a failure -- an agent run's, or a graph run's
+    /// engine-error -- enqueues through `persist_failure` (D-15). `None` (the
+    /// default) preserves every prior plan's behavior verbatim -- no enqueue
+    /// call happens anywhere. A repository error here is logged and NEVER
+    /// changes the run's own status (prohibition P2): it is enqueued strictly
+    /// after the run's own status write/ack has already succeeded.
     webhook_deliveries: Option<Arc<dyn WebhookDeliveryRepositoryPort>>,
     /// The trace pipeline configuration (OBS-02, D-11), wired via
     /// [`RunWorkerPool::with_trace_config`]. Defaults to
     /// [`TraceConfig::default`] (`log_sink: true`) -- a pool that never
     /// calls the builder still gets the default-on log sink for every run
-    /// dispatched through [`Self::engine_factory`]. Has no effect on the
-    /// shared-engine ("no factory") path, exactly like `event_bus` above:
-    /// per-run trace composition needs a per-run engine to attach to.
+    /// dispatched through [`Self::engine_factory`], and for every legacy
+    /// `Runnable::Agent` run (which needs no engine to host its standalone
+    /// dispatcher). Has no effect on a graph run's shared-engine ("no
+    /// factory") path: per-run trace composition needs a per-run engine to
+    /// attach to.
     trace_config: TraceConfig,
     /// The durable trace-persistence backend (OBS-02, D-17), wired via
     /// [`RunWorkerPool::with_run_trace_port`]: `run_once` passes this to
@@ -533,6 +699,61 @@ pub struct RunWorkerPool<W: WaypointPort> {
     /// regardless of `trace_config.persist` -- matching that function's own
     /// documented "no port available is a no-op, not an error" contract.
     run_trace_port: Option<Arc<dyn RunTracePort>>,
+    /// The operator-configured [`Herald`] (D-12, D-11b), wired via
+    /// [`RunWorkerPool::with_herald`]: `run_once` composes a
+    /// [`HeraldTraceSink`] labeled with [`run_model_label`] alongside
+    /// whatever [`crate::infrastructure::telemetry::build_run_sink`] itself
+    /// produces, so every run this pool dispatches through
+    /// [`Self::engine_factory`] hands its `RunFinished` event to this
+    /// herald. `None` (the default) means no herald is attached and the
+    /// untraced-for-cost path stays exactly as every prior plan left it --
+    /// matching `trace_config`/`run_trace_port`'s own documented "a pool
+    /// that never calls the builder is unaffected" contract. Has no effect
+    /// on the shared-engine ("no factory") path, exactly like
+    /// `trace_config`/`run_trace_port` above.
+    herald: Option<Arc<dyn Herald>>,
+    /// The Treasurer's durable spend ledger (D-08, D-07, 39-07), wired via
+    /// [`RunWorkerPool::with_treasury_ledger`]: attaches to every per-run
+    /// engine [`Self::engine_factory`] builds, via
+    /// [`WarEngine::with_treasury_ledger`] with a [`SettlementContext`]
+    /// whose `scope` is the run row's recorded submitter -- its tenant and
+    /// API key id via [`LedgerScope::from_attribution`] (Phase 40 D-15), or
+    /// the [`LedgerScope::unattributed`] sentinel when `Run.submitted_by`
+    /// is `None` (a schedule-fired or internal run, D-10) -- `run_id` is
+    /// this dispatch's own `Run.run_id`, and `attempt` is the persisted
+    /// counter this same
+    /// `run_once` call just computed -- `run.attempt` on a first dispatch,
+    /// or [`RunRepositoryPort::bump_attempt`]'s returned value on a
+    /// `Running` redelivery (D-07): the engine never invents its own
+    /// counter. The shared no-factory engine gets none, exactly like the
+    /// trace sinks above. Settlements written through this attachment are
+    /// observational only -- a ledger failure is logged and never affects
+    /// this run's status, ack or retry (D-08). An agent-kind run does not
+    /// settle here at all: [`Self::run_agent`] instead carries this run's
+    /// id and the same submitter-derived scope into the run engine's shared
+    /// [`PaladinPort`] via [`RunScope::with_run_id`] and
+    /// [`RunScope::with_ledger_scope`] (D-16), so the agent loop's own
+    /// `AgentLoopSettlement::PlatformRunsOnly` writer (39-05) settles it
+    /// under attempt `1` and the same tenant/API key id, never
+    /// double-charging a redelivered agent-kind run. `None` (the default)
+    /// means no ledger call happens anywhere in
+    /// this pool, matching every other optional field's own "a pool that
+    /// never calls the builder is unaffected" contract.
+    treasury_ledger: Option<Arc<dyn TreasuryLedgerPort>>,
+    /// The Treasurer's durable once-per-window notice store (Phase 41 D-18, C6), wired via
+    /// [`RunWorkerPool::with_treasury_notices`]: on a run's FIRST dispatch (`Queued`) the pool
+    /// reads the notices the admission won for this run id and emits one
+    /// [`TraceEvent::AllowanceWarning`] per row through the run's own dispatcher, before
+    /// `RunStarted`. `None` (the default) means no notice is ever read.
+    treasury_notices: Option<Arc<dyn TreasuryNoticePort>>,
+    /// The Treasurer facade service (ALLOW-03, Phase 42 D-04), wired via
+    /// [`RunWorkerPool::with_treasurer`]: on the [`Self::engine_factory`] path, every per-run
+    /// engine for a run whose row records a submitter gets a per-run
+    /// [`Treasurer::spend_guard`] attached via [`WarEngine::with_spend_guard`], so an allowance
+    /// exhausted mid-run halts the run at its next superstep boundary. `None` (the default)
+    /// attaches no guard and makes no ledger read, matching every other optional field's "a
+    /// pool that never calls the builder is unaffected" contract.
+    treasurer: Option<Arc<Treasurer>>,
 }
 
 impl<W: WaypointPort + 'static> RunWorkerPool<W> {
@@ -572,6 +793,10 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
             webhook_deliveries: None,
             trace_config: TraceConfig::default(),
             run_trace_port: None,
+            herald: None,
+            treasury_ledger: None,
+            treasury_notices: None,
+            treasurer: None,
         }
     }
 
@@ -644,7 +869,9 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// [`RunEventBusSink`] to that engine directly at construction (mirrors
     /// [`Self::with_cancellation_probing`]'s own documented limitation);
     /// this pool still binds/unbinds regardless, since those do not depend
-    /// on which engine instance is used.
+    /// on which engine instance is used. A legacy `Runnable::Agent` run has
+    /// no engine at all: `run_agent` attaches its own
+    /// [`RunEventBusSink`] to a standalone per-run dispatcher (PLAT-08).
     pub fn with_event_bus(mut self, bus: Arc<RunEventBus>) -> Self {
         self.event_bus = Some(bus);
         self
@@ -655,7 +882,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// per-run `CompositeSink`/`TraceDispatcher` via
     /// [`crate::infrastructure::telemetry::build_run_sink`]. Only takes
     /// effect on the [`Self::with_engine_factory`] path -- see that field's
-    /// own doc comment.
+    /// own doc comment -- but `run_agent` applies it to every legacy agent run.
     pub fn with_trace_config(mut self, config: TraceConfig) -> Self {
         self.trace_config = config;
         self
@@ -668,12 +895,177 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// joins the per-run composite whenever [`Self::with_trace_config`]'s
     /// `persist` flag is also set. Only takes effect on the
     /// [`Self::with_engine_factory`] path, exactly like
-    /// [`Self::with_trace_config`] itself. A pool that never calls this
+    /// [`Self::with_trace_config`] itself (`run_agent` applies it to every
+    /// agent run regardless). A pool that never calls this
     /// builder leaves `trace_config.persist` a no-op, matching
     /// `build_run_sink`'s own "no port available" contract.
     pub fn with_run_trace_port(mut self, port: Arc<dyn RunTracePort>) -> Self {
         self.run_trace_port = Some(port);
         self
+    }
+
+    /// Wire an operator-configured [`Herald`] (D-12, D-11b): `run_once` composes a
+    /// [`HeraldTraceSink`] labeled with this run's `run_model_label` alongside whatever
+    /// [`crate::infrastructure::telemetry::build_run_sink`] itself produces, so every run
+    /// dispatched through the per-run `engine_factory` hands its `RunFinished` event to
+    /// `herald`. Only takes effect on the [`Self::with_engine_factory`] path, exactly like
+    /// [`Self::with_trace_config`]/[`Self::with_run_trace_port`]; `run_agent` composes a
+    /// herald sink labeled by `agent_model_label` for every agent run. A pool that never
+    /// calls this builder attaches no herald -- the untraced-for-cost path stays zero-cost.
+    pub fn with_herald(mut self, herald: Arc<dyn Herald>) -> Self {
+        self.herald = Some(herald);
+        self
+    }
+
+    /// Attach the Treasurer's durable spend ledger (D-08, D-07, 39-07):
+    /// `run_once` attaches `ledger` to every per-run engine
+    /// [`Self::with_engine_factory`] produces, via
+    /// [`WarEngine::with_treasury_ledger`] with a [`SettlementContext`]
+    /// scoped to the run row's recorded submitter via
+    /// [`LedgerScope::from_attribution`] (Phase 40 D-15; the
+    /// [`LedgerScope::unattributed`] sentinel only when the row records no
+    /// principal, D-10) and keyed by this dispatch's
+    /// own `run_id` and persisted `attempt` (D-07) -- the same persisted
+    /// counter [`RunRepositoryPort::bump_attempt`]/`record_resume` already
+    /// bump on redelivery/resume, so a genuine re-execution settles under a
+    /// fresh key while a repeated settle of an already-settled key is
+    /// charged once (LEDGR-03, ADR-0053 §4). Also carries this run's id
+    /// and the same submitter-derived scope into the run engine's shared
+    /// [`PaladinPort`] for an agent-kind (`Runnable::Agent`) run via
+    /// [`RunScope::with_run_id`] and [`RunScope::with_ledger_scope`] in
+    /// `Self::run_agent` (D-16), so that port's own `AgentLoopSettlement::
+    /// PlatformRunsOnly` writer (39-05) settles it under the Platform run
+    /// id and the submitting principal's tenant and API key id rather than
+    /// a fresh execution id and the sentinel every dispatch. Only takes
+    /// effect on the [`Self::with_engine_factory`] path -- the shared
+    /// no-factory engine is never attached to, exactly like
+    /// [`Self::with_trace_config`]/[`Self::with_herald`]. A pool that never
+    /// calls this builder performs no ledger call at all (D-08: the ledger
+    /// is not installed when no backend is configured), and every
+    /// pre-existing worker test's behavior is unchanged.
+    pub fn with_treasury_ledger(mut self, ledger: Arc<dyn TreasuryLedgerPort>) -> Self {
+        self.treasury_ledger = Some(ledger);
+        self
+    }
+
+    /// Attach the Treasurer's durable notice store (Phase 41 D-18, C6): on a run's first
+    /// dispatch (`Queued` only -- never a `Running` redelivery or an `AwaitingInput` resume)
+    /// the pool reads `notices_for_run(run_id)` and emits one
+    /// [`TraceEvent::AllowanceWarning`] per row through that run's own trace dispatcher,
+    /// immediately before `RunStarted`, for graph runs and agent-kind runs alike. Emitting from
+    /// the worker, never from the submitting process, is what keeps the run's `seq` counter
+    /// collision-free. A read failure is logged and never affects the run (D-15), and a run
+    /// with no trace sink emits nothing. A pool that never calls this builder reads no notice.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// use paladin::application::services::run::RunWorkerPool;
+    /// use paladin_ports::output::treasury_notice_port::TreasuryNoticePort;
+    /// use paladin_ports::output::waypoint_port::WaypointPort;
+    ///
+    /// fn attach<W: WaypointPort + 'static>(
+    ///     pool: RunWorkerPool<W>,
+    ///     notices: Arc<dyn TreasuryNoticePort>,
+    /// ) -> RunWorkerPool<W> {
+    ///     pool.with_treasury_notices(notices)
+    /// }
+    /// ```
+    pub fn with_treasury_notices(mut self, notices: Arc<dyn TreasuryNoticePort>) -> Self {
+        self.treasury_notices = Some(notices);
+        self
+    }
+
+    /// Attach the [`Treasurer`] (ALLOW-03, Phase 42 D-04): `run_once` attaches a per-run
+    /// [`Treasurer::spend_guard`] to every per-run engine [`Self::with_engine_factory`]
+    /// produces, beside `with_cancellation_probe` and `with_treasury_ledger`, whenever the run
+    /// row records a submitter. The engine then consults the guard once per superstep boundary
+    /// and halts the run (status `halted`, no error, its last Waypoint kept as the restart
+    /// point) when an allowance has been exhausted mid-run -- overshoot is at most one
+    /// superstep's spend, never absolute.
+    ///
+    /// The guard is built with the run's own trace emitter (Phase 42 D-17), so a `warn_at`
+    /// crossing the run reaches mid-run is emitted as one [`TraceEvent::AllowanceWarning`] on
+    /// that run's own stream, once per window, and a spend halt notifies the operator once per
+    /// window (D-18). Without a configured trace sink the notices are still claimed and queued;
+    /// only the stream event is skipped.
+    ///
+    /// A run whose row records no submitter (`submitted_by: None`, a schedule-fired or internal
+    /// run) gets no guard and no ledger read (D-00e). Only takes effect on the
+    /// [`Self::with_engine_factory`] path, exactly like [`Self::with_treasury_ledger`]. A pool
+    /// that never calls this builder is unaffected.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// use paladin::application::services::run::RunWorkerPool;
+    /// use paladin::application::services::treasurer::Treasurer;
+    /// use paladin_ports::output::waypoint_port::WaypointPort;
+    ///
+    /// fn attach<W: WaypointPort + 'static>(
+    ///     pool: RunWorkerPool<W>,
+    ///     treasurer: Arc<Treasurer>,
+    /// ) -> RunWorkerPool<W> {
+    ///     pool.with_treasurer(treasurer)
+    /// }
+    /// ```
+    pub fn with_treasurer(mut self, treasurer: Arc<Treasurer>) -> Self {
+        self.treasurer = Some(treasurer);
+        self
+    }
+
+    /// The `seq` this run's trace dispatcher starts after (Phase 42 review WR-6).
+    ///
+    /// `run_traces` is keyed `(thread_id, seq)` and drops a conflicting record, so a second run
+    /// on one thread (a fork, or a drained run that is requeued) must number its records after
+    /// the thread's largest persisted `seq` or its early records are silently lost. `0` -- the
+    /// dispatcher's own default -- when the run's records are not persisted (no persisting sink,
+    /// no port) and when the read fails: a trace is a best-effort replay aid and never gates a
+    /// run, so a failed read is logged (run id and error, never a payload) and the run proceeds.
+    async fn trace_seq_origin(&self, run: &Run) -> u64 {
+        if !self.trace_config.persist {
+            return 0;
+        }
+        let Some(port) = &self.run_trace_port else {
+            return 0;
+        };
+        match port.max_seq(&run.thread_id).await {
+            Ok(max) => max,
+            Err(error) => {
+                log::warn!(
+                    "could not read the thread's trace position, so run {} starts its trace \
+                     at seq 1: {error}",
+                    run.run_id
+                );
+                0
+            }
+        }
+    }
+
+    /// Emit one [`TraceEvent::AllowanceWarning`] per notice the admission won for `run`
+    /// through `emitter`, in recorded order (D-18, C6). Called on a first dispatch only, after
+    /// the run's own emitter exists and before `RunStarted`, so the events take the run's own
+    /// lowest `seq` values. Silent when no notice store is wired; a read failure is logged
+    /// (run id and error, never a figure) and the run proceeds (D-15, T-41-36).
+    async fn emit_allowance_warnings(&self, run: &Run, emitter: &dyn TraceEmitter) {
+        let Some(notices) = &self.treasury_notices else {
+            return;
+        };
+        match notices.notices_for_run(&run.run_id).await {
+            Ok(records) => {
+                for record in records {
+                    emitter.emit(TraceEvent::from(record.warning));
+                }
+            }
+            Err(error) => {
+                log::warn!(
+                    "allowance notice read failed for run {}: {error}",
+                    run.run_id
+                );
+            }
+        }
     }
 
     /// Wire the D-40 durable webhook delivery queue: `run_once` enqueues a
@@ -769,7 +1161,16 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
             return Ok(true);
         };
 
-        match run.status {
+        // D-18, C6: only a run's first dispatch (`Queued`) carries its admission's allowance
+        // warnings; a `Running` redelivery or an `AwaitingInput` resume never re-emits them.
+        let first_dispatch = matches!(run.status, RunStatus::Queued);
+
+        // D-07: `attempt` is the persisted `Run.attempt` counter this
+        // dispatch settles under (39-07) -- `run.attempt` on a first
+        // dispatch or an `AwaitingInput` release, or `bump_attempt`'s own
+        // returned value on a `Running` redelivery. The engine never
+        // invents its own counter.
+        let attempt = match run.status {
             RunStatus::Queued => {
                 self.repository
                     .update_status(
@@ -779,6 +1180,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                         chrono::Utc::now(),
                     )
                     .await?;
+                run.attempt
             }
             RunStatus::AwaitingInput => {
                 self.repository
@@ -789,11 +1191,12 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                         chrono::Utc::now(),
                     )
                     .await?;
+                run.attempt
             }
             RunStatus::Running => {
                 // A redelivery: no status change, just the shared attempt
                 // counter (D-23).
-                self.repository.bump_attempt(&run.run_id).await?;
+                self.repository.bump_attempt(&run.run_id).await?
             }
             _ => {
                 // A stale message for an already-terminal run: ack and
@@ -801,7 +1204,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                 self.queue.ack(&leased.token).await?;
                 return Ok(true);
             }
-        }
+        };
 
         let resolved = self
             .resolver
@@ -811,7 +1214,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         let graph = match resolved.runnable {
             Runnable::Workflow(graph) => graph,
             Runnable::Agent(paladin) => {
-                return self.run_agent(&leased, &run, paladin).await;
+                return self.run_agent(&leased, &run, paladin, attempt).await;
             }
         };
 
@@ -832,42 +1235,82 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         // caller's factory closure never needs to know about probes at
         // all. Otherwise (the default), fall back to the ONE shared engine
         // exactly as 27-04 left it, with no local-token registration.
-        let (run_engine, local_token_guard, run_trace_emitter): RunDispatchEngine<W> = match &self
-            .engine_factory
-        {
-            Some(factory) => {
-                let child_token = self.coordinator.token().child_token();
-                self.local_tokens
-                    .register(run.run_id.clone(), child_token.clone())
-                    .await;
-                let mut engine = factory(child_token);
-                if let Some(probe) = &self.cancellation_probe {
-                    engine = engine.with_cancellation_probe(Arc::clone(probe));
-                }
-                // --- 28-06 (OBS-02, D-03, D-11): one CompositeSink, one
-                // TraceDispatcher, per run. `build_run_sink` is the single
-                // place a run's sink fan-out (the default-on log sink
-                // alongside the D-24 bus sink, when wired) is assembled.
-                // The dispatcher is built HERE, before the engine exists,
-                // because the SAME `Arc<dyn TraceEmitter>` handle must also
-                // reach the fallback adapter/middleware chain/execution
-                // service below the engine -- `with_bound_trace_dispatcher`
-                // then hands this exact instance to the engine too, so
-                // every record in this run comes from the ONE counter
-                // (D-03), never two independent dispatchers racing.
-                let bus_sink = self.event_bus.as_ref().map(|bus| {
-                    Arc::new(RunEventBusSink::new(Arc::clone(bus))) as Arc<dyn TraceSink>
-                });
-                let run_trace_emitter =
-                    match build_run_sink(&self.trace_config, bus_sink, self.run_trace_port.clone())
-                    {
+        let (run_engine, local_token_guard, run_trace_emitter): RunDispatchEngine<W> =
+            match &self.engine_factory {
+                Some(factory) => {
+                    let child_token = self.coordinator.token().child_token();
+                    self.local_tokens
+                        .register(run.run_id.clone(), child_token.clone())
+                        .await;
+                    // --- Phase 42 D-14, G1: a per-run probe on EVERY factory-built
+                    // engine, so a same-instance caller cancel (which fires only
+                    // the child token, a child of the shutdown token) reaches the
+                    // engine as a caller cancel instead of an indistinguishable
+                    // token halt. It ORs the pool's debounced durable-flag probe
+                    // (when `with_cancellation_probing` was called) with the run's
+                    // own token while the shutdown token is not cancelled.
+                    let mut engine = factory(child_token.clone());
+                    engine = engine.with_cancellation_probe(Arc::new(PerRunCancelProbe::new(
+                        self.cancellation_probe.clone(),
+                        child_token,
+                        self.coordinator.token(),
+                    )));
+                    if let Some(ledger) = &self.treasury_ledger {
+                        engine = engine.with_treasury_ledger(
+                            Arc::clone(ledger),
+                            // 40-04 (D-15): the run row's recorded submitter is
+                            // the scope; the sentinel only when none was recorded.
+                            SettlementContext {
+                                scope: LedgerScope::from_attribution(run.submitted_by.as_ref()),
+                                run_id: run.run_id.clone(),
+                                attempt,
+                            },
+                        );
+                    }
+                    // --- 28-06 (OBS-02, D-03, D-11): one CompositeSink, one
+                    // TraceDispatcher, per run. `build_run_sink` is the single
+                    // place a run's sink fan-out (the default-on log sink
+                    // alongside the D-24 bus sink, when wired) is assembled.
+                    // The dispatcher is built HERE, before the engine exists,
+                    // because the SAME `Arc<dyn TraceEmitter>` handle must also
+                    // reach the fallback adapter/middleware chain/execution
+                    // service below the engine -- `with_bound_trace_dispatcher`
+                    // then hands this exact instance to the engine too, so
+                    // every record in this run comes from the ONE counter
+                    // (D-03), never two independent dispatchers racing.
+                    // D-15: a drain is not a finish -- the sink drops a reasonless
+                    // `Halted` once the shutdown token is cancelled.
+                    let bus_sink = self.event_bus.as_ref().map(|bus| {
+                        Arc::new(
+                            RunEventBusSink::new(Arc::clone(bus))
+                                .with_shutdown_token(self.coordinator.token()),
+                        ) as Arc<dyn TraceSink>
+                    });
+                    let base_sink =
+                        build_run_sink(&self.trace_config, bus_sink, self.run_trace_port.clone());
+                    // D-12: compose a HeraldTraceSink alongside build_run_sink's own
+                    // output, only when this pool has an operator herald wired
+                    // (RunWorkerPool::with_herald) -- a pool with no herald composes
+                    // exactly as before, so the untraced-for-cost path stays zero-cost.
+                    let herald_sink = self.herald.as_ref().map(|herald| {
+                        Arc::new(HeraldTraceSink::new(
+                            Arc::clone(herald),
+                            run_model_label(&graph),
+                        )) as Arc<dyn TraceSink>
+                    });
+                    let composed_sink = compose_run_sink(base_sink, herald_sink);
+                    let run_trace_emitter = match composed_sink {
                         Some(sink) => {
-                            let dispatcher = Arc::new(TraceDispatcher::with_capacity(
-                                run.thread_id.clone(),
-                                Some(run.run_id.clone()),
-                                Some(sink.clone()),
-                                self.trace_config.channel_capacity,
-                            ));
+                            let dispatcher = Arc::new(
+                                TraceDispatcher::with_capacity(
+                                    run.thread_id.clone(),
+                                    Some(run.run_id.clone()),
+                                    Some(sink.clone()),
+                                    self.trace_config.channel_capacity,
+                                )
+                                // WR-6: number this run's records after the thread's last.
+                                .with_seq_origin(self.trace_seq_origin(&run).await),
+                            );
                             engine = engine
                                 .with_trace_sink(sink)
                                 .with_trace_capacity(self.trace_config.channel_capacity)
@@ -884,14 +1327,32 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                         }
                         None => None,
                     };
-                (
-                    Arc::new(engine),
-                    Some(run.run_id.clone()),
-                    run_trace_emitter,
-                )
-            }
-            None => (Arc::clone(&self.engine), None, None),
-        };
+                    // --- ALLOW-03, Phase 42 D-04, D-00e, D-17: the per-run spend guard,
+                    // attached beside the probe and the ledger but built AFTER the run's
+                    // own trace emitter exists, so a `warn_at` crossing the run reaches
+                    // mid-run is emitted on THIS run's stream (the same emitter the
+                    // first-dispatch warning replay uses). Only a run whose row records
+                    // a submitter gets one -- an unattributed run has no allowance
+                    // identity, so it makes no guard and no ledger read. The guard takes
+                    // the recorded identity (tenant and key NAME), never a role. It is
+                    // still attached before `start`/`resume`/`fork` below.
+                    if let (Some(treasurer), Some(attribution)) =
+                        (&self.treasurer, run.submitted_by.as_ref())
+                    {
+                        engine = engine.with_spend_guard(treasurer.spend_guard_with_emitter(
+                            attribution.clone(),
+                            run.run_id.clone(),
+                            run_trace_emitter.clone(),
+                        ));
+                    }
+                    (
+                        Arc::new(engine),
+                        Some(run.run_id.clone()),
+                        run_trace_emitter,
+                    )
+                }
+                None => (Arc::clone(&self.engine), None, None),
+            };
 
         // D-24: bind THIS thread/run on the bus before dispatch, so a
         // `TraceSink` callback firing mid-superstep has somewhere to
@@ -899,6 +1360,12 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         // sees the live path rather than falling back to degraded.
         if let Some(bus) = &self.event_bus {
             bus.bind(run.thread_id.clone(), run.run_id.clone()).await;
+        }
+
+        // D-18: the admission's allowance warnings, on this run's own stream, before the
+        // engine's own `RunStarted`. Needs the run's own emitter (a traced factory-built run).
+        if first_dispatch && let Some(emitter) = run_trace_emitter.as_deref() {
+            self.emit_allowance_warnings(&run, emitter).await;
         }
 
         let heartbeat = LeaseHeartbeat::spawn(self.queue.clone(), leased.token.clone(), self.lease);
@@ -978,34 +1445,43 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         let cancel_requested = self.repository.is_cancel_requested(&run.thread_id).await?;
         let shutting_down = self.coordinator.token().is_cancelled();
 
-        // D-14: this worker no longer publishes the terminal/suspension
-        // event directly. The engine's own `ParleyRaised` (raised
-        // mid-superstep, on `RunOutcome::AwaitingInput`) and `RunFinished`
-        // (emitted at the end of every `start`/`resume`/`resume_with`/
-        // `fork` call, whatever `outcome` turns out to be -- `Completed`,
-        // `Halted`, `AwaitingInput` or `Failed`) already reached the bus
-        // through `RunEventBusSink`/`map_trace_event` above, inside the
-        // `with_run_trace_scope` call this dispatch just returned from.
-        // `RunFinishStatus` carries no `cancelled` variant distinct from
-        // `halted` (it is a property of the ENGINE's own outcome, not this
-        // worker's repository-level cancel-request flag), so the WIRE
-        // `done` payload for a cancelled run's dispatch now reports
-        // `"halted"` rather than `"cancelled"` -- a deliberate, documented
-        // simplification of D-14's collapse; the run's own persisted
-        // `RunStatus` (queried via `GET /runs/{id}`) still resolves to
-        // `Cancelled` correctly, this is only the SSE `done` event's status
-        // string. `unbind` itself is deferred past the repository/queue
-        // write below -- see the comment there for why.
+        // D-14: this worker does not publish the terminal/suspension event itself. The engine's
+        // own `ParleyRaised` and `RunFinished` (emitted at the end of every `start`/`resume`/
+        // `resume_with`/`fork` call) already reached the bus through `RunEventBusSink`/
+        // `map_trace_event`, inside the `with_run_trace_scope` call this dispatch just returned
+        // from. Which status string the SSE `done` carries is owned by 42-05 (the halt reason)
+        // and 42-06 (`cancelled`); this worker only guarantees below that a halting run's reason
+        // is on the row BEFORE its status flips. `unbind` itself is deferred past the
+        // repository/queue write below -- see the comment there for why.
 
         match map_outcome(&outcome, cancel_requested, shutting_down) {
             OutcomeAction::Transition {
                 to,
                 outcome: record,
             } => {
-                self.repository
-                    .update_status(&run.run_id, RunStatus::Running, to, chrono::Utc::now())
-                    .await?;
-                self.repository.record_outcome(&run.run_id, record).await?;
+                // G14 / PLAT-09: for a halting transition the outcome (carrying the typed
+                // reason and the fork-point Waypoint id) is written BEFORE the status flips, so
+                // no reader -- the degraded SSE poller included -- can observe `halted` or
+                // `cancelled` without them. `record_outcome` has no status guard on any adapter
+                // (the contract clause `record_outcome_before_status_flip_is_accepted`), so the
+                // reversed order is legal. Every other transition keeps its original order.
+                // Accepted window (Phase 42 review IN-8): if `update_status` then fails, the
+                // message is redelivered, but until the next attempt rewrites the outcome a
+                // still-`Running` row reports its `halt_reason` and `final_waypoint_id`. The
+                // window is narrow and self-healing, and the alternative order would let a
+                // reader see `halted` or `cancelled` without them, which is the worse outcome.
+                let halt_reason = record.halt_reason.clone();
+                if matches!(to, RunStatus::Halted | RunStatus::Cancelled) {
+                    self.repository.record_outcome(&run.run_id, record).await?;
+                    self.repository
+                        .update_status(&run.run_id, RunStatus::Running, to, chrono::Utc::now())
+                        .await?;
+                } else {
+                    self.repository
+                        .update_status(&run.run_id, RunStatus::Running, to, chrono::Utc::now())
+                        .await?;
+                    self.repository.record_outcome(&run.run_id, record).await?;
+                }
                 self.queue.ack(&leased.token).await?;
 
                 // D-40, PLAT-FR-14: enqueue a webhook delivery for this
@@ -1013,23 +1489,12 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                 // ack have already succeeded -- a delivery-repository
                 // failure here is logged and never rolls back or changes
                 // the run's own status (prohibition P2).
-                if let Some(deliveries) = &self.webhook_deliveries
-                    && let Some(kind) = run_status_to_event_kind(to)
-                {
-                    let parleys = match &outcome {
-                        RunOutcome::AwaitingInput { parleys, .. } => Some(parleys.as_slice()),
-                        _ => None,
-                    };
-                    if let Some(delivery) =
-                        webhook_delivery_for_outcome(&run, kind, to, parleys, chrono::Utc::now())
-                        && let Err(error) = deliveries.enqueue(delivery).await
-                    {
-                        log::warn!(
-                            "run worker: failed to enqueue webhook delivery for run {}: {error}",
-                            run.run_id
-                        );
-                    }
-                }
+                let parleys = match &outcome {
+                    RunOutcome::AwaitingInput { parleys, .. } => Some(parleys.as_slice()),
+                    _ => None,
+                };
+                self.enqueue_webhook_delivery(&run, to, parleys, halt_reason.as_ref())
+                    .await;
             }
             OutcomeAction::LeaveRunningAndRequeue => {
                 self.queue.nack(&leased.token, Duration::ZERO).await?;
@@ -1064,29 +1529,65 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// whole input serialised when that key is absent or not a string. A
     /// redelivery simply restarts it. Without a wired `PaladinPort`, nacks
     /// for redelivery rather than executing (the 27-01 fallback, preserved
-    /// until a later plan always wires one).
+    /// until a later plan always wires one) -- and a nacked run never binds
+    /// the event bus.
     ///
-    /// **(WR-02) A documented, tested limitation: neither the D-24 live
-    /// event bus nor the PLAT-FR-14 webhook delivery hook run on this
-    /// path.** Both of this function's return points (the `Ok` branch
-    /// below and [`RunWorkerPool::record_engine_failure`] on the `Err`
-    /// branch) write status/outcome and ack/nack directly, with no
-    /// `event_bus.bind`/`publish` call and no `webhook_deliveries.enqueue`
-    /// call anywhere in between -- unlike the `Runnable::Workflow` path in
-    /// [`RunWorkerPool::run_once`], which does both. A run against a
-    /// code-registered agent therefore never fires a webhook and only
-    /// ever takes the degraded polling path on `GET /runs/{id}/stream`,
-    /// regardless of the `webhook` spec or event bus wiring the pool
-    /// carries. This is accepted and tracked (ledger row 31), not an
-    /// oversight -- see the `event_bus`/`webhook_deliveries` field docs
-    /// above and `agent_kind_run_with_a_webhook_enqueues_no_delivery` in
-    /// `worker_tests.rs`, the test that pins it.
+    /// **(PLAT-08, D-14/D-15) Same machinery as a graph run.** No engine hosts
+    /// this run, so it assembles the graph path's per-run trace pipeline
+    /// itself: `build_run_sink` (+ the herald sink, composed by the same
+    /// `compose_run_sink`) behind one standalone `TraceDispatcher`, the event
+    /// bus bound before the call, and the `execute_scoped` call wrapped in
+    /// `with_run_trace_scope` so the agent loop's own middleware, progress
+    /// and fallback records reach the same dispatcher. Because no engine
+    /// emits them, this method emits `RunStarted` (graph fingerprint
+    /// [`AGENT_RUN_FINGERPRINT`]), one superstep-0 `NodeStarted`/
+    /// `NodeFinished` pair for the agent call -- carrying its `PaladinResult`
+    /// usage and cost, so the dispatcher's `total_usage()`/`total_cost()`
+    /// are real. On success that `NodeFinished` also carries
+    /// `reasoning_requested` / `reasoning_effective`, copied from the call's own
+    /// `run_metadata` (the adapter-stamped `paladin.reasoning_*` keys, the
+    /// engine's `AttemptReasoning` rule), never the agent's configured effort;
+    /// on failure both are `None`. The run ends with
+    /// `RunFinished { total_supersteps: 0 }`. The live SSE
+    /// `node_started`/`node_finished`/`done`|`error` events therefore come
+    /// from the ONE `map_trace_event` mapping, never a hand-published event.
+    ///
+    /// **Exactly one terminal wire event.** A failure emits `RunFinished
+    /// { Failed }`, which maps to the single `error` event with `message:
+    /// null` -- the same shape a graph run's engine-emitted failure has.
+    /// This method makes no direct bus publish of its own and does not go
+    /// through `record_engine_failure` (whose own publish would be a second
+    /// `error`); it calls `persist_failure` instead. The failure text stays
+    /// readable through the tenant-scoped `GET /runs/{id}` `error` field,
+    /// never on the wire, the trace or the webhook payload.
+    ///
+    /// **Webhooks.** Both return paths enqueue the run's subscribed
+    /// `completed`/`failed` delivery strictly after the status write and ack
+    /// (D-40), through `enqueue_webhook_delivery` -> `webhook_delivery_for_outcome`;
+    /// an enqueue error is logged and never changes the run's status (P2).
+    ///
+    /// The `RunScope` (run id + ledger scope) and the `execute_scoped`
+    /// arguments are unchanged from 39-07/40-04 (D-00g): nothing here changes
+    /// what the Treasurer ledger settles for an agent run.
+    ///
+    /// **Phase 42 (D-12, D-13, G8, A8): the derived budget.** When the pool has a Treasurer and
+    /// the run row records a submitter, the budget is re-derived HERE, at dispatch, from the
+    /// ledger (never from a figure persisted at submit time) and added to the `RunScope`, so the
+    /// shared service's `TokenBudget` -- installed in Treasurer-only mode, G12 -- cuts the run
+    /// when it crosses. A crossed budget is recorded `Halted` with the `allowance_exhausted`
+    /// object, `error: null` and the partial output kept, and the one terminal event carries the
+    /// reason. A zero or exhausted figure at dispatch records the same halt, and an unreadable
+    /// ledger records `ledger_unavailable`, both without calling the LLM; a model that lost its
+    /// price row records `Failed` naming the model, also without calling the LLM. An agent-kind
+    /// run writes no Waypoint (D-08), so a halted one is resumed by resubmission.
     async fn run_agent(
         &self,
         leased: &LeasedRun,
         run: &Run,
         paladin: Arc<Paladin>,
+        attempt: u32,
     ) -> Result<bool, WorkerError> {
+        // A nacked run never binds: keep this early return FIRST.
         let Some(paladin_port) = &self.paladin_port else {
             self.queue
                 .nack(&leased.token, Duration::from_secs(1))
@@ -1099,63 +1600,357 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
             None => run.input.to_string(),
         };
 
-        match paladin_port.execute(paladin.as_ref(), &input_text).await {
+        // 45-02 (D-14): the graph path's per-run trace assembly. No engine
+        // hosts this run, so the dispatcher is a standalone one built from
+        // the SAME sink composition `run_once` uses.
+        let bus_sink = self.event_bus.as_ref().map(|bus| {
+            Arc::new(
+                RunEventBusSink::new(Arc::clone(bus)).with_shutdown_token(self.coordinator.token()),
+            ) as Arc<dyn TraceSink>
+        });
+        let base_sink = build_run_sink(&self.trace_config, bus_sink, self.run_trace_port.clone());
+        let herald_sink = self.herald.as_ref().map(|herald| {
+            Arc::new(HeraldTraceSink::new(
+                Arc::clone(herald),
+                agent_model_label(&paladin),
+            )) as Arc<dyn TraceSink>
+        });
+        let composed_sink = compose_run_sink(base_sink, herald_sink);
+        let traced = composed_sink.is_some();
+        let dispatcher = Arc::new(
+            TraceDispatcher::with_capacity(
+                run.thread_id.clone(),
+                Some(run.run_id.clone()),
+                composed_sink,
+                self.trace_config.channel_capacity,
+            )
+            // WR-6: number this run's records after the thread's last.
+            .with_seq_origin(self.trace_seq_origin(run).await),
+        );
+        // `None` for an untraced run, so below-engine producers keep their
+        // zero-cost "no emitter" path (D-10) exactly as on the graph path.
+        let emitter: Option<Arc<dyn TraceEmitter>> =
+            traced.then(|| Arc::clone(&dispatcher) as Arc<dyn TraceEmitter>);
+
+        if let Some(bus) = &self.event_bus {
+            bus.bind(run.thread_id.clone(), run.run_id.clone()).await;
+        }
+
+        let node_id = NodeId::new(run.assistant.assistant_id.clone());
+        // D-18: the admission's allowance warnings first, so they take this run's lowest `seq`
+        // values; the `RunScope` below deliberately does NOT carry them (emitted once, here).
+        if matches!(run.status, RunStatus::Queued)
+            && let Some(emitter) = emitter.as_deref()
+        {
+            self.emit_allowance_warnings(run, emitter).await;
+        }
+        // Phase 42 (D-12, D-13, G8, A8): re-derive the budget from the ledger NOW, at dispatch,
+        // never from a figure persisted at submit time -- the allowance may have been spent while
+        // the run sat in the queue. The three no-call outcomes (a zero or exhausted figure, an
+        // unreadable ledger, a model that lost its price row) are decided before the LLM is
+        // reached, and each is recorded through the same one-terminal-event path as a call.
+        let derived_budget = self.derive_dispatch_budget(run, &paladin.data.model).await;
+        dispatcher.emit(TraceEvent::RunStarted {
+            run_id: Some(run.run_id.clone()),
+            graph_fingerprint: AGENT_RUN_FINGERPRINT.to_string(),
+        });
+        let derived_budget = match derived_budget {
+            DispatchBudget::Halt(reason) => {
+                emit_agent_run_finished(
+                    &dispatcher,
+                    RunFinishStatus::Halted,
+                    Some(reason.clone()),
+                    0,
+                );
+                let persisted = self.persist_agent_halt(leased, run, None, reason).await;
+                self.unbind_after_drain(run).await;
+                return persisted;
+            }
+            DispatchBudget::Unpriced(model) => {
+                emit_agent_run_finished(&dispatcher, RunFinishStatus::Failed, None, 0);
+                let persisted = self
+                    .persist_failure(
+                        leased,
+                        run,
+                        format!("model {model} has no treasurer.pricing row"),
+                    )
+                    .await;
+                self.unbind_after_drain(run).await;
+                return persisted;
+            }
+            DispatchBudget::Derived(budget) => Some(budget),
+            DispatchBudget::Unbounded => None,
+        };
+        dispatcher.emit(TraceEvent::NodeStarted {
+            superstep: 0,
+            node_id: node_id.clone(),
+            attempt,
+            muster_task_key: None,
+        });
+        let started = std::time::Instant::now();
+
+        // 39-07: carry this run's Platform API id into the run engine's
+        // shared PaladinPort via RunScope::with_run_id, so the agent
+        // loop's own AgentLoopSettlement::PlatformRunsOnly writer (39-05)
+        // settles this call under the Platform run id -- for any port
+        // that does not override `execute_scoped`, the trait's default
+        // body delegates straight to `execute`, so this is
+        // behavior-identical for a port with no ledger settlement
+        // installed. 40-04 (D-15/D-16): the same scope carries the run
+        // row's recorded submitter as the ledger scope, so that writer
+        // settles under the submitting principal's tenant and API key id
+        // (the sentinel only when the row records no principal, D-10).
+        let mut run_scope = RunScope::default()
+            .with_run_id(run.run_id.clone())
+            .with_ledger_scope(LedgerScope::from_attribution(run.submitted_by.as_ref()));
+        // The derived figure rides the scope to the ONE `TokenBudget` on the shared service
+        // (Treasurer-only mode, G12): only a scope carrying it is ever cut, so an engine node
+        // sharing that service never is.
+        if let Some(budget) = derived_budget {
+            run_scope = run_scope.with_derived_token_budget(budget);
+        }
+        let call = with_run_trace_scope(
+            &emitter,
+            paladin_port.execute_scoped(
+                paladin.as_ref(),
+                &input_text,
+                &HeartbeatHandle::new(),
+                &run_scope,
+            ),
+        )
+        .await;
+
+        let persisted = match call {
             Ok(result) => {
-                self.repository
-                    .update_status(
-                        &run.run_id,
-                        RunStatus::Running,
-                        RunStatus::Completed,
-                        chrono::Utc::now(),
-                    )
-                    .await?;
-                self.repository
-                    .record_outcome(
-                        &run.run_id,
-                        RunOutcomeRecord {
-                            error: None,
-                            output: Some(serde_json::Value::String(result.output)),
-                            final_waypoint_id: None,
-                        },
-                    )
-                    .await?;
-                self.queue.ack(&leased.token).await?;
-                Ok(true)
+                let duration_ms = elapsed_ms(started);
+                dispatcher.emit(TraceEvent::NodeFinished {
+                    superstep: 0,
+                    node_id,
+                    attempt,
+                    outcome: NodeOutcomeKind::Succeeded,
+                    duration_ms,
+                    usage: result.usage.clone(),
+                    cost: result.cost.clone(),
+                    // D-11 (REASON-05): the call's own adapter-stamped strings,
+                    // copied verbatim (never parsed, never read from the agent's
+                    // configuration) -- the engine's `AttemptReasoning` rule.
+                    reasoning_requested: result
+                        .run_metadata
+                        .get(REASONING_REQUESTED_METADATA_KEY)
+                        .cloned(),
+                    reasoning_effective: result
+                        .run_metadata
+                        .get(REASONING_EFFECTIVE_METADATA_KEY)
+                        .cloned(),
+                    cache_hit: false,
+                });
+                // D-12: a crossed derived budget is a halt, not a completion. The partial output
+                // (with the loop's truncation notice) is kept on the row, `error` stays null, and
+                // the one terminal event carries the reason (SSE `done`, the `halted` webhook).
+                if let StopReason::AllowanceHalted(refusal) = &result.stop_reason {
+                    let reason = HaltReason::AllowanceExhausted(refusal.clone());
+                    emit_agent_run_finished(
+                        &dispatcher,
+                        RunFinishStatus::Halted,
+                        Some(reason.clone()),
+                        duration_ms,
+                    );
+                    let persisted = self
+                        .persist_agent_halt(leased, run, Some(result.output), reason)
+                        .await;
+                    self.unbind_after_drain(run).await;
+                    return persisted;
+                }
+                emit_agent_run_finished(&dispatcher, RunFinishStatus::Completed, None, duration_ms);
+                async {
+                    self.repository
+                        .update_status(
+                            &run.run_id,
+                            RunStatus::Running,
+                            RunStatus::Completed,
+                            chrono::Utc::now(),
+                        )
+                        .await?;
+                    self.repository
+                        .record_outcome(
+                            &run.run_id,
+                            RunOutcomeRecord {
+                                error: None,
+                                output: Some(serde_json::Value::String(result.output)),
+                                final_waypoint_id: None,
+                                halt_reason: None,
+                            },
+                        )
+                        .await?;
+                    self.queue.ack(&leased.token).await?;
+                    // D-40, D-15: strictly AFTER the status write and ack;
+                    // logged and never propagated (P2).
+                    self.enqueue_webhook_delivery(run, RunStatus::Completed, None, None)
+                        .await;
+                    Ok(true)
+                }
+                .await
             }
             Err(error) => {
-                self.record_engine_failure(leased, run, error.to_string())
-                    .await
+                // D-15 (single terminal event): the ONE `error` wire event
+                // comes from `RunFinished { Failed }` through the dispatcher
+                // -> `map_trace_event` (`message: null`, exactly like a graph
+                // run's engine-emitted failure); this arm makes no direct bus
+                // publish of its own. The failure text is persisted on the
+                // run row below and stays readable through `GET /runs/{id}`.
+                let duration_ms = elapsed_ms(started);
+                dispatcher.emit(TraceEvent::NodeFinished {
+                    superstep: 0,
+                    node_id,
+                    attempt,
+                    outcome: NodeOutcomeKind::Failed,
+                    duration_ms,
+                    usage: TokenUsage::default(),
+                    cost: None,
+                    reasoning_requested: None,
+                    reasoning_effective: None,
+                    cache_hit: false,
+                });
+                emit_agent_run_finished(&dispatcher, RunFinishStatus::Failed, None, duration_ms);
+                self.persist_failure(leased, run, error.to_string()).await
+            }
+        };
+
+        // Best-effort drain window, then unbind -- captured-then-returned so
+        // a repository error never leaves the channel bound (T-45-11).
+        self.unbind_after_drain(run).await;
+        persisted
+    }
+
+    /// Best-effort drain window, then unbind the run's event channel (T-45-11). Shared by every
+    /// exit of [`Self::run_agent`] that has bound the bus, so a repository error never leaves
+    /// the channel bound.
+    async fn unbind_after_drain(&self, run: &Run) {
+        if let Some(bus) = &self.event_bus {
+            tokio::time::sleep(TRACE_DRAIN_GRACE_PERIOD).await;
+            bus.unbind(&run.thread_id).await;
+        }
+    }
+
+    /// Re-derive `run`'s token budget at dispatch (Phase 42, D-12/D-13, G8, A8).
+    ///
+    /// Acts only when the pool has a Treasurer AND the run row records a submitter; otherwise
+    /// the run is [`DispatchBudget::Unbounded`] with no ledger read. The derivation is
+    /// [`Treasurer::derive_budget`], read through the same evaluation admission uses, so it can
+    /// never disagree with admission about ceiling order or the exhausted predicate:
+    ///
+    /// - `Ok(Some(budget))` runs the call under `budget`; `Ok(None)` (no ceiling, or a free
+    ///   model) runs it unbounded.
+    /// - A refusal (the allowance was spent while the run was queued, or the derived figure is
+    ///   zero tokens) halts with the binding ceiling's figures.
+    /// - A backend error, or any error this code does not name (`AdmissionError` is
+    ///   `#[non_exhaustive]`), halts `ledger_unavailable` -- fail closed (D-03). Logged at
+    ///   `error` with the run id only, never a key value.
+    /// - `ModelUnpriced` records `Failed` naming the model: a deployment incoherence (the model
+    ///   lost its price row since admission), not quota exhaustion.
+    async fn derive_dispatch_budget(&self, run: &Run, model: &str) -> DispatchBudget {
+        let (Some(treasurer), Some(attribution)) = (&self.treasurer, run.submitted_by.as_ref())
+        else {
+            return DispatchBudget::Unbounded;
+        };
+        match treasurer.derive_budget(attribution, model).await {
+            Ok(Some(budget)) => DispatchBudget::Derived(budget),
+            Ok(None) => DispatchBudget::Unbounded,
+            Err(AdmissionError::Refused(refusal)) => {
+                DispatchBudget::Halt(HaltReason::AllowanceExhausted(refusal))
+            }
+            Err(AdmissionError::ModelUnpriced { model }) => DispatchBudget::Unpriced(model),
+            Err(AdmissionError::Backend { message }) => {
+                log::error!(
+                    "run worker: allowance derivation failed at dispatch for run {}: {message}; \
+                     halting fail-closed",
+                    run.run_id
+                );
+                DispatchBudget::Halt(HaltReason::LedgerUnavailable)
+            }
+            Err(other) => {
+                log::error!(
+                    "run worker: unrecognised allowance derivation error at dispatch for run {}: \
+                     {other}; halting fail-closed",
+                    run.run_id
+                );
+                DispatchBudget::Halt(HaltReason::LedgerUnavailable)
             }
         }
     }
 
-    /// Record an `EngineError` (or a `PaladinError`, for the `Agent`-kind
-    /// path) returned outside normal `RunOutcome` reporting as a `Failed`
-    /// run -- never a panic. If the repository write itself fails, log at
-    /// `warn` and nack with a 1s delay so the run is retried rather than
-    /// lost.
+    /// Record an agent-kind run's halt: the outcome (the typed `reason`, the kept partial
+    /// `output` or `None` for a halt before any call, `error: null`, no Waypoint) is written
+    /// BEFORE the status flips `Running -> Halted`, so no reader -- the degraded SSE poller
+    /// included -- can observe `halted` without the reason (G14, the same order
+    /// `run_once`'s halting transition uses). Then ack, and strictly after both, the subscribed
+    /// `halted` webhook delivery carrying the reason (D-19; an enqueue error is logged and never
+    /// changes the run's status, P2). An agent-kind run writes no Waypoint (D-08), so there is
+    /// no `final_waypoint_id`; it is resumed by resubmission.
+    async fn persist_agent_halt(
+        &self,
+        leased: &LeasedRun,
+        run: &Run,
+        output: Option<String>,
+        reason: HaltReason,
+    ) -> Result<bool, WorkerError> {
+        self.repository
+            .record_outcome(
+                &run.run_id,
+                RunOutcomeRecord {
+                    error: None,
+                    output: output.map(serde_json::Value::String),
+                    final_waypoint_id: None,
+                    halt_reason: Some(reason.clone()),
+                },
+            )
+            .await?;
+        self.repository
+            .update_status(
+                &run.run_id,
+                RunStatus::Running,
+                RunStatus::Halted,
+                chrono::Utc::now(),
+            )
+            .await?;
+        self.queue.ack(&leased.token).await?;
+        self.enqueue_webhook_delivery(run, RunStatus::Halted, None, Some(&reason))
+            .await;
+        Ok(true)
+    }
+
+    /// Record an `EngineError` returned outside normal `RunOutcome`
+    /// reporting as a `Failed` run -- never a panic. If the repository write
+    /// itself fails, log at `warn` and nack with a 1s delay so the run is
+    /// retried rather than lost.
     ///
     /// **(D-14) The ONE publish this pool retains outside `map_trace_event`,
-    /// deliberately.** Every caller of this method reaches it through a
-    /// path that never gets a `TraceEvent::RunFinished` record: the corrupt
-    /// `fork_from` case (`run_once`, before any engine dispatch begins),
-    /// the `Runnable::Agent` path (`run_agent`, which calls a bare
-    /// `PaladinPort` directly -- no `WarEngine`, no trace pipeline at all),
-    /// and a `WarEngine::start`/`resume`/`resume_with`/`fork` call that
-    /// itself returns `Err` before its OWN `trace.emit(TraceEvent::
-    /// RunStarted)` runs (graph/battlefield validation failures --
+    /// deliberately.** Its two callers both reach it through a path that
+    /// never gets a `TraceEvent::RunFinished` record: the corrupt `fork_from`
+    /// case (`run_once`, before any engine dispatch begins), and a
+    /// `WarEngine::start`/`resume`/`resume_with`/`fork` call that itself
+    /// returns `Err` before its OWN `trace.emit(TraceEvent::RunStarted)` runs
+    /// (graph/battlefield validation failures --
     /// `crates/paladin-battalion/src/engine/mod.rs`'s `start`, for one,
     /// validates the graph and initializes the Battlefield before opening
-    /// its trace dispatcher). A `WarEngine` call that fails AFTER its own
-    /// `RunStarted` already reached the trace pipeline DOES still get a
-    /// `RunFinished{status: failed}` record (the engine unconditionally
-    /// emits it right after `superstep::run` returns, `Ok` or `Err` alike)
-    /// -- for that narrower subset this method's own publish is a harmless,
-    /// accepted duplicate `error` event alongside the one `map_trace_event`
-    /// already produced, not a correctness bug: an SSE consumer treats
-    /// `error` as terminal either way. Fixing the duplicate would require
-    /// distinguishing "already had a `RunStarted`" inside `paladin-battalion`
-    /// itself, a crate outside this plan's file scope.
+    /// its trace dispatcher). The `Runnable::Agent` path no longer reaches
+    /// this method: [`RunWorkerPool::run_agent`] emits its own
+    /// `RunFinished { Failed }` and calls [`Self::persist_failure`]
+    /// directly, so an agent run produces exactly one `error` wire event.
+    /// A `WarEngine` call that fails AFTER its own `RunStarted` already
+    /// reached the trace pipeline DOES still get a `RunFinished{status:
+    /// failed}` record (the engine unconditionally emits it right after
+    /// `superstep::run` returns, `Ok` or `Err` alike) -- for that narrower
+    /// subset this method's own publish is a harmless, accepted duplicate
+    /// `error` event alongside the one `map_trace_event` already produced,
+    /// not a correctness bug: an SSE consumer treats `error` as terminal
+    /// either way. Fixing the duplicate would require distinguishing
+    /// "already had a `RunStarted`" inside `paladin-battalion` itself, a
+    /// crate outside this plan's file scope.
+    ///
+    /// The status write, ack and the subscribed `failed` webhook delivery
+    /// come from [`Self::persist_failure`] (D-15), so a graph run failing
+    /// here gets the delivery the `Ok`-only `Transition` arm never enqueued.
     async fn record_engine_failure(
         &self,
         leased: &LeasedRun,
@@ -1173,7 +1968,23 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
             .await;
             bus.unbind(&run.thread_id).await;
         }
+        self.persist_failure(leased, run, error_text).await
+    }
 
+    /// Persist a run's failure: status `Running -> Failed`, the outcome record
+    /// carrying `error_text`, then `ack` -- or, on a repository error, log at
+    /// `warn` and `nack` with a 1s delay so the run is retried rather than
+    /// lost. On the ack path ONLY, enqueues the run's subscribed `failed`
+    /// webhook delivery (D-40 ordering: strictly after the status write and
+    /// ack; a delivery error is logged and never changes the run's status,
+    /// prohibition P2). Publishes nothing on the bus -- callers own their
+    /// wire event.
+    async fn persist_failure(
+        &self,
+        leased: &LeasedRun,
+        run: &Run,
+        error_text: String,
+    ) -> Result<bool, WorkerError> {
         let now = chrono::Utc::now();
         let record_result: Result<(), RunRepositoryError> = async {
             self.repository
@@ -1186,6 +1997,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                         error: Some(error_text.clone()),
                         output: None,
                         final_waypoint_id: None,
+                        halt_reason: None,
                     },
                 )
                 .await?;
@@ -1196,6 +2008,8 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         match record_result {
             Ok(()) => {
                 self.queue.ack(&leased.token).await?;
+                self.enqueue_webhook_delivery(run, RunStatus::Failed, None, None)
+                    .await;
             }
             Err(repo_err) => {
                 log::warn!(
@@ -1210,6 +2024,46 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         }
         Ok(true)
     }
+
+    /// Enqueue the `Pending` webhook delivery `status` implies for `run`, when
+    /// a delivery repository is wired and the run's webhook subscribes to the
+    /// matching event (D-40, PLAT-FR-14). The one enqueue path every terminal
+    /// or suspension transition shares -- graph outcomes, agent outcomes and
+    /// [`Self::persist_failure`] alike -- so both runnable kinds deliver
+    /// through the identical [`webhook_delivery_for_outcome`] helper and the
+    /// SSRF-guarded `WebhookDeliveryService` that drains it (D-00h).
+    ///
+    /// Callers invoke this strictly AFTER the run's own status write and ack
+    /// succeeded. An enqueue error is logged (naming only the run id, never
+    /// the URL or secret) and NEVER propagated (prohibition P2).
+    async fn enqueue_webhook_delivery(
+        &self,
+        run: &Run,
+        status: RunStatus,
+        parleys: Option<&[ParleyRequest]>,
+        halt_reason: Option<&HaltReason>,
+    ) {
+        let Some(deliveries) = &self.webhook_deliveries else {
+            return;
+        };
+        let Some(kind) = run_status_to_event_kind(status) else {
+            return;
+        };
+        if let Some(delivery) = webhook_delivery_for_outcome(
+            run,
+            kind,
+            status,
+            parleys,
+            halt_reason,
+            chrono::Utc::now(),
+        ) && let Err(error) = deliveries.enqueue(delivery).await
+        {
+            log::warn!(
+                "run worker: failed to enqueue webhook delivery for run {}: {error}",
+                run.run_id
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1220,23 +2074,33 @@ mod tests {
 
     use async_trait::async_trait;
 
-    use paladin_battalion::engine::{EngineLimits, WarEngine, WarGraph};
-    use paladin_core::platform::container::battlefield::{Battlefield, BattlefieldSchema};
+    use paladin_battalion::engine::{EngineLimits, InputMapping, NodeSpec, WarEngine, WarGraph};
+    use paladin_core::platform::container::battlefield::{
+        Battlefield, BattlefieldSchema, DispatchRule, FieldSpec,
+    };
+    use paladin_core::platform::container::cost::{Cost, CurrencyCode};
     use paladin_core::platform::container::execution_result::PaladinResult;
     use paladin_core::platform::container::paladin::Paladin;
     use paladin_core::platform::container::paladin_error::PaladinError;
+    use paladin_core::platform::container::principal::{RunAttribution, TenantId};
     use paladin_core::platform::container::run::AssistantRef;
+    use paladin_core::platform::container::treasury_ledger::{
+        ReservationId, ReserveRequest, SettleOutcome, SettleRequest, SettlementKey, SpendQuery,
+        SpendRow,
+    };
     use paladin_core::platform::container::waypoint::{
-        FrontierSnapshot, GraphFingerprint, ThreadId, WaypointStatus,
+        FrontierSnapshot, GraphFingerprint, NodeId, ThreadId, WaypointStatus,
     };
     use paladin_ports::output::paladin_port::{PaladinPort, PaladinStream};
     use paladin_ports::output::run_queue_port::{QueueError, QueuedRun};
+    use paladin_ports::output::treasury_ledger_port::TreasuryLedgerError;
     use paladin_storage::run::in_memory::InMemoryRunRepository;
     use paladin_storage::run_queue::in_memory::InMemoryRunQueue;
+    use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
     use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
 
     use super::super::events::RunEventBus;
-    use super::super::resolver::{AssistantResolver, CodeWorkflowResolver};
+    use super::super::resolver::{AssistantResolver, CodeWorkflowResolver, ResolvedAssistant};
 
     /// A [`PaladinPort`] that must never be called -- this module's own
     /// graphs never have `NodeSpec::Paladin` nodes (mirrors
@@ -1419,6 +2283,7 @@ mod tests {
                     error: None,
                     output: None,
                     final_waypoint_id: Some(waypoint.to_string()),
+                    halt_reason: None,
                 },
             }
         );
@@ -1444,6 +2309,7 @@ mod tests {
                     error: Some(expected_text),
                     output: None,
                     final_waypoint_id: None,
+                    halt_reason: None,
                 },
             }
         );
@@ -1465,6 +2331,7 @@ mod tests {
                     error: None,
                     output: None,
                     final_waypoint_id: Some(waypoint.to_string()),
+                    halt_reason: None,
                 },
             }
         );
@@ -1473,7 +2340,10 @@ mod tests {
     #[test]
     fn map_outcome_halted_with_cancel_requested_transitions_to_cancelled() {
         let waypoint = paladin_core::platform::container::waypoint::WaypointId::generate();
-        let outcome = RunOutcome::Halted { waypoint };
+        let outcome = RunOutcome::Halted {
+            waypoint,
+            cause: paladin_battalion::engine::HaltCause::Token,
+        };
         let action = map_outcome(&outcome, true, false);
         assert_eq!(
             action,
@@ -1483,6 +2353,7 @@ mod tests {
                     error: None,
                     output: None,
                     final_waypoint_id: Some(waypoint.to_string()),
+                    halt_reason: None,
                 },
             }
         );
@@ -1491,7 +2362,10 @@ mod tests {
     #[test]
     fn map_outcome_halted_while_shutting_down_leaves_running_and_requeues() {
         let waypoint = paladin_core::platform::container::waypoint::WaypointId::generate();
-        let outcome = RunOutcome::Halted { waypoint };
+        let outcome = RunOutcome::Halted {
+            waypoint,
+            cause: paladin_battalion::engine::HaltCause::Token,
+        };
         let action = map_outcome(&outcome, false, true);
         assert_eq!(action, OutcomeAction::LeaveRunningAndRequeue);
     }
@@ -1499,7 +2373,10 @@ mod tests {
     #[test]
     fn map_outcome_halted_otherwise_transitions_to_halted() {
         let waypoint = paladin_core::platform::container::waypoint::WaypointId::generate();
-        let outcome = RunOutcome::Halted { waypoint };
+        let outcome = RunOutcome::Halted {
+            waypoint,
+            cause: paladin_battalion::engine::HaltCause::Token,
+        };
         let action = map_outcome(&outcome, false, false);
         assert_eq!(
             action,
@@ -1509,8 +2386,125 @@ mod tests {
                     error: None,
                     output: None,
                     final_waypoint_id: Some(waypoint.to_string()),
+                    halt_reason: None,
                 },
             }
+        );
+    }
+
+    fn spend_halt_outcome() -> (
+        paladin_core::platform::container::waypoint::WaypointId,
+        RunOutcome,
+    ) {
+        let waypoint = paladin_core::platform::container::waypoint::WaypointId::generate();
+        let outcome = RunOutcome::Halted {
+            waypoint,
+            cause: HaltCause::Spend(
+                paladin_core::platform::container::allowance::HaltReason::LedgerUnavailable,
+            ),
+        };
+        (waypoint, outcome)
+    }
+
+    fn halted_transition(
+        waypoint: paladin_core::platform::container::waypoint::WaypointId,
+        to: RunStatus,
+        halt_reason: Option<HaltReason>,
+    ) -> OutcomeAction {
+        OutcomeAction::Transition {
+            to,
+            outcome: RunOutcomeRecord {
+                error: None,
+                output: None,
+                final_waypoint_id: Some(waypoint.to_string()),
+                halt_reason,
+            },
+        }
+    }
+
+    #[test]
+    fn map_outcome_spend_halt_transitions_to_halted_even_while_shutting_down() {
+        let (waypoint, outcome) = spend_halt_outcome();
+        assert_eq!(
+            map_outcome(&outcome, false, true),
+            halted_transition(
+                waypoint,
+                RunStatus::Halted,
+                Some(HaltReason::LedgerUnavailable)
+            ),
+            "a spend halt is recorded Halted, never requeued by a drain"
+        );
+    }
+
+    #[test]
+    fn map_outcome_spend_halt_ignores_a_cancel_flag() {
+        let (waypoint, outcome) = spend_halt_outcome();
+        assert_eq!(
+            map_outcome(&outcome, true, false),
+            halted_transition(
+                waypoint,
+                RunStatus::Halted,
+                Some(HaltReason::LedgerUnavailable)
+            )
+        );
+        assert_eq!(
+            map_outcome(&outcome, true, true),
+            halted_transition(
+                waypoint,
+                RunStatus::Halted,
+                Some(HaltReason::LedgerUnavailable)
+            )
+        );
+    }
+
+    #[test]
+    fn map_outcome_spend_halt_records_the_reason() {
+        // An exhausted-allowance reason (figures and all) is carried to the record verbatim,
+        // and the record's `error` stays None: a halt is a resume point, not a failure (D-06).
+        let usd = paladin_core::platform::container::cost::CurrencyCode::new("USD").unwrap();
+        let reason = HaltReason::AllowanceExhausted(
+            paladin_core::platform::container::allowance::AllowanceRefusal {
+                scope_kind:
+                    paladin_core::platform::container::allowance::AllowanceScopeKind::ApiKey,
+                limit_kind:
+                    paladin_core::platform::container::allowance::AllowanceLimitKind::Window,
+                balance: Cost::new(1_000_000_001, usd.clone()),
+                ceiling: Cost::new(1_000_000_001, usd),
+                window: None,
+                evaluated_at: chrono::Utc::now(),
+            },
+        );
+        let waypoint = paladin_core::platform::container::waypoint::WaypointId::generate();
+        let outcome = RunOutcome::Halted {
+            waypoint,
+            cause: HaltCause::Spend(reason.clone()),
+        };
+        match map_outcome(&outcome, false, false) {
+            OutcomeAction::Transition { to, outcome } => {
+                assert_eq!(to, RunStatus::Halted);
+                assert_eq!(outcome.halt_reason, Some(reason));
+                assert_eq!(outcome.error, None);
+                assert_eq!(outcome.final_waypoint_id, Some(waypoint.to_string()));
+            }
+            other => panic!("expected a Halted transition, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_outcome_cancel_requested_cause_transitions_to_cancelled() {
+        let waypoint = paladin_core::platform::container::waypoint::WaypointId::generate();
+        let outcome = RunOutcome::Halted {
+            waypoint,
+            cause: HaltCause::CancelRequested,
+        };
+        // The cause alone decides: no side flag is needed.
+        assert_eq!(
+            map_outcome(&outcome, false, false),
+            halted_transition(waypoint, RunStatus::Cancelled, None)
+        );
+        assert_eq!(
+            map_outcome(&outcome, false, true),
+            halted_transition(waypoint, RunStatus::Cancelled, None)
         );
     }
 
@@ -1576,6 +2570,7 @@ mod tests {
             RunEventKind::Completed,
             RunStatus::Completed,
             None,
+            None,
             chrono::Utc::now(),
         );
         assert!(delivery.is_none());
@@ -1588,6 +2583,7 @@ mod tests {
             &run,
             RunEventKind::Completed,
             RunStatus::Completed,
+            None,
             None,
             chrono::Utc::now(),
         );
@@ -1602,6 +2598,7 @@ mod tests {
             RunEventKind::Completed,
             RunStatus::Completed,
             None,
+            None,
             chrono::Utc::now(),
         )
         .unwrap();
@@ -1613,6 +2610,84 @@ mod tests {
         ));
         assert!(delivery.payload.contains(run.run_id.as_str()));
         assert!(!delivery.payload.to_lowercase().contains("secret"));
+    }
+
+    #[test]
+    fn halted_webhook_payload_carries_the_halt_reason_object() {
+        let run = sample_run_with_webhook(vec![RunEventKind::Halted]);
+        let reason = HaltReason::LedgerUnavailable;
+        let delivery = webhook_delivery_for_outcome(
+            &run,
+            RunEventKind::Halted,
+            RunStatus::Halted,
+            None,
+            Some(&reason),
+            chrono::Utc::now(),
+        )
+        .unwrap();
+        let payload: serde_json::Value = serde_json::from_str(&delivery.payload).unwrap();
+        assert_eq!(payload["status"], "halted");
+        assert_eq!(payload["event"], "halted");
+        assert_eq!(payload["halt_reason"], reason.wire_json());
+    }
+
+    #[test]
+    fn halted_webhook_without_a_reason_omits_the_key() {
+        let run = sample_run_with_webhook(vec![RunEventKind::Halted]);
+        let delivery = webhook_delivery_for_outcome(
+            &run,
+            RunEventKind::Halted,
+            RunStatus::Halted,
+            None,
+            None,
+            chrono::Utc::now(),
+        )
+        .unwrap();
+        let payload: serde_json::Value = serde_json::from_str(&delivery.payload).unwrap();
+        assert!(payload.get("halt_reason").is_none());
+    }
+
+    #[test]
+    fn non_halted_webhook_payload_never_carries_a_halt_reason_and_is_byte_identical() {
+        // Even if a reason were (wrongly) offered, only a `halted` event carries it. The bytes of
+        // a completed payload are exactly the pre-change serialization of the same inputs: the
+        // fixed key order below is the struct's field order, with no `halt_reason` key.
+        let run = sample_run_with_webhook(vec![RunEventKind::Completed]);
+        let now = chrono::Utc::now();
+        let offered = HaltReason::LedgerUnavailable;
+        let with_offer = webhook_delivery_for_outcome(
+            &run,
+            RunEventKind::Completed,
+            RunStatus::Completed,
+            None,
+            Some(&offered),
+            now,
+        )
+        .unwrap();
+        let without = webhook_delivery_for_outcome(
+            &run,
+            RunEventKind::Completed,
+            RunStatus::Completed,
+            None,
+            None,
+            now,
+        )
+        .unwrap();
+        assert_eq!(with_offer.payload, without.payload);
+
+        let expected = format!(
+            concat!(
+                r#"{{"run_id":"{run_id}","thread_id":"{thread_id}","#,
+                r#""assistant":{{"assistant_id":"a1","version":1}},"#,
+                r#""status":"completed","event":"completed","#,
+                r#""timestamp":{timestamp},"attempt":{attempt}}}"#,
+            ),
+            run_id = run.run_id,
+            thread_id = run.thread_id,
+            timestamp = serde_json::to_string(&now).unwrap(),
+            attempt = run.attempt,
+        );
+        assert_eq!(without.payload, expected);
     }
 
     // --- LeaseHeartbeat --------------------------------------------------
@@ -1766,5 +2841,715 @@ mod tests {
 
         let run_after = repository.get(&run_id).await.unwrap().unwrap();
         assert_eq!(run_after.status, RunStatus::Failed);
+    }
+
+    /// D-15: a graph run failing through `record_engine_failure` (the corrupt
+    /// `fork_from` vehicle) now enqueues exactly one `Failed` delivery -- the
+    /// graph `Err` path used to enqueue only on the `Ok` path. Its `error`
+    /// wire event is pinned separately by
+    /// `engine_failure_still_reaches_the_error_wire_name`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn graph_engine_failure_enqueues_failed_delivery() {
+        use paladin_core::platform::container::run::WebhookSpec;
+        use paladin_core::platform::container::webhook::WebhookDeliveryStatus;
+        use paladin_storage::webhook::in_memory::InMemoryWebhookDeliveryRepository;
+
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let waypoint_store = Arc::new(InMemoryWaypointStore::new());
+        let graph = Arc::new(WarGraph::new(
+            BattlefieldSchema::new(vec![]),
+            EngineLimits::default(),
+        ));
+        let resolver: Arc<dyn AssistantResolver> =
+            Arc::new(CodeWorkflowResolver::new().register("noop", graph));
+        let engine = Arc::new(WarEngine::new(
+            Arc::new(UnusedPaladinPort),
+            waypoint_store.clone(),
+        ));
+        let deliveries: Arc<dyn WebhookDeliveryRepositoryPort> =
+            Arc::new(InMemoryWebhookDeliveryRepository::new());
+        let pool = RunWorkerPool::new(
+            engine,
+            waypoint_store,
+            repository.clone(),
+            queue.clone(),
+            resolver,
+            Duration::from_secs(30),
+        )
+        .with_webhook_deliveries(Arc::clone(&deliveries));
+
+        let run_id = RunId::new_v7();
+        let thread_id = ThreadId::new(format!("thread-{run_id}")).unwrap();
+        let run = Run::new(
+            run_id.clone(),
+            thread_id.clone(),
+            AssistantRef {
+                assistant_id: "noop".to_string(),
+                version: 1,
+            },
+            serde_json::json!({}),
+        )
+        .with_fork_from(ForkSpec {
+            from_waypoint_id: "not-a-uuid".to_string(),
+            edit: None,
+        })
+        .with_webhook(WebhookSpec {
+            url: "https://example.com/hook".to_string(),
+            secret: None,
+            events: vec![RunEventKind::Failed],
+        });
+        repository.insert(&run).await.unwrap();
+        queue
+            .enqueue(QueuedRun {
+                run_id: run_id.clone(),
+                thread_id,
+                attempt: 1,
+                enqueued_at: chrono::Utc::now(),
+            })
+            .await
+            .unwrap();
+
+        assert!(pool.run_once().await.unwrap());
+        let run_after = repository.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run_after.status, RunStatus::Failed);
+
+        let page = deliveries.list_for_run(&run_id, 10, None).await.unwrap();
+        assert_eq!(page.items.len(), 1, "exactly one Failed delivery");
+        assert!(matches!(page.items[0].event, RunEventKind::Failed));
+        assert!(matches!(
+            page.items[0].status,
+            WebhookDeliveryStatus::Pending
+        ));
+        let payload: serde_json::Value = serde_json::from_str(&page.items[0].payload).unwrap();
+        assert_eq!(payload["status"], "failed");
+    }
+
+    // --- run_model_label (D-12, model_used discretion item) ---------
+
+    fn labeled_paladin(name: &str, model: &str) -> Paladin {
+        use paladin_core::base::entity::Entity;
+        use paladin_core::platform::container::paladin::PaladinData;
+
+        let data = PaladinData {
+            name: name.to_string(),
+            model: model.to_string(),
+            ..Default::default()
+        };
+        Entity::new(data, Some(name.to_string()))
+    }
+
+    #[test]
+    fn run_model_label_names_single_mixed_or_none() {
+        use paladin_battalion::engine::{InputMapping, NodeSpec};
+        use paladin_core::platform::container::battlefield::{DispatchRule, FieldName, FieldSpec};
+        use paladin_core::platform::container::waypoint::NodeId;
+
+        let field = FieldName::new("summary").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            field.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+
+        // Zero Paladin nodes -> "none".
+        let empty_graph = WarGraph::new(schema.clone(), EngineLimits::default());
+        assert_eq!(run_model_label(&empty_graph), "none");
+
+        // One Paladin node -> its own model.
+        let mut single_graph = WarGraph::new(schema.clone(), EngineLimits::default());
+        let n1 = NodeId::new("n1");
+        single_graph.add_node(
+            n1.clone(),
+            NodeSpec::paladin(
+                labeled_paladin("n1", "gpt-4"),
+                InputMapping::new("go"),
+                field.clone(),
+            ),
+        );
+        single_graph.add_entry(n1);
+        assert_eq!(run_model_label(&single_graph), "gpt-4");
+
+        // Two Paladin nodes declaring the SAME model -> that model, not "mixed".
+        let mut same_model_graph = WarGraph::new(schema.clone(), EngineLimits::default());
+        let a1 = NodeId::new("a1");
+        let a2 = NodeId::new("a2");
+        same_model_graph.add_node(
+            a1.clone(),
+            NodeSpec::paladin(
+                labeled_paladin("a1", "gpt-4"),
+                InputMapping::new("go"),
+                field.clone(),
+            ),
+        );
+        same_model_graph.add_node(
+            a2.clone(),
+            NodeSpec::paladin(
+                labeled_paladin("a2", "gpt-4"),
+                InputMapping::new("go"),
+                field.clone(),
+            ),
+        );
+        same_model_graph.add_entry(a1);
+        assert_eq!(run_model_label(&same_model_graph), "gpt-4");
+
+        // Two Paladin nodes declaring DIFFERENT models -> "mixed".
+        let mut mixed_graph = WarGraph::new(schema, EngineLimits::default());
+        let m1 = NodeId::new("m1");
+        let m2 = NodeId::new("m2");
+        mixed_graph.add_node(
+            m1.clone(),
+            NodeSpec::paladin(
+                labeled_paladin("m1", "gpt-4"),
+                InputMapping::new("go"),
+                field.clone(),
+            ),
+        );
+        mixed_graph.add_node(
+            m2.clone(),
+            NodeSpec::paladin(
+                labeled_paladin("m2", "claude-3-5-sonnet-20241022"),
+                InputMapping::new("go"),
+                field,
+            ),
+        );
+        mixed_graph.add_entry(m1);
+        assert_eq!(run_model_label(&mixed_graph), "mixed");
+    }
+
+    /// 45-02 (D-14): the agent-path label is the paladin's own model, or
+    /// `"none"` when the model string is empty.
+    #[test]
+    fn agent_model_label_names_the_model_or_none() {
+        assert_eq!(
+            agent_model_label(&labeled_paladin("solo", "gpt-4")),
+            "gpt-4"
+        );
+        assert_eq!(agent_model_label(&labeled_paladin("blank", "")), "none");
+    }
+
+    // --- 39-07: the worker attaches the treasury ledger per run with the
+    // persisted attempt; agent-kind runs carry their run id -------------
+
+    /// A [`TreasuryLedgerPort`] that records every `settle` call's key and
+    /// amount, delegating everything else to a real `InMemoryTreasuryLedger`
+    /// -- mirrors `paladin-battalion`'s own `RecordingTreasuryLedger`
+    /// (39-04), re-implemented locally since that one is crate-private to
+    /// `paladin-battalion`'s own test module.
+    #[derive(Default)]
+    struct RecordingTreasuryLedger {
+        inner: InMemoryTreasuryLedger,
+        calls: Mutex<Vec<(SettlementKey, Cost)>>,
+        /// 40-04 (D-15): the `LedgerScope` of every `settle` request, in
+        /// call order -- the instrument for the attribution tests.
+        scopes: Mutex<Vec<LedgerScope>>,
+    }
+
+    impl RecordingTreasuryLedger {
+        fn calls(&self) -> Vec<(SettlementKey, Cost)> {
+            self.calls.lock().expect("calls mutex poisoned").clone()
+        }
+
+        fn scopes(&self) -> Vec<LedgerScope> {
+            self.scopes.lock().expect("scopes mutex poisoned").clone()
+        }
+    }
+
+    #[async_trait]
+    impl TreasuryLedgerPort for RecordingTreasuryLedger {
+        async fn reserve(
+            &self,
+            request: ReserveRequest,
+        ) -> Result<ReservationId, TreasuryLedgerError> {
+            self.inner.reserve(request).await
+        }
+
+        async fn release(&self, reservation: ReservationId) -> Result<(), TreasuryLedgerError> {
+            self.inner.release(reservation).await
+        }
+
+        async fn settle(
+            &self,
+            request: SettleRequest,
+        ) -> Result<SettleOutcome, TreasuryLedgerError> {
+            self.calls
+                .lock()
+                .expect("calls mutex poisoned")
+                .push((request.key.clone(), request.amount.clone()));
+            self.scopes
+                .lock()
+                .expect("scopes mutex poisoned")
+                .push(request.scope.clone());
+            self.inner.settle(request).await
+        }
+
+        async fn spend(&self, query: SpendQuery) -> Result<Vec<SpendRow>, TreasuryLedgerError> {
+            self.inner.spend(query).await
+        }
+
+        async fn store_now(&self) -> Result<chrono::DateTime<chrono::Utc>, TreasuryLedgerError> {
+            self.inner.store_now().await
+        }
+    }
+
+    /// A [`PaladinPort`] that always returns a priced result (45,000,000
+    /// nanos USD) -- the instrument for every engine-path settlement test
+    /// below. The model breakdown key comes from the dispatched Paladin
+    /// node's own `model` field (`dispatch_paladin_model`), not from this
+    /// port's response.
+    struct PricedPaladinPort;
+
+    #[async_trait]
+    impl PaladinPort for PricedPaladinPort {
+        async fn execute(
+            &self,
+            _paladin: &Paladin,
+            input: &str,
+        ) -> Result<PaladinResult, PaladinError> {
+            Ok(PaladinResult {
+                output: input.to_string(),
+                cost: Some(Cost::new(45_000_000, CurrencyCode::new("USD").unwrap())),
+                ..Default::default()
+            })
+        }
+
+        async fn execute_stream(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+        ) -> Result<PaladinStream, PaladinError> {
+            unreachable!("this test never streams")
+        }
+
+        fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+            Ok(())
+        }
+    }
+
+    /// A single-node, single-superstep workflow with one Paladin node,
+    /// modeled `"gpt-4"`, priced by [`PricedPaladinPort`].
+    fn priced_paladin_graph() -> Arc<WarGraph> {
+        let field = FieldName::new("summary").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            field.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let node_id = NodeId::new("summarizer");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::paladin(
+                labeled_paladin("summarizer", "gpt-4"),
+                InputMapping::new("summarize this"),
+                field,
+            ),
+        );
+        graph.add_entry(node_id);
+        Arc::new(graph)
+    }
+
+    /// Build a `RunWorkerPool` over a fresh in-memory waypoint
+    /// store/repository/queue, wired with an `engine_factory` over
+    /// [`PricedPaladinPort`] (required for the worker to attach a per-run
+    /// treasury ledger -- the shared no-factory engine never gets one) and
+    /// `treasury_ledger` when `Some`.
+    fn build_ledger_pool(
+        treasury_ledger: Option<Arc<dyn TreasuryLedgerPort>>,
+    ) -> (
+        RunWorkerPool<InMemoryWaypointStore>,
+        Arc<dyn RunRepositoryPort>,
+        Arc<dyn RunQueuePort>,
+    ) {
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let store = Arc::new(InMemoryWaypointStore::new());
+        let resolver: Arc<dyn AssistantResolver> =
+            Arc::new(CodeWorkflowResolver::new().register("priced", priced_paladin_graph()));
+        let base_engine = Arc::new(WarEngine::new(Arc::new(PricedPaladinPort), store.clone()));
+
+        let factory_store = store.clone();
+        let engine_factory: Arc<
+            dyn Fn(CancellationToken) -> WarEngine<InMemoryWaypointStore> + Send + Sync,
+        > = Arc::new(move |_token| {
+            WarEngine::new(Arc::new(PricedPaladinPort), factory_store.clone())
+        });
+
+        let mut pool = RunWorkerPool::new(
+            base_engine,
+            store,
+            repository.clone(),
+            queue.clone(),
+            resolver,
+            Duration::from_secs(30),
+        )
+        .with_engine_factory(engine_factory);
+        if let Some(ledger) = treasury_ledger {
+            pool = pool.with_treasury_ledger(ledger);
+        }
+
+        (pool, repository, queue)
+    }
+
+    /// Insert a fresh `Queued` run against `"priced"` and enqueue it,
+    /// returning the run id. The run records no submitting principal
+    /// (`submitted_by = None`, D-10).
+    async fn submit_priced_run(
+        repository: &Arc<dyn RunRepositoryPort>,
+        queue: &Arc<dyn RunQueuePort>,
+    ) -> RunId {
+        submit_priced_run_with(repository, queue, None).await
+    }
+
+    /// The `(acme, svc-a)` attribution every 40-04 attribution test stamps.
+    fn acme_svc_a() -> RunAttribution {
+        RunAttribution::new(TenantId::new("acme").unwrap(), "svc-a")
+    }
+
+    /// `submit_priced_run` with an explicit recorded submitter (40-04,
+    /// D-15): `Some(a)` inserts the run `with_submitted_by(a)`.
+    async fn submit_priced_run_with(
+        repository: &Arc<dyn RunRepositoryPort>,
+        queue: &Arc<dyn RunQueuePort>,
+        submitted_by: Option<RunAttribution>,
+    ) -> RunId {
+        let run_id = RunId::new_v7();
+        let thread_id = ThreadId::new(format!("thread-{run_id}")).unwrap();
+        let mut run = Run::new(
+            run_id.clone(),
+            thread_id.clone(),
+            AssistantRef {
+                assistant_id: "priced".to_string(),
+                version: 1,
+            },
+            serde_json::json!({}),
+        );
+        if let Some(attribution) = submitted_by {
+            run = run.with_submitted_by(attribution);
+        }
+        repository.insert(&run).await.unwrap();
+        queue
+            .enqueue(QueuedRun {
+                run_id: run_id.clone(),
+                thread_id: thread_id.clone(),
+                attempt: 1,
+                enqueued_at: chrono::Utc::now(),
+            })
+            .await
+            .unwrap();
+        run_id
+    }
+
+    #[tokio::test]
+    async fn engine_run_settles_under_its_run_id_and_first_attempt() {
+        let ledger = Arc::new(RecordingTreasuryLedger::default());
+        let treasury_ledger: Arc<dyn TreasuryLedgerPort> = ledger.clone();
+        let (pool, repository, queue) = build_ledger_pool(Some(treasury_ledger));
+
+        let run_id = submit_priced_run(&repository, &queue).await;
+
+        assert!(pool.run_once().await.unwrap());
+
+        let run = repository.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.status, RunStatus::Completed);
+
+        let calls = ledger.calls();
+        assert_eq!(calls.len(), 1, "exactly one settlement for one superstep");
+        let (key, amount) = &calls[0];
+        assert_eq!(key.run_id, run_id);
+        assert_eq!(key.superstep, 1);
+        assert_eq!(key.attempt, 1);
+        assert_eq!(
+            amount,
+            &Cost::new(45_000_000, CurrencyCode::new("USD").unwrap())
+        );
+    }
+
+    #[tokio::test]
+    async fn redelivered_running_run_settles_under_the_bumped_attempt() {
+        let ledger = Arc::new(RecordingTreasuryLedger::default());
+        let treasury_ledger: Arc<dyn TreasuryLedgerPort> = ledger.clone();
+        let (pool, repository, queue) = build_ledger_pool(Some(treasury_ledger));
+
+        let run_id = submit_priced_run(&repository, &queue).await;
+
+        // Seed the redelivery: a prior worker already claimed this run
+        // (`Running`, `attempt == 1`) and this same message is redelivered.
+        repository
+            .update_status(
+                &run_id,
+                RunStatus::Queued,
+                RunStatus::Running,
+                chrono::Utc::now(),
+            )
+            .await
+            .unwrap();
+
+        assert!(pool.run_once().await.unwrap());
+
+        let run = repository.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.status, RunStatus::Completed);
+        assert_eq!(run.attempt, 2, "bump_attempt must have run");
+
+        let calls = ledger.calls();
+        assert_eq!(calls.len(), 1);
+        let (key, _amount) = &calls[0];
+        assert_eq!(key.run_id, run_id);
+        assert_eq!(
+            key.attempt, 2,
+            "the settlement must key on the BUMPED attempt, never a re-invented 1"
+        );
+    }
+
+    /// D-15: an engine run whose row records `submitted_by = (acme, svc-a)`
+    /// settles its superstep under exactly that scope -- the worker builds
+    /// the `SettlementContext.scope` from the run row, never the sentinel.
+    #[tokio::test]
+    async fn attributed_engine_run_settles_under_its_submitting_principal_scope() {
+        let ledger = Arc::new(RecordingTreasuryLedger::default());
+        let treasury_ledger: Arc<dyn TreasuryLedgerPort> = ledger.clone();
+        let (pool, repository, queue) = build_ledger_pool(Some(treasury_ledger));
+
+        let run_id = submit_priced_run_with(&repository, &queue, Some(acme_svc_a())).await;
+
+        assert!(pool.run_once().await.unwrap());
+
+        let run = repository.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.status, RunStatus::Completed);
+
+        let scopes = ledger.scopes();
+        assert_eq!(scopes.len(), 1, "exactly one settlement for one superstep");
+        assert_eq!(scopes[0], LedgerScope::new("acme", "svc-a"));
+    }
+
+    /// D-10/D-15: a run with no recorded principal (schedule-fired or
+    /// internal) still settles under the unattributed sentinel.
+    #[tokio::test]
+    async fn unattributed_engine_run_settles_under_the_unattributed_sentinel() {
+        let ledger = Arc::new(RecordingTreasuryLedger::default());
+        let treasury_ledger: Arc<dyn TreasuryLedgerPort> = ledger.clone();
+        let (pool, repository, queue) = build_ledger_pool(Some(treasury_ledger));
+
+        let run_id = submit_priced_run(&repository, &queue).await;
+
+        assert!(pool.run_once().await.unwrap());
+
+        let run = repository.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.status, RunStatus::Completed);
+        assert!(run.submitted_by.is_none());
+
+        let scopes = ledger.scopes();
+        assert_eq!(scopes.len(), 1);
+        assert_eq!(scopes[0], LedgerScope::unattributed());
+        assert!(scopes[0].is_unattributed());
+    }
+
+    #[tokio::test]
+    async fn pool_without_a_treasury_ledger_settles_nothing() {
+        let (pool, repository, queue) = build_ledger_pool(None);
+        let run_id = submit_priced_run(&repository, &queue).await;
+
+        assert!(pool.run_once().await.unwrap());
+
+        let run = repository.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(
+            run.status,
+            RunStatus::Completed,
+            "a pool with no treasury ledger attached behaves exactly as before"
+        );
+    }
+
+    /// A [`PaladinPort`] that records the [`RunScope`] handed to
+    /// `execute_scoped`, then delegates to a plain, unpriced `execute` --
+    /// the instrument for `agent_kind_run_passes_its_run_id_in_the_run_scope`.
+    #[derive(Default)]
+    struct ScopeRecordingPaladinPort {
+        recorded: Mutex<Option<RunScope>>,
+    }
+
+    impl ScopeRecordingPaladinPort {
+        fn recorded_scope(&self) -> Option<RunScope> {
+            self.recorded.lock().expect("mutex poisoned").clone()
+        }
+    }
+
+    #[async_trait]
+    impl PaladinPort for ScopeRecordingPaladinPort {
+        async fn execute(
+            &self,
+            _paladin: &Paladin,
+            input: &str,
+        ) -> Result<PaladinResult, PaladinError> {
+            Ok(PaladinResult {
+                output: input.to_string(),
+                ..Default::default()
+            })
+        }
+
+        async fn execute_scoped(
+            &self,
+            paladin: &Paladin,
+            input: &str,
+            _heartbeat: &HeartbeatHandle,
+            scope: &RunScope,
+        ) -> Result<PaladinResult, PaladinError> {
+            *self.recorded.lock().expect("mutex poisoned") = Some(scope.clone());
+            self.execute(paladin, input).await
+        }
+
+        async fn execute_stream(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+        ) -> Result<PaladinStream, PaladinError> {
+            unreachable!("this test never streams")
+        }
+
+        fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+            Ok(())
+        }
+    }
+
+    /// An [`AssistantResolver`] resolving every id to a code-registered
+    /// `Runnable::Agent` -- mirrors `worker_tests.rs`'s own
+    /// `AgentOnlyResolver` precedent, local to this module since that one
+    /// lives in a sibling test file.
+    struct AgentOnlyResolver;
+
+    #[async_trait]
+    impl AssistantResolver for AgentOnlyResolver {
+        async fn resolve(
+            &self,
+            assistant_id: &str,
+            version: Option<u32>,
+        ) -> Result<ResolvedAssistant, ResolveError> {
+            Ok(ResolvedAssistant {
+                reference: AssistantRef {
+                    assistant_id: assistant_id.to_string(),
+                    version: version.unwrap_or(1),
+                },
+                runnable: Runnable::Agent(Arc::new(labeled_paladin(assistant_id, "gpt-4"))),
+                allowed_roles: vec![],
+                source: paladin_core::platform::container::assistant::AssistantSource::Code,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn agent_kind_run_passes_its_run_id_in_the_run_scope() {
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let store = Arc::new(InMemoryWaypointStore::new());
+        let resolver: Arc<dyn AssistantResolver> = Arc::new(AgentOnlyResolver);
+        let engine = Arc::new(WarEngine::new(Arc::new(UnusedPaladinPort), store.clone()));
+
+        let scope_port = Arc::new(ScopeRecordingPaladinPort::default());
+        let paladin_port: Arc<dyn PaladinPort> = scope_port.clone();
+        let pool = RunWorkerPool::new(
+            engine,
+            store,
+            repository.clone(),
+            queue.clone(),
+            resolver,
+            Duration::from_secs(30),
+        )
+        .with_paladin_port(paladin_port);
+
+        let run_id = RunId::new_v7();
+        let thread_id = ThreadId::new(format!("thread-{run_id}")).unwrap();
+        let run = Run::new(
+            run_id.clone(),
+            thread_id.clone(),
+            AssistantRef {
+                assistant_id: "assistant".to_string(),
+                version: 1,
+            },
+            serde_json::json!({}),
+        );
+        repository.insert(&run).await.unwrap();
+        queue
+            .enqueue(QueuedRun {
+                run_id: run_id.clone(),
+                thread_id: thread_id.clone(),
+                attempt: 1,
+                enqueued_at: chrono::Utc::now(),
+            })
+            .await
+            .unwrap();
+
+        assert!(pool.run_once().await.unwrap());
+
+        let run = repository.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.status, RunStatus::Completed);
+
+        let scope = scope_port
+            .recorded_scope()
+            .expect("execute_scoped must have been called");
+        assert_eq!(scope.run_id, Some(run_id));
+        assert_eq!(
+            scope.ledger_scope,
+            Some(LedgerScope::unattributed()),
+            "a run with no recorded principal carries the sentinel scope (D-10)"
+        );
+    }
+
+    /// D-16 (run path): an agent-kind run whose row records
+    /// `submitted_by = (acme, svc-a)` hands the shared `PaladinPort` a
+    /// `RunScope` carrying both its run id and `ledger_scope == (acme, svc-a)`.
+    #[tokio::test]
+    async fn agent_kind_run_carries_its_attribution_in_the_run_scope() {
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let store = Arc::new(InMemoryWaypointStore::new());
+        let resolver: Arc<dyn AssistantResolver> = Arc::new(AgentOnlyResolver);
+        let engine = Arc::new(WarEngine::new(Arc::new(UnusedPaladinPort), store.clone()));
+
+        let scope_port = Arc::new(ScopeRecordingPaladinPort::default());
+        let paladin_port: Arc<dyn PaladinPort> = scope_port.clone();
+        let pool = RunWorkerPool::new(
+            engine,
+            store,
+            repository.clone(),
+            queue.clone(),
+            resolver,
+            Duration::from_secs(30),
+        )
+        .with_paladin_port(paladin_port);
+
+        let run_id = RunId::new_v7();
+        let thread_id = ThreadId::new(format!("thread-{run_id}")).unwrap();
+        let run = Run::new(
+            run_id.clone(),
+            thread_id.clone(),
+            AssistantRef {
+                assistant_id: "assistant".to_string(),
+                version: 1,
+            },
+            serde_json::json!({}),
+        )
+        .with_submitted_by(acme_svc_a());
+        repository.insert(&run).await.unwrap();
+        queue
+            .enqueue(QueuedRun {
+                run_id: run_id.clone(),
+                thread_id: thread_id.clone(),
+                attempt: 1,
+                enqueued_at: chrono::Utc::now(),
+            })
+            .await
+            .unwrap();
+
+        assert!(pool.run_once().await.unwrap());
+
+        let run = repository.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.status, RunStatus::Completed);
+
+        let scope = scope_port
+            .recorded_scope()
+            .expect("execute_scoped must have been called");
+        assert_eq!(scope.run_id, Some(run_id));
+        assert_eq!(scope.ledger_scope, Some(LedgerScope::new("acme", "svc-a")));
     }
 }

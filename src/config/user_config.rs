@@ -282,6 +282,7 @@ mod tests {
             agent_runtime: crate::config::AgentRuntimeConfig::default(),
             trace: crate::config::TraceConfig::default(),
             web_server: crate::config::WebServerConfig::default(),
+            treasurer: crate::config::TreasurerConfig::default(),
         }
     }
 

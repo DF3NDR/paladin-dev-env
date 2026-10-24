@@ -3,25 +3,29 @@
 Reference for the key Rust design patterns used consistently across the Paladin
 codebase.
 
-## 1. `Node<T>` Entity Pattern
+## 1. `Entity<T>` Entity Pattern
 
-All persistent domain entities are wrapped in `Node<T>`, which adds identity and
-timestamps without polluting the domain data struct:
+All persistent domain entities are wrapped in `Entity<T>`
+(`paladin_core::base::entity::Entity`), which adds identity, timestamps, an optional name
+and a revision-intent flag without polluting the domain data struct:
 
 ```rust,ignore
-pub struct Node<T> {
-    pub id:         Uuid,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub node:       T,
+// crates/paladin-core/src/base/entity/wrapper.rs
+pub struct Entity<T> {
+    pub uuid:     Uuid,
+    pub created:  DateTime<Utc>,
+    pub modified: DateTime<Utc>,
+    pub data:     T,
+    pub name:     Option<String>,
+    pub version:  bool,
 }
 
 // Usage — domain type alias
-pub type Paladin = Node<PaladinData>;
+pub type Paladin = Entity<PaladinData>;
 
-// Access payload fields through .node
-let name = &paladin.node.name;
-let model = &paladin.node.model;
+// Access payload fields through .data
+let name = &paladin.data.name;
+let model = &paladin.data.model;
 ```
 
 ## 2. Builder Pattern (`PaladinBuilder`)

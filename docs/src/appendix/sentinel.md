@@ -77,13 +77,11 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Create vision-capable LLM adapter
-    let config = OpenAIConfig {
-        api_key: std::env::var("OPENAI_API_KEY")?,
-        base_url: "https://api.openai.com/v1".to_string(),
-        organization: None,
-        timeout_seconds: 300,
-        max_retries: 3,
-    };
+    // `OpenAIConfig` is `#[non_exhaustive]`: start from `new(api_key, model)`, then set knobs
+    // with the `with_*` builders
+    let config = OpenAIConfig::new(std::env::var("OPENAI_API_KEY")?, "gpt-4o".to_string())
+        .with_max_retries(3)
+        .with_timeout_seconds(300);
     let llm = Arc::new(OpenAIAdapter::new(config)?);
 
     // 2. Build vision-enabled Paladin (model is set on the builder, not the config)
@@ -188,14 +186,11 @@ pub enum ImageDetail {
 ```rust,ignore
 use paladin_llm::openai::{OpenAIAdapter, OpenAIConfig};
 
-// The model ("gpt-4o") is set on the PaladinBuilder, not on OpenAIConfig -- see the Quick Example above.
-let config = OpenAIConfig {
-    api_key: env::var("OPENAI_API_KEY")?,
-    base_url: "https://api.openai.com/v1".to_string(),
-    organization: None,
-    timeout_seconds: 300,
-    max_retries: 3,
-};
+// `new(api_key, model)` names the adapter's default model ("gpt-4o"); the model the
+// PaladinBuilder sets decides each request -- see the Quick Example above.
+let config = OpenAIConfig::new(env::var("OPENAI_API_KEY")?, "gpt-4o".to_string())
+    .with_max_retries(3)
+    .with_timeout_seconds(300);
 
 let llm = Arc::new(OpenAIAdapter::new(config)?);
 ```
@@ -213,18 +208,20 @@ let llm = Arc::new(OpenAIAdapter::new(config)?);
 
 ### Anthropic Vision
 
-**Models**: `claude-3-opus-20240229`, `claude-3-sonnet-20240229`, `claude-3-haiku-20240307`
+**Models**: use a current Claude model id; the adapter's seeded default is `claude-haiku-5-5`. The
+earlier `claude-3-*` ids this page used to list now answer HTTP 404 (see
+[Switching Providers](../user-guides/switching-providers.md)).
 
 ```rust,ignore
 use paladin_llm::anthropic::{AnthropicAdapter, AnthropicConfig};
 
-let config = AnthropicConfig {
-    api_key: env::var("ANTHROPIC_API_KEY")?,
-    model: "claude-3-opus-20240229".to_string(),
-    base_url: "https://api.anthropic.com/v1".to_string(),
-    max_tokens: 4096,
-    timeout_seconds: 300,
-};
+// `AnthropicConfig` is `#[non_exhaustive]`: `new(..)` takes the key and the model; the endpoint,
+// output budget (4,096 by default) and the other knobs are `with_*` builders
+let config = AnthropicConfig::new(
+    env::var("ANTHROPIC_API_KEY")?,
+    "claude-haiku-5-5".to_string(), // ANTHROPIC_DEFAULT_MODEL
+)
+.with_timeout_seconds(300);
 
 let llm = Arc::new(AnthropicAdapter::new(config)?);
 ```

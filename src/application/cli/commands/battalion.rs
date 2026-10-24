@@ -23,8 +23,27 @@ use crate::application::cli::error::CliError;
 use crate::application::cli::templates::battalion_template::generate_battalion_template;
 use clap::Subcommand;
 use colored::Colorize;
+use paladin_core::platform::container::aegis::{Aegis, TimeoutPolicy};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
+
+/// Build the Aegis policy the CLI hands every Battalion run: a single
+/// wall-clock bound of `secs` seconds on each Paladin attempt.
+///
+/// The bound applies to every attempt on its own, not to the whole run, so a
+/// long pipeline of fast Paladins is never cut off by it. No retry, error
+/// handler or cache policy is set, which keeps the Formation and Phalanx
+/// failure behaviour fail fast.
+fn per_attempt_timeout(secs: u64) -> Aegis {
+    Aegis {
+        timeout: Some(TimeoutPolicy {
+            run_timeout: Some(Duration::from_secs(secs)),
+            idle_timeout: None,
+        }),
+        ..Aegis::default()
+    }
+}
 
 /// Battalion subcommands for multi-agent orchestration
 #[derive(Debug, Subcommand)]
@@ -266,7 +285,7 @@ async fn execute_formation(
 
     // Create Battalion configuration
     let battalion_config = BattalionConfig::new(&config.name)
-        .with_timeout(600) // Default 10 minute timeout
+        .with_aegis(per_attempt_timeout(600)) // each Paladin attempt bounded at 10 minutes
         .with_description(format!("Formation with {} Paladins", paladins.len()));
 
     // Create Formation
@@ -432,7 +451,7 @@ async fn execute_phalanx(
 
     // Create Battalion configuration
     let battalion_config = BattalionConfig::new(&config.name)
-        .with_timeout(600)
+        .with_aegis(per_attempt_timeout(600)) // each Paladin attempt bounded at 10 minutes
         .with_description(format!("Phalanx with {} parallel Paladins", paladins.len()));
 
     // Create Phalanx
@@ -592,7 +611,7 @@ async fn execute_conclave(
 
     // Create Battalion configuration
     let battalion_config = BattalionConfig::new(&config.name)
-        .with_timeout(config.timeout_seconds.unwrap_or(300))
+        .with_aegis(per_attempt_timeout(config.timeout_seconds.unwrap_or(300)))
         .with_description(format!("Conclave with {} experts", experts.len()));
 
     // Parse observability level
@@ -604,7 +623,6 @@ async fn execute_conclave(
 
     // Create Conclave domain configuration
     let mut conclave_config = DomainConclaveConfig::new(&config.name, battalion_config)
-        .with_timeout(config.timeout_seconds.unwrap_or(300))
         .with_retry_attempts(config.retry_attempts.unwrap_or(2))
         .with_observability(observability);
 
@@ -813,7 +831,7 @@ async fn execute_maneuver(
     let mut paladins_map = std::collections::HashMap::new();
     for (idx, paladin_ref) in config.paladins.iter().enumerate() {
         let paladin = build_paladin_from_reference(paladin_ref, verbose, idx + 1).await?;
-        let name = paladin.node.name.clone();
+        let name = paladin.data.name.clone();
         paladins_map.insert(name, paladin);
     }
 
@@ -823,7 +841,6 @@ async fn execute_maneuver(
 
     // Create Battalion configuration (not currently used but kept for consistency)
     let _battalion_config = BattalionConfig::new(&config.name)
-        .with_timeout(300)
         .with_description(format!("Maneuver with flow: {}", config.flow));
 
     // Create Maneuver config

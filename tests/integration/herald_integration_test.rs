@@ -50,9 +50,11 @@ impl LlmPort for MockLlmPort {
             content: self.response_text.clone(),
             finish_reason: FinishReason::Stop,
             usage: TokenUsage::new(50, 100),
+            cost: None,
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
+            reasoning: None,
         })
     }
 
@@ -405,7 +407,7 @@ impl PaladinPort for MockPaladinPort {
         Ok(PaladinResult {
             output: format!(
                 "{}: {} - {}",
-                paladin.node.name, input, self.response_suffix
+                paladin.data.name, input, self.response_suffix
             ),
             usage: paladin_ports::output::llm_port::TokenUsage::new(50, 0),
             execution_time_ms: 25,

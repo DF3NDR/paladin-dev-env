@@ -40,6 +40,7 @@ use futures::FutureExt;
 use tokio::sync::mpsc;
 
 use paladin_core::platform::container::battlefield::{Battlefield, StateDelta};
+use paladin_core::platform::container::cost::{Cost, CostTally};
 use paladin_core::platform::container::run::RunId;
 use paladin_core::platform::container::token_usage::TokenUsage;
 use paladin_core::platform::container::waypoint::ThreadId;
@@ -98,6 +99,16 @@ struct TraceQueue {
     /// mutex is recovered with `PoisonError::into_inner` on a poisoned lock
     /// (library code must not panic) rather than `.unwrap()`/`.expect()`.
     usage: Mutex<TokenUsage>,
+    /// This dispatcher's own run-level cost tally (D-10) -- the synchronous
+    /// twin of `usage` above, folding every `TraceEvent::NodeFinished`'s
+    /// `(usage, cost)` pair through `CostTally::record_node` synchronously
+    /// inside [`TraceDispatcher::emit`] (never by the async consumer task),
+    /// exactly like `usage`'s own accumulation guarantee. Readable via
+    /// [`TraceDispatcher::total_cost`], and what
+    /// `TraceEvent::RunFinished.cost` is populated from at this run's
+    /// `WarEngine::start`/`resume*` call site. Recovered with
+    /// `PoisonError::into_inner` on a poisoned lock, same as `usage`.
+    cost: Mutex<CostTally>,
 }
 
 /// The engine-owned trace event dispatcher (ENG-FR-21, D-03): sits between
@@ -114,7 +125,9 @@ struct TraceQueue {
 /// Constructed with the specific `thread_id` (and optional `run_id`) it
 /// stamps every record for (D-03): production always builds one engine —
 /// and so one dispatcher — per run (the Phase 27 worker's own pattern), so
-/// `seq` starting at 1 per dispatcher IS `seq` starting at 1 per run.
+/// `seq` starting at 1 per dispatcher IS `seq` starting at 1 per run. A run
+/// that shares its thread with an earlier run starts after that run's last
+/// `seq` instead -- see [`TraceDispatcher::with_seq_origin`].
 pub struct TraceDispatcher {
     /// `None` when no sink is configured. `Some` pairs the shared queue with
     /// the lightweight "doorbell" sender that wakes the consumer task —
@@ -214,6 +227,7 @@ impl TraceDispatcher {
             sink_panics: AtomicU64::new(0),
             superstep_count: AtomicU64::new(0),
             usage: Mutex::new(TokenUsage::default()),
+            cost: Mutex::new(CostTally::new()),
         });
         // Capacity 1: the doorbell only ever needs to prove "there is at
         // least one more thing to check for" -- the consumer always drains
@@ -290,6 +304,19 @@ impl TraceDispatcher {
     /// dispatcher's own final `dropped_count()` (D-07) -- `RunFinished` is
     /// the run's last event, drop-oldest never evicts the newest push, so
     /// this is always accurate.
+    ///
+    /// # Serialisation cost (OBS-05, Phase 45)
+    ///
+    /// `emit` performs no serialisation: serialisation lives in the sinks,
+    /// and `LogTraceSink` now skips it entirely for a filtered
+    /// `paladin::trace` target. The per-event `thread_id`/`run_id` clones
+    /// are forced by `TraceRecord`'s owned fields, which D-17 forbids
+    /// reshaping, and the `usage` clone is a plain-integer copy. No
+    /// enablement guard belongs here: the dispatcher cannot know which sinks
+    /// need a record (the bus, persisting, OTel and herald sinks all do),
+    /// and skipping an event would bypass the `seq` stamp and the
+    /// usage/cost tallies that gapless `seq` and `RunStreamMode::Replay`
+    /// depend on (D-00f).
     pub fn emit(&self, event: TraceEvent) {
         let Some((queue, doorbell)) = &self.inner else {
             return;
@@ -307,12 +334,17 @@ impl TraceDispatcher {
             TraceEvent::SuperstepStarted { .. } => {
                 queue.superstep_count.fetch_add(1, Ordering::SeqCst);
             }
-            TraceEvent::NodeFinished { usage, .. } => {
+            TraceEvent::NodeFinished { usage, cost, .. } => {
                 let mut total = queue
                     .usage
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 *total += usage.clone();
+                let mut cost_total = queue
+                    .cost
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                cost_total.record_node(usage, cost.as_ref());
             }
             _ => {}
         }
@@ -395,6 +427,45 @@ impl TraceDispatcher {
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .clone()
             })
+    }
+
+    /// This run's total currency cost across every `TraceEvent::NodeFinished`
+    /// record stamped so far (D-10) -- the synchronous twin of
+    /// [`TraceDispatcher::total_usage`], what `WarEngine::start`/`resume*`
+    /// reads to populate `RunFinished.cost`. Folded through `CostTally`
+    /// (D-00c's None-propagation rule): `None` when nothing has been priced
+    /// yet or any priced call was unpriced -- never a partial sum. Exact the
+    /// instant the last `emit` returns, same guarantee as `total_usage`.
+    /// `None` with no sink configured (mirroring every other counter here).
+    pub fn total_cost(&self) -> Option<Cost> {
+        self.inner.as_ref().and_then(|(queue, _)| {
+            queue
+                .cost
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .total()
+        })
+    }
+
+    /// Start this dispatcher's sequence after `origin` instead of at 1: the
+    /// first record it stamps carries `seq == origin + 1` (Phase 42 review
+    /// WR-6).
+    ///
+    /// A persisted trace is keyed `(thread_id, seq)`, and a second run on one
+    /// thread (a fork, or a drained run that is requeued) builds a fresh
+    /// dispatcher, so without an origin its records would reuse the seq values
+    /// of the first run's and be dropped as conflicts. The caller seeds the
+    /// origin from the thread's largest persisted `seq`
+    /// (`RunTracePort::max_seq`). An `origin` of `0` is the default and changes
+    /// nothing. Call it straight after construction, before the first `emit`:
+    /// a dispatcher that already stamped records keeps the larger of the two
+    /// positions, so the sequence can never move backwards.
+    #[must_use]
+    pub fn with_seq_origin(self, origin: u64) -> Self {
+        if let Some((queue, _)) = &self.inner {
+            queue.seq.fetch_max(origin, Ordering::SeqCst);
+        }
+        self
     }
 
     /// Enable opt-in value inclusion on `TraceEvent::DeltaMerged
@@ -622,6 +693,8 @@ mod tests {
             status: paladin_ports::output::trace_sink_port::RunFinishStatus::Completed,
             total_supersteps: 0,
             usage: TokenUsage::default(),
+            cost: None,
+            halt_reason: None,
             duration_ms: 0,
             trace_dropped_total: 0,
         }
@@ -639,6 +712,186 @@ mod tests {
         let dispatcher = TraceDispatcher::new(ThreadId::new("t").unwrap(), None, None);
         dispatcher.emit(run_started());
         assert_eq!(dispatcher.dropped_count(), 0);
+    }
+
+    // --- Task 2 (TDD): TraceDispatcher::total_cost, the synchronous twin
+    // of total_usage (D-10, engine/mod.rs D-02/D-04/D-11) -----------------
+
+    use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+
+    fn usd() -> CurrencyCode {
+        CurrencyCode::new("USD").unwrap()
+    }
+
+    fn node_finished_with_cost(node: &str, usage: TokenUsage, cost: Option<Cost>) -> TraceEvent {
+        TraceEvent::NodeFinished {
+            superstep: 1,
+            node_id: NodeId::new(node),
+            attempt: 1,
+            outcome: paladin_core::platform::container::waypoint::NodeOutcomeKind::Succeeded,
+            duration_ms: 1,
+            usage,
+            cost,
+            reasoning_requested: None,
+            reasoning_effective: None,
+            cache_hit: false,
+        }
+    }
+
+    /// D-10: two priced `NodeFinished` events (10_000 and 32_500 nanos USD)
+    /// plus one neutral non-Paladin `NodeFinished` (default usage, no cost)
+    /// sum to `Some(42_500 nanos USD)` -- the neutral event must not
+    /// poison the tally.
+    #[tokio::test]
+    async fn total_cost_sums_priced_nodes_and_ignores_neutral_ones() {
+        let dispatcher = TraceDispatcher::new(
+            ThreadId::new("total-cost-sums").unwrap(),
+            None,
+            Some(RecordingTraceSink::new()),
+        );
+
+        dispatcher.emit(node_finished_with_cost(
+            "n1",
+            TokenUsage::new(100, 50),
+            Some(Cost::new(10_000, usd())),
+        ));
+        dispatcher.emit(node_finished_with_cost(
+            "n2",
+            TokenUsage::new(300, 100),
+            Some(Cost::new(32_500, usd())),
+        ));
+        dispatcher.emit(node_finished_with_cost("n3", TokenUsage::default(), None));
+
+        assert_eq!(dispatcher.total_cost(), Some(Cost::new(42_500, usd())));
+    }
+
+    /// D-10: adding one `NodeFinished` with non-zero usage and `cost: None`
+    /// poisons the run total permanently -- `total_cost()` is `None`, never
+    /// a partial sum.
+    #[tokio::test]
+    async fn total_cost_is_none_once_any_call_is_unpriced() {
+        let dispatcher = TraceDispatcher::new(
+            ThreadId::new("total-cost-poisoned").unwrap(),
+            None,
+            Some(RecordingTraceSink::new()),
+        );
+
+        dispatcher.emit(node_finished_with_cost(
+            "n1",
+            TokenUsage::new(100, 50),
+            Some(Cost::new(10_000, usd())),
+        ));
+        dispatcher.emit(node_finished_with_cost(
+            "n2",
+            TokenUsage::new(300, 100),
+            Some(Cost::new(32_500, usd())),
+        ));
+        dispatcher.emit(node_finished_with_cost("n3", TokenUsage::new(10, 10), None));
+
+        assert_eq!(dispatcher.total_cost(), None);
+    }
+
+    /// A dispatcher built with no sink configured reports `None` after
+    /// emitting priced events -- mirrors `total_usage`'s own no-sink
+    /// contract.
+    #[tokio::test]
+    async fn total_cost_is_none_without_a_sink() {
+        let dispatcher =
+            TraceDispatcher::new(ThreadId::new("total-cost-no-sink").unwrap(), None, None);
+
+        dispatcher.emit(node_finished_with_cost(
+            "n1",
+            TokenUsage::new(100, 50),
+            Some(Cost::new(10_000, usd())),
+        ));
+
+        assert_eq!(dispatcher.total_cost(), None);
+    }
+
+    /// A `RunFinished` emitted with `cost: trace.total_cost()` after the
+    /// priced events is recorded by the sink with `cost` equal to
+    /// `Some(42_500 nanos USD)` (D-11a).
+    #[tokio::test]
+    async fn run_finished_carries_total_cost() {
+        let sink = RecordingTraceSink::new();
+        let dispatcher = TraceDispatcher::new(
+            ThreadId::new("run-finished-carries-total-cost").unwrap(),
+            None,
+            Some(sink.clone()),
+        );
+
+        dispatcher.emit(node_finished_with_cost(
+            "n1",
+            TokenUsage::new(100, 50),
+            Some(Cost::new(10_000, usd())),
+        ));
+        dispatcher.emit(node_finished_with_cost(
+            "n2",
+            TokenUsage::new(300, 100),
+            Some(Cost::new(32_500, usd())),
+        ));
+        dispatcher.emit(TraceEvent::RunFinished {
+            status: paladin_ports::output::trace_sink_port::RunFinishStatus::Completed,
+            total_supersteps: 1,
+            usage: dispatcher.total_usage(),
+            cost: dispatcher.total_cost(),
+            halt_reason: None,
+            duration_ms: 1,
+            trace_dropped_total: 0,
+        });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let records = sink.events().await;
+        let run_finished_cost = records
+            .iter()
+            .find_map(|r| match &r.event {
+                TraceEvent::RunFinished { cost, .. } => Some(cost.clone()),
+                _ => None,
+            })
+            .expect("a RunFinished record must exist");
+        assert_eq!(run_finished_cost, Some(Cost::new(42_500, usd())));
+    }
+
+    /// WR-6: a dispatcher seeded with an origin stamps `origin + 1` first and stays gapless, so a
+    /// second run on a thread numbers its records after the first run's.
+    #[tokio::test]
+    async fn seq_origin_starts_the_sequence_after_the_origin() {
+        let sink = RecordingTraceSink::new();
+        let dispatcher =
+            TraceDispatcher::new(ThreadId::new("t").unwrap(), None, Some(sink.clone()))
+                .with_seq_origin(41);
+
+        dispatcher.emit(run_started());
+        dispatcher.emit(superstep_started(1));
+        dispatcher.emit(run_finished());
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let seqs: Vec<u64> = sink.events().await.iter().map(|r| r.seq).collect();
+        assert_eq!(seqs, vec![42, 43, 44]);
+    }
+
+    /// WR-6: an origin of zero is the default sequence, and an origin set after records were
+    /// stamped never moves the sequence backwards.
+    #[tokio::test]
+    async fn seq_origin_zero_changes_nothing_and_never_moves_backwards() {
+        let sink = RecordingTraceSink::new();
+        let dispatcher =
+            TraceDispatcher::new(ThreadId::new("t").unwrap(), None, Some(sink.clone()))
+                .with_seq_origin(0);
+        dispatcher.emit(run_started());
+        dispatcher.emit(superstep_started(1));
+        let dispatcher = dispatcher.with_seq_origin(1);
+        dispatcher.emit(run_finished());
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let seqs: Vec<u64> = sink.events().await.iter().map(|r| r.seq).collect();
+        assert_eq!(seqs, vec![1, 2, 3]);
+
+        // No sink: the call is a no-op and still returns the dispatcher.
+        let untraced =
+            TraceDispatcher::new(ThreadId::new("t").unwrap(), None, None).with_seq_origin(9);
+        untraced.emit(run_started());
+        assert_eq!(untraced.dropped_count(), 0);
     }
 
     #[tokio::test]
@@ -749,7 +1002,9 @@ mod tests {
 
     // --- D-06/D-07/D-08: ordering, drop accounting, panic isolation ----
 
-    use crate::engine::test_support::PanickingTraceSink;
+    use crate::engine::test_support::{
+        PanickingTraceSink, captured_warnings_for_this_thread, install_capturing_logger,
+    };
 
     /// Build the event sequence a `n`-superstep run emits, modelled the same
     /// way `full_queue_drops_the_oldest_event_not_the_newest` (above) models
@@ -883,50 +1138,6 @@ mod tests {
             run_finished_count, 1,
             "exactly one RunFinished record must survive under saturation"
         );
-    }
-
-    // --- D-07: a minimal in-process `log::Log` capturer, scoped by OS
-    // thread id so concurrently running `#[tokio::test]`s (each its own OS
-    // thread under the default per-test-thread `cargo test` harness) never
-    // observe each other's captured lines. Installed at most once per
-    // process (`log::set_boxed_logger` may only be called once) via `Once`.
-    struct CapturingLogger;
-
-    static LOGGER_INIT: std::sync::Once = std::sync::Once::new();
-    static CAPTURED: Mutex<Option<HashMapWarnings>> = Mutex::new(None);
-    type HashMapWarnings = std::collections::HashMap<std::thread::ThreadId, Vec<String>>;
-
-    impl log::Log for CapturingLogger {
-        fn enabled(&self, _metadata: &log::Metadata) -> bool {
-            true
-        }
-        fn log(&self, record: &log::Record) {
-            if record.target() == "paladin::trace" {
-                let mut guard = CAPTURED.lock().expect("captured warnings mutex poisoned");
-                let map = guard.get_or_insert_with(std::collections::HashMap::new);
-                map.entry(std::thread::current().id())
-                    .or_default()
-                    .push(record.args().to_string());
-            }
-        }
-        fn flush(&self) {}
-    }
-
-    fn install_capturing_logger() {
-        static LOGGER: CapturingLogger = CapturingLogger;
-        LOGGER_INIT.call_once(|| {
-            log::set_logger(&LOGGER).expect("install the capturing test logger");
-            log::set_max_level(log::LevelFilter::Warn);
-        });
-    }
-
-    fn captured_warnings_for_this_thread() -> Vec<String> {
-        CAPTURED
-            .lock()
-            .expect("captured warnings mutex poisoned")
-            .as_ref()
-            .and_then(|m| m.get(&std::thread::current().id()).cloned())
-            .unwrap_or_default()
     }
 
     #[tokio::test]
@@ -1113,6 +1324,9 @@ mod tests {
                             outcome: paladin_core::platform::container::waypoint::NodeOutcomeKind::Succeeded,
                             duration_ms: 0,
                             usage: TokenUsage::default(),
+                            cost: None,
+                            reasoning_requested: None,
+                            reasoning_effective: None,
                             cache_hit: false,
                         });
                     }

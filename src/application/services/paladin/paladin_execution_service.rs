@@ -64,11 +64,11 @@ use crate::application::services::sanctum::rag_retrieval_service::{
     RagRetrievalResult, RagRetrievalService, rag_omission_marker,
 };
 use crate::config::agent_runtime::{ToolErrorConfig, ToolErrorMode};
-use crate::core::base::entity::node::Node;
+use crate::core::base::entity::Entity;
 use crate::core::platform::container::arsenal::{ArmamentCall, ArsenalError};
 use crate::core::platform::container::garrison::{ConversationRole, GarrisonEntry};
 use crate::core::platform::container::heartbeat::HeartbeatHandle;
-use crate::core::platform::container::herald::Herald;
+use crate::core::platform::container::herald::{ExecutionMetadata, Herald};
 use crate::core::platform::container::paladin::Paladin;
 use crate::core::platform::container::prompt::{
     PromptData, PromptItem, PromptParameters, PromptType, UserPrompt,
@@ -79,19 +79,32 @@ use crate::infrastructure::adapters::arsenal::tool_result_formatter::ToolResultF
 use crate::infrastructure::resilience::circuit_breaker::CircuitBreaker;
 use log::{debug, error, info, warn};
 use paladin_battalion::llm_failure::to_paladin_error;
+use paladin_core::platform::container::allowance::{AllowanceWarning, DerivedTokenBudget};
+use paladin_core::platform::container::cost::{Cost, CostTally};
+use paladin_core::platform::container::run::RunId;
 use paladin_core::platform::container::run_scope::RunScope;
 use paladin_core::platform::container::structured::render_instruction_block;
 use paladin_core::platform::container::transience::Transience;
+use paladin_core::platform::container::treasury_ledger::{
+    LedgerScope, SettleOutcome, SettleRequest, SettlementKey,
+};
 use paladin_core::platform::container::vault::Namespace;
 use paladin_core::platform::container::waypoint::NodeId;
 use paladin_llm::fallback::SERVED_BY_METADATA_KEY;
+use paladin_llm::registry::UNPROFILED_MODEL_METADATA_KEY;
+use paladin_llm::sampling::PARAMS_OMITTED_METADATA_KEY;
 use paladin_ports::output::arsenal_port::ArsenalPort;
 use paladin_ports::output::garrison_port::GarrisonPort;
-use paladin_ports::output::llm_port::{FunctionCall, LlmPort, LlmRequest, ResponseFormat};
+use paladin_ports::output::llm_port::{
+    BilledUsage, FunctionCall, LlmPort, LlmRequest, ResponseFormat,
+};
 use paladin_ports::output::orchestrator_port::OrchestratorPort;
 use paladin_ports::output::paladin_executor_port::PaladinExecutorPort;
 use paladin_ports::output::paladin_port::{
     ChunkMetadata, PaladinResult, PaladinStream, PaladinStreamChunk, StopReason,
+};
+use paladin_ports::output::spend_scope::{
+    ATTEMPT_SPEND, HOPPED_BILLS, HoppedBills, record_incurred_spend,
 };
 use paladin_ports::output::streaming_executor_port::StreamingExecutorPort;
 use paladin_ports::output::structured_executor_port::{
@@ -101,6 +114,7 @@ use paladin_ports::output::token_counter_port::TokenCounterPort;
 use paladin_ports::output::trace_sink_port::{
     MiddlewareAction, NodeProgressKind, TraceEmitter, TraceEvent, current_trace_emitter,
 };
+use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
 use paladin_ports::output::vault_port::VaultPort;
 #[cfg(feature = "vision")]
 use paladin_ports::output::vision_port::VisionPort;
@@ -230,6 +244,40 @@ pub struct PaladinExecutionService {
     /// `None` by default -- a service with nothing wired emits nothing,
     /// exactly like every other observability seam in this phase (X-03).
     trace_emitter: Option<Arc<dyn TraceEmitter>>,
+
+    /// The agent-loop settle writer (D-07, D-08, 39-05), installed via
+    /// [`PaladinExecutionService::with_treasury_ledger`]. `None` by default
+    /// -- a service with no ledger attached performs no ledger call at all,
+    /// exactly like every other observability seam in this phase (X-03).
+    treasury_ledger: Option<(Arc<dyn TreasuryLedgerPort>, AgentLoopSettlement)>,
+}
+
+/// Which calls this service's agent-loop settle writer settles (D-07, D-08),
+/// installed via [`PaladinExecutionService::with_treasury_ledger`].
+///
+/// The ledger is observational in this phase (D-08, LEDGR-03): a settle
+/// failure or duplicate-key outcome is logged and never fails, retries or
+/// alters an execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentLoopSettlement {
+    /// Every priced model call settles, under the run's own
+    /// [`RunScope::run_id`] when the caller supplied one, else this
+    /// service's own execution id (D-07). The right mode for services
+    /// backing HTTP agent routes (`agent_host.rs`), where every call is
+    /// either a plain HTTP agent execution (no Platform run) or a Platform
+    /// API run the worker dispatched -- either way, this service is the
+    /// only writer that will ever settle that call.
+    EveryCall,
+    /// Only a call whose [`RunScope`] names a run id settles -- a call with
+    /// no run id (an engine node's own dispatch) never settles here. The
+    /// right mode for the run engine's SHARED execution service
+    /// (`facade_provisioner.rs`'s `EngineExecutionPort`): engine nodes are
+    /// already settled once per superstep by `WarEngine::with_treasury_ledger`
+    /// (39-04), and this mode is what keeps this service from ever settling
+    /// the SAME call a second time. Only a Platform API run of an
+    /// agent-kind assistant (which carries a real run id in its `RunScope`,
+    /// 39-07) settles through this service at all.
+    PlatformRunsOnly,
 }
 
 /// D-16: the latest-summary-wins effective-history rule.
@@ -334,6 +382,219 @@ pub(crate) fn effective_history(history: Vec<GarrisonEntry>) -> Vec<GarrisonEntr
     effective
 }
 
+/// The ledger identity one agent-loop execution settles its priced calls
+/// under (D-07, Phase 40 D-16): the run id every `(run_id, ordinal, 1)`
+/// key names and the resolved [`LedgerScope`] every row is stamped with.
+/// Resolved once per `execute_scoped` call, from that call's own
+/// [`RunScope`] (`ledger_run_id` for the id; `scope.ledger_scope` or the
+/// [`LedgerScope::unattributed`] sentinel for the scope), and carried
+/// unchanged through `execute_bounded` into `execute_internal`'s loop.
+/// `None` at the call site means no call this execution makes settles.
+#[derive(Debug, Clone)]
+struct AgentLoopLedgerTarget {
+    /// The run every settlement key names.
+    run_id: RunId,
+    /// The tenant and API key id every settlement row is stamped with.
+    scope: LedgerScope,
+}
+
+/// A failed model call as the agent loop's retry helper reports it
+/// (G-50-5a, plan 50-28): the error the caller sees, unchanged
+/// (`to_paladin_error`'s output), plus the bills the call incurred.
+///
+/// The retry and circuit-breaker machinery only see [`PaladinError`], so a
+/// billed `EmptyCompletion` or `Refusal` would otherwise lose its
+/// [`BilledUsage`] at the conversion. The helper records the bill beside the
+/// conversion and returns it here, so the buffered loop can fold it into the
+/// run's tallies and settle it before the error leaves the loop. Private: no
+/// public type changes. `bills` lists the bills of every hop a fallback chain
+/// moved past during the call (plan 50-30, [`HOPPED_BILLS`]) are kept apart in
+/// `hop_bills` (plan 50-32, A5-50-32), because the collector already counted
+/// them into the attempt scope at their hop and this loop only folds and
+/// settles them; `bills` is the failing call's own bill, which this loop
+/// records into the attempt scope itself. Both are empty for an unbilled
+/// error with no billed hop.
+#[derive(Debug)]
+struct CallFailure {
+    /// The error the caller sees.
+    error: PaladinError,
+    /// What the vendor billed for the failed call itself, priced when a
+    /// `PricingLlmAdapter` priced it.
+    bills: Vec<BilledUsage>,
+    /// The bills of every hop the chain moved past on the way, in hop order,
+    /// priced when a `PricingLlmAdapter` priced them. Already counted into the
+    /// attempt scope by [`HoppedBills::count_and_take`] (WR-03, plan 50-32):
+    /// the loop folds them into the run's tallies and settles them, and never
+    /// records them into the scope again.
+    hop_bills: Vec<BilledUsage>,
+}
+
+/// A served model call as the agent loop's retry helper reports it
+/// (G-50-5a remainder (a), plan 50-30): the response, plus the bills of every
+/// hop a `FallbackLlmAdapter` moved past before a later hop served it (a
+/// refusal the vendor billed under `hop_on_refusal`). The helper installs a
+/// fresh [`HOPPED_BILLS`] collector around the whole call -- all of its
+/// retries, each retry's hops being separate billed requests (A3-50-30) --
+/// and returns what it collected here, so the loop folds every part into the
+/// run's tallies and settles them in the call's one row. Private: no public
+/// type changes (`LlmResponse` keeps its fields). `bills` is empty for every
+/// call that hopped past no billed error. The collector counted each of them
+/// into the attempt scope at its hop (WR-03, plan 50-32); the loop folds and
+/// settles them and does not count them again.
+#[derive(Debug)]
+struct CallOutcome {
+    /// The response that served the call.
+    response: paladin_ports::output::llm_port::LlmResponse,
+    /// The bills of the hops moved past, in hop order, priced when a
+    /// `PricingLlmAdapter` outside the chain priced them.
+    bills: Vec<BilledUsage>,
+}
+
+/// The priced parts of `bills` as `(model, cost)` settle parts: an unpriced
+/// bill contributes nothing (D-00c), and a bill naming no model falls back
+/// to `fallback_model` (the Paladin's configured model), the rule a served
+/// response's empty `model` already follows.
+fn priced_bill_parts<'a>(
+    bills: &'a [BilledUsage],
+    fallback_model: &'a str,
+) -> impl Iterator<Item = (&'a str, &'a Cost)> + 'a {
+    bills
+        .iter()
+        .filter_map(move |bill| priced_bill_part(bill, fallback_model))
+}
+
+/// One bill's priced `(model, cost)` settle part: `None` for an unpriced bill
+/// (D-00c), and `fallback_model` when the bill names no model. The single
+/// keying rule for a bill, shared by the buffered loop's failure settle, the
+/// hop bills and a streamed call's own billed terminal error (WR-02), so the
+/// same event never lands under two different `model_breakdown` keys.
+fn priced_bill_part<'a>(
+    bill: &'a BilledUsage,
+    fallback_model: &'a str,
+) -> Option<(&'a str, &'a Cost)> {
+    let model = if bill.model.is_empty() {
+        fallback_model
+    } else {
+        bill.model.as_str()
+    };
+    bill.cost.as_ref().map(|cost| (model, cost))
+}
+
+/// Where a streamed call settles (D-07/D-08, 39-05; Phase 40 D-16): the
+/// ledger, the caller's resolved scope and the execution's own run id,
+/// resolved once before the stream opens. `None` outside `EveryCall` mode.
+type StreamSettlement = (Arc<dyn TreasuryLedgerPort>, LedgerScope, RunId);
+
+/// Settle a streamed call's priced parts once under `(execution id, 1, 1)`:
+/// the hop bills against their own models, then `own`: the terminal chunk's cost under
+/// `model_used` (the only model identity a terminal chunk carries), or a
+/// billed terminal error's cost under that bill's own model (WR-02, see
+/// [`priced_bill_part`]). Called at every exit of the streamed call -- terminal
+/// chunk, terminal error, an early `generate_stream` error, a stream that
+/// ended without a final marker, and a dropped receiver -- so no billed hop
+/// is lost however the stream ends. Neither `hop_bills` nor `own` is recorded
+/// into the attempt scope here: the hop bills were counted by their collector
+/// at the hop and taken with [`HoppedBills::count_and_take`] (WR-03, plan
+/// 50-32), and `own`'s caller already recorded it beside its own fold.
+async fn settle_streamed_call(
+    settlement: Option<&StreamSettlement>,
+    model_used: &str,
+    hop_bills: &[BilledUsage],
+    own: Option<(&str, &Cost)>,
+) {
+    let Some((ledger, scope, run_id)) = settlement else {
+        return;
+    };
+    let parts: Vec<(&str, &Cost)> = priced_bill_parts(hop_bills, model_used)
+        .chain(own)
+        .collect();
+    settle_agent_loop_call(ledger, scope, run_id, 1, &parts).await;
+}
+
+/// Settle one priced agent-loop model call (D-07, D-08, 39-05): an
+/// unreserved settlement under `(run_id, ordinal, 1)` with the caller's
+/// resolved `scope` (Phase 40 D-16: the submitting principal's tenant and
+/// API key id, or the [`LedgerScope::unattributed`] sentinel when the
+/// caller resolved none).
+///
+/// `parts` are the call's priced `(model, cost)` parts: the served
+/// response's (or the failing call's own bill) and, since plan 50-30, the
+/// bill of every fallback hop the call moved past. They settle in ONE row
+/// (ADR-0053 section 4: a model-fallback hop folds into its attempt's row;
+/// a second settle under the same key would be dropped as `AlreadySettled`,
+/// A1-50-30): `amount` is their [`Cost::checked_add`] sum and
+/// `model_breakdown` names each model with its own nanos (summed when a
+/// model appears twice, e.g. the same hop refused on two retries). No parts
+/// settles nothing. A currency mismatch between parts -- impossible while
+/// every part comes from the one `PriceTable` behind the decorator
+/// (A2-50-30) -- is logged at `error!` and settles nothing, never a partial
+/// or fabricated amount.
+///
+/// A free function (not a `PaladinExecutionService` method) so it can be
+/// called from `execute_stream_inner`'s spawned task, which owns no `&self`
+/// -- [`PaladinExecutionService::settle_model_call`] delegates to this same
+/// function for the buffered reasoning loop, so there is exactly one settle
+/// implementation for both call sites.
+///
+/// Never propagates: a ledger `Err` is logged at `error!` and a
+/// duplicate-key [`SettleOutcome::AlreadySettled`] at `warn!` -- neither
+/// changes a run's output, retries a call, or fails an execution (D-08).
+/// Log lines carry the run id, ordinal, nanos and currency -- never the
+/// prompt, the response content, the scope's key id, or any API key value.
+async fn settle_agent_loop_call(
+    ledger: &Arc<dyn TreasuryLedgerPort>,
+    scope: &LedgerScope,
+    run_id: &RunId,
+    ordinal: u64,
+    parts: &[(&str, &Cost)],
+) {
+    let Some(((_, first), rest)) = parts.split_first() else {
+        return;
+    };
+    let mut cost: Cost = (*first).clone();
+    for (_, part) in rest {
+        let Some(sum) = cost.checked_add(part) else {
+            error!(
+                "agent-loop model call parts disagree on currency: run {run_id} ordinal {ordinal} \
+                 currencies {} and {} -- nothing settled",
+                cost.currency(),
+                part.currency()
+            );
+            return;
+        };
+        cost = sum;
+    }
+    let mut model_breakdown: BTreeMap<String, i64> = BTreeMap::new();
+    for (model, part) in parts {
+        let nanos = model_breakdown.entry((*model).to_string()).or_insert(0);
+        *nanos = nanos.saturating_add(part.nanos());
+    }
+    let key = SettlementKey::new(run_id.clone(), ordinal, 1);
+    let request = SettleRequest::unreserved(scope.clone(), key, cost.clone(), model_breakdown);
+    match ledger.settle(request).await {
+        Ok(SettleOutcome::Settled) => {
+            debug!(
+                "settled agent-loop model call: run {run_id} ordinal {ordinal} amount_nanos {} currency {} parts {}",
+                cost.nanos(),
+                cost.currency(),
+                parts.len()
+            );
+        }
+        Ok(SettleOutcome::AlreadySettled) => {
+            warn!(
+                "agent-loop model call already settled: run {run_id} ordinal {ordinal} -- duplicate not charged again"
+            );
+        }
+        Err(e) => {
+            error!(
+                "failed to settle agent-loop model call: run {run_id} ordinal {ordinal} amount_nanos {} currency {}: {e}",
+                cost.nanos(),
+                cost.currency()
+            );
+        }
+    }
+}
+
 impl PaladinExecutionService {
     /// Creates a new Paladin execution service
     ///
@@ -392,6 +653,7 @@ impl PaladinExecutionService {
             vault_tools_enabled: false,
             tool_error_config: ToolErrorConfig::default(),
             trace_emitter: None,
+            treasury_ledger: None,
         }
     }
 
@@ -815,6 +1077,101 @@ impl PaladinExecutionService {
         self
     }
 
+    /// Installs the agent-loop settle writer (D-07, D-08, 39-05): after this
+    /// call, every priced model call of the reasoning loop (buffered or
+    /// streamed) settles exactly once, under a `SettlementKey` this
+    /// service's `settlement` mode resolves (see [`AgentLoopSettlement`]).
+    ///
+    /// The ledger is observational (LEDGR-03): a settle failure is logged
+    /// at `error!` and a duplicate-key `AlreadySettled` outcome at `warn!`
+    /// -- neither ever fails, retries or alters a `PaladinResult`. A call
+    /// with no cost (`response.cost: None`) writes no row. A service
+    /// without this call behaves exactly as before -- no ledger call at
+    /// all.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    ///
+    /// use paladin::application::services::paladin::paladin_execution_service::{
+    ///     AgentLoopSettlement, PaladinExecutionService,
+    /// };
+    /// use paladin::infrastructure::resilience::circuit_breaker::CircuitBreaker;
+    /// use paladin_llm::mock::MockLlmAdapter;
+    /// use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
+    /// use std::time::Duration;
+    ///
+    /// let llm = Arc::new(MockLlmAdapter::new());
+    /// let circuit_breaker = Arc::new(CircuitBreaker::new(3, 2, Duration::from_secs(30)));
+    /// let ledger = Arc::new(InMemoryTreasuryLedger::new());
+    /// let service = PaladinExecutionService::new(llm, circuit_breaker, None, None)
+    ///     .with_treasury_ledger(ledger, AgentLoopSettlement::EveryCall);
+    /// ```
+    #[must_use]
+    pub fn with_treasury_ledger(
+        mut self,
+        ledger: Arc<dyn TreasuryLedgerPort>,
+        settlement: AgentLoopSettlement,
+    ) -> Self {
+        info!(
+            "Attaching treasury ledger to PaladinExecutionService: settlement={:?}",
+            settlement
+        );
+        self.treasury_ledger = Some((ledger, settlement));
+        self
+    }
+
+    /// Resolves the run id this service's agent-loop settle writer should
+    /// settle `scope`'s calls under (D-07), or `None` when no call this run
+    /// makes should settle at all. The companion scope resolution (Phase 40
+    /// D-16: `scope.ledger_scope`, else the sentinel) happens beside this
+    /// call in `execute_scoped`; both ride together as one
+    /// [`AgentLoopLedgerTarget`].
+    ///
+    /// - No ledger installed: `None`.
+    /// - [`AgentLoopSettlement::PlatformRunsOnly`][] mode: `scope.run_id.clone()`
+    ///   -- an engine node's own dispatch (no run id in its scope) never
+    ///   settles here (LEDGR-04: engine spend is settled once, by the
+    ///   superstep writer, 39-04).
+    /// - [`AgentLoopSettlement::EveryCall`][] mode: `scope.run_id.clone()`
+    ///   when present, else this execution's own id (`execution_id`) parsed
+    ///   as a [`RunId`] -- a UUIDv4 execution id is always a well-formed
+    ///   UUID, so this parse never fails in practice.
+    fn ledger_run_id(&self, scope: &RunScope, execution_id: uuid::Uuid) -> Option<RunId> {
+        let (_, settlement) = self.treasury_ledger.as_ref()?;
+        match settlement {
+            AgentLoopSettlement::PlatformRunsOnly => scope.run_id.clone(),
+            AgentLoopSettlement::EveryCall => scope.run_id.clone().or_else(|| {
+                RunId::parse(execution_id.to_string())
+                    .inspect_err(|e| {
+                        error!("execution id {execution_id} did not parse as a RunId: {e}");
+                    })
+                    .ok()
+            }),
+        }
+    }
+
+    /// Settle one priced model call (D-07, D-08): an unreserved settlement
+    /// under `(target.run_id, ordinal, 1)` with the resolved `target.scope`
+    /// (Phase 40 D-16), one row for all of the call's priced `parts` with a
+    /// per-model `model_breakdown` (plan 50-30, see [`settle_agent_loop_call`]).
+    ///
+    /// Delegates to [`settle_agent_loop_call`], the free function the
+    /// streamed path (`execute_stream_inner`'s spawned task, which owns no
+    /// `&self`) also calls -- one settle implementation, two call sites.
+    async fn settle_model_call(
+        &self,
+        target: &AgentLoopLedgerTarget,
+        ordinal: u64,
+        parts: &[(&str, &Cost)],
+    ) {
+        let Some((ledger, _)) = &self.treasury_ledger else {
+            return;
+        };
+        settle_agent_loop_call(ledger, &target.scope, &target.run_id, ordinal, parts).await;
+    }
+
     /// Replaces the whole `ExecutionMiddleware` chain with `chain` (Doc 05
     /// RT-01, D-06).
     ///
@@ -908,6 +1265,76 @@ impl PaladinExecutionService {
         if let Some(ref herald) = self.herald {
             // Herald now uses actual PaladinResult directly - no conversion needed!
             let formatted = herald.format_paladin_result(result).map_err(|e| {
+                PaladinError::ExecutionError(format!("Herald formatting failed: {}", e))
+            })?;
+            Ok(Some(formatted))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Folds one model call's `paladin.*` visibility keys into the run's
+    /// [`PaladinResult::run_metadata`] (ADR-0061 (h), owner reading R-1).
+    ///
+    /// Only keys that start with `paladin.` are read, and `paladin.served_by` is skipped (it
+    /// has its own `PaladinResult` field), so no foreign key -- and nothing credential-shaped --
+    /// is ever copied (T-50-18-01). `paladin.params_omitted` and `paladin.unprofiled_model`
+    /// hold the de-duplicated union of their comma-separated items in first-seen order, so a
+    /// parameter omitted on every loop is reported once; every other `paladin.*` key
+    /// (`paladin.served_model`, `paladin.response_format_adjusted`) holds the latest call's
+    /// value. The streaming path calls this same helper with the terminal chunk's metadata.
+    fn merge_run_metadata(
+        run_metadata: &mut BTreeMap<String, String>,
+        call_metadata: &HashMap<String, String>,
+    ) {
+        for (key, value) in call_metadata {
+            if !key.starts_with("paladin.") || key == SERVED_BY_METADATA_KEY {
+                continue;
+            }
+            if key == PARAMS_OMITTED_METADATA_KEY || key == UNPROFILED_MODEL_METADATA_KEY {
+                let mut merged = run_metadata.get(key).cloned().unwrap_or_default();
+                for item in value.split(',').map(str::trim).filter(|i| !i.is_empty()) {
+                    if !merged.split(',').any(|seen| seen == item) {
+                        if !merged.is_empty() {
+                            merged.push(',');
+                        }
+                        merged.push_str(item);
+                    }
+                }
+                if !merged.is_empty() {
+                    run_metadata.insert(key.clone(), merged);
+                }
+            } else {
+                run_metadata.insert(key.clone(), value.clone());
+            }
+        }
+    }
+
+    /// Finalizes a streamed execution using the configured Herald (D-12).
+    ///
+    /// The agent loop's streamed-completion producer (`execute_stream_inner`) builds
+    /// `metadata` -- including any cost the pricing decorator attached (D-09) -- and attaches it
+    /// to the final `PaladinStreamChunk` via `ChunkMetadata::with_execution`. This method hands
+    /// that same metadata to `Herald::finalize_stream`, mirroring [`Self::format_result`] for
+    /// the streaming path.
+    ///
+    /// # Arguments
+    ///
+    /// * `metadata` - The `ExecutionMetadata` produced for this streamed run
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(formatted_output)` if a Herald is configured, `None` if not.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PaladinError::ExecutionError` if formatting fails.
+    pub fn finalize_stream_output(
+        &self,
+        metadata: &ExecutionMetadata,
+    ) -> Result<Option<String>, PaladinError> {
+        if let Some(ref herald) = self.herald {
+            let formatted = herald.finalize_stream(metadata).map_err(|e| {
                 PaladinError::ExecutionError(format!("Herald formatting failed: {}", e))
             })?;
             Ok(Some(formatted))
@@ -1043,24 +1470,50 @@ impl PaladinExecutionService {
         // SAME `ConfinedVault` handle `VaultRecallMiddleware` reads --
         // exactly one resolution point, per `confined_vault`'s own contract.
         let confined_vault = self.confined_vault(scope);
+        // D-07: resolved here, once, from this call's own `scope` -- never
+        // recomputed inside `execute_internal`'s per-loop-iteration body.
+        // Phase 40 D-16: the ledger scope rides beside the run id -- the
+        // scope's own `ledger_scope` (the submitting principal's tenant and
+        // API key id, set by the run worker or the HTTP agent handler), or
+        // the unattributed sentinel when this scope carries none (D-10).
+        let ledger_target =
+            self.ledger_run_id(scope, execution_id)
+                .map(|run_id| AgentLoopLedgerTarget {
+                    run_id,
+                    scope: scope
+                        .ledger_scope
+                        .clone()
+                        .unwrap_or_else(LedgerScope::unattributed),
+                });
         info!(
             "Starting scoped Paladin execution: id={}, name={}, input_len={}, vault_namespace={}",
             execution_id,
-            paladin.node.name,
+            paladin.data.name,
             input.len(),
             confined_vault
                 .as_ref()
                 .map(|v| v.granted().to_string())
                 .unwrap_or_else(|| "none".to_string())
         );
-        self.execute_bounded(paladin, input, execution_id, heartbeat, confined_vault)
-            .await
+        // ALLOW-05 (Phase 42 D-11): the Treasurer-derived budget this call's scope carries rides
+        // down to the run's `ModelCallContext`, where the one `TokenBudget` reads it.
+        self.execute_bounded(
+            paladin,
+            input,
+            execution_id,
+            heartbeat,
+            confined_vault,
+            ledger_target,
+            scope.derived_token_budget.clone(),
+        )
+        .await
     }
 
     /// The shared body of `execute`, `execute_observed` and `execute_scoped`:
     /// the same per-execution timeout wrapper around
     /// [`Self::execute_internal`], differing only in whether a heartbeat is
     /// threaded through.
+    #[allow(clippy::too_many_arguments)]
     async fn execute_bounded(
         &self,
         paladin: &Paladin,
@@ -1068,13 +1521,22 @@ impl PaladinExecutionService {
         execution_id: uuid::Uuid,
         heartbeat: Option<&HeartbeatHandle>,
         confined_vault: Option<ConfinedVault>,
+        ledger_target: Option<AgentLoopLedgerTarget>,
+        derived_token_budget: Option<DerivedTokenBudget>,
     ) -> Result<PaladinResult, PaladinError> {
         let start_time = Instant::now();
-        let timeout_duration = Duration::from_secs(paladin.node.max_loops.as_u32() as u64 * 60);
+        let timeout_duration = Duration::from_secs(paladin.data.max_loops.as_u32() as u64 * 60);
 
         // Wrap execution with timeout
-        let execution_future =
-            self.execute_internal(paladin, input, execution_id, heartbeat, confined_vault);
+        let execution_future = self.execute_internal(
+            paladin,
+            input,
+            execution_id,
+            heartbeat,
+            confined_vault,
+            ledger_target,
+            derived_token_budget,
+        );
 
         match timeout(timeout_duration, execution_future).await {
             Ok(result) => {
@@ -1111,7 +1573,7 @@ impl PaladinExecutionService {
         images: Vec<VisionContent>,
     ) -> Result<PaladinResult, PaladinError> {
         // Step 1: Validate vision is enabled on the Paladin
-        if !paladin.node.vision_enabled {
+        if !paladin.data.vision_enabled {
             return Err(PaladinError::ConfigurationError(
                 "Vision execution requires vision_enabled=true. Use PaladinBuilder::enable_vision(true)".to_string(),
             ));
@@ -1127,7 +1589,7 @@ impl PaladinExecutionService {
         }
 
         // Step 3: Extract provider from model name
-        let model = paladin.node.model.as_str();
+        let model = paladin.data.model.as_str();
         let provider = self.extract_provider_from_model(model)?;
 
         // Step 4: Get vision adapter for provider
@@ -1140,7 +1602,7 @@ impl PaladinExecutionService {
         })?;
 
         // Step 5: Determine timeout from paladin config
-        let timeout_secs = paladin.node.max_loops.as_u32() as u64 * 60;
+        let timeout_secs = paladin.data.max_loops.as_u32() as u64 * 60;
         let timeout_duration = Duration::from_secs(timeout_secs);
 
         // Step 6: Execute vision analysis with timeout
@@ -1181,7 +1643,7 @@ impl PaladinExecutionService {
         })??;
 
         // Step 7: Check for stop words
-        for stop_word in &paladin.node.stop_words {
+        for stop_word in &paladin.data.stop_words {
             if vision_result.content.contains(stop_word) {
                 return Err(PaladinError::ExecutionError(format!(
                     "Stop word detected: {}",
@@ -1250,6 +1712,7 @@ impl PaladinExecutionService {
     /// it is beaten after every completed LLM call and after every
     /// Armament invocation, and never consulted otherwise, so the
     /// unobserved `execute` path is byte-identical to before plan 25-09.
+    #[allow(clippy::too_many_arguments)]
     async fn execute_internal(
         &self,
         paladin: &Paladin,
@@ -1257,9 +1720,17 @@ impl PaladinExecutionService {
         execution_id: uuid::Uuid,
         heartbeat: Option<&HeartbeatHandle>,
         confined_vault: Option<ConfinedVault>,
+        ledger_target: Option<AgentLoopLedgerTarget>,
+        derived_token_budget: Option<DerivedTokenBudget>,
     ) -> Result<PaladinResult, PaladinError> {
         let start_time = Instant::now();
         let mut usage = paladin_core::platform::container::token_usage::TokenUsage::default();
+        // D-10: cost rides beside usage everywhere usage travels -- one
+        // `CostTally` per run, folded from every model call's `LlmResponse.cost`
+        // at the exact point `usage` accumulates that call's `TokenUsage`
+        // (below). `None` propagates: if any call in this run was unpriced,
+        // the run's cost is `None`, never a partial sum (D-00c).
+        let mut cost_tally = paladin_core::platform::container::cost::CostTally::new();
         let mut accumulated_output = String::new();
         let mut _retrieval_latency_ms = 0u64;
         let mut _memories_retrieved_count = 0usize;
@@ -1270,6 +1741,10 @@ impl PaladinExecutionService {
         // stamps on its response. A plain adapter stamps nothing, so this
         // stays `None` and the serialised result is byte-identical to before.
         let mut served_by: Option<String> = None;
+        // Phase 50 (ADR-0061 (h), owner reading R-1): the `paladin.*` visibility keys every
+        // model call of this run stamped, merged by `merge_run_metadata`. A run whose calls
+        // stamped nothing leaves it empty, so the serialised result is unchanged.
+        let mut collected_metadata: BTreeMap<String, String> = BTreeMap::new();
 
         // =======================================================================
         // LAYER 1: Autonomous Planning & Prompt Generation (Optional, Pre-Exec)
@@ -1288,7 +1763,7 @@ impl PaladinExecutionService {
         // Use generated prompt if available, otherwise use configured prompt
         let effective_system_prompt = generated_prompt
             .as_ref()
-            .unwrap_or(&paladin.node.system_prompt);
+            .unwrap_or(&paladin.data.system_prompt);
 
         // =======================================================================
         // CORE LAYER 0: Standard Execution (Always Runs)
@@ -1399,12 +1874,17 @@ impl PaladinExecutionService {
         // `execute_scoped` before dispatch, is set once here and read (never
         // mutated) by `VaultRecallMiddleware` on loop 0.
         middleware_cx.vault = confined_vault;
+        // ALLOW-05 (Phase 42 D-11): the Treasurer-derived budget for THIS run, set once from the
+        // call's `RunScope` and read (never mutated) by `TokenBudget::after_model`. Per-run
+        // scratch on the context, so concurrent runs through this shared service never see each
+        // other's figure.
+        middleware_cx.set_derived_token_budget(derived_token_budget);
 
         // Execute reasoning loop
-        for loop_num in 1..=paladin.node.max_loops.as_u32() {
+        for loop_num in 1..=paladin.data.max_loops.as_u32() {
             debug!(
                 "Paladin loop iteration: id={}, loop={}/{}",
-                execution_id, loop_num, paladin.node.max_loops
+                execution_id, loop_num, paladin.data.max_loops
             );
 
             // =======================================================================
@@ -1474,12 +1954,17 @@ impl PaladinExecutionService {
                     return Ok(PaladinResult {
                         output: accumulated_output,
                         usage: usage.clone(),
+                        // Same tally every other return path reports: a `before_model`
+                        // stop on loop N must not discard the cost of loops 1..N-1
+                        // (Phase 38 code review CR-01).
+                        cost: cost_tally.total(),
                         execution_time_ms: start_time.elapsed().as_millis() as u64,
                         loop_count: loop_num,
                         stop_reason: effective_result.stop_reason,
                         plan: task_plan,
                         handoff_history,
                         served_by,
+                        run_metadata: collected_metadata,
                     });
                 }
             };
@@ -1487,7 +1972,10 @@ impl PaladinExecutionService {
             let prompt = middleware_cx.assembly.render();
 
             // Execute with retry and circuit breaker (using effective temperature)
-            let response = self
+            let CallOutcome {
+                response,
+                bills: hop_bills,
+            } = match self
                 .execute_with_retry_and_temperature(
                     paladin,
                     &prompt,
@@ -1496,7 +1984,53 @@ impl PaladinExecutionService {
                     loop_num,
                     &middleware_cx,
                 )
-                .await?;
+                .await
+            {
+                Ok(outcome) => outcome,
+                Err(failure) => {
+                    // G-50-5a (plan 50-28): a call the vendor billed but that
+                    // failed (a billed `EmptyCompletion` or `Refusal`) is
+                    // folded into the run's tallies and settled exactly like a
+                    // priced success -- same ordinal -- before the unchanged
+                    // error leaves the loop. A billed failure is `Permanent`,
+                    // so it is never retried and never settled twice; an
+                    // unpriced bill (`cost: None`) folds its usage and settles
+                    // nothing (D-00c). Plan 50-30: `hop_bills` holds the bill
+                    // of every fallback hop moved past (a chain that ended in
+                    // `AllProvidersFailed` after billed refusals), so all of
+                    // the call's priced parts settle in ONE row.
+                    //
+                    // WR-03 (plan 50-32): the hop bills were counted into the
+                    // attempt scope by their collector at the hop; only the
+                    // failing call's own bills are recorded here.
+                    for bill in failure.hop_bills.iter().chain(&failure.bills) {
+                        usage += bill.usage.clone();
+                        cost_tally.record_call(bill.cost.as_ref());
+                    }
+                    for bill in &failure.bills {
+                        // G-50-5a (plan 50-29): a billed failure is a call the
+                        // attempt was charged for -- reported to the attempt
+                        // scope at the same fold as a success's call.
+                        record_incurred_spend(&bill.usage, bill.cost.as_ref());
+                    }
+                    if let Some(target) = ledger_target.as_ref() {
+                        let fallback_model = paladin.data.model.as_str();
+                        let parts: Vec<(&str, &Cost)> =
+                            priced_bill_parts(&failure.hop_bills, fallback_model)
+                                .chain(priced_bill_parts(&failure.bills, fallback_model))
+                                .collect();
+                        self.settle_model_call(target, u64::from(loop_num), &parts)
+                            .await;
+                    }
+                    if !failure.hop_bills.is_empty() || !failure.bills.is_empty() {
+                        debug!(
+                            "billed model call failed: id={}, loop={}, run_total_tokens={}",
+                            execution_id, loop_num, usage.total_tokens
+                        );
+                    }
+                    return Err(failure.error);
+                }
+            };
 
             // --- FT-FR-09, D-19: an LLM call completed -- progress.
             if let Some(heartbeat) = heartbeat {
@@ -1509,11 +2043,49 @@ impl PaladinExecutionService {
             // D-12) rather than a hand-rolled sum, so the three optional
             // cache/reasoning sub-counts merge under the same saturating
             // rule every other accumulator in the tree uses.
+            //
+            // G-50-5a remainder (a), plan 50-30: the bill of every fallback hop
+            // this call moved past (a refusal the vendor billed) is folded the
+            // same way first -- each one was a billed request, so it counts in
+            // the run's usage and price. WR-03 (plan 50-32): the attempt's spend
+            // already counted each one at its hop, so they are not recorded
+            // into the scope again.
+            for bill in &hop_bills {
+                usage += bill.usage.clone();
+                cost_tally.record_call(bill.cost.as_ref());
+            }
             usage += response.usage.clone();
+            cost_tally.record_call(response.cost.as_ref());
+            // G-50-5a (plan 50-29): report this call to the Battalion attempt
+            // that made it, at the exact point it is folded into the run's
+            // own tallies, so the attempt can charge it however the run
+            // ends. A no-op outside an engine attempt (no active scope).
+            record_incurred_spend(&response.usage, response.cost.as_ref());
+            // D-07/D-08 (39-05): settle this priced call at the exact point
+            // its cost is folded into the run's own tally -- the same
+            // response, the same model, so the ledger's breakdown key
+            // matches the price that was actually computed from it (38-04).
+            // Plan 50-30: the hopped-past bills settle in the SAME row (one
+            // row per call ordinal, a per-model breakdown, A1-50-30); a call
+            // with no hop bill settles exactly the one-part row it did before.
+            if let Some(target) = ledger_target.as_ref() {
+                let served_model = if response.model.is_empty() {
+                    paladin.data.model.as_str()
+                } else {
+                    response.model.as_str()
+                };
+                let parts: Vec<(&str, &Cost)> =
+                    priced_bill_parts(&hop_bills, paladin.data.model.as_str())
+                        .chain(response.cost.as_ref().map(|cost| (served_model, cost)))
+                        .collect();
+                self.settle_model_call(target, u64::from(loop_num), &parts)
+                    .await;
+            }
             middleware_cx.cumulative_tokens = usage.total_tokens;
             if let Some(provider) = response.metadata.get(SERVED_BY_METADATA_KEY) {
                 served_by = Some(provider.clone());
             }
+            Self::merge_run_metadata(&mut collected_metadata, &response.metadata);
 
             // --- D-04: after_model fires on the FINAL response for this
             // iteration -- after the service's own buffered retry and
@@ -1542,12 +2114,14 @@ impl PaladinExecutionService {
                 return Ok(PaladinResult {
                     output: accumulated_output,
                     usage: usage.clone(),
+                    cost: cost_tally.total(),
                     execution_time_ms: start_time.elapsed().as_millis() as u64,
                     loop_count: loop_num,
                     stop_reason: final_result.stop_reason,
                     plan: task_plan,
                     handoff_history,
                     served_by,
+                    run_metadata: collected_metadata,
                 });
             }
 
@@ -1801,10 +2375,10 @@ impl PaladinExecutionService {
             }
 
             // Check if we've reached max loops
-            if loop_num == paladin.node.max_loops.as_u32() {
+            if loop_num == paladin.data.max_loops.as_u32() {
                 debug!(
                     "Reached max loops: id={}, loops={}",
-                    execution_id, paladin.node.max_loops
+                    execution_id, paladin.data.max_loops
                 );
 
                 // Store assistant response in garrison if available
@@ -1828,12 +2402,14 @@ impl PaladinExecutionService {
                 return Ok(PaladinResult {
                     output: accumulated_output,
                     usage: usage.clone(),
+                    cost: cost_tally.total(),
                     execution_time_ms: start_time.elapsed().as_millis() as u64,
                     loop_count: loop_num,
                     stop_reason: StopReason::MaxLoops,
                     plan: task_plan, // Layer 1 metadata
                     handoff_history, // Layer 3 metadata
                     served_by,       // FT-FR-17: serving provider (fallback chains only)
+                    run_metadata: collected_metadata,
                 });
             }
         }
@@ -1855,12 +2431,14 @@ impl PaladinExecutionService {
         Ok(PaladinResult {
             output: accumulated_output,
             usage: usage.clone(),
+            cost: cost_tally.total(),
             execution_time_ms: start_time.elapsed().as_millis() as u64,
-            loop_count: paladin.node.max_loops.as_u32(),
+            loop_count: paladin.data.max_loops.as_u32(),
             stop_reason: StopReason::Completed,
             plan: task_plan, // Layer 1 metadata
             handoff_history, // Layer 3 metadata
             served_by,       // FT-FR-17: serving provider (fallback chains only)
+            run_metadata: collected_metadata,
         })
     }
 
@@ -1878,7 +2456,7 @@ impl PaladinExecutionService {
         conversation_history: &[GarrisonEntry],
         rag_context: Option<&str>,
     ) -> String {
-        let mut prompt = format!("{}\n\n", paladin.node.system_prompt);
+        let mut prompt = format!("{}\n\n", paladin.data.system_prompt);
 
         // Inject RAG context if available
         if let Some(context) = rag_context
@@ -2070,7 +2648,7 @@ impl PaladinExecutionService {
     fn check_stop_words(&self, paladin: &Paladin, output: &str) -> Option<String> {
         let output_lower = output.to_lowercase();
 
-        for stop_word in paladin.node.stop_words.iter() {
+        for stop_word in paladin.data.stop_words.iter() {
             let stop_word_lower = stop_word.to_lowercase();
 
             // Check for exact word match (case-insensitive)
@@ -2113,7 +2691,7 @@ impl PaladinExecutionService {
         execution_id: uuid::Uuid,
     ) -> Option<crate::core::platform::container::planning::TaskPlan> {
         // Check if planning is enabled
-        if !paladin.node.autonomous_planning {
+        if !paladin.data.autonomous_planning {
             debug!(
                 "Planning disabled: execution_id={}, autonomous_planning=false",
                 execution_id
@@ -2140,7 +2718,7 @@ impl PaladinExecutionService {
         );
 
         // Use model from paladin config (Phase 1 enhancement)
-        let model = paladin.node.model.as_str();
+        let model = paladin.data.model.as_str();
 
         // Attempt to generate plan with graceful degradation
         match planning_service.create_plan(input, 10, model).await {
@@ -2181,7 +2759,7 @@ impl PaladinExecutionService {
         execution_id: uuid::Uuid,
     ) -> Option<String> {
         // Check if prompt generation is enabled
-        if !paladin.node.autonomous_prompts {
+        if !paladin.data.autonomous_prompts {
             debug!(
                 "Prompt generation disabled: execution_id={}, autonomous_prompts=false",
                 execution_id
@@ -2202,7 +2780,7 @@ impl PaladinExecutionService {
         };
 
         // Check if agent has a description (required for prompt generation)
-        if paladin.node.agent_description.is_empty() {
+        if paladin.data.agent_description.is_empty() {
             warn!(
                 "Prompt generation enabled but agent_description is empty: execution_id={}",
                 execution_id
@@ -2212,15 +2790,15 @@ impl PaladinExecutionService {
 
         info!(
             "Generating system prompt: execution_id={}, agent={}",
-            execution_id, paladin.node.name
+            execution_id, paladin.data.name
         );
 
         // Use model from paladin config (Phase 1 enhancement)
-        let model = paladin.node.model.as_str();
+        let model = paladin.data.model.as_str();
 
         // Attempt to generate prompt with graceful degradation
         match prompt_service
-            .generate_prompt(&paladin.node.name, &paladin.node.agent_description, model)
+            .generate_prompt(&paladin.data.name, &paladin.data.agent_description, model)
             .await
         {
             Ok(generated_prompt) => {
@@ -2256,12 +2834,12 @@ impl PaladinExecutionService {
     /// Adjusted temperature value (base_temp + progress * (1.0 - base_temp))
     fn apply_layer2_dynamic_temperature(&self, paladin: &Paladin, loop_num: u32) -> f32 {
         // If dynamic temperature is disabled, return configured temperature
-        if !paladin.node.dynamic_temperature {
-            return paladin.node.temperature;
+        if !paladin.data.dynamic_temperature {
+            return paladin.data.temperature;
         }
 
-        let base_temp = paladin.node.temperature;
-        let max_loops = paladin.node.max_loops.as_u32() as f32;
+        let base_temp = paladin.data.temperature;
+        let max_loops = paladin.data.max_loops.as_u32() as f32;
         let current_loop = loop_num as f32;
 
         // Linear interpolation: temp = base + progress * (1.0 - base)
@@ -2271,7 +2849,7 @@ impl PaladinExecutionService {
 
         debug!(
             "Dynamic temperature: loop={}/{}, base={}, adjusted={}",
-            loop_num, paladin.node.max_loops, base_temp, adjusted_temp
+            loop_num, paladin.data.max_loops, base_temp, adjusted_temp
         );
 
         adjusted_temp.clamp(0.0, 1.0)
@@ -2350,7 +2928,7 @@ impl PaladinExecutionService {
         // Create handoff context from the coordinator
         let context = crate::core::platform::container::handoff::HandoffContext::new(
             task_description.clone(),
-            paladin.node.name.clone(),
+            paladin.data.name.clone(),
         );
 
         // Execute the handoff via HandoffService with retry logic
@@ -2393,7 +2971,7 @@ impl PaladinExecutionService {
     /// Executes an LLM call with retry logic, circuit breaker, and custom temperature
     ///
     /// This variant supports Layer 2 (dynamic temperature) by accepting a temperature
-    /// parameter instead of using paladin.node.temperature.
+    /// parameter instead of using paladin.data.temperature.
     ///
     /// With no retry policy set on `cx`, implements today's exponential
     /// backoff unchanged: 100ms, 200ms, 400ms, etc. (D-11, X-03).
@@ -2420,11 +2998,16 @@ impl PaladinExecutionService {
     ///
     /// # Returns
     ///
-    /// LLM response on success
+    /// A [`CallOutcome`]: the served response plus the bills of every billed
+    /// fallback hop moved past on the way (plan 50-30)
     ///
     /// # Errors
     ///
-    /// Returns `PaladinError` if:
+    /// Returns a [`CallFailure`] whose `error` is the `PaladinError` the
+    /// caller sees, and whose `bills` carry the [`BilledUsage`] of every
+    /// billed hop moved past (plan 50-30) and then of any attempt the vendor
+    /// billed but that failed (G-50-5a, plan 50-28), recorded beside the
+    /// `to_paladin_error` conversion. The `error` is returned if:
     /// - Circuit breaker is open
     /// - The failure is [`Transience::Permanent`](paladin_core::platform::container::transience::Transience::Permanent)
     ///   (e.g. a rejected credential or a malformed prompt) -- returned
@@ -2442,7 +3025,55 @@ impl PaladinExecutionService {
         execution_id: uuid::Uuid,
         loop_num: u32,
         cx: &ModelCallContext<'_>,
-    ) -> Result<paladin_ports::output::llm_port::LlmResponse, PaladinError> {
+    ) -> Result<CallOutcome, CallFailure> {
+        // G-50-5a remainder (a), plan 50-30: one fresh collector around the
+        // whole call -- every retry and every hop of each retry -- so a
+        // `FallbackLlmAdapter` that hops past a billed refusal can hand its
+        // bill to THIS call (A3-50-30); `PricingLlmAdapter` prices the
+        // entries in place. Taken once the call ends: a success carries them
+        // in `CallOutcome.bills`, a failure puts them before its own bill.
+        let hopped = HoppedBills::new();
+        let outcome = HOPPED_BILLS
+            .scope(
+                hopped.clone(),
+                self.execute_with_retry_inner(
+                    paladin,
+                    prompt,
+                    temperature,
+                    execution_id,
+                    loop_num,
+                    cx,
+                ),
+            )
+            .await;
+        // WR-03 (plan 50-32): `count_and_take` counts into the attempt scope
+        // any hop bill the chain recorded where no scope was visible, and
+        // returns every hop bill; the ones recorded at their hop inside the
+        // scope were counted then and are not counted again.
+        let bills = hopped.count_and_take();
+        match outcome {
+            Ok(response) => Ok(CallOutcome { response, bills }),
+            Err(mut failure) => {
+                failure.hop_bills = bills;
+                Err(failure)
+            }
+        }
+    }
+
+    /// The body of [`Self::execute_with_retry_and_temperature`]: every
+    /// attempt of one model call under the retry policy and the circuit
+    /// breaker, run inside that method's [`HOPPED_BILLS`] collector. Returns
+    /// the served response, or a [`CallFailure`] carrying the failing
+    /// attempts' own bills (the caller adds the hopped-past ones).
+    async fn execute_with_retry_inner(
+        &self,
+        paladin: &Paladin,
+        prompt: &str,
+        temperature: f32,
+        execution_id: uuid::Uuid,
+        loop_num: u32,
+        cx: &ModelCallContext<'_>,
+    ) -> Result<paladin_ports::output::llm_port::LlmResponse, CallFailure> {
         // D-11 / the assumption-delta promote (see `ModelCallContext::effective_llm`'s
         // rustdoc): the effective port for THIS call is resolved here,
         // exactly once. The service's own `llm_port` is the seeded default;
@@ -2457,7 +3088,11 @@ impl PaladinExecutionService {
         let max_attempts = retry_policy
             .as_ref()
             .map(|policy| policy.max_attempts)
-            .unwrap_or_else(|| paladin.node.max_loops.as_u32().min(10)); // Cap retries at 10 with no policy
+            .unwrap_or_else(|| paladin.data.max_loops.as_u32().min(10)); // Cap retries at 10 with no policy
+        // G-50-5a: every bill an attempt of this call incurred. A billed error
+        // is `Permanent` and returns on its own attempt, so this holds at most
+        // one bill today; it is returned with whatever error ends the call.
+        let mut bills: Vec<BilledUsage> = Vec::new();
 
         loop {
             attempt += 1;
@@ -2480,10 +3115,10 @@ impl PaladinExecutionService {
                     top_p: None,
                     frequency_penalty: None,
                     presence_penalty: None,
-                    stop_sequences: if paladin.node.stop_words.is_empty() {
+                    stop_sequences: if paladin.data.stop_words.is_empty() {
                         None
                     } else {
-                        Some(paladin.node.stop_words.clone())
+                        Some(paladin.data.stop_words.clone())
                     },
                 },
                 context: None,
@@ -2495,31 +3130,52 @@ impl PaladinExecutionService {
             };
 
             let prompt_item = PromptItem {
-                node: Node::new(prompt_data, Some(format!("execution-{}", execution_id))),
+                entity: Entity::new(prompt_data, Some(format!("execution-{}", execution_id))),
             };
 
             // Create LLM request. `cx.response_format` (RT-05, D-27, D-28) is
             // set exactly once, by a structured run's `execute_json_schema` --
             // an ordinary run's context never sets it, so this call is a
             // no-op for every existing caller (X-03).
-            let mut request = LlmRequest::new(paladin.node.model.clone(), prompt_item);
+            let mut request = LlmRequest::new(paladin.data.model.clone(), prompt_item);
             if let Some(response_format) = cx.response_format.clone() {
                 request = request.with_response_format(response_format);
+            }
+            // D-00e: the agent is the second level of the reasoning-effort
+            // precedence (request, agent, provider default, vendor default).
+            // Set only when the agent set it, so an agent that sets neither
+            // builds exactly the request it built before the knob existed;
+            // the adapter then applies the provider default to a request that
+            // carries none (plan 51-06).
+            if let Some(effort) = paladin.data.reasoning_effort {
+                request = request.with_reasoning(effort);
+            }
+            if let Some(fallback) = paladin.data.reasoning_fallback {
+                request = request.with_reasoning_fallback(fallback);
             }
 
             // Wrap LLM call with circuit breaker (async version). Uses the
             // resolved `llm_port` (D-11's single resolution point), not
             // `self.llm_port` directly.
             let port = Arc::clone(&llm_port);
+            // G-50-5a: the bill is kept from the `LlmError` before it is
+            // converted -- the circuit breaker and the retry arms below only
+            // ever see `PaladinError`.
+            let mut attempt_bill: Option<BilledUsage> = None;
+            let bill_slot = &mut attempt_bill;
             let result = self
                 .circuit_breaker
                 .call_async(async move {
                     match port.generate(request).await {
                         Ok(response) => Ok(response),
-                        Err(e) => Err(to_paladin_error(&e)),
+                        Err(e) => {
+                            *bill_slot = e.billed_usage().cloned();
+                            Err(to_paladin_error(&e))
+                        }
                     }
                 })
                 .await;
+            bills.extend(attempt_bill);
 
             match result {
                 Ok(response) => {
@@ -2535,7 +3191,11 @@ impl PaladinExecutionService {
                         "Circuit breaker open: id={}, loop={}",
                         execution_id, loop_num
                     );
-                    return Err(PaladinError::CircuitBreakerOpen);
+                    return Err(CallFailure {
+                        error: PaladinError::CircuitBreakerOpen,
+                        bills,
+                        hop_bills: Vec::new(),
+                    });
                 }
                 // WR-02 (`25-REVIEW.md`), D-11: a `Permanent` failure (e.g. a
                 // rejected credential or a malformed prompt) needs operator
@@ -2557,7 +3217,11 @@ impl PaladinExecutionService {
                         "LLM call failed permanently, not retrying: id={}, loop={}, attempt={}, error={}",
                         execution_id, loop_num, attempt, e
                     );
-                    return Err(e);
+                    return Err(CallFailure {
+                        error: e,
+                        bills,
+                        hop_bills: Vec::new(),
+                    });
                 }
                 // D-11: with an active retry policy, `RetryPredicate::admits`
                 // -- the SAME pure function
@@ -2576,7 +3240,11 @@ impl PaladinExecutionService {
                         "LLM call failed with a policy-declined transience, not retrying: id={}, loop={}, attempt={}, error={}",
                         execution_id, loop_num, attempt, e
                     );
-                    return Err(e);
+                    return Err(CallFailure {
+                        error: e,
+                        bills,
+                        hop_bills: Vec::new(),
+                    });
                 }
                 Err(_e) if attempt >= max_attempts => {
                     // Exhausted retries
@@ -2584,7 +3252,11 @@ impl PaladinExecutionService {
                         "Max retries exhausted: id={}, loop={}, attempts={}",
                         execution_id, loop_num, attempt
                     );
-                    return Err(PaladinError::MaxRetriesExceeded(attempt));
+                    return Err(CallFailure {
+                        error: PaladinError::MaxRetriesExceeded(attempt),
+                        bills,
+                        hop_bills: Vec::new(),
+                    });
                 }
                 Err(e) => {
                     // D-11: the delay before the NEXT attempt comes from
@@ -2646,7 +3318,7 @@ impl PaladinExecutionService {
         loop_num: u32,
     ) -> Result<paladin_ports::output::llm_port::LlmResponse, PaladinError> {
         let mut attempt = 0;
-        let max_attempts = paladin.node.max_loops.as_u32().min(10); // Cap retries at 10
+        let max_attempts = paladin.data.max_loops.as_u32().min(10); // Cap retries at 10
 
         loop {
             attempt += 1;
@@ -2665,14 +3337,14 @@ impl PaladinExecutionService {
                 content_attachments: vec![],
                 parameters: PromptParameters {
                     max_tokens: None,
-                    temperature: Some(paladin.node.temperature),
+                    temperature: Some(paladin.data.temperature),
                     top_p: None,
                     frequency_penalty: None,
                     presence_penalty: None,
-                    stop_sequences: if paladin.node.stop_words.is_empty() {
+                    stop_sequences: if paladin.data.stop_words.is_empty() {
                         None
                     } else {
-                        Some(paladin.node.stop_words.clone())
+                        Some(paladin.data.stop_words.clone())
                     },
                 },
                 context: None,
@@ -2684,11 +3356,17 @@ impl PaladinExecutionService {
             };
 
             let prompt_item = PromptItem {
-                node: Node::new(prompt_data, Some(format!("execution-{}", execution_id))),
+                entity: Entity::new(prompt_data, Some(format!("execution-{}", execution_id))),
             };
 
             // Create LLM request
-            let request = LlmRequest::new(paladin.node.model.clone(), prompt_item);
+            let mut request = LlmRequest::new(paladin.data.model.clone(), prompt_item);
+            if let Some(effort) = paladin.data.reasoning_effort {
+                request = request.with_reasoning(effort);
+            }
+            if let Some(fallback) = paladin.data.reasoning_fallback {
+                request = request.with_reasoning_fallback(fallback);
+            }
 
             // Wrap LLM call with circuit breaker (async version)
             let llm_port = Arc::clone(&self.llm_port);
@@ -2918,6 +3596,23 @@ impl PaladinExecutorPort for PaladinExecutionService {
         // Delegate to the existing public execute method
         self.execute(paladin, input).await
     }
+
+    /// Phase 40 D-16: the HTTP agent handlers hand their calling principal's
+    /// ledger scope through this override, so agent-execute spend settles
+    /// under the caller's tenant and API key id. Fully qualified so the
+    /// inherent `execute_scoped` (heartbeat-taking) is what resolves here,
+    /// never this trait method recursing into itself.
+    async fn execute_scoped(
+        &self,
+        paladin: &Paladin,
+        input: &str,
+        scope: &RunScope,
+    ) -> Result<PaladinResult, PaladinError> {
+        // D-18: the allowance warnings an HTTP agent-route admission won, emitted once
+        // before the loop starts (a no-op with no emitter and no warning).
+        self.emit_scope_allowance_warnings(scope);
+        PaladinExecutionService::execute_scoped(self, paladin, input, None, scope).await
+    }
 }
 
 /// Streaming execution over [`LlmPort::generate_stream`].
@@ -2945,7 +3640,31 @@ impl StreamingExecutorPort for PaladinExecutionService {
         paladin: &Paladin,
         input: &str,
     ) -> Result<PaladinStream, PaladinError> {
-        self.execute_stream_inner(paladin, input, None).await
+        self.execute_stream_inner(paladin, input, None, None, Vec::new())
+            .await
+    }
+
+    /// Phase 40 D-16: the streamed counterpart of
+    /// `PaladinExecutorPort::execute_scoped` -- the scope's `ledger_scope`
+    /// is the only part of `scope` this single-pass path consumes (there is
+    /// no Vault recall and no Platform run id on a stream).
+    async fn execute_stream_scoped(
+        &self,
+        paladin: &Paladin,
+        input: &str,
+        scope: &RunScope,
+    ) -> Result<PaladinStream, PaladinError> {
+        // D-18: emitted once before the provider stream opens; the same warnings also ride
+        // the final chunk's `ExecutionMetadata` (see `execute_stream_inner`).
+        self.emit_scope_allowance_warnings(scope);
+        self.execute_stream_inner(
+            paladin,
+            input,
+            None,
+            scope.ledger_scope.clone(),
+            scope.allowance_warnings.clone(),
+        )
+        .await
     }
 }
 
@@ -3075,20 +3794,40 @@ impl PaladinExecutionService {
         cx.response_format = Some(response_format);
         cx.trace_emitter = self.trace_emitter.clone();
 
-        let response = self
+        let outcome = self
             .execute_with_retry_and_temperature(
                 paladin,
                 prompt,
-                paladin.node.temperature,
+                paladin.data.temperature,
                 execution_id,
                 call_num,
                 &cx,
             )
-            .await?;
+            .await
+            // G-50-5a (plan 50-29, closing A3-50-28): every structured call
+            // -- the first and each repair, success or billed failure -- is
+            // reported to the attempt scope here, because `run_structured`
+            // returns only the LAST call's `PaladinResult` and the engine's
+            // structured arm reads the scope for the whole attempt's spend.
+            // The caller still sees the unchanged error.
+            .map_err(|failure| {
+                for bill in &failure.bills {
+                    record_incurred_spend(&bill.usage, bill.cost.as_ref());
+                }
+                failure.error
+            })?;
+        // G-50-5a remainder (a), plan 50-30: a structured call whose chain
+        // hopped past a billed refusal was billed for that hop too. WR-03
+        // (plan 50-32): the collector already counted it into the attempt
+        // scope at its hop (the engine's structured arm reads the scope for
+        // the whole spend), so it is not recorded again here.
+        let response = outcome.response;
+        record_incurred_spend(&response.usage, response.cost.as_ref());
 
         Ok(PaladinResult {
             output: response.content,
             usage: response.usage.clone(),
+            cost: response.cost.clone(),
             loop_count: call_num,
             stop_reason: StopReason::Completed,
             ..Default::default()
@@ -3136,19 +3875,52 @@ impl PaladinExecutionService {
         input: &str,
         heartbeat: &HeartbeatHandle,
     ) -> Result<PaladinStream, PaladinError> {
-        self.execute_stream_inner(paladin, input, Some(heartbeat.clone()))
+        self.execute_stream_inner(paladin, input, Some(heartbeat.clone()), None, Vec::new())
             .await
     }
 
-    /// The shared body of `execute_stream` and `execute_stream_observed`:
-    /// `heartbeat` is `Some` only on the observed path and is beaten once
-    /// per forwarded chunk; the unobserved path is byte-identical to before
-    /// plan 25-09.
+    /// The shared body of `execute_stream`, `execute_stream_observed` and
+    /// `execute_stream_scoped`: `heartbeat` is `Some` only on the observed
+    /// path and is beaten once per forwarded chunk; `ledger_scope` is `Some`
+    /// only on the scoped path (Phase 40 D-16) and names the tenant and API
+    /// key id the priced terminal chunk settles under -- `None` settles
+    /// under the unattributed sentinel (D-10). `allowance_warnings` (Phase 41
+    /// D-18) are the warnings an HTTP agent-route admission won: every final
+    /// chunk's `ExecutionMetadata` carries them, so the herald renders one
+    /// allowance line; empty on every other path, which stays byte-identical
+    /// to before plan 25-09.
+    ///
+    /// A billed terminal error (G-50-5a, plan 50-28: the provider stream
+    /// ended in an `EmptyCompletion` or `Refusal` its vendor billed, priced
+    /// by `PricingLlmAdapter`) is settled like a priced terminal chunk --
+    /// once, under `(execution id, 1, 1)`, naming `model_used` -- before the
+    /// converted error is sent; chunks already forwarded are unchanged.
+    ///
+    /// The attempt spend scope (G-50-5a, plan 50-29) active on the calling
+    /// task is captured before the spawn and re-installed inside the
+    /// forwarding task, exactly like the trace emitter, so the terminal
+    /// chunk's usage and cost and a billed terminal error's bill are both
+    /// reported to the attempt that opened the stream.
+    ///
+    /// A fallback chain that hopped past billed refusals before its first
+    /// chunk (G-50-5a remainder (a), plan 50-30) records those bills into a
+    /// [`HOPPED_BILLS`] collector installed around the `generate_stream` call
+    /// and re-installed in the forwarding task. The chain counts each bill
+    /// into the attempt scope at its hop (WR-03, plan 50-32), so an attempt
+    /// cut off while the stream is still opening has already been charged for
+    /// it. Every exit -- the terminal chunk, a terminal error, an early
+    /// `generate_stream` error, a stream that ends without a final marker, a
+    /// dropped receiver -- takes them with [`HoppedBills::count_and_take`]
+    /// (which counts only a bill not yet counted) and settles them in the
+    /// call's one row with a per-model breakdown; the terminal chunk's usage
+    /// and cost fold them in.
     async fn execute_stream_inner(
         &self,
         paladin: &Paladin,
         input: &str,
         heartbeat: Option<HeartbeatHandle>,
+        ledger_scope: Option<LedgerScope>,
+        allowance_warnings: Vec<AllowanceWarning>,
     ) -> Result<PaladinStream, PaladinError> {
         // --- D-04: before_model fires exactly once on this path (no loop,
         // no tool dispatch); after_model/around_tool are never invoked
@@ -3156,8 +3928,14 @@ impl PaladinExecutionService {
         // exactly the no-history inputs renders byte-identically to the
         // old hardcoded `format!("{}\n\nUser: {}\n", ..)` (D-02).
         let run_id = uuid::Uuid::new_v4();
+        // D-12: captured before the provider stream opens (and, for the
+        // no-model-call `Finish` branch below, before any model call is even
+        // attempted) so the streamed-completion producer has a real start
+        // time and model name on every exit path.
+        let started_at = chrono::Utc::now();
+        let model_used = paladin.data.model.clone();
         let assembly =
-            PromptAssembly::new(paladin.node.system_prompt.clone(), input, "", vec![], None);
+            PromptAssembly::new(paladin.data.system_prompt.clone(), input, "", vec![], None);
         let mut middleware_cx = ModelCallContext::new(run_id, paladin, assembly);
         middleware_cx.trace_emitter = self.trace_emitter.clone();
         let before_outcome = run_before(&self.middleware, &mut middleware_cx).await?;
@@ -3165,14 +3943,24 @@ impl PaladinExecutionService {
         let prompt = match before_outcome {
             BeforeOutcome::Continue { .. } => middleware_cx.assembly.render(),
             BeforeOutcome::Finish { result, .. } => {
-                // No model call at all: emit the finished output as the
-                // sole, final chunk.
+                // No model call at all: emit the finished output as the sole,
+                // final chunk, still carrying a produced ExecutionMetadata
+                // (D-12) -- no usage, no cost, but a real execution record.
+                let execution = Self::stream_execution_metadata(
+                    run_id,
+                    started_at,
+                    &model_used,
+                    None,
+                    None,
+                    &allowance_warnings,
+                );
+                let metadata = execution.map(|exec| ChunkMetadata::new().with_execution(exec));
                 let (tx, rx) = mpsc::channel::<Result<PaladinStreamChunk, PaladinError>>(1);
                 let _ = tx
                     .send(Ok(PaladinStreamChunk {
                         text: result.output,
                         is_final: true,
-                        metadata: None,
+                        metadata,
                     }))
                     .await;
                 return Ok(rx);
@@ -3187,14 +3975,14 @@ impl PaladinExecutionService {
             content_attachments: vec![],
             parameters: PromptParameters {
                 max_tokens: None,
-                temperature: Some(paladin.node.temperature),
+                temperature: Some(paladin.data.temperature),
                 top_p: None,
                 frequency_penalty: None,
                 presence_penalty: None,
-                stop_sequences: if paladin.node.stop_words.is_empty() {
+                stop_sequences: if paladin.data.stop_words.is_empty() {
                     None
                 } else {
-                    Some(paladin.node.stop_words.clone())
+                    Some(paladin.data.stop_words.clone())
                 },
             },
             context: None,
@@ -3205,21 +3993,95 @@ impl PaladinExecutionService {
             metadata: BTreeMap::new(),
         };
 
-        let request = LlmRequest::new(
-            paladin.node.model.clone(),
+        let mut request = LlmRequest::new(
+            model_used.clone(),
             PromptItem {
-                node: Node::new(prompt_data, Some("stream".to_string())),
+                entity: Entity::new(prompt_data, Some("stream".to_string())),
             },
         )
         .with_stream(true);
+        // D-00e: the agent's effort and fallback ride on the streamed request too, only when set.
+        if let Some(effort) = paladin.data.reasoning_effort {
+            request = request.with_reasoning(effort);
+        }
+        if let Some(fallback) = paladin.data.reasoning_fallback {
+            request = request.with_reasoning_fallback(fallback);
+        }
+
+        // D-12: `Uuid` is `Copy`; cloned into the spawned task explicitly
+        // (rather than relying on the implicit `Copy` move) so the intent
+        // reads at the call site -- every final chunk's `ExecutionMetadata`
+        // is stamped with the SAME execution id as this call's `run_id`.
+        let execution_id = run_id;
+
+        // D-07/D-08 (39-05): the streamed path carries no Platform run id
+        // (a stream is never worker-dispatched), so only `EveryCall` mode
+        // ever settles a stream, always under this execution's own id --
+        // resolved ONCE, before the stream opens (an early `generate_stream`
+        // error settles too, plan 50-30) and before the spawn, since the
+        // spawned task owns no `&self`. Phase 40 D-16: the scope it settles
+        // under is the caller's `ledger_scope` (`execute_stream_scoped`, from
+        // the HTTP agent handler's principal), or the unattributed sentinel
+        // when the caller passed none (D-10).
+        let stream_settlement: Option<StreamSettlement> = self
+            .treasury_ledger
+            .as_ref()
+            .filter(|(_, mode)| *mode == AgentLoopSettlement::EveryCall)
+            .and_then(|(ledger, _)| {
+                RunId::parse(execution_id.to_string())
+                    .inspect_err(|e| {
+                        error!("execution id {execution_id} did not parse as a RunId: {e}");
+                    })
+                    .ok()
+                    .map(|run_id| {
+                        (
+                            ledger.clone(),
+                            ledger_scope.unwrap_or_else(LedgerScope::unattributed),
+                            run_id,
+                        )
+                    })
+            });
+
+        // G-50-5a remainder (a), plan 50-30: one fresh collector around the
+        // streamed call, so a `FallbackLlmAdapter` that hops past a billed
+        // refusal before its first chunk hands that bill to THIS call
+        // (`PricingLlmAdapter` prices it in place). The handle is moved into
+        // the chunk task below and re-installed there. WR-03 (plan 50-32): a
+        // hop bill is counted into the attempt scope at its hop, while the
+        // stream is still opening; every exit of the call takes the entries
+        // with `count_and_take` (counting only any not yet counted) and
+        // settles them with the call's own part.
+        let stream_hopped = HoppedBills::new();
 
         // Open the provider stream eagerly so an unsupported provider errors here
         // (before the caller starts an SSE response).
-        let provider_stream = self
-            .llm_port
-            .generate_stream(request)
-            .await
-            .map_err(|e| to_paladin_error(&e))?;
+        let opened = HOPPED_BILLS
+            .scope(
+                stream_hopped.clone(),
+                self.llm_port.generate_stream(request),
+            )
+            .await;
+        let provider_stream = match opened {
+            Ok(provider_stream) => provider_stream,
+            Err(e) => {
+                // Plan 50-30: a chain that hopped past billed refusals and then
+                // ran out (`AllProvidersFailed`, carrying the last hop's own
+                // bill) fails here, before any chunk. Every bill is still
+                // recorded to the attempt scope and settled once.
+                let own = e.billed_usage();
+                if let Some(bill) = own {
+                    record_incurred_spend(&bill.usage, bill.cost.as_ref());
+                }
+                settle_streamed_call(
+                    stream_settlement.as_ref(),
+                    &model_used,
+                    &stream_hopped.count_and_take(),
+                    own.and_then(|bill| priced_bill_part(bill, &model_used)),
+                )
+                .await;
+                return Err(to_paladin_error(&e));
+            }
+        };
 
         let (tx, rx) = mpsc::channel::<Result<PaladinStreamChunk, PaladinError>>(64);
 
@@ -3233,13 +4095,22 @@ impl PaladinExecutionService {
             .trace_emitter
             .clone()
             .or_else(current_trace_emitter);
+        // G-50-5a (plan 50-29): the attempt spend scope is a task-local too,
+        // so it is captured HERE on the calling task, by the same rule, and
+        // re-installed inside the spawned task below. A missing scope (no
+        // engine attempt around this call) stays missing: nothing is recorded.
+        let stream_spend_scope = ATTEMPT_SPEND.try_with(Clone::clone).ok();
 
         // D-17: captured before the spawn (the spawned task never touches
         // `self`) purely to name the provider in the no-usage warning below
         // -- never any request/response content.
         let provider_name = self.llm_port.get_provider_name();
 
-        tokio::spawn(async move {
+        // Plan 50-30: the collector handle the chunk task takes the entries
+        // from at every exit; a second clone is re-installed as the task's
+        // `HOPPED_BILLS` (a task-local never crosses a `tokio::spawn`).
+        let hopped = stream_hopped.clone();
+        let forward_chunks = async move {
             use futures::StreamExt;
             let mut stream = Box::into_pin(provider_stream);
             while let Some(item) = stream.next().await {
@@ -3262,17 +4133,98 @@ impl PaladinExecutionService {
                         // recorded decision (Milestone 14); do not "fix"
                         // this by wiring the counter in.
                         let metadata = if is_final {
-                            match resp.usage.clone() {
-                                Some(usage) => Some(ChunkMetadata::new().with_usage(usage)),
-                                None => {
-                                    warn!(
-                                        "streamed call to provider \"{provider_name}\" ended \
-                                         without a reported usage; recording a default usage \
-                                         rather than a TokenCounterPort estimate (D-17)"
-                                    );
-                                    None
-                                }
+                            let usage = resp.usage.clone();
+                            if usage.is_none() {
+                                warn!(
+                                    "streamed call to provider \"{provider_name}\" ended \
+                                     without a reported usage; recording a default usage \
+                                     rather than a TokenCounterPort estimate (D-17)"
+                                );
                             }
+                            // D-09/D-10: the pricing decorator (if any)
+                            // stamped `cost` on this SAME terminal
+                            // `StreamingResponse` -- never fabricated here.
+                            let cost = resp.cost.clone();
+                            // G-50-5a (plan 50-29): the terminal chunk is the
+                            // stream's one billed call -- reported to the
+                            // re-installed attempt scope when the provider
+                            // reported a usage (a usage-less chunk is nothing
+                            // billable to record, D-17).
+                            if let Some(usage) = usage.as_ref() {
+                                record_incurred_spend(usage, cost.as_ref());
+                            }
+                            // D-07/D-08 (39-05): settle this streamed call's
+                            // priced terminal chunk under (execution id, 1,
+                            // 1), naming `model_used` -- the only model
+                            // identity a stream carries -- before the chunk
+                            // is sent. Plan 50-30: the bills of the hops the
+                            // chain moved past settle in the same row.
+                            let hop_bills = hopped.count_and_take();
+                            settle_streamed_call(
+                                stream_settlement.as_ref(),
+                                &model_used,
+                                &hop_bills,
+                                cost.as_ref().map(|cost| (model_used.as_str(), cost)),
+                            )
+                            .await;
+                            // Plan 50-30: the run's reported figures fold the
+                            // hop bills in, as the buffered loop's do -- the
+                            // cost by the `CostTally` rule (any unpriced part
+                            // makes it unknown), the usage only when the
+                            // provider reported one for the served call (a
+                            // usage-less terminal chunk stays usage-less,
+                            // D-17; its hop bills still settled above).
+                            let (usage, cost) = if hop_bills.is_empty() {
+                                (usage, cost)
+                            } else {
+                                let mut tally = CostTally::new();
+                                tally.record_call(cost.as_ref());
+                                let usage = usage.map(|mut served| {
+                                    for bill in &hop_bills {
+                                        served += bill.usage.clone();
+                                    }
+                                    served
+                                });
+                                for bill in &hop_bills {
+                                    tally.record_call(bill.cost.as_ref());
+                                }
+                                (usage, tally.total())
+                            };
+                            let mut chunk_metadata = ChunkMetadata::new();
+                            if let Some(usage) = usage.clone() {
+                                chunk_metadata = chunk_metadata.with_usage(usage);
+                            }
+                            if let Some(cost) = cost.clone() {
+                                chunk_metadata = chunk_metadata.with_cost(cost);
+                            }
+                            // ADR-0061 (h), owner reading R-1 (option-b): the terminal
+                            // chunk's `paladin.*` visibility keys, merged by the same rule
+                            // as a buffered run. A stream chunk has no dedicated
+                            // `served_by` field, so that key is carried here too -- no
+                            // `paladin.*` key is dropped between the provider's terminal
+                            // chunk and the caller.
+                            let mut run_metadata: BTreeMap<String, String> = BTreeMap::new();
+                            Self::merge_run_metadata(&mut run_metadata, &resp.metadata);
+                            if let Some(provider) = resp.metadata.get(SERVED_BY_METADATA_KEY) {
+                                run_metadata
+                                    .insert(SERVED_BY_METADATA_KEY.to_string(), provider.clone());
+                            }
+                            chunk_metadata = chunk_metadata.with_run_metadata(run_metadata);
+                            // D-12: the streamed-completion producer -- built
+                            // on every terminal chunk, usage or no usage,
+                            // priced or not.
+                            let execution = Self::stream_execution_metadata(
+                                execution_id,
+                                started_at,
+                                &model_used,
+                                usage.as_ref(),
+                                cost.as_ref(),
+                                &allowance_warnings,
+                            );
+                            if let Some(execution) = execution {
+                                chunk_metadata = chunk_metadata.with_execution(execution);
+                            }
+                            Some(chunk_metadata)
                         } else {
                             None
                         };
@@ -3288,7 +4240,16 @@ impl PaladinExecutionService {
                             heartbeat.beat();
                         }
                         // A send error means the receiver was dropped — stop producing.
+                        // Plan 50-30: a hop bill is never left unsettled (a no-op
+                        // after the terminal chunk, which already took them).
                         if tx.send(Ok(chunk)).await.is_err() {
+                            settle_streamed_call(
+                                stream_settlement.as_ref(),
+                                &model_used,
+                                &hopped.count_and_take(),
+                                None,
+                            )
+                            .await;
                             return;
                         }
                         if is_final {
@@ -3296,22 +4257,125 @@ impl PaladinExecutionService {
                         }
                     }
                     Err(e) => {
+                        // G-50-5a (plan 50-28): a billed, priced terminal error
+                        // (a stream that ended empty or refused) is settled
+                        // exactly like a priced terminal chunk -- (execution
+                        // id, 1, 1), naming the bill's own model (WR-02) -- once, before the
+                        // converted error is sent. An unbilled or unpriced
+                        // error settles nothing (D-00c). G-50-5a (plan
+                        // 50-29): the bill is reported to the re-installed
+                        // attempt scope first.
+                        if let Some(bill) = e.billed_usage() {
+                            record_incurred_spend(&bill.usage, bill.cost.as_ref());
+                        }
+                        // Plan 50-30: with the bills of any hops moved past.
+                        settle_streamed_call(
+                            stream_settlement.as_ref(),
+                            &model_used,
+                            &hopped.count_and_take(),
+                            e.billed_usage()
+                                .and_then(|bill| priced_bill_part(bill, &model_used)),
+                        )
+                        .await;
                         let _ = tx.send(Err(to_paladin_error(&e))).await;
                         return;
                     }
                 }
             }
-            // Provider stream ended without an explicit final marker — emit one.
+            // Provider stream ended without an explicit final marker — emit
+            // one, still carrying a produced ExecutionMetadata (D-12) with
+            // no usage and no cost (the stream never reported a terminal
+            // chunk to read either from). Plan 50-30: the bills of any hops
+            // moved past still settle.
+            settle_streamed_call(
+                stream_settlement.as_ref(),
+                &model_used,
+                &hopped.count_and_take(),
+                None,
+            )
+            .await;
+            let execution = Self::stream_execution_metadata(
+                execution_id,
+                started_at,
+                &model_used,
+                None,
+                None,
+                &allowance_warnings,
+            );
+            let metadata = execution.map(|exec| ChunkMetadata::new().with_execution(exec));
             let _ = tx
                 .send(Ok(PaladinStreamChunk {
                     text: String::new(),
                     is_final: true,
-                    metadata: None,
+                    metadata,
                 }))
                 .await;
+        };
+        tokio::spawn(async move {
+            let forward_chunks = HOPPED_BILLS.scope(stream_hopped, forward_chunks);
+            match stream_spend_scope {
+                Some(scope) => ATTEMPT_SPEND.scope(scope, forward_chunks).await,
+                None => forward_chunks.await,
+            }
         });
 
         Ok(rx)
+    }
+
+    /// Emit each of `scope`'s allowance warnings once as a
+    /// [`TraceEvent::AllowanceWarning`] through whichever [`TraceEmitter`] is available
+    /// (D-18, RESEARCH Pattern 7): this service's own, else the ambient
+    /// `current_trace_emitter()` -- the `MiddlewareEvent` precedent. A no-op with no warning or
+    /// no emitter; never fails or delays the call.
+    fn emit_scope_allowance_warnings(&self, scope: &RunScope) {
+        if scope.allowance_warnings.is_empty() {
+            return;
+        }
+        let Some(emitter) = self.trace_emitter.clone().or_else(current_trace_emitter) else {
+            return;
+        };
+        for warning in &scope.allowance_warnings {
+            emitter.emit(TraceEvent::from(warning.clone()));
+        }
+    }
+
+    /// Build the streamed agent loop's `ExecutionMetadata` (D-12) for one final chunk:
+    /// `execution_id`/`started_at`/`model_used` identify the run, `usage` becomes
+    /// `token_usage` (falling back to `TokenUsage::default()` when the provider reported none),
+    /// and `cost` is attached through `ExecutionMetadataBuilder::cost` only when `Some` -- never
+    /// a fabricated zero (D-00c). `end_time` is stamped `now` and `calculate_duration()` is
+    /// called before returning. A builder error (missing required field) is logged once at
+    /// `warn!` and yields `None` rather than panicking.
+    fn stream_execution_metadata(
+        execution_id: uuid::Uuid,
+        started_at: chrono::DateTime<chrono::Utc>,
+        model_used: &str,
+        usage: Option<&paladin_core::platform::container::token_usage::TokenUsage>,
+        cost: Option<&paladin_core::platform::container::cost::Cost>,
+        allowance_warnings: &[AllowanceWarning],
+    ) -> Option<ExecutionMetadata> {
+        let mut builder = ExecutionMetadata::builder()
+            .execution_id(execution_id)
+            .start_time(started_at)
+            .end_time(chrono::Utc::now())
+            .model_used(model_used.to_string())
+            .token_usage(usage.cloned().unwrap_or_default());
+        if let Some(cost) = cost {
+            builder = builder.cost(cost);
+        }
+        match builder.build() {
+            Ok(mut metadata) => {
+                metadata.calculate_duration();
+                // D-18: the won allowance warnings, rendered by every herald through
+                // `ExecutionMetadata::allowance_warning_display` (no-op when empty).
+                metadata.with_allowance_warnings(allowance_warnings);
+                Some(metadata)
+            }
+            Err(e) => {
+                warn!("failed to build streamed ExecutionMetadata: {e}");
+                None
+            }
+        }
     }
 }
 
@@ -3319,7 +4383,7 @@ impl PaladinExecutionService {
 mod tests {
     use super::*;
     use crate::application::services::sanctum::MemoryExtractionStrategy;
-    use crate::core::base::entity::node::Node;
+    use crate::core::base::entity::Entity;
     #[cfg(feature = "vision")]
     use crate::core::platform::container::vision::{ImageDetail, VisionContent};
     use crate::core::platform::container::{
@@ -3375,7 +4439,7 @@ mod tests {
             ..Default::default()
         };
 
-        Node::new(data, Some("TestPaladin".to_string()))
+        Entity::new(data, Some("TestPaladin".to_string()))
     }
 
     // --- Plan 26-13, D-21: RunScope / execute_scoped / with_vault --------
@@ -3408,9 +4472,11 @@ mod tests {
                 content: "the answer".to_string(),
                 finish_reason: paladin_ports::output::llm_port::FinishReason::Stop,
                 usage: crate::core::platform::container::token_usage::TokenUsage::new(1, 1),
+                cost: None,
                 created_at: chrono::Utc::now(),
                 metadata: HashMap::new(),
                 function_call: None,
+                reasoning: None,
             })
         }
 
@@ -3439,6 +4505,268 @@ mod tests {
         fn get_capabilities(&self) -> ProviderCapabilities {
             ProviderCapabilities::default()
         }
+    }
+
+    /// An `LlmPort` that answers a plain completion on every call, stamping the scripted
+    /// metadata for that call (the last script entry repeats). Drives the Phase 50 run-metadata
+    /// merge (ADR-0061 (h), owner reading R-1).
+    struct ScriptedMetadataLlmPort {
+        script: Vec<HashMap<String, String>>,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl ScriptedMetadataLlmPort {
+        fn new(script: Vec<Vec<(&str, &str)>>) -> Self {
+            Self {
+                script: script
+                    .into_iter()
+                    .map(|call| {
+                        call.into_iter()
+                            .map(|(k, v)| (k.to_string(), v.to_string()))
+                            .collect()
+                    })
+                    .collect(),
+                calls: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl LlmPort for ScriptedMetadataLlmPort {
+        async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
+            let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let metadata = self
+                .script
+                .get(n)
+                .or_else(|| self.script.last())
+                .cloned()
+                .unwrap_or_default();
+            Ok(LlmResponse {
+                id: Uuid::new_v4(),
+                request_id: request.id,
+                model: request.model,
+                content: "the answer".to_string(),
+                finish_reason: paladin_ports::output::llm_port::FinishReason::Stop,
+                usage: crate::core::platform::container::token_usage::TokenUsage::new(1, 1),
+                cost: None,
+                created_at: chrono::Utc::now(),
+                metadata,
+                function_call: None,
+                reasoning: None,
+            })
+        }
+
+        async fn generate_stream(
+            &self,
+            _request: LlmRequest,
+        ) -> Result<
+            Box<dyn futures::Stream<Item = Result<StreamingResponse, LlmError>> + Send>,
+            LlmError,
+        > {
+            // One content chunk, then a terminal chunk stamped with the script's last entry.
+            let mut terminal =
+                StreamingResponse::terminal(paladin_ports::output::llm_port::FinishReason::Stop);
+            for (key, value) in self.script.last().cloned().unwrap_or_default() {
+                terminal = terminal.with_metadata(key, value);
+            }
+            let items: Vec<Result<StreamingResponse, LlmError>> =
+                vec![Ok(StreamingResponse::delta("streamed")), Ok(terminal)];
+            Ok(Box::new(futures::stream::iter(items)))
+        }
+
+        async fn validate_model(&self, _model: &str) -> Result<bool, LlmError> {
+            Ok(true)
+        }
+
+        async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
+            Ok(vec![])
+        }
+
+        fn get_provider_name(&self) -> &'static str {
+            "ScriptedMetadata"
+        }
+
+        fn get_capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities::default()
+        }
+    }
+
+    /// Phase 50, owner reading R-1 (option-b): every model call's `paladin.*` keys reach
+    /// `PaladinResult.run_metadata`. Two calls stamp `params_omitted` (`temperature`, then
+    /// `temperature,stop`), one stamps `unprofiled_model`, the last stamps `served_model` ->
+    /// the union / last-value rule of ADR-0061 (h). `paladin.served_by` keeps its own field and
+    /// is not duplicated; a non-`paladin.` key is ignored (T-50-18-01).
+    #[tokio::test]
+    async fn run_metadata_collects_the_paladin_keys_of_every_call() {
+        use crate::core::platform::container::paladin::MaxLoops;
+        let llm = Arc::new(ScriptedMetadataLlmPort::new(vec![
+            vec![
+                ("paladin.params_omitted", "temperature"),
+                ("paladin.served_model", "m1"),
+            ],
+            vec![
+                ("paladin.params_omitted", "temperature,stop"),
+                ("paladin.unprofiled_model", "m1"),
+                ("paladin.served_by", "p1"),
+                ("x-request-id", "not-a-paladin-key"),
+            ],
+            vec![("paladin.served_model", "m2")],
+        ]));
+        let service = PaladinExecutionService::new(llm, test_circuit_breaker(), None, None);
+        let mut paladin = create_test_paladin();
+        paladin.data.max_loops = MaxLoops::Fixed(3);
+
+        let result = service.execute(&paladin, "hello").await.expect("run");
+
+        assert_eq!(result.loop_count, 3);
+        let expected: std::collections::BTreeMap<String, String> = [
+            ("paladin.params_omitted", "temperature,stop"),
+            ("paladin.unprofiled_model", "m1"),
+            ("paladin.served_model", "m2"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        assert_eq!(result.run_metadata, expected);
+        assert!(!result.run_metadata.contains_key("paladin.served_by"));
+        assert_eq!(result.served_by.as_deref(), Some("p1"));
+    }
+
+    /// Phase 50, owner reading R-1 (option-b), streaming half: the terminal chunk's `paladin.*`
+    /// keys reach the final `PaladinStreamChunk`'s `ChunkMetadata.run_metadata` by the same
+    /// merge rule (a stream chunk has no `served_by` field, so that key is carried too); a
+    /// content chunk carries none and a non-`paladin.` key is never copied.
+    #[tokio::test]
+    async fn streamed_run_merges_the_terminal_chunk_keys_into_run_metadata() {
+        let llm = Arc::new(ScriptedMetadataLlmPort::new(vec![vec![
+            ("paladin.params_omitted", "temperature, stop,temperature"),
+            ("paladin.served_by", "p1"),
+            ("paladin.served_model", "m2"),
+            ("x-request-id", "not-a-paladin-key"),
+        ]]));
+        let service = PaladinExecutionService::new(llm, test_circuit_breaker(), None, None);
+
+        let mut stream = service
+            .execute_stream(&create_test_paladin(), "hello")
+            .await
+            .expect("stream opens");
+        let mut chunks = Vec::new();
+        while let Some(item) = stream.recv().await {
+            chunks.push(item.expect("every scripted chunk is Ok"));
+        }
+
+        let last = chunks.last().expect("a final chunk");
+        assert!(last.is_final);
+        let run_metadata = &last.metadata.as_ref().expect("final metadata").run_metadata;
+        let expected: std::collections::BTreeMap<String, String> = [
+            ("paladin.params_omitted", "temperature,stop"),
+            ("paladin.served_by", "p1"),
+            ("paladin.served_model", "m2"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        assert_eq!(run_metadata, &expected);
+        for content in chunks.iter().filter(|c| !c.is_final) {
+            assert!(content.metadata.is_none(), "content chunk: {content:?}");
+        }
+    }
+
+    /// A streamed call that adjusted nothing leaves `run_metadata` empty on its final chunk.
+    #[tokio::test]
+    async fn streamed_run_without_stamped_keys_has_empty_run_metadata() {
+        let llm = Arc::new(ScriptedMetadataLlmPort::new(vec![vec![]]));
+        let service = PaladinExecutionService::new(llm, test_circuit_breaker(), None, None);
+
+        let mut stream = service
+            .execute_stream(&create_test_paladin(), "hello")
+            .await
+            .expect("stream opens");
+        let mut last = None;
+        while let Some(item) = stream.recv().await {
+            last = Some(item.expect("every scripted chunk is Ok"));
+        }
+
+        let last = last.expect("a final chunk");
+        assert!(
+            last.metadata
+                .expect("final metadata")
+                .run_metadata
+                .is_empty()
+        );
+    }
+
+    /// A run whose calls stamped nothing has an empty `run_metadata`, and the serialised result
+    /// carries no `run_metadata` key (byte-identical to before the field existed).
+    #[tokio::test]
+    async fn run_metadata_is_empty_when_no_call_stamped_anything() {
+        let llm = Arc::new(CountingLlmPort::default());
+        let service = PaladinExecutionService::new(llm, test_circuit_breaker(), None, None);
+
+        let result = service
+            .execute(&create_test_paladin(), "hello")
+            .await
+            .expect("run");
+
+        assert!(result.run_metadata.is_empty());
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(!json.contains("run_metadata"), "{json}");
+    }
+
+    /// The merge helper, unit-level: union keeps first-seen order without duplicates, a
+    /// blank item is dropped, other `paladin.*` keys take the last value, `served_by` and
+    /// foreign keys are ignored.
+    #[test]
+    fn merge_run_metadata_follows_the_adr_0061_rule() {
+        use std::collections::BTreeMap;
+        let call = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        let mut merged = BTreeMap::new();
+        PaladinExecutionService::merge_run_metadata(
+            &mut merged,
+            &call(&[("paladin.params_omitted", "top_p,temperature")]),
+        );
+        PaladinExecutionService::merge_run_metadata(
+            &mut merged,
+            &call(&[
+                ("paladin.params_omitted", "temperature, stop,,top_p"),
+                ("paladin.response_format_adjusted", "json_object"),
+                ("paladin.served_by", "p"),
+                ("other", "x"),
+            ]),
+        );
+        PaladinExecutionService::merge_run_metadata(
+            &mut merged,
+            &call(&[("paladin.response_format_adjusted", "omitted")]),
+        );
+        PaladinExecutionService::merge_run_metadata(
+            &mut merged,
+            &call(&[("paladin.params_omitted", "")]),
+        );
+
+        assert_eq!(
+            merged.get("paladin.params_omitted").map(String::as_str),
+            Some("top_p,temperature,stop")
+        );
+        assert_eq!(
+            merged
+                .get("paladin.response_format_adjusted")
+                .map(String::as_str),
+            Some("omitted")
+        );
+        assert_eq!(merged.len(), 2, "{merged:?}");
+
+        // An entry whose only value is blank leaves no key behind.
+        let mut blank = BTreeMap::new();
+        PaladinExecutionService::merge_run_metadata(
+            &mut blank,
+            &call(&[("paladin.unprofiled_model", "")]),
+        );
+        assert!(blank.is_empty(), "{blank:?}");
     }
 
     /// Test 2: a run through `execute` produces a `PaladinResult` equal to
@@ -3793,12 +5121,14 @@ mod tests {
                 content: "calling lookup".to_string(),
                 finish_reason: paladin_ports::output::llm_port::FinishReason::FunctionCall,
                 usage: crate::core::platform::container::token_usage::TokenUsage::new(1, 1),
+                cost: None,
                 created_at: chrono::Utc::now(),
                 metadata: HashMap::new(),
                 function_call: Some(FunctionCall {
                     name: "lookup".to_string(),
                     arguments: r#"{"q":"x"}"#.to_string(),
                 }),
+                reasoning: None,
             })
         }
 
@@ -3888,7 +5218,7 @@ mod tests {
             Some(arsenal.clone() as Arc<dyn ArsenalPort>),
         );
         let mut paladin = create_test_paladin();
-        paladin.node.max_loops = MaxLoops::Fixed(2);
+        paladin.data.max_loops = MaxLoops::Fixed(2);
 
         // --- buffered path: 2 loops x (1 LLM completion + 1 Armament call)
         let heartbeat = HeartbeatHandle::new();
@@ -3993,7 +5323,7 @@ mod tests {
         )
         .with_trace_emitter(emitter.clone());
         let mut paladin = create_test_paladin();
-        paladin.node.max_loops = MaxLoops::Fixed(1);
+        paladin.data.max_loops = MaxLoops::Fixed(1);
         tool_service.execute(&paladin, "hello").await.unwrap();
 
         // --- StreamChunk progress: 2 content deltas plus the final marker.
@@ -4164,7 +5494,7 @@ mod tests {
 
     /// Plan 25-06 Test 1 (D-02): a provider 503 reaching `execute_stream`'s
     /// open-stream site surfaces as the structured `LlmFailure`, carrying the
-    /// typed transience/status/provider -- not the stringly `LlmError(String)`.
+    /// typed transience/status/provider.
     #[tokio::test]
     async fn paladin_execution_service_surfaces_structured_llm_failure() {
         use paladin_core::platform::container::transience::Transience;
@@ -4235,19 +5565,18 @@ mod tests {
         );
     }
 
-    /// Plan 25-06 (T-25-25): the two buffered retry-loop sites feed the
-    /// converted failure to the circuit breaker, whose `is_retryable()`
-    /// accounting must not drift -- `LlmFailure` counts as a failure exactly
-    /// as the legacy `LlmError(_)` did. With a threshold of one failure, the
-    /// first attempt trips the breaker and the second attempt fails fast with
-    /// `CircuitBreakerOpen`, so the loop's control flow is observably unchanged
-    /// (one provider call, not two).
+    /// Plan 25-06 (T-25-25, D-14): the two buffered retry-loop sites feed the
+    /// converted failure to the circuit breaker, which counts a failure only
+    /// when its `transience()` is `Transient` -- the 503 used here is. With a
+    /// threshold of one failure, the first attempt trips the breaker and the
+    /// second attempt fails fast with `CircuitBreakerOpen` (one provider call,
+    /// not two).
     #[tokio::test]
-    async fn buffered_retry_sites_trip_the_circuit_breaker_like_the_legacy_variant() {
+    async fn buffered_retry_sites_trip_the_circuit_breaker_on_a_transient_failure() {
         use crate::core::platform::container::paladin::MaxLoops;
 
         let mut paladin = create_test_paladin();
-        paladin.node.max_loops = MaxLoops::Fixed(2);
+        paladin.data.max_loops = MaxLoops::Fixed(2);
 
         // Site: execute_with_retry_and_temperature.
         let trips_after_one = Arc::new(CircuitBreaker::new(1, 1, Duration::from_secs(60)));
@@ -4261,7 +5590,8 @@ mod tests {
                 1,
                 &bare_cx(&paladin),
             )
-            .await;
+            .await
+            .map_err(|failure| failure.error);
         assert!(
             matches!(result, Err(PaladinError::CircuitBreakerOpen)),
             "expected CircuitBreakerOpen on the second attempt, got {result:?}"
@@ -4301,7 +5631,7 @@ mod tests {
         use crate::core::platform::container::paladin::MaxLoops;
 
         let mut paladin = create_test_paladin();
-        paladin.node.max_loops = MaxLoops::Fixed(5);
+        paladin.data.max_loops = MaxLoops::Fixed(5);
 
         // Site: execute_with_retry_and_temperature.
         let (port, service) = failing_service(auth_failure, FailAt::Open, default_breaker());
@@ -4314,7 +5644,8 @@ mod tests {
                 1,
                 &bare_cx(&paladin),
             )
-            .await;
+            .await
+            .map_err(|failure| failure.error);
         match result {
             Err(PaladinError::LlmFailure { transience, .. }) => {
                 assert_eq!(transience, Transience::Permanent);
@@ -4359,7 +5690,7 @@ mod tests {
         }
 
         let mut paladin = create_test_paladin();
-        paladin.node.max_loops = MaxLoops::Fixed(2);
+        paladin.data.max_loops = MaxLoops::Fixed(2);
 
         for make in [provider_503, processing_error] {
             let (port, service) = failing_service(make, FailAt::Open, default_breaker());
@@ -4372,7 +5703,8 @@ mod tests {
                     1,
                     &bare_cx(&paladin),
                 )
-                .await;
+                .await
+                .map_err(|failure| failure.error);
             assert!(
                 matches!(result, Err(PaladinError::MaxRetriesExceeded(2))),
                 "expected MaxRetriesExceeded(2), got {result:?}"
@@ -4399,9 +5731,9 @@ mod tests {
         }
     }
 
-    /// Plan 25-06 Test 5 (X-03, T-25-27): for a fixed `LlmError`, what each
-    /// migrated site in this file returns renders exactly what the legacy
-    /// `PaladinError::LlmError(e.to_string())` rendered -- `LLM error: {e}`.
+    /// Plan 25-06 Test 5 (T-25-27): for a fixed `LlmError`, what each
+    /// migrated site in this file returns is a `PaladinError::LlmFailure`
+    /// rendering `LLM error: {e}`.
     ///
     /// The two buffered retry-loop sites never return the converted error to
     /// a caller (they log it and end in `MaxRetriesExceeded` or
@@ -4745,7 +6077,7 @@ mod tests {
             vision_enabled: true,
             ..Default::default()
         };
-        let paladin = Node::new(data, Some("VisionPaladin".to_string()));
+        let paladin = Entity::new(data, Some("VisionPaladin".to_string()));
 
         // Verify that the MockLlmPort doesn't support vision
         let caps = llm_port.get_capabilities();
@@ -4756,7 +6088,7 @@ mod tests {
 
         // Verify paladin has vision_enabled
         assert!(
-            paladin.node.vision_enabled,
+            paladin.data.vision_enabled,
             "Paladin should have vision enabled"
         );
     }
@@ -4774,7 +6106,7 @@ mod tests {
             vision_enabled: false,
             ..Default::default()
         };
-        let paladin = Node::new(data, Some("NormalPaladin".to_string()));
+        let paladin = Entity::new(data, Some("NormalPaladin".to_string()));
 
         // Try to execute with vision - should fail
         let images = vec![VisionContent::ImageUrl {
@@ -4811,7 +6143,7 @@ mod tests {
             vision_enabled: true,
             ..Default::default()
         };
-        let paladin = Node::new(data, Some("VisionPaladin".to_string()));
+        let paladin = Entity::new(data, Some("VisionPaladin".to_string()));
 
         let images = vec![VisionContent::ImageUrl {
             url: "https://example.com/image.jpg".to_string(),
@@ -5067,7 +6399,7 @@ mod tests {
             stop_words: vec!["STOP".to_string()],
             ..Default::default()
         };
-        let paladin = Node::new(data, Some("VisionPaladin".to_string()));
+        let paladin = Entity::new(data, Some("VisionPaladin".to_string()));
 
         let images = vec![VisionContent::ImageUrl {
             url: "https://example.com/image.jpg".to_string(),
@@ -5152,7 +6484,7 @@ mod tests {
             model: "gpt-4o".to_string(),
             ..Default::default()
         };
-        let paladin = Node::new(data, Some("VisionPaladin".to_string()));
+        let paladin = Entity::new(data, Some("VisionPaladin".to_string()));
 
         let images = vec![VisionContent::ImageUrl {
             url: "https://example.com/image.jpg".to_string(),
@@ -5239,7 +6571,7 @@ mod tests {
             model: "gpt-4o".to_string(),
             ..Default::default()
         };
-        let paladin = Node::new(data, Some("VisionPaladin".to_string()));
+        let paladin = Entity::new(data, Some("VisionPaladin".to_string()));
 
         let images = vec![VisionContent::ImageUrl {
             url: "https://example.com/image.jpg".to_string(),
@@ -5271,7 +6603,7 @@ mod middleware_wiring_tests {
         ExecutionMiddleware, FinalResult, LlmResponseView, MiddlewareFlow, ModelCallContext,
         PromptSection, SectionPlacement, ToolCallContext, ToolCallKind, ToolFlow,
     };
-    use crate::core::base::entity::node::Node;
+    use crate::core::base::entity::Entity;
     use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
     use async_trait::async_trait;
     use paladin_llm::mock::{MockLlmAdapter, MockScriptEntry};
@@ -5283,7 +6615,7 @@ mod middleware_wiring_tests {
             max_loops: MaxLoops::Fixed(max_loops),
             ..Default::default()
         };
-        Node::new(data, Some("TestPaladin".to_string()))
+        Entity::new(data, Some("TestPaladin".to_string()))
     }
 
     fn make_service(llm: Arc<MockLlmAdapter>) -> PaladinExecutionService {
@@ -5520,6 +6852,24 @@ mod middleware_wiring_tests {
         assert_eq!(result.output, "hello");
         assert_eq!(result.stop_reason, StopReason::MaxLoops);
         assert_eq!(result.loop_count, 1);
+    }
+
+    /// WR-01: stop words are enforced client-side. An output containing one aborts the run with
+    /// `StopWordDetected`, whatever the model's wire `stop` support, so a builder that no longer
+    /// refuses a `NotSent` profile does not leave the list unenforced.
+    #[tokio::test]
+    async fn an_output_containing_a_stop_word_aborts_with_stop_word_detected() {
+        let llm = Arc::new(MockLlmAdapter::new().with_response("the answer is END of story"));
+        let service = make_service(llm);
+        let mut paladin = make_paladin(1);
+        paladin.data.stop_words.push("end".to_string());
+
+        let result = service.execute(&paladin, "hi").await;
+
+        assert!(
+            matches!(&result, Err(PaladinError::StopWordDetected(word)) if word == "end"),
+            "expected StopWordDetected(\"end\"), got {result:?}"
+        );
     }
 
     /// `before_model`/`after_model` fire once per loop iteration, in strict
@@ -6094,7 +7444,7 @@ mod token_counter_and_recall_limit_tests {
     use crate::application::services::paladin::middleware::{
         ExecutionMiddleware, MiddlewareFlow, ModelCallContext,
     };
-    use crate::core::base::entity::node::Node;
+    use crate::core::base::entity::Entity;
     use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
     use async_trait::async_trait;
     use paladin_core::platform::container::garrison::GarrisonConfig;
@@ -6109,7 +7459,7 @@ mod token_counter_and_recall_limit_tests {
             max_loops: MaxLoops::Fixed(max_loops),
             ..Default::default()
         };
-        Node::new(data, None)
+        Entity::new(data, None)
     }
 
     /// Records `cx.assembly.history.len()` observed on the FIRST loop
@@ -6239,7 +7589,7 @@ mod token_counter_and_recall_limit_tests {
 #[cfg(test)]
 mod streamed_usage_tests {
     use super::*;
-    use crate::core::base::entity::node::Node;
+    use crate::core::base::entity::Entity;
     use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
     use paladin_core::platform::container::token_usage::TokenUsage;
     use paladin_llm::mock::MockLlmAdapter;
@@ -6251,7 +7601,7 @@ mod streamed_usage_tests {
             max_loops: MaxLoops::Fixed(1),
             ..Default::default()
         };
-        Node::new(data, None)
+        Entity::new(data, None)
     }
 
     fn make_service(llm: Arc<MockLlmAdapter>) -> PaladinExecutionService {
@@ -6402,7 +7752,7 @@ mod streamed_usage_tests {
 #[cfg(test)]
 mod structured_output_tests {
     use super::*;
-    use crate::core::base::entity::node::Node;
+    use crate::core::base::entity::Entity;
     use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
     use paladin_core::platform::container::heartbeat::HeartbeatHandle;
     use paladin_core::platform::container::prompt::PromptType;
@@ -6414,7 +7764,7 @@ mod structured_output_tests {
             max_loops: MaxLoops::Fixed(3),
             ..Default::default()
         };
-        Node::new(data, None)
+        Entity::new(data, None)
     }
 
     fn weather_schema() -> Value {
@@ -6708,6 +8058,2801 @@ mod structured_output_tests {
             "the facade's StructuredExecutorPort impl must contain no manual \
              repair loop -- run_structured (paladin-ports) owns the only \
              bounded attempt loop"
+        );
+    }
+}
+
+/// Plan 38-02's tracer: a priced streamed agent call reaches
+/// `ExecutionMetadata` and the markdown herald (D-09, D-12).
+#[cfg(test)]
+mod streamed_cost_tests {
+    use super::*;
+    use crate::core::base::entity::Entity;
+    use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
+    use paladin_core::platform::container::cost::{CurrencyCode, PriceRow, PriceTable};
+    use paladin_core::platform::container::token_usage::TokenUsage;
+    use paladin_core::platform::container::treasury_ledger::{SpendGroupBy, SpendQuery};
+    use paladin_herald::MarkdownHerald;
+    use paladin_herald::markdown_herald::MarkdownHeraldConfig;
+    use paladin_llm::mock::MockLlmAdapter;
+    use paladin_llm::pricing::PricingLlmAdapter;
+    use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
+
+    fn make_paladin(model: &str) -> Paladin {
+        let data = PaladinData {
+            system_prompt: "system".to_string(),
+            model: model.to_string(),
+            max_loops: MaxLoops::Fixed(1),
+            ..Default::default()
+        };
+        Entity::new(data, None)
+    }
+
+    fn plain_markdown_herald() -> Arc<dyn Herald> {
+        Arc::new(MarkdownHerald::with_config(MarkdownHeraldConfig {
+            include_colors: false,
+            heading_level: 2,
+        }))
+    }
+
+    fn make_service(llm: Arc<dyn LlmPort>) -> PaladinExecutionService {
+        PaladinExecutionService::new(
+            llm,
+            Arc::new(CircuitBreaker::new(5, 3, Duration::from_secs(60))),
+            None,
+            None,
+        )
+        .with_herald(plain_markdown_herald())
+    }
+
+    async fn drain_final_chunk(
+        service: &PaladinExecutionService,
+        paladin: &Paladin,
+    ) -> ChunkMetadata {
+        let mut stream = service.execute_stream(paladin, "hi").await.unwrap();
+        loop {
+            let item = stream.recv().await.expect("stream must emit a final chunk");
+            let chunk = item.unwrap();
+            if chunk.is_final {
+                return chunk
+                    .metadata
+                    .expect("the final chunk must carry ChunkMetadata (D-12)");
+            }
+        }
+    }
+
+    /// A streamed agent call through `PaladinExecutionService::execute_stream`, whose
+    /// `LlmPort` is wrapped by `PricingLlmAdapter` over a USD table pricing `gpt-4` at
+    /// prompt 2.50 / completion 10.00 per 1M tokens, ends with a final chunk whose
+    /// `ChunkMetadata` carries `Cost` 22_500_000 nanos USD for 1_000 prompt / 2_000
+    /// completion tokens and an `ExecutionMetadata` whose `cost_estimate` is
+    /// `Some(0.0225)`; handing that metadata to `finalize_stream_output` with a
+    /// `MarkdownHerald` yields text containing `0.0225 USD` and no dollar sign.
+    #[tokio::test]
+    async fn streamed_priced_call_produces_execution_metadata_cost() {
+        let table = Arc::new(PriceTable::new(CurrencyCode::new("USD").unwrap()).with_row(
+            "gpt-4",
+            PriceRow::new(2_500_000_000, 10_000_000_000).unwrap(),
+        ));
+        let mock = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("streamed")
+                .with_token_usage_struct(TokenUsage::new(1_000, 2_000)),
+        );
+        let llm: Arc<dyn LlmPort> = Arc::new(PricingLlmAdapter::new(mock, table));
+        let service = make_service(llm);
+        let paladin = make_paladin("gpt-4");
+
+        let metadata = drain_final_chunk(&service, &paladin).await;
+
+        let cost = metadata
+            .cost
+            .as_ref()
+            .expect("a priced model must carry a cost");
+        assert_eq!(cost.nanos(), 22_500_000);
+        assert_eq!(cost.currency().as_str(), "USD");
+
+        let execution = metadata
+            .execution
+            .as_ref()
+            .expect("the final chunk must carry ExecutionMetadata (D-12)");
+        assert_eq!(execution.cost_estimate, Some(0.0225));
+
+        let text = service
+            .finalize_stream_output(execution)
+            .unwrap()
+            .expect("a herald is configured");
+        assert!(text.contains("0.0225 USD"), "{text}");
+        assert!(
+            !text.contains('$'),
+            "no dollar sign once a currency is configured: {text}"
+        );
+    }
+
+    /// The same streamed call against a model with no price row ends with cost `None` on
+    /// `ChunkMetadata`, an `ExecutionMetadata` whose `cost_estimate` is `None` (never
+    /// `Some(0.0)`), and herald text with no `Cost` line (D-00c, D-08).
+    #[tokio::test]
+    async fn streamed_unpriced_call_reports_no_cost() {
+        let table = Arc::new(PriceTable::new(CurrencyCode::new("USD").unwrap()).with_row(
+            "gpt-4",
+            PriceRow::new(2_500_000_000, 10_000_000_000).unwrap(),
+        ));
+        let mock = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("streamed")
+                .with_token_usage_struct(TokenUsage::new(1_000, 2_000)),
+        );
+        let llm: Arc<dyn LlmPort> = Arc::new(PricingLlmAdapter::new(mock, table));
+        let service = make_service(llm);
+        let paladin = make_paladin("tracer-unpriced-model");
+
+        let metadata = drain_final_chunk(&service, &paladin).await;
+
+        assert!(
+            metadata.cost.is_none(),
+            "an unpriced model must never carry a cost"
+        );
+
+        let execution = metadata
+            .execution
+            .as_ref()
+            .expect("the final chunk must carry ExecutionMetadata even when unpriced (D-12)");
+        assert_eq!(
+            execution.cost_estimate, None,
+            "an unpriced model's cost_estimate must be None, never Some(0.0) (D-00c)"
+        );
+
+        let text = service
+            .finalize_stream_output(execution)
+            .unwrap()
+            .expect("a herald is configured");
+        assert!(!text.contains("Cost"), "{text}");
+    }
+
+    /// Plan 39-05: a streamed priced call settles exactly once, under
+    /// `(execution_id, 1, 1)`, naming the request's model (`gpt-4`, the
+    /// only model identity a stream carries).
+    #[tokio::test]
+    async fn streamed_priced_call_settles_once() {
+        let table = Arc::new(PriceTable::new(CurrencyCode::new("USD").unwrap()).with_row(
+            "gpt-4",
+            PriceRow::new(2_500_000_000, 10_000_000_000).unwrap(),
+        ));
+        let mock = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("streamed")
+                .with_token_usage_struct(TokenUsage::new(1_000, 2_000)),
+        );
+        let llm: Arc<dyn LlmPort> = Arc::new(PricingLlmAdapter::new(mock, table));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let paladin = make_paladin("gpt-4");
+
+        let _ = drain_final_chunk(&service, &paladin).await;
+
+        let rows = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Model,
+                ..Default::default()
+            })
+            .await
+            .expect("spend query succeeds");
+        assert_eq!(rows.len(), 1, "exactly one (model, currency) row");
+        assert_eq!(rows[0].group, "gpt-4");
+        assert_eq!(rows[0].amount.nanos(), 22_500_000);
+        assert_eq!(rows[0].settlements, 1);
+    }
+
+    /// Drain every item `execute_stream` delivers, in order, until the channel closes.
+    async fn drain_all(
+        service: &PaladinExecutionService,
+        paladin: &Paladin,
+    ) -> Vec<Result<PaladinStreamChunk, PaladinError>> {
+        let mut stream = service.execute_stream(paladin, "hi").await.unwrap();
+        let mut items = Vec::new();
+        while let Some(item) = stream.recv().await {
+            items.push(item);
+        }
+        items
+    }
+
+    /// G-50-5a (plan 50-28): a stream that yields one delta and then ends in
+    /// a billed, priced `EmptyCompletion` settles exactly once -- ordinal 1,
+    /// naming the bill's own model (WR-02; `model_used` only when the bill
+    /// names none), the billed nanos -- while the caller still receives
+    /// the delta and then the converted `LlmFailure`. Control: a stream that
+    /// ends in an unbilled error settles nothing.
+    #[tokio::test]
+    async fn billed_stream_failure_is_settled() {
+        use paladin_ports::output::llm_port::{BilledUsage, LlmError};
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let billed = LlmError::empty_completion("finish_reason=stop with empty content")
+            .with_billed_usage(
+                BilledUsage::new("bill-model", TokenUsage::new(1_000, 2_000))
+                    .with_cost(Cost::new(22_500_000, usd)),
+            );
+        let mock = Arc::new(
+            MockLlmAdapter::new().with_stream_items(vec![Ok("partial".to_string()), Err(billed)]),
+        );
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(mock).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let paladin = make_paladin("gpt-4");
+
+        let items = drain_all(&service, &paladin).await;
+        assert_eq!(items.len(), 2, "the delta, then the error: {items:?}");
+        let delta = items[0].as_ref().expect("the delta was delivered");
+        assert_eq!(delta.text, "partial");
+        assert!(!delta.is_final);
+        assert!(
+            matches!(items[1], Err(PaladinError::LlmFailure { .. })),
+            "the stream ends with the converted error, got {:?}",
+            items[1]
+        );
+
+        let rows = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Model,
+                ..Default::default()
+            })
+            .await
+            .expect("spend query succeeds");
+        assert_eq!(rows.len(), 1, "exactly one settled row: {rows:?}");
+        // WR-02: keyed by the model that billed it (the bill's own), not `model_used`.
+        assert_eq!(rows[0].group, "bill-model");
+        assert_eq!(rows[0].amount.nanos(), 22_500_000);
+        assert_eq!(rows[0].settlements, 1);
+
+        // Control: an unbilled stream error settles nothing.
+        let mock = Arc::new(MockLlmAdapter::new().with_stream_items(vec![
+            Ok("partial".to_string()),
+            Err(LlmError::empty_completion(
+                "finish_reason=stop with empty content",
+            )),
+        ]));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(mock).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let items = drain_all(&service, &paladin).await;
+        assert!(matches!(
+            items.last(),
+            Some(Err(PaladinError::LlmFailure { .. }))
+        ));
+        let rows = ledger
+            .spend(SpendQuery::default())
+            .await
+            .expect("spend query succeeds");
+        assert!(
+            rows.is_empty(),
+            "an unbilled failure settles nothing: {rows:?}"
+        );
+    }
+
+    /// G-50-5a (plan 50-29): the streamed path's spawned task re-installs the
+    /// attempt scope that was active when `execute_stream` was called (the
+    /// `stream_trace_emitter` capture pattern -- a task-local never crosses
+    /// a `tokio::spawn`), so a priced terminal chunk and a billed stream
+    /// failure both leave their spend in the caller's scope.
+    #[tokio::test]
+    async fn streamed_calls_are_recorded_in_the_attempt_spend_scope() {
+        use paladin_ports::output::llm_port::{BilledUsage, LlmError};
+        use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope};
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let table = Arc::new(PriceTable::new(usd.clone()).with_row(
+            "gpt-4",
+            PriceRow::new(2_500_000_000, 10_000_000_000).unwrap(),
+        ));
+        let mock = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("streamed")
+                .with_token_usage_struct(TokenUsage::new(1_000, 2_000)),
+        );
+        let llm: Arc<dyn LlmPort> = Arc::new(PricingLlmAdapter::new(mock, table));
+        let service = make_service(llm);
+        let paladin = make_paladin("gpt-4");
+
+        let scope = SpendScope::new();
+        let items = ATTEMPT_SPEND
+            .scope(scope.clone(), drain_all(&service, &paladin))
+            .await;
+        assert!(items.iter().all(Result::is_ok), "a clean stream: {items:?}");
+        let spend = scope.snapshot();
+        assert_eq!(
+            spend.calls(),
+            1,
+            "the terminal chunk is the stream's one bill"
+        );
+        assert_eq!(spend.usage(), &TokenUsage::new(1_000, 2_000));
+        assert_eq!(spend.cost(), Some(Cost::new(22_500_000, usd.clone())));
+
+        let billed = LlmError::empty_completion("finish_reason=stop with empty content")
+            .with_billed_usage(
+                BilledUsage::new("bill-model", TokenUsage::new(200, 50))
+                    .with_cost(Cost::new(1_000_000, usd.clone())),
+            );
+        let mock = Arc::new(
+            MockLlmAdapter::new().with_stream_items(vec![Ok("partial".to_string()), Err(billed)]),
+        );
+        let service = make_service(mock);
+        let scope = SpendScope::new();
+        let items = ATTEMPT_SPEND
+            .scope(scope.clone(), drain_all(&service, &paladin))
+            .await;
+        assert!(matches!(
+            items.last(),
+            Some(Err(PaladinError::LlmFailure { .. }))
+        ));
+        let spend = scope.snapshot();
+        assert_eq!(spend.calls(), 1, "the billed failure is recorded");
+        assert_eq!(spend.usage(), &TokenUsage::new(200, 50));
+        assert_eq!(spend.cost(), Some(Cost::new(1_000_000, usd)));
+    }
+
+    /// `Pricing(Fallback[hop1 -> m1, hop2 -> m2].hop_on_refusal(true))` over two mock hops on
+    /// the stream path: hop 1 answers `first`, hop 2 answers `second` (plan 50-30).
+    fn priced_refusal_stream_chain(
+        first: impl LlmPort + 'static,
+        second: impl LlmPort + 'static,
+    ) -> (Arc<dyn LlmPort>, Arc<PriceTable>) {
+        use paladin_llm::fallback::{FallbackLlmAdapter, FallbackStep};
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let table = Arc::new(
+            PriceTable::new(usd)
+                .with_row("m1", PriceRow::new(3_000_000_000, 15_000_000_000).unwrap())
+                .with_row("m2", PriceRow::new(2_500_000_000, 10_000_000_000).unwrap()),
+        );
+        let chain = FallbackLlmAdapter::from_steps(vec![
+            FallbackStep::new(Arc::new(first) as Arc<dyn LlmPort>, "m1"),
+            FallbackStep::new(Arc::new(second) as Arc<dyn LlmPort>, "m2"),
+        ])
+        .unwrap()
+        .hop_on_refusal(true);
+        let llm: Arc<dyn LlmPort> =
+            Arc::new(PricingLlmAdapter::new(Arc::new(chain), table.clone()));
+        (llm, table)
+    }
+
+    fn billed_refusal_hop(name: &'static str, model: &str, usage: TokenUsage) -> MockLlmAdapter {
+        use paladin_ports::output::llm_port::{BilledUsage, LlmError};
+
+        MockLlmAdapter::new().with_provider_name(name).with_error(
+            LlmError::refusal(name, model, "I can't help with that.")
+                .with_billed_usage(BilledUsage::new(model, usage)),
+        )
+    }
+
+    async fn spend_by_model(
+        ledger: &InMemoryTreasuryLedger,
+    ) -> std::collections::BTreeMap<String, (i64, u64)> {
+        ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Model,
+                ..Default::default()
+            })
+            .await
+            .expect("spend by model succeeds")
+            .into_iter()
+            .map(|row| (row.group, (row.amount.nanos(), row.settlements)))
+            .collect()
+    }
+
+    /// G-50-5a remainder (a), plan 50-30, streamed: hop 1 refuses after billing U1 on `m1`, hop
+    /// 2 streams the answer on `m2` with U2. The terminal settle (ordinal 1) is ONE row carrying
+    /// both parts, the final chunk reports U1 + U2 and c1 + c2, and the attempt scope holds both.
+    #[tokio::test]
+    async fn hopped_refusal_bill_is_settled_on_the_stream() {
+        use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope};
+
+        let u1 = TokenUsage::new(1_000, 40);
+        let u2 = TokenUsage::new(1_000, 2_000);
+        let (llm, table) = priced_refusal_stream_chain(
+            billed_refusal_hop("hop1", "m1", u1.clone()),
+            MockLlmAdapter::new()
+                .with_provider_name("hop2")
+                .with_response("streamed")
+                .with_token_usage_struct(u2.clone()),
+        );
+        let c1 = table.price("m1", &u1).expect("m1 is priced");
+        let c2 = table.price("m2", &u2).expect("m2 is priced");
+        let total = c1.checked_add(&c2).expect("one currency");
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        // The stream names its call by the Paladin's model (Phase 31: a stream carries no
+        // served-model string), so the served part is keyed and priced under `m2`.
+        let paladin = make_paladin("m2");
+
+        let scope = SpendScope::new();
+        let metadata = ATTEMPT_SPEND
+            .scope(scope.clone(), drain_final_chunk(&service, &paladin))
+            .await;
+
+        let mut both = u1;
+        both += u2;
+        assert_eq!(
+            metadata.usage,
+            Some(both.clone()),
+            "the hop bill is in the run usage"
+        );
+        assert_eq!(metadata.cost, Some(total.clone()), "and in its price");
+
+        let by_run = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(by_run.len(), 1);
+        assert_eq!(by_run[0].settlements, 1, "one terminal row");
+        assert_eq!(by_run[0].amount, total);
+        assert_eq!(
+            spend_by_model(&ledger).await,
+            std::collections::BTreeMap::from([
+                ("m1".to_string(), (c1.nanos(), 1)),
+                ("m2".to_string(), (c2.nanos(), 1)),
+            ])
+        );
+
+        let spend = scope.snapshot();
+        assert_eq!(spend.calls(), 2);
+        assert_eq!(spend.usage(), &both);
+        assert_eq!(spend.cost(), Some(total));
+    }
+
+    /// Plan 50-30, streamed exhaustion: both hops refuse after billing, so `generate_stream`
+    /// itself fails before any chunk. Both bills still settle in one row and reach the attempt
+    /// scope, and the caller gets the converted error.
+    #[tokio::test]
+    async fn hopped_bills_survive_stream_exhaustion() {
+        use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope};
+
+        let u1 = TokenUsage::new(1_000, 40);
+        let u2 = TokenUsage::new(800, 30);
+        let (llm, table) = priced_refusal_stream_chain(
+            billed_refusal_hop("hop1", "m1", u1.clone()),
+            billed_refusal_hop("hop2", "m2", u2.clone()),
+        );
+        let c1 = table.price("m1", &u1).expect("m1 is priced");
+        let c2 = table.price("m2", &u2).expect("m2 is priced");
+        let total = c1.checked_add(&c2).expect("one currency");
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        // WR-02: the Paladin's configured model is neither hop's model, so the last hop's own
+        // bill (carried on `AllProvidersFailed`) must be keyed by `m2`, not by this name.
+        let paladin = make_paladin("configured-model");
+
+        let scope = SpendScope::new();
+        let opened = ATTEMPT_SPEND
+            .scope(scope.clone(), service.execute_stream(&paladin, "hi"))
+            .await;
+        assert!(
+            matches!(opened, Err(PaladinError::LlmFailure { .. })),
+            "every hop refused: {:?}",
+            opened.err()
+        );
+
+        assert_eq!(
+            spend_by_model(&ledger).await,
+            std::collections::BTreeMap::from([
+                ("m1".to_string(), (c1.nanos(), 1)),
+                ("m2".to_string(), (c2.nanos(), 1)),
+            ]),
+            "one row, both hops, each at its own model's rate"
+        );
+        let spend = scope.snapshot();
+        assert_eq!(spend.calls(), 2);
+        assert_eq!(spend.cost(), Some(total));
+    }
+
+    /// 40-04 (D-16, HTTP path): through `Arc<dyn StreamingExecutorPort>` in
+    /// `EveryCall` mode, `execute_stream_scoped` settles the streamed priced
+    /// call under the scope's `ledger_scope` -- `(acme, svc-a)`, never the
+    /// sentinel.
+    #[tokio::test]
+    async fn stream_scoped_settles_under_the_scope_ledger_scope() {
+        let table = Arc::new(PriceTable::new(CurrencyCode::new("USD").unwrap()).with_row(
+            "gpt-4",
+            PriceRow::new(2_500_000_000, 10_000_000_000).unwrap(),
+        ));
+        let mock = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("streamed")
+                .with_token_usage_struct(TokenUsage::new(1_000, 2_000)),
+        );
+        let llm: Arc<dyn LlmPort> = Arc::new(PricingLlmAdapter::new(mock, table));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let paladin = make_paladin("gpt-4");
+        let streamer: Arc<dyn StreamingExecutorPort> = Arc::new(service);
+        let scope = RunScope::default().with_ledger_scope(LedgerScope::new("acme", "svc-a"));
+
+        let mut stream = streamer
+            .execute_stream_scoped(&paladin, "hi", &scope)
+            .await
+            .unwrap();
+        loop {
+            let item = stream.recv().await.expect("stream must emit a final chunk");
+            if item.unwrap().is_final {
+                break;
+            }
+        }
+
+        let attributed = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::ApiKey,
+                tenant_id: Some("acme".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("spend query succeeds");
+        assert_eq!(attributed.len(), 1, "the streamed call settled under acme");
+        assert_eq!(attributed[0].group, "svc-a");
+        assert_eq!(attributed[0].amount.nanos(), 22_500_000);
+        assert_eq!(attributed[0].settlements, 1);
+
+        let sentinel = ledger
+            .spend(SpendQuery {
+                tenant_id: Some(LedgerScope::UNATTRIBUTED.to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("spend query succeeds");
+        assert!(
+            sentinel.is_empty(),
+            "a scoped stream never settles under the sentinel"
+        );
+    }
+
+    /// WR-03, plan 50-32, streamed: hop 1 refuses after billing U1 on `m1`, then hop 2's
+    /// `generate_stream` never resolves, so the attempt is dropped by a deadline while the
+    /// stream is still opening. Hop 1's priced bill is already in the attempt scope.
+    #[tokio::test(start_paused = true)]
+    async fn streamed_hop_bill_counts_when_the_attempt_is_dropped_mid_open() {
+        use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope};
+
+        let u1 = TokenUsage::new(1_000, 40);
+        let (llm, table) = priced_refusal_stream_chain(
+            billed_refusal_hop("hop1", "m1", u1.clone()),
+            super::agent_loop_cost_tests::StallingLlmPort,
+        );
+        let c1 = table.price("m1", &u1).expect("m1 is priced");
+        let service = make_service(llm);
+        let paladin = make_paladin("m2");
+
+        let scope = SpendScope::new();
+        let cut = tokio::time::timeout(
+            Duration::from_millis(500),
+            ATTEMPT_SPEND.scope(scope.clone(), drain_final_chunk(&service, &paladin)),
+        )
+        .await;
+        assert!(cut.is_err(), "the attempt was dropped mid-open");
+
+        let spend = scope.snapshot();
+        assert_eq!(spend.calls(), 1, "hop 1's bill is already counted");
+        assert_eq!(spend.usage(), &u1);
+        assert_eq!(spend.cost(), Some(c1), "and it is priced");
+    }
+}
+
+/// Plan 38-07: the agent loop folds each model call's cost into
+/// `PaladinResult.cost` beside `usage` (D-10, D-00c).
+#[cfg(test)]
+mod agent_loop_cost_tests {
+    use super::*;
+    use crate::application::services::paladin::middleware::MiddlewareFlow;
+    use crate::core::base::entity::Entity;
+    use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
+    use async_trait::async_trait;
+    use chrono::{DateTime, Utc};
+    use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+    use paladin_core::platform::container::token_usage::TokenUsage;
+    use paladin_core::platform::container::treasury_ledger::{
+        ReservationId, ReserveRequest, SpendGroupBy, SpendQuery, SpendRow,
+    };
+    use paladin_llm::mock::MockLlmAdapter;
+    use paladin_ports::output::llm_port::{
+        BilledUsage, FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse,
+        ProviderCapabilities, StreamingResponse,
+    };
+    use paladin_ports::output::treasury_ledger_port::TreasuryLedgerError;
+    use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
+    use std::sync::Mutex as StdMutex;
+    use uuid::Uuid;
+
+    fn make_paladin(max_loops: u32) -> Paladin {
+        let data = PaladinData {
+            system_prompt: "system".to_string(),
+            max_loops: MaxLoops::Fixed(max_loops),
+            ..Default::default()
+        };
+        Entity::new(data, None)
+    }
+
+    fn make_service(llm: Arc<dyn LlmPort>) -> PaladinExecutionService {
+        PaladinExecutionService::new(
+            llm,
+            Arc::new(CircuitBreaker::new(5, 3, Duration::from_secs(60))),
+            None,
+            None,
+        )
+    }
+
+    /// A stub `LlmPort` returning a preset queue of `(content, usage, cost)`
+    /// tuples, one per call, holding on the last entry once exhausted --
+    /// lets a test drive per-call `cost` independently of
+    /// `MockLlmAdapter`'s single shared, cost-less response shape.
+    struct ScriptedCostLlmPort {
+        entries: StdMutex<std::collections::VecDeque<(String, TokenUsage, Option<Cost>)>>,
+    }
+
+    impl ScriptedCostLlmPort {
+        fn new(entries: Vec<(&str, TokenUsage, Option<Cost>)>) -> Self {
+            Self {
+                entries: StdMutex::new(
+                    entries
+                        .into_iter()
+                        .map(|(content, usage, cost)| (content.to_string(), usage, cost))
+                        .collect(),
+                ),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl LlmPort for ScriptedCostLlmPort {
+        async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
+            let mut entries = self.entries.lock().unwrap();
+            let (content, usage, cost) = if entries.len() > 1 {
+                entries.pop_front().unwrap()
+            } else {
+                entries.front().cloned().expect("at least one entry")
+            };
+            Ok(LlmResponse {
+                id: Uuid::new_v4(),
+                request_id: request.id,
+                model: request.model,
+                content,
+                finish_reason: FinishReason::Stop,
+                usage,
+                cost,
+                created_at: chrono::Utc::now(),
+                metadata: HashMap::new(),
+                function_call: None,
+                reasoning: None,
+            })
+        }
+
+        async fn generate_stream(
+            &self,
+            _request: LlmRequest,
+        ) -> Result<
+            Box<dyn futures::Stream<Item = Result<StreamingResponse, LlmError>> + Send>,
+            LlmError,
+        > {
+            unimplemented!("ScriptedCostLlmPort only supports generate()")
+        }
+
+        async fn validate_model(&self, _model: &str) -> Result<bool, LlmError> {
+            Ok(true)
+        }
+
+        async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
+            Ok(vec![])
+        }
+
+        fn get_provider_name(&self) -> &'static str {
+            "scripted-cost-stub"
+        }
+
+        fn get_capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities::default()
+        }
+    }
+
+    /// G-50-5a (plan 50-29): a one-loop Paladin executed inside an
+    /// `ATTEMPT_SPEND` scope leaves a snapshot equal to the response's usage
+    /// and cost -- the buffered loop records every call at the point it folds
+    /// it into its own tallies. Outside a scope nothing is recorded.
+    #[tokio::test]
+    async fn buffered_calls_are_recorded_in_the_attempt_spend_scope() {
+        use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope};
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let usage = TokenUsage::new(1_000, 2_000);
+        let cost = Cost::new(22_500_000, usd);
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedCostLlmPort::new(vec![(
+            "done",
+            usage.clone(),
+            Some(cost.clone()),
+        )]));
+        let service = make_service(llm);
+        let paladin = make_paladin(1);
+
+        let scope = SpendScope::new();
+        let result = ATTEMPT_SPEND
+            .scope(scope.clone(), service.execute(&paladin, "hi"))
+            .await
+            .expect("the run succeeds");
+
+        let spend = scope.snapshot();
+        assert_eq!(spend.calls(), 1, "one loop, one recorded call");
+        assert_eq!(spend.usage(), &usage);
+        assert_eq!(spend.cost(), Some(cost));
+        assert_eq!(
+            spend.usage(),
+            &result.usage,
+            "equal to what the run reports"
+        );
+        assert_eq!(spend.cost(), result.cost);
+
+        let outside = SpendScope::new();
+        service
+            .execute(&paladin, "hi")
+            .await
+            .expect("still succeeds");
+        assert!(outside.snapshot().is_empty(), "no scope: nothing recorded");
+    }
+
+    /// D-10: two loop iterations whose responses carry costs 22_500_000 and
+    /// 1_000_000 nanos USD sum to `PaladinResult.cost == Some(23_500_000 USD)`
+    /// -- the exact `CostTally` sum of the run's priced calls.
+    #[tokio::test]
+    async fn agent_loop_sums_cost_across_calls() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedCostLlmPort::new(vec![
+            (
+                "first",
+                TokenUsage::new(1_000, 2_000),
+                Some(Cost::new(22_500_000, usd.clone())),
+            ),
+            (
+                "second",
+                TokenUsage::new(200, 50),
+                Some(Cost::new(1_000_000, usd.clone())),
+            ),
+        ]));
+        let service = make_service(llm);
+        let paladin = make_paladin(2);
+
+        let result = service.execute(&paladin, "hi").await.unwrap();
+
+        let cost = result
+            .cost
+            .expect("two priced calls must sum to a priced run cost");
+        assert_eq!(cost.nanos(), 23_500_000);
+        assert_eq!(cost.currency(), &usd);
+    }
+
+    /// D-10, D-00c: an in-test `LlmPort` whose first response carries
+    /// `Some` cost and second carries `None` poisons the run total --
+    /// `PaladinResult.cost == None`, never a partial sum of just the first
+    /// call.
+    #[tokio::test]
+    async fn agent_loop_cost_is_none_when_any_call_unpriced() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedCostLlmPort::new(vec![
+            (
+                "first",
+                TokenUsage::new(1_000, 2_000),
+                Some(Cost::new(22_500_000, usd)),
+            ),
+            ("second", TokenUsage::new(200, 50), None),
+        ]));
+        let service = make_service(llm);
+        let paladin = make_paladin(2);
+
+        let result = service.execute(&paladin, "hi").await.unwrap();
+
+        assert!(
+            result.cost.is_none(),
+            "one unpriced call must poison the run total"
+        );
+    }
+
+    /// D-00c: an unwrapped `MockLlmAdapter` (no `PricingLlmAdapter`
+    /// decorator) reports `cost: None` on every response -- the run's
+    /// `PaladinResult.cost` is `None` while `usage` is still reported in
+    /// full, never a fabricated zero.
+    #[tokio::test]
+    async fn agent_loop_cost_is_none_without_pricing() {
+        let mock = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("plain")
+                .with_token_usage_struct(TokenUsage::new(10, 20)),
+        );
+        let llm: Arc<dyn LlmPort> = mock;
+        let service = make_service(llm);
+        let paladin = make_paladin(1);
+
+        let result = service.execute(&paladin, "hi").await.unwrap();
+
+        assert!(
+            result.cost.is_none(),
+            "no pricing installed must yield None"
+        );
+        assert_eq!(
+            result.usage.total_tokens, 30,
+            "usage must still be reported in full even with no cost"
+        );
+    }
+
+    /// A ledger whose `settle` always fails with `TreasuryLedgerError::Backend`
+    /// -- proves D-08's "never fails the agent loop" guarantee.
+    /// `reserve`/`release` are unreachable: the agent loop's settle-only
+    /// production writer never calls them.
+    struct FailingTreasuryLedger;
+
+    #[async_trait]
+    impl TreasuryLedgerPort for FailingTreasuryLedger {
+        async fn reserve(
+            &self,
+            _request: ReserveRequest,
+        ) -> Result<ReservationId, TreasuryLedgerError> {
+            unreachable!("not exercised by the agent loop's settle-only production writer")
+        }
+
+        async fn release(&self, _reservation: ReservationId) -> Result<(), TreasuryLedgerError> {
+            unreachable!("not exercised by the agent loop's settle-only production writer")
+        }
+
+        async fn settle(
+            &self,
+            _request: SettleRequest,
+        ) -> Result<SettleOutcome, TreasuryLedgerError> {
+            Err(TreasuryLedgerError::Backend {
+                source: Box::new(std::io::Error::other("ledger backend unavailable")),
+            })
+        }
+
+        async fn spend(&self, _query: SpendQuery) -> Result<Vec<SpendRow>, TreasuryLedgerError> {
+            Ok(Vec::new())
+        }
+
+        async fn store_now(&self) -> Result<DateTime<Utc>, TreasuryLedgerError> {
+            Ok(Utc::now())
+        }
+    }
+
+    /// D-07: every priced model call of a plain `execute()` (no `RunScope`
+    /// run id) settles under the service's own execution id -- the in-memory
+    /// ledger's spend by run has one row with 2 settlements whose amount
+    /// equals `PaladinResult.cost`; spend by model is keyed on the
+    /// responses' model.
+    #[tokio::test]
+    async fn every_priced_model_call_settles_under_the_execution_id() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedCostLlmPort::new(vec![
+            (
+                "first",
+                TokenUsage::new(1_000, 2_000),
+                Some(Cost::new(22_500_000, usd.clone())),
+            ),
+            (
+                "second",
+                TokenUsage::new(200, 50),
+                Some(Cost::new(1_000_000, usd)),
+            ),
+        ]));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let paladin = make_paladin(2);
+
+        let result = service.execute(&paladin, "hi").await.unwrap();
+        let cost = result.cost.expect("two priced calls must sum to a cost");
+
+        let by_run = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(by_run.len(), 1, "exactly one run settled");
+        assert_eq!(by_run[0].amount, cost);
+        assert_eq!(by_run[0].settlements, 2);
+
+        let by_model = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Model,
+                ..Default::default()
+            })
+            .await
+            .expect("spend by model succeeds");
+        assert_eq!(by_model.len(), 1, "both calls named the same model");
+        assert_eq!(by_model[0].group, "gpt-4");
+        assert_eq!(by_model[0].amount, cost);
+    }
+
+    /// D-08: an unpriced call writes no settlement row -- one priced and one
+    /// unpriced call settle exactly once.
+    #[tokio::test]
+    async fn unpriced_model_call_writes_no_settlement() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedCostLlmPort::new(vec![
+            (
+                "first",
+                TokenUsage::new(1_000, 2_000),
+                Some(Cost::new(22_500_000, usd)),
+            ),
+            ("second", TokenUsage::new(200, 50), None),
+        ]));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let paladin = make_paladin(2);
+
+        let _ = service.execute(&paladin, "hi").await.unwrap();
+
+        let by_run = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(by_run.len(), 1);
+        assert_eq!(
+            by_run[0].settlements, 1,
+            "the unpriced call must write no row"
+        );
+    }
+
+    /// One scripted call outcome: a success `(content, usage, cost)` or an error.
+    type ScriptedOutcome<S> = Result<(S, TokenUsage, Option<Cost>), LlmError>;
+
+    /// A stub `LlmPort` answering a preset queue of outcomes, one per call --
+    /// a success `(content, usage, cost)` or an error -- holding on the last
+    /// entry once exhausted (G-50-5a, plan 50-28): lets a test end a run in a
+    /// billed failure after earlier priced successes.
+    struct ScriptedOutcomeLlmPort {
+        outcomes: StdMutex<std::collections::VecDeque<ScriptedOutcome<String>>>,
+    }
+
+    impl ScriptedOutcomeLlmPort {
+        fn new(outcomes: Vec<ScriptedOutcome<&str>>) -> Self {
+            Self {
+                outcomes: StdMutex::new(
+                    outcomes
+                        .into_iter()
+                        .map(|outcome| {
+                            outcome.map(|(content, usage, cost)| (content.to_string(), usage, cost))
+                        })
+                        .collect(),
+                ),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl LlmPort for ScriptedOutcomeLlmPort {
+        async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
+            let outcome = {
+                let mut outcomes = self.outcomes.lock().unwrap();
+                if outcomes.len() > 1 {
+                    outcomes.pop_front().unwrap()
+                } else {
+                    outcomes.front().cloned().expect("at least one outcome")
+                }
+            };
+            let (content, usage, cost) = outcome?;
+            Ok(LlmResponse {
+                id: Uuid::new_v4(),
+                request_id: request.id,
+                model: request.model,
+                content,
+                finish_reason: FinishReason::Stop,
+                usage,
+                cost,
+                created_at: chrono::Utc::now(),
+                metadata: HashMap::new(),
+                function_call: None,
+                reasoning: None,
+            })
+        }
+
+        async fn generate_stream(
+            &self,
+            _request: LlmRequest,
+        ) -> Result<
+            Box<dyn futures::Stream<Item = Result<StreamingResponse, LlmError>> + Send>,
+            LlmError,
+        > {
+            unimplemented!("ScriptedOutcomeLlmPort only supports generate()")
+        }
+
+        async fn validate_model(&self, _model: &str) -> Result<bool, LlmError> {
+            Ok(true)
+        }
+
+        async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
+            Ok(vec![])
+        }
+
+        fn get_provider_name(&self) -> &'static str {
+            "scripted-outcome-stub"
+        }
+
+        fn get_capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities::default()
+        }
+    }
+
+    /// An `EmptyCompletion` the vendor billed for `usage` on `model`, priced at
+    /// `cost` when `Some` (as `PricingLlmAdapter` would have priced it).
+    fn billed_empty_completion(model: &str, usage: TokenUsage, cost: Option<Cost>) -> LlmError {
+        let mut bill = BilledUsage::new(model, usage);
+        if let Some(cost) = cost {
+            bill = bill.with_cost(cost);
+        }
+        LlmError::empty_completion("finish_reason=length with empty content")
+            .with_billed_usage(bill)
+    }
+
+    /// G-50-5a (plan 50-28 tracer): a model call that fails with a billed,
+    /// priced `EmptyCompletion` is settled to the treasury ledger exactly once
+    /// -- one row of the billed 2_403_000 nanos, breakdown key `m` -- while the
+    /// caller still sees exactly the error `to_paladin_error` produces.
+    #[tokio::test]
+    async fn billed_empty_completion_is_settled() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let billed = billed_empty_completion(
+            "m",
+            TokenUsage::new(1_000, 62_000),
+            Some(Cost::new(2_403_000, usd)),
+        );
+        let expected = to_paladin_error(&billed);
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedOutcomeLlmPort::new(vec![Err(billed)]));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let paladin = make_paladin(1);
+
+        let err = service
+            .execute(&paladin, "hi")
+            .await
+            .expect_err("a billed empty completion still fails the run");
+        assert!(
+            matches!(
+                err,
+                PaladinError::LlmFailure {
+                    transience: Transience::Permanent,
+                    ..
+                }
+            ),
+            "expected a permanent LlmFailure, got {err:?}"
+        );
+        assert_eq!(
+            err.to_string(),
+            expected.to_string(),
+            "the caller sees exactly what to_paladin_error produces"
+        );
+
+        let by_model = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Model,
+                ..Default::default()
+            })
+            .await
+            .expect("spend by model succeeds");
+        assert_eq!(by_model.len(), 1, "exactly one settled row");
+        assert_eq!(by_model[0].group, "m");
+        assert_eq!(by_model[0].amount.nanos(), 2_403_000);
+        assert_eq!(by_model[0].settlements, 1);
+
+        let by_run = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(by_run.len(), 1, "settled under the execution's own run");
+        assert_eq!(by_run[0].settlements, 1);
+    }
+
+    /// G-50-5a: a priced success on loop 1 and a billed failure on loop 2
+    /// settle once per call ordinal -- two rows, A and B.
+    #[tokio::test]
+    async fn billed_failure_after_a_priced_call_settles_both_ordinals() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedOutcomeLlmPort::new(vec![
+            Ok((
+                "first",
+                TokenUsage::new(1_000, 2_000),
+                Some(Cost::new(22_500_000, usd.clone())),
+            )),
+            Err(billed_empty_completion(
+                "gpt-4",
+                TokenUsage::new(200, 50),
+                Some(Cost::new(1_000_000, usd.clone())),
+            )),
+        ]));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let paladin = make_paladin(2);
+
+        let _ = service
+            .execute(&paladin, "hi")
+            .await
+            .expect_err("the second call's billed failure fails the run");
+
+        let by_run = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(by_run.len(), 1);
+        assert_eq!(by_run[0].settlements, 2, "one settle per call ordinal");
+        assert_eq!(by_run[0].amount, Cost::new(23_500_000, usd));
+    }
+
+    /// An `ExecutionMiddleware` whose SECOND `before_model` fails the run
+    /// with a non-LLM `ExecutionError` -- a terminal error after a billed
+    /// call (G-50-5a remainder (b), plan 50-29).
+    struct FailOnSecondLoop {
+        loops_seen: std::sync::atomic::AtomicU32,
+    }
+
+    #[async_trait]
+    impl ExecutionMiddleware for FailOnSecondLoop {
+        async fn before_model(
+            &self,
+            _cx: &mut ModelCallContext<'_>,
+        ) -> Result<MiddlewareFlow, PaladinError> {
+            let seen = self
+                .loops_seen
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if seen == 0 {
+                Ok(MiddlewareFlow::Continue)
+            } else {
+                Err(PaladinError::ExecutionError(
+                    "middleware refused the second loop".to_string(),
+                ))
+            }
+        }
+
+        fn name(&self) -> &str {
+            "fail-on-second-loop"
+        }
+    }
+
+    /// G-50-5a remainder (b), plan 50-29: inside an `ATTEMPT_SPEND` scope, a
+    /// two-loop Paladin whose first call succeeds at cost A and whose second
+    /// iteration fails with a non-LLM error returns that error, and the
+    /// scope holds A and the first call's usage -- the billed call before a
+    /// non-`LlmFailure` terminal error still reports its spend.
+    #[tokio::test]
+    async fn non_llm_failure_after_billed_calls_reports_their_spend() {
+        use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope};
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let first_usage = TokenUsage::new(1_000, 2_000);
+        let cost_a = Cost::new(22_500_000, usd);
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedCostLlmPort::new(vec![(
+            "first",
+            first_usage.clone(),
+            Some(cost_a.clone()),
+        )]));
+        let service = make_service(llm).with_middleware(Arc::new(FailOnSecondLoop {
+            loops_seen: std::sync::atomic::AtomicU32::new(0),
+        }));
+        let paladin = make_paladin(2);
+
+        let scope = SpendScope::new();
+        let err = ATTEMPT_SPEND
+            .scope(scope.clone(), service.execute(&paladin, "hi"))
+            .await
+            .expect_err("the second loop's middleware error fails the run");
+        assert!(
+            matches!(&err, PaladinError::ExecutionError(msg) if msg.contains("second loop")),
+            "the middleware's own error, unchanged: {err:?}"
+        );
+
+        let spend = scope.snapshot();
+        assert_eq!(spend.calls(), 1, "the one billed call before the error");
+        assert_eq!(spend.usage(), &first_usage);
+        assert_eq!(spend.cost(), Some(cost_a));
+    }
+
+    /// G-50-5a (plan 50-29): a billed `EmptyCompletion` priced at B leaves B
+    /// in the attempt scope beside its ledger settle (plan 50-28).
+    #[tokio::test]
+    async fn billed_failure_is_recorded_in_the_attempt_spend_scope() {
+        use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope};
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let billed_usage = TokenUsage::new(1_000, 62_000);
+        let cost_b = Cost::new(2_403_000, usd);
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedOutcomeLlmPort::new(vec![Err(
+            billed_empty_completion("m", billed_usage.clone(), Some(cost_b.clone())),
+        )]));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let paladin = make_paladin(1);
+
+        let scope = SpendScope::new();
+        let err = ATTEMPT_SPEND
+            .scope(scope.clone(), service.execute(&paladin, "hi"))
+            .await
+            .expect_err("a billed empty completion still fails the run");
+        assert!(matches!(err, PaladinError::LlmFailure { .. }));
+
+        let spend = scope.snapshot();
+        assert_eq!(spend.calls(), 1, "the bill is one recorded call");
+        assert_eq!(spend.usage(), &billed_usage);
+        assert_eq!(spend.cost(), Some(cost_b.clone()));
+
+        let by_run = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(by_run.len(), 1, "the 50-28 settle is unchanged beside it");
+        assert_eq!(by_run[0].amount, cost_b);
+        assert_eq!(by_run[0].settlements, 1);
+    }
+
+    /// G-50-5a (plan 50-29): `execute_json_schema` with `max_repair_attempts:
+    /// 1` and two priced non-conforming responses returns
+    /// `StructuredOutputInvalid { attempts: 2, .. }`, and the attempt scope
+    /// holds BOTH calls -- the first and the repair. Outside any scope the
+    /// same run behaves exactly as before and records nothing.
+    #[tokio::test]
+    async fn structured_exhaustion_reports_every_call() {
+        use paladin_core::platform::container::structured::StructuredOptions;
+        use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope};
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let scripted = || -> Arc<dyn LlmPort> {
+            Arc::new(ScriptedCostLlmPort::new(vec![
+                (
+                    r#"{"nope": 1}"#,
+                    TokenUsage::new(300, 20),
+                    Some(Cost::new(1_000_000, usd.clone())),
+                ),
+                (
+                    r#"{"nope": 2}"#,
+                    TokenUsage::new(500, 30),
+                    Some(Cost::new(1_500_000, usd.clone())),
+                ),
+            ]))
+        };
+        let schema = serde_json::json!({
+            "type": "object",
+            "required": ["city"],
+            "properties": {"city": {"type": "string"}}
+        });
+        let paladin = make_paladin(1);
+
+        let service = make_service(scripted());
+        let scope = SpendScope::new();
+        let err = ATTEMPT_SPEND
+            .scope(
+                scope.clone(),
+                service.execute_json_schema(
+                    &paladin,
+                    "weather",
+                    &schema,
+                    &StructuredOptions::new(1),
+                ),
+            )
+            .await
+            .expect_err("two non-conforming responses exhaust one repair");
+        assert!(
+            matches!(
+                err,
+                PaladinError::StructuredOutputInvalid { attempts: 2, .. }
+            ),
+            "got {err:?}"
+        );
+        let spend = scope.snapshot();
+        assert_eq!(spend.calls(), 2, "the first call and the repair call");
+        assert_eq!(spend.usage(), &TokenUsage::new(800, 50));
+        assert_eq!(spend.cost(), Some(Cost::new(2_500_000, usd.clone())));
+
+        // Outside any scope: the same error, nothing recorded anywhere.
+        let service = make_service(scripted());
+        let err = service
+            .execute_json_schema(&paladin, "weather", &schema, &StructuredOptions::new(1))
+            .await
+            .expect_err("still exhausts");
+        assert!(matches!(
+            err,
+            PaladinError::StructuredOutputInvalid { attempts: 2, .. }
+        ));
+        assert!(SpendScope::new().snapshot().is_empty());
+    }
+
+    /// G-50-5a / D-00c: a failure with no bill settles nothing, and a bill
+    /// with `cost: None` (an unpriced model) settles nothing either.
+    #[tokio::test]
+    async fn unbilled_or_unpriced_failure_settles_nothing() {
+        for failure in [
+            LlmError::empty_completion("finish_reason=stop with empty content"),
+            billed_empty_completion("m", TokenUsage::new(1_000, 62_000), None),
+        ] {
+            let llm: Arc<dyn LlmPort> = Arc::new(ScriptedOutcomeLlmPort::new(vec![Err(failure)]));
+            let ledger = Arc::new(InMemoryTreasuryLedger::new());
+            let service = make_service(llm)
+                .with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+
+            let _ = service
+                .execute(&make_paladin(1), "hi")
+                .await
+                .expect_err("the failure still fails the run");
+
+            let rows = ledger
+                .spend(SpendQuery::default())
+                .await
+                .expect("spend succeeds");
+            assert!(rows.is_empty(), "nothing priced, nothing settled: {rows:?}");
+        }
+    }
+
+    /// D-07: `EveryCall` prefers the scope's own run id over this service's
+    /// execution id -- `execute_scoped` with a `RunScope::with_run_id(R)`
+    /// settles both loop iterations under R, at supersteps 1 and 2, attempt
+    /// 1 (proven by re-settling the exact same keys directly against the
+    /// ledger and observing `AlreadySettled`, never a fresh `Settled`).
+    #[tokio::test]
+    async fn every_call_mode_prefers_the_scope_run_id() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedCostLlmPort::new(vec![
+            (
+                "first",
+                TokenUsage::new(1_000, 2_000),
+                Some(Cost::new(22_500_000, usd.clone())),
+            ),
+            (
+                "second",
+                TokenUsage::new(200, 50),
+                Some(Cost::new(1_000_000, usd.clone())),
+            ),
+        ]));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let paladin = make_paladin(2);
+        let run_id = RunId::new_v7();
+        let scope = RunScope::default().with_run_id(run_id.clone());
+
+        let _ = service
+            .execute_scoped(&paladin, "hi", None, &scope)
+            .await
+            .unwrap();
+
+        let rows = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                run_ids: vec![run_id.clone()],
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(rows.len(), 1, "both calls settled under the scope's run id");
+        assert_eq!(rows[0].settlements, 2);
+
+        for superstep in [1_u64, 2_u64] {
+            let outcome = ledger
+                .settle(SettleRequest::unreserved(
+                    LedgerScope::unattributed(),
+                    SettlementKey::new(run_id.clone(), superstep, 1),
+                    Cost::new(1, usd.clone()),
+                    BTreeMap::from([("probe".to_string(), 1_i64)]),
+                ))
+                .await
+                .expect("settle probe succeeds");
+            assert_eq!(
+                outcome,
+                SettleOutcome::AlreadySettled,
+                "superstep {superstep} attempt 1 must already be settled under run {run_id}"
+            );
+        }
+    }
+
+    /// D-16 (run path): a `RunScope` carrying `ledger_scope == (acme, svc-a)`
+    /// settles every priced call under that scope -- a spend query filtered
+    /// to that tenant and key sees both settlements, and the sentinel sees
+    /// none.
+    #[tokio::test]
+    async fn agent_loop_settles_under_the_run_scope_ledger_scope() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedCostLlmPort::new(vec![
+            (
+                "first",
+                TokenUsage::new(1_000, 2_000),
+                Some(Cost::new(22_500_000, usd.clone())),
+            ),
+            (
+                "second",
+                TokenUsage::new(200, 50),
+                Some(Cost::new(1_000_000, usd.clone())),
+            ),
+        ]));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let paladin = make_paladin(2);
+        let run_id = RunId::new_v7();
+        let scope = RunScope::default()
+            .with_run_id(run_id.clone())
+            .with_ledger_scope(LedgerScope::new("acme", "svc-a"));
+
+        let _ = service
+            .execute_scoped(&paladin, "hi", None, &scope)
+            .await
+            .unwrap();
+
+        let attributed = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                tenant_id: Some("acme".to_string()),
+                api_key_id: Some("svc-a".to_string()),
+                run_ids: vec![run_id.clone()],
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(
+            attributed.len(),
+            1,
+            "both calls settled under (acme, svc-a)"
+        );
+        assert_eq!(attributed[0].settlements, 2);
+
+        let sentinel = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                tenant_id: Some(LedgerScope::UNATTRIBUTED.to_string()),
+                run_ids: vec![run_id],
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert!(
+            sentinel.is_empty(),
+            "an attributed run must never settle under the sentinel"
+        );
+    }
+
+    /// D-10/D-16: a `RunScope` carrying no `ledger_scope` settles under the
+    /// unattributed sentinel -- the only case the sentinel is stamped.
+    #[tokio::test]
+    async fn agent_loop_without_a_ledger_scope_settles_unattributed() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedCostLlmPort::new(vec![(
+            "first",
+            TokenUsage::new(1_000, 2_000),
+            Some(Cost::new(22_500_000, usd)),
+        )]));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let paladin = make_paladin(1);
+        let run_id = RunId::new_v7();
+        let scope = RunScope::default().with_run_id(run_id.clone());
+        assert!(scope.ledger_scope.is_none());
+
+        let _ = service
+            .execute_scoped(&paladin, "hi", None, &scope)
+            .await
+            .unwrap();
+
+        let rows = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Tenant,
+                run_ids: vec![run_id],
+                ..Default::default()
+            })
+            .await
+            .expect("spend by tenant succeeds");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].group, LedgerScope::UNATTRIBUTED);
+        assert_eq!(rows[0].settlements, 1);
+    }
+
+    /// D-16 (HTTP path): through `Arc<dyn PaladinExecutorPort>` -- the
+    /// handle `agent_controller` holds -- `execute_scoped` settles the priced
+    /// call under the scope's `ledger_scope`, proving the trait override
+    /// reaches the inherent scoped path rather than the default delegate.
+    #[tokio::test]
+    async fn executor_port_execute_scoped_settles_under_the_scope_ledger_scope() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedCostLlmPort::new(vec![(
+            "first",
+            TokenUsage::new(1_000, 2_000),
+            Some(Cost::new(22_500_000, usd)),
+        )]));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let executor: Arc<dyn PaladinExecutorPort> = Arc::new(service);
+        let paladin = make_paladin(1);
+        let scope = RunScope::default().with_ledger_scope(LedgerScope::new("acme", "svc-a"));
+
+        let _ = executor
+            .execute_scoped(&paladin, "hi", &scope)
+            .await
+            .unwrap();
+
+        let rows = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::ApiKey,
+                tenant_id: Some("acme".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("spend by api key succeeds");
+        assert_eq!(rows.len(), 1, "the call settled under tenant acme");
+        assert_eq!(rows[0].group, "svc-a");
+        assert_eq!(rows[0].settlements, 1);
+        assert_eq!(rows[0].amount.nanos(), 22_500_000);
+    }
+
+    /// D-07/D-08: `PlatformRunsOnly` never settles a plain `execute()` call
+    /// (no run id in scope) -- only an `execute_scoped` call whose
+    /// `RunScope` names a run id settles.
+    #[tokio::test]
+    async fn platform_runs_only_settles_only_scoped_runs() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedCostLlmPort::new(vec![(
+            "first",
+            TokenUsage::new(1_000, 2_000),
+            Some(Cost::new(22_500_000, usd)),
+        )]));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service = make_service(llm)
+            .with_treasury_ledger(ledger.clone(), AgentLoopSettlement::PlatformRunsOnly);
+        let paladin = make_paladin(1);
+
+        let _ = service.execute(&paladin, "hi").await.unwrap();
+        let empty = ledger
+            .spend(SpendQuery::default())
+            .await
+            .expect("spend succeeds");
+        assert!(
+            empty.is_empty(),
+            "a call with no scope run id must never settle under PlatformRunsOnly"
+        );
+
+        let run_id = RunId::new_v7();
+        let scope = RunScope::default().with_run_id(run_id.clone());
+        let _ = service
+            .execute_scoped(&paladin, "hi", None, &scope)
+            .await
+            .unwrap();
+
+        let rows = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                run_ids: vec![run_id],
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(rows.len(), 1, "the scoped run's call settled");
+    }
+
+    /// D-08, LEDGR-03: a ledger `Err` on every `settle` call never fails,
+    /// retries, or alters the run's output -- `execute` returns the exact
+    /// same output and cost as the identical run with no ledger installed.
+    #[tokio::test]
+    async fn ledger_failure_never_fails_the_agent_loop() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let make_llm = || -> Arc<dyn LlmPort> {
+            Arc::new(ScriptedCostLlmPort::new(vec![(
+                "first",
+                TokenUsage::new(1_000, 2_000),
+                Some(Cost::new(22_500_000, usd.clone())),
+            )]))
+        };
+        let paladin = make_paladin(1);
+
+        let baseline = make_service(make_llm())
+            .execute(&paladin, "hi")
+            .await
+            .unwrap();
+
+        let failing_service = make_service(make_llm()).with_treasury_ledger(
+            Arc::new(FailingTreasuryLedger),
+            AgentLoopSettlement::EveryCall,
+        );
+        let with_failing_ledger = failing_service.execute(&paladin, "hi").await.unwrap();
+
+        assert_eq!(with_failing_ledger.output, baseline.output);
+        assert_eq!(with_failing_ledger.cost, baseline.cost);
+        assert_eq!(with_failing_ledger.loop_count, baseline.loop_count);
+    }
+
+    // ---- G-50-5a remainder (a), plan 50-30: hopped-past fallback bills ----
+
+    use paladin_core::platform::container::cost::{PriceRow, PriceTable};
+    use paladin_llm::fallback::{FallbackLlmAdapter, FallbackStep};
+    use paladin_llm::pricing::PricingLlmAdapter;
+
+    /// The price table the plan 50-30 hop tests price against: `m1` (the
+    /// hop that refused) and `m2` (the hop that answered), USD.
+    fn hop_price_table() -> Arc<PriceTable> {
+        let usd = CurrencyCode::new("USD").unwrap();
+        Arc::new(
+            PriceTable::new(usd)
+                .with_row("m1", PriceRow::new(3_000_000_000, 15_000_000_000).unwrap())
+                .with_row("m2", PriceRow::new(2_500_000_000, 10_000_000_000).unwrap()),
+        )
+    }
+
+    /// A refusal hop `model` refused after the vendor billed `usage` (no cost
+    /// yet: the pricing decorator outside the chain prices it).
+    fn billed_refusal(provider: &str, model: &str, usage: TokenUsage) -> LlmError {
+        LlmError::refusal(provider, model, "I can't help with that.")
+            .with_billed_usage(BilledUsage::new(model, usage))
+    }
+
+    /// `Pricing(Fallback[hop1 -> m1, hop2 -> m2].hop_on_refusal(true))`, the
+    /// composition ADR-0052 prescribes, over two scripted hops.
+    fn priced_refusal_chain(
+        hop1: Vec<ScriptedOutcome<&str>>,
+        hop2: Vec<ScriptedOutcome<&str>>,
+    ) -> Arc<dyn LlmPort> {
+        let hop1: Arc<dyn LlmPort> = Arc::new(ScriptedOutcomeLlmPort::new(hop1));
+        let hop2: Arc<dyn LlmPort> = Arc::new(ScriptedOutcomeLlmPort::new(hop2));
+        let chain = FallbackLlmAdapter::from_steps(vec![
+            FallbackStep::new(hop1, "m1"),
+            FallbackStep::new(hop2, "m2"),
+        ])
+        .unwrap()
+        .hop_on_refusal(true);
+        Arc::new(PricingLlmAdapter::new(Arc::new(chain), hop_price_table()))
+    }
+
+    /// Every settled row's `(amount nanos, settlements)` by model, from the
+    /// ledger's own `SpendGroupBy::Model` read (it sums `model_breakdown`).
+    async fn spend_by_model(ledger: &InMemoryTreasuryLedger) -> BTreeMap<String, (i64, u64)> {
+        ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Model,
+                ..Default::default()
+            })
+            .await
+            .expect("spend by model succeeds")
+            .into_iter()
+            .map(|row| (row.group, (row.amount.nanos(), row.settlements)))
+            .collect()
+    }
+
+    /// G-50-5a remainder (a), plan 50-30 tracer: hop 1 refuses after the
+    /// vendor billed U1 on `m1`; the chain hops (`hop_on_refusal`) and hop 2
+    /// answers on `m2` with U2. The refused hop's bill is priced against its
+    /// own model and settled with the served call in ONE row for ordinal 1
+    /// (amount c1 + c2, breakdown `{m1: c1, m2: c2}`), and the run reports
+    /// U1 + U2 and c1 + c2 -- to the caller and to the attempt scope.
+    #[tokio::test]
+    async fn hopped_refusal_bill_is_settled_with_the_served_call() {
+        use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope};
+
+        let u1 = TokenUsage::new(1_000, 40);
+        let u2 = TokenUsage::new(1_000, 2_000);
+        let table = hop_price_table();
+        let c1 = table.price("m1", &u1).expect("m1 is priced");
+        let c2 = table.price("m2", &u2).expect("m2 is priced");
+        let total = c1.checked_add(&c2).expect("one currency");
+
+        let llm = priced_refusal_chain(
+            vec![Err(billed_refusal("hop1", "m1", u1.clone()))],
+            vec![Ok(("answer", u2.clone(), None))],
+        );
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let paladin = make_paladin(1);
+
+        let scope = SpendScope::new();
+        let result = ATTEMPT_SPEND
+            .scope(scope.clone(), service.execute(&paladin, "hi"))
+            .await
+            .expect("hop 2 serves the call");
+
+        let mut both = u1.clone();
+        both += u2.clone();
+        assert_eq!(
+            result.usage, both,
+            "the refused hop's billed usage is counted"
+        );
+        assert_eq!(result.cost, Some(total.clone()), "and its price");
+
+        let by_run = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(by_run.len(), 1);
+        assert_eq!(
+            by_run[0].settlements, 1,
+            "one row for the call, not one per hop"
+        );
+        assert_eq!(by_run[0].amount, total);
+        assert_eq!(
+            spend_by_model(&ledger).await,
+            BTreeMap::from([
+                ("m1".to_string(), (c1.nanos(), 1)),
+                ("m2".to_string(), (c2.nanos(), 1)),
+            ]),
+            "the row's breakdown names each model with its own nanos"
+        );
+
+        let spend = scope.snapshot();
+        assert_eq!(spend.calls(), 2, "the hop bill and the served call");
+        assert_eq!(spend.usage(), &both);
+        assert_eq!(spend.cost(), Some(total));
+    }
+
+    /// Control (plan 50-30): a call through the same chain with no hop bill
+    /// settles exactly the row it settled before -- one part, one breakdown
+    /// entry.
+    #[tokio::test]
+    async fn a_call_with_no_hop_bill_settles_one_part() {
+        let u2 = TokenUsage::new(1_000, 2_000);
+        let c2 = hop_price_table().price("m2", &u2).expect("m2 is priced");
+        let llm = priced_refusal_chain(
+            vec![Err(LlmError::ProviderError {
+                provider: "hop1".to_string(),
+                status: 503,
+                message: "upstream unavailable".to_string(),
+            })],
+            vec![Ok(("answer", u2.clone(), None))],
+        );
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+
+        let result = service.execute(&make_paladin(1), "hi").await.unwrap();
+
+        assert_eq!(result.usage, u2);
+        assert_eq!(result.cost, Some(c2.clone()));
+        assert_eq!(
+            spend_by_model(&ledger).await,
+            BTreeMap::from([("m2".to_string(), (c2.nanos(), 1))])
+        );
+    }
+
+    /// G-50-5a remainder (a), plan 50-30: both hops refuse after billing, so the chain ends in
+    /// `AllProvidersFailed`. Hop 1's bill was recorded at its hop, hop 2's rides on the error;
+    /// the call settles ONE row holding both, each priced against its own model, and the run
+    /// still fails with the converted error.
+    #[tokio::test]
+    async fn hopped_bills_survive_chain_exhaustion() {
+        use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope};
+
+        let u1 = TokenUsage::new(1_000, 40);
+        let u2 = TokenUsage::new(800, 30);
+        let table = hop_price_table();
+        let c1 = table.price("m1", &u1).expect("m1 is priced");
+        let c2 = table.price("m2", &u2).expect("m2 is priced");
+        let total = c1.checked_add(&c2).expect("one currency");
+
+        let llm = priced_refusal_chain(
+            vec![Err(billed_refusal("hop1", "m1", u1.clone()))],
+            vec![Err(billed_refusal("hop2", "m2", u2.clone()))],
+        );
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+
+        let scope = SpendScope::new();
+        let err = ATTEMPT_SPEND
+            .scope(scope.clone(), service.execute(&make_paladin(1), "hi"))
+            .await
+            .expect_err("every hop refused");
+        assert!(
+            matches!(
+                err,
+                PaladinError::LlmFailure {
+                    transience: Transience::Permanent,
+                    ..
+                }
+            ),
+            "got {err:?}"
+        );
+
+        let by_run = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(by_run.len(), 1);
+        assert_eq!(by_run[0].settlements, 1, "one row for the call");
+        assert_eq!(by_run[0].amount, total);
+        assert_eq!(
+            spend_by_model(&ledger).await,
+            BTreeMap::from([
+                ("m1".to_string(), (c1.nanos(), 1)),
+                ("m2".to_string(), (c2.nanos(), 1)),
+            ])
+        );
+
+        let mut both = u1;
+        both += u2;
+        let spend = scope.snapshot();
+        assert_eq!(spend.calls(), 2, "both refused hops were billed");
+        assert_eq!(spend.usage(), &both);
+        assert_eq!(spend.cost(), Some(total));
+    }
+
+    /// Plan 50-30: a structured call whose chain hopped past a billed refusal records the hop
+    /// bill in the attempt scope beside the served call, so the engine's structured arm (which
+    /// reads the scope) charges both.
+    #[tokio::test]
+    async fn structured_call_records_its_hopped_bill() {
+        use paladin_core::platform::container::structured::StructuredOptions;
+        use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope};
+
+        let u1 = TokenUsage::new(1_000, 40);
+        let u2 = TokenUsage::new(300, 20);
+        let table = hop_price_table();
+        let total = table
+            .price("m1", &u1)
+            .and_then(|c1| table.price("m2", &u2).and_then(|c2| c1.checked_add(&c2)))
+            .expect("both priced, one currency");
+        let llm = priced_refusal_chain(
+            vec![Err(billed_refusal("hop1", "m1", u1.clone()))],
+            vec![Ok((r#"{"city": "Paris"}"#, u2.clone(), None))],
+        );
+        let schema = serde_json::json!({
+            "type": "object",
+            "required": ["city"],
+            "properties": {"city": {"type": "string"}}
+        });
+        let service = make_service(llm);
+
+        let scope = SpendScope::new();
+        ATTEMPT_SPEND
+            .scope(
+                scope.clone(),
+                service.execute_json_schema(
+                    &make_paladin(1),
+                    "weather",
+                    &schema,
+                    &StructuredOptions::new(0),
+                ),
+            )
+            .await
+            .expect("hop 2 answers a conforming object");
+
+        let mut both = u1;
+        both += u2;
+        let spend = scope.snapshot();
+        assert_eq!(spend.calls(), 2, "the hop bill and the served call");
+        assert_eq!(spend.usage(), &both);
+        assert_eq!(spend.cost(), Some(total));
+    }
+
+    // ---- WR-03, plan 50-32: a hopped-past bill is counted at its hop ----
+
+    /// A model port that accepts a call and never answers it: `generate` and `generate_stream`
+    /// both stay pending forever, so a test can cut the attempt off by a deadline while a later
+    /// fallback hop is still in flight.
+    pub(super) struct StallingLlmPort;
+
+    #[async_trait]
+    impl LlmPort for StallingLlmPort {
+        async fn generate(&self, _request: LlmRequest) -> Result<LlmResponse, LlmError> {
+            std::future::pending().await
+        }
+
+        async fn generate_stream(
+            &self,
+            _request: LlmRequest,
+        ) -> Result<
+            Box<dyn futures::Stream<Item = Result<StreamingResponse, LlmError>> + Send>,
+            LlmError,
+        > {
+            std::future::pending().await
+        }
+
+        async fn validate_model(&self, _model: &str) -> Result<bool, LlmError> {
+            Ok(true)
+        }
+
+        async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
+            Ok(vec![])
+        }
+
+        fn get_provider_name(&self) -> &'static str {
+            "stalling-stub"
+        }
+
+        fn get_capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities::default()
+        }
+    }
+
+    /// `Pricing(Fallback[hop1 -> m1, hop2 -> m2].hop_on_refusal(true))`: hop 1 refuses after the
+    /// vendor billed `u1` on `m1`, hop 2 never answers.
+    fn stalling_second_hop_chain(u1: TokenUsage) -> Arc<dyn LlmPort> {
+        let hop1: Arc<dyn LlmPort> = Arc::new(ScriptedOutcomeLlmPort::new(vec![Err(
+            billed_refusal("hop1", "m1", u1),
+        )]));
+        let hop2: Arc<dyn LlmPort> = Arc::new(StallingLlmPort);
+        let chain = FallbackLlmAdapter::from_steps(vec![
+            FallbackStep::new(hop1, "m1"),
+            FallbackStep::new(hop2, "m2"),
+        ])
+        .unwrap()
+        .hop_on_refusal(true);
+        Arc::new(PricingLlmAdapter::new(Arc::new(chain), hop_price_table()))
+    }
+
+    /// WR-03: the engine drops an attempt mid-call (`race_attempt`'s exact shape: the attempt
+    /// future runs under a deadline inside the `ATTEMPT_SPEND` scope the engine holds outside it).
+    /// Hop 1 returned a billed refusal and hop 2 had not answered, yet the scope already holds
+    /// hop 1's priced bill.
+    #[tokio::test(start_paused = true)]
+    async fn hop_bill_counts_when_the_attempt_is_dropped_mid_call() {
+        use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope};
+
+        let u1 = TokenUsage::new(1_000, 40);
+        let c1 = hop_price_table().price("m1", &u1).expect("m1 is priced");
+        let service = make_service(stalling_second_hop_chain(u1.clone()));
+        let paladin = make_paladin(1);
+
+        let scope = SpendScope::new();
+        let cut = tokio::time::timeout(
+            Duration::from_millis(500),
+            ATTEMPT_SPEND.scope(scope.clone(), service.execute(&paladin, "hi")),
+        )
+        .await;
+        assert!(cut.is_err(), "the attempt was dropped by the deadline");
+
+        let spend = scope.snapshot();
+        assert_eq!(spend.calls(), 1, "hop 1's bill is already counted");
+        assert_eq!(spend.usage(), &u1);
+        assert_eq!(spend.cost(), Some(c1), "priced at m1's own rate");
+    }
+
+    /// The engine-facing [`PaladinPort`](paladin_ports::output::paladin_port::PaladinPort) seam
+    /// over the real execution service, local to this test (the same minimal adapter
+    /// `run::tracer_e2e` uses; no production adapter of this shape exists yet).
+    struct PaladinPortAdapter(Arc<PaladinExecutionService>);
+
+    #[async_trait]
+    impl paladin_ports::output::paladin_port::PaladinPort for PaladinPortAdapter {
+        async fn execute(
+            &self,
+            paladin: &Paladin,
+            input: &str,
+        ) -> Result<PaladinResult, PaladinError> {
+            self.0.execute(paladin, input).await
+        }
+
+        async fn execute_stream(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+        ) -> Result<PaladinStream, PaladinError> {
+            unreachable!("this test's WarGraph never streams")
+        }
+
+        fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+            Ok(())
+        }
+    }
+
+    /// WR-03, the literal Battalion case: a real `WarEngine` over the real execution service runs
+    /// a one-node Paladin graph whose chain refuses on hop 1 (billed) and stalls on hop 2. The
+    /// attempt is cut by the run deadline (variant A) or the idle bound (variant B); the node
+    /// fails with the typed timeout and the superstep settle charges hop 1's priced bill once.
+    #[tokio::test(start_paused = true)]
+    async fn engine_charges_a_hop_bill_when_the_attempt_is_cut_mid_call() {
+        use paladin_battalion::engine::{
+            EngineLimits, InputMapping, NodeSpec, WarEngine, WarGraph,
+        };
+        use paladin_core::platform::container::aegis::{Aegis, TimeoutPolicy};
+        use paladin_core::platform::container::battlefield::{
+            BattlefieldSchema, DispatchRule, FieldName, FieldSpec, StateDelta,
+        };
+        use paladin_core::platform::container::node_error::{NodeErrorSource, TimeoutKind};
+        use paladin_core::platform::container::treasury_ledger::{LedgerScope, SettlementContext};
+        use paladin_core::platform::container::waypoint::{NodeId, ThreadId};
+        use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
+
+        let u1 = TokenUsage::new(1_000, 40);
+        let c1 = hop_price_table().price("m1", &u1).expect("m1 is priced");
+
+        for (label, run_timeout, idle_timeout, expected_kind) in [
+            (
+                "run-deadline",
+                Duration::from_millis(500),
+                None,
+                TimeoutKind::Run,
+            ),
+            (
+                "idle-window",
+                Duration::from_secs(20),
+                Some(Duration::from_millis(250)),
+                TimeoutKind::Idle,
+            ),
+        ] {
+            let service = Arc::new(make_service(stalling_second_hop_chain(u1.clone())));
+            let port: Arc<dyn paladin_ports::output::paladin_port::PaladinPort> =
+                Arc::new(PaladinPortAdapter(service));
+
+            let out = FieldName::new("out").unwrap();
+            let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+                out.clone(),
+                DispatchRule::LastWrite,
+                None,
+                false,
+            )]);
+            let mut graph = WarGraph::new(schema, EngineLimits::default());
+            let node_id = NodeId::new("scout");
+            graph.add_node(
+                node_id.clone(),
+                NodeSpec::paladin(make_paladin(1), InputMapping::new("go"), out),
+            );
+            graph.add_entry(node_id.clone());
+            graph.set_aegis(
+                node_id,
+                Aegis {
+                    timeout: Some(TimeoutPolicy {
+                        run_timeout: Some(run_timeout),
+                        idle_timeout,
+                    }),
+                    ..Default::default()
+                },
+            );
+
+            let ledger = Arc::new(InMemoryTreasuryLedger::new());
+            let run_id = RunId::new_v7();
+            let context = SettlementContext {
+                scope: LedgerScope::unattributed(),
+                run_id: run_id.clone(),
+                attempt: 1,
+            };
+            let engine = WarEngine::new(port, Arc::new(InMemoryWaypointStore::new()))
+                .with_treasury_ledger(ledger.clone(), context);
+            let outcome = engine
+                .start(
+                    &graph,
+                    ThreadId::new(format!("wr-03-{label}")).unwrap(),
+                    StateDelta::new(),
+                )
+                .await
+                .unwrap();
+
+            let node_error = outcome
+                .node_error()
+                .unwrap_or_else(|| panic!("{label}: expected a timed-out node, got {outcome:?}"));
+            assert_eq!(
+                node_error.source,
+                NodeErrorSource::Timeout(expected_kind),
+                "{label}: the typed bound fired"
+            );
+            let rows = ledger
+                .spend(SpendQuery {
+                    group_by: SpendGroupBy::Run,
+                    run_ids: vec![run_id],
+                    ..Default::default()
+                })
+                .await
+                .expect("spend by run succeeds");
+            assert_eq!(
+                rows.first()
+                    .map(|row| (row.amount.clone(), row.settlements)),
+                Some((c1.clone(), 1)),
+                "{label}: the boundary settles hop 1's priced bill once"
+            );
+        }
+    }
+
+    /// Guard (plan 50-32; green before and after the fix): a call whose retries hop past the
+    /// same billed refusal twice counts each hop bill into the attempt scope once and settles
+    /// them once, in the call's one row. Hop 1 refuses (billed U1 on `m1`) on every attempt;
+    /// hop 2 fails with a 503 on the first attempt and answers on the second.
+    #[tokio::test(start_paused = true)]
+    async fn hop_bills_are_counted_once_across_the_calls_retries() {
+        use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope};
+
+        let u1 = TokenUsage::new(1_000, 40);
+        let u2 = TokenUsage::new(1_000, 2_000);
+        let table = hop_price_table();
+        let c1 = table.price("m1", &u1).expect("m1 is priced");
+        let c2 = table.price("m2", &u2).expect("m2 is priced");
+        let two_c1 = c1.checked_add(&c1).expect("one currency");
+        let total = two_c1.checked_add(&c2).expect("one currency");
+
+        let llm = priced_refusal_chain(
+            vec![Err(billed_refusal("hop1", "m1", u1.clone()))],
+            vec![
+                Err(LlmError::ProviderError {
+                    provider: "hop2".to_string(),
+                    status: 503,
+                    message: "upstream unavailable".to_string(),
+                }),
+                Ok(("answer", u2.clone(), None)),
+            ],
+        );
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        // One reasoning loop, two attempts of its model call: the retry policy (not `max_loops`,
+        // which would run a second loop and a second call) allows the second attempt.
+        let service = make_service(llm)
+            .with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall)
+            .with_middleware(Arc::new(
+                crate::application::services::paladin::middleware::ModelRetryMiddleware::new(
+                    paladin_core::platform::container::aegis::RetryPolicy {
+                        max_attempts: 2,
+                        initial_interval: Duration::from_millis(100),
+                        jitter: false,
+                        ..Default::default()
+                    },
+                ),
+            ));
+
+        let scope = SpendScope::new();
+        let result = ATTEMPT_SPEND
+            .scope(scope.clone(), service.execute(&make_paladin(1), "hi"))
+            .await
+            .expect("the retry is served by hop 2");
+
+        let mut all = u1.clone();
+        all += u1;
+        all += u2;
+        assert_eq!(result.usage, all);
+        let spend = scope.snapshot();
+        assert_eq!(spend.calls(), 3, "two hop bills and the served call");
+        assert_eq!(spend.usage(), &all);
+        assert_eq!(spend.cost(), Some(total));
+
+        let by_run = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(by_run.len(), 1);
+        assert_eq!(by_run[0].settlements, 1, "one row for the one call");
+        assert_eq!(
+            spend_by_model(&ledger).await,
+            BTreeMap::from([
+                ("m1".to_string(), (two_c1.nanos(), 1)),
+                ("m2".to_string(), (c2.nanos(), 1)),
+            ])
+        );
+    }
+}
+
+/// Phase 41 D-18: the allowance warnings an HTTP agent-route admission won travel in
+/// `RunScope::allowance_warnings`; the execution service emits them once through its trace
+/// emitter and the streamed final chunk's `ExecutionMetadata` carries the herald line.
+/// ALLOW-05 "works alongside, replaces none" (ROADMAP success criterion 3), proven on a real
+/// service: the Treasurer's derived budget composes with the Commissary's input-side rationing
+/// instead of replacing it (Phase 42 D-11).
+#[cfg(test)]
+mod derived_budget_tests {
+    use super::*;
+    use crate::application::services::paladin::middleware::TokenBudget;
+    use crate::application::services::sanctum::RagConfig;
+    use crate::config::agent_runtime::TokenBudgetConfig;
+    use crate::core::base::entity::Entity;
+    use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
+    use crate::core::platform::container::sanctum::{MemoryBuilder, MemoryType, SanctumEntry};
+    use crate::infrastructure::adapters::sanctum::InMemorySanctum;
+    use async_trait::async_trait;
+    use chrono::{TimeZone, Utc};
+    use paladin_core::platform::container::allowance::{
+        AllowanceLimitKind, AllowanceRefusal, AllowanceScopeKind, DerivedTokenBudget,
+    };
+    use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+    use paladin_llm::mock::MockLlmAdapter;
+    use paladin_ports::output::embedding_port::{Embedding, EmbeddingError, EmbeddingPort};
+    use paladin_ports::output::paladin_port::StopReason;
+    use paladin_ports::output::sanctum_port::SanctumPort;
+
+    /// The query used for every run: it starts with none of `A`/`B`/`C`, so the deterministic
+    /// embedding gives it the highest-scoring memory's own vector.
+    const QUERY: &str = "find the relevant memories";
+
+    /// A deterministic, reproducible embedding port (a test-local copy of the one in
+    /// `tests/integration/rag_commissary_test.rs`): content starting with `A`/`B`/`C` maps to a
+    /// fixed vector at decreasing cosine similarity to the query vector.
+    struct DeterministicEmbeddingPort;
+
+    #[async_trait]
+    impl EmbeddingPort for DeterministicEmbeddingPort {
+        async fn embed_text(&self, text: &str) -> Result<Embedding, EmbeddingError> {
+            let vector = if text.starts_with('A') {
+                vec![1.0, 0.0, 0.0]
+            } else if text.starts_with('B') {
+                vec![0.8, 0.6, 0.0]
+            } else if text.starts_with('C') {
+                vec![0.6, 0.8, 0.0]
+            } else {
+                vec![1.0, 0.0, 0.0]
+            };
+            Ok(Embedding {
+                vector,
+                model: "deterministic-mock".to_string(),
+                dimension: 3,
+                token_count: Some(10),
+            })
+        }
+
+        async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Embedding>, EmbeddingError> {
+            let mut out = Vec::with_capacity(texts.len());
+            for text in texts {
+                out.push(self.embed_text(text).await?);
+            }
+            Ok(out)
+        }
+
+        fn dimension(&self) -> usize {
+            3
+        }
+
+        fn model_name(&self) -> &str {
+            "deterministic-mock"
+        }
+    }
+
+    /// Embed `content` and store it in `sanctum` as one of `paladin_id`'s memories.
+    async fn store_memory(
+        sanctum: &Arc<dyn SanctumPort>,
+        embedding: &Arc<dyn EmbeddingPort>,
+        paladin_id: &str,
+        content: &str,
+    ) {
+        let memory = MemoryBuilder::new(paladin_id.to_string(), content.to_string())
+            .memory_type(MemoryType::Semantic)
+            .importance(0.8)
+            .build()
+            .expect("a test memory builds");
+        let embedded = embedding
+            .embed_text(content)
+            .await
+            .expect("the deterministic embedding never fails");
+        let entry = SanctumEntry::new(memory, embedded.vector).expect("a sanctum entry builds");
+        sanctum.store(entry).await.expect("the entry is stored");
+    }
+
+    /// The Commissary's shed-forcing fixture: three memories of 987 / 654 / 321 bytes under a
+    /// 233-token RAG budget (the figures `rag_commissary_test.rs` proves force a shed).
+    async fn rag_service(paladin_id: &str) -> Arc<RagRetrievalService> {
+        let sanctum: Arc<dyn SanctumPort> = Arc::new(InMemorySanctum::new(100));
+        let embedding: Arc<dyn EmbeddingPort> = Arc::new(DeterministicEmbeddingPort);
+        store_memory(&sanctum, &embedding, paladin_id, &"A".repeat(987)).await;
+        store_memory(&sanctum, &embedding, paladin_id, &"B".repeat(654)).await;
+        store_memory(&sanctum, &embedding, paladin_id, &"C".repeat(321)).await;
+        let config = RagConfig {
+            max_tokens: 233,
+            min_similarity: 0.0,
+            top_k: 10,
+            ..RagConfig::default()
+        };
+        Arc::new(RagRetrievalService::new(sanctum, embedding, config))
+    }
+
+    fn paladin(max_loops: u32) -> Paladin {
+        let data = PaladinData {
+            system_prompt: "You are a helpful assistant".to_string(),
+            max_loops: MaxLoops::Fixed(max_loops),
+            ..Default::default()
+        };
+        Entity::new(data, Some("BudgetPaladin".to_string()))
+    }
+
+    fn derived(max_tokens: u32) -> DerivedTokenBudget {
+        let usd = CurrencyCode::new("USD").expect("USD is valid");
+        DerivedTokenBudget::new(
+            max_tokens,
+            AllowanceRefusal {
+                scope_kind: AllowanceScopeKind::Tenant,
+                limit_kind: AllowanceLimitKind::Lifetime,
+                balance: Cost::new(1_000, usd.clone()),
+                ceiling: Cost::new(1_000, usd),
+                window: None,
+                evaluated_at: Utc
+                    .with_ymd_and_hms(2026, 10, 6, 12, 0, 0)
+                    .single()
+                    .expect("valid instant"),
+            },
+        )
+    }
+
+    /// One service with RAG retrieval attached and the one `TokenBudget` installed (operator
+    /// figure off, so only the Treasurer's derived figure can bind).
+    async fn service_with_rag(
+        llm: Arc<MockLlmAdapter>,
+        paladin_id: &str,
+    ) -> PaladinExecutionService {
+        PaladinExecutionService::new(
+            llm,
+            Arc::new(CircuitBreaker::new(5, 3, Duration::from_secs(60))),
+            None,
+            None,
+        )
+        .with_rag_retrieval(rag_service(paladin_id).await)
+        .with_middleware(Arc::new(TokenBudget::new(TokenBudgetConfig {
+            enabled: false,
+            max_tokens: 1,
+        })))
+    }
+
+    /// One run through the real service. A run carrying a derived figure is cut by the one
+    /// `TokenBudget` on the OUTPUT side after the crossing response, while the SAME run's INPUT
+    /// side was already rationed by the Commissary: the RAG context that reached the prompt the
+    /// model received was shed to its budget and carries the Commissary's own shared omission
+    /// marker. Neither limit replaced the other; and the same run without a derived figure sees
+    /// the identical first prompt and is not halted.
+    #[tokio::test]
+    async fn derived_budget_composes_with_the_commissary_rationed_rag_context() {
+        let agent = paladin(3);
+        let paladin_id = agent.uuid.to_string();
+
+        // What the Commissary alone does for this fixture: the shed count and allotted budget
+        // the shared omission marker is built from.
+        let retrieval = rag_service(&paladin_id)
+            .await
+            .retrieve_context(&paladin_id, QUERY)
+            .await
+            .expect("retrieval succeeds");
+        assert!(
+            !retrieval.shed.is_empty(),
+            "the fixture's small budget must force the Commissary to shed"
+        );
+        let marker = rag_omission_marker(retrieval.shed.len(), retrieval.allotted_tokens);
+
+        // Run 1: a derived figure of 50 against a model that reports 100 tokens per response.
+        let llm = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("chunk")
+                .with_token_usage(0, 100, 100),
+        );
+        let service = service_with_rag(llm.clone(), &paladin_id).await;
+        let scope = RunScope::default().with_derived_token_budget(derived(50));
+        let halted = service
+            .execute_scoped(&agent, QUERY, None, &scope)
+            .await
+            .expect("the run ends gracefully");
+
+        // Output side: the derived budget cut the run after the crossing response.
+        assert_eq!(
+            llm.call_count(),
+            1,
+            "cut after the first, crossing response"
+        );
+        assert!(
+            matches!(halted.stop_reason, StopReason::AllowanceHalted(_)),
+            "got {:?}",
+            halted.stop_reason
+        );
+        assert!(!halted.stop_reason.is_successful());
+        assert!(
+            halted.output.contains("chunk"),
+            "the crossing response is kept"
+        );
+
+        // Input side: the prompt the model received carries the rationed RAG context.
+        let first_prompt = llm.last_prompt().expect("one model call was made");
+        assert!(
+            first_prompt.contains("## Relevant Context from Memory"),
+            "the RAG section reached the prompt: {first_prompt}"
+        );
+        assert!(
+            first_prompt.contains(&marker),
+            "the Commissary's shared omission marker {marker:?} reached the prompt: {first_prompt}"
+        );
+
+        // The same run without a derived figure: identical first prompt, not halted.
+        let llm_plain = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("chunk")
+                .with_token_usage(0, 100, 100),
+        );
+        let plain_agent = paladin(1);
+        // Same paladin identity so the memories (keyed by it) retrieve identically.
+        let plain_agent = Entity {
+            uuid: agent.uuid,
+            ..plain_agent
+        };
+        let plain_service = service_with_rag(llm_plain.clone(), &paladin_id).await;
+        let plain = plain_service
+            .execute_scoped(&plain_agent, QUERY, None, &RunScope::default())
+            .await
+            .expect("the run completes");
+
+        assert!(
+            !matches!(plain.stop_reason, StopReason::AllowanceHalted(_)),
+            "no derived figure, so the allowance never halts: {:?}",
+            plain.stop_reason
+        );
+        assert_eq!(
+            llm_plain.last_prompt().expect("one model call was made"),
+            first_prompt,
+            "a derived figure never changes what the Commissary dispenses"
+        );
+    }
+}
+
+#[cfg(test)]
+mod allowance_warning_tests {
+    use super::*;
+    use crate::core::base::entity::Entity;
+    use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
+    use paladin_core::platform::container::allowance::{AllowanceLimitKind, AllowanceScopeKind};
+    use paladin_core::platform::container::cost::CurrencyCode;
+    use paladin_core::platform::container::waypoint::ThreadId;
+    use paladin_herald::MarkdownHerald;
+    use paladin_herald::markdown_herald::MarkdownHeraldConfig;
+    use paladin_llm::mock::MockLlmAdapter;
+    use paladin_ports::output::trace_sink_port::{
+        StandaloneEmitter, TraceRecord, TraceSink, TraceSinkError,
+    };
+
+    #[derive(Default)]
+    struct RecordingSink {
+        events: std::sync::Mutex<Vec<TraceRecord>>,
+    }
+
+    #[async_trait::async_trait]
+    impl TraceSink for RecordingSink {
+        async fn on_event(&self, record: TraceRecord) -> Result<(), TraceSinkError> {
+            self.events.lock().unwrap().push(record);
+            Ok(())
+        }
+    }
+
+    /// The sink drains on its own schedule: wait (bounded) for `expected` records.
+    async fn records_eventually(sink: &RecordingSink, expected: usize) -> Vec<TraceRecord> {
+        for _ in 0..300 {
+            let events = sink.events.lock().unwrap().clone();
+            if events.len() >= expected {
+                return events;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        sink.events.lock().unwrap().clone()
+    }
+
+    fn warning() -> AllowanceWarning {
+        let usd = CurrencyCode::new("USD").unwrap();
+        AllowanceWarning {
+            scope_kind: AllowanceScopeKind::Tenant,
+            limit_kind: AllowanceLimitKind::Lifetime,
+            balance: Cost::new(20_500_000_000, usd.clone()),
+            ceiling: Cost::new(25_000_000_000, usd),
+            window_start: None,
+            window_end: None,
+            warn_at: 80,
+        }
+    }
+
+    fn paladin() -> Paladin {
+        let data = PaladinData {
+            system_prompt: "system".to_string(),
+            model: "gpt-4".to_string(),
+            max_loops: MaxLoops::Fixed(1),
+            ..Default::default()
+        };
+        Entity::new(data, None)
+    }
+
+    fn service() -> PaladinExecutionService {
+        let llm: Arc<dyn LlmPort> = Arc::new(MockLlmAdapter::new().with_response("answer"));
+        PaladinExecutionService::new(
+            llm,
+            Arc::new(CircuitBreaker::new(5, 3, Duration::from_secs(60))),
+            None,
+            None,
+        )
+        .with_herald(Arc::new(MarkdownHerald::with_config(
+            MarkdownHeraldConfig {
+                include_colors: false,
+                heading_level: 2,
+            },
+        )))
+    }
+
+    fn emitter_over(sink: &Arc<RecordingSink>) -> Arc<dyn TraceEmitter> {
+        Arc::new(StandaloneEmitter::new(
+            ThreadId::new("allowance-warning-test").unwrap(),
+            None,
+            Some(sink.clone() as Arc<dyn TraceSink>),
+        ))
+    }
+
+    #[tokio::test]
+    async fn scoped_execute_emits_scope_allowance_warnings_through_the_emitter() {
+        let sink = Arc::new(RecordingSink::default());
+        let service = service().with_trace_emitter(emitter_over(&sink));
+        let scope = RunScope::default().with_allowance_warnings(vec![warning()]);
+
+        let result = PaladinExecutorPort::execute_scoped(&service, &paladin(), "hi", &scope)
+            .await
+            .unwrap();
+        assert_eq!(result.output, "answer");
+
+        let events = records_eventually(&sink, 1).await;
+        let warnings: Vec<_> = events
+            .iter()
+            .filter_map(|r| AllowanceWarning::from_trace_event(&r.event))
+            .collect();
+        assert_eq!(warnings, vec![warning()], "exactly one warning: {events:?}");
+    }
+
+    #[tokio::test]
+    async fn scoped_execute_without_an_emitter_ignores_allowance_warnings() {
+        let service = service();
+        let scope = RunScope::default().with_allowance_warnings(vec![warning()]);
+
+        let with = PaladinExecutorPort::execute_scoped(&service, &paladin(), "hi", &scope)
+            .await
+            .unwrap();
+        let without =
+            PaladinExecutorPort::execute_scoped(&service, &paladin(), "hi", &RunScope::default())
+                .await
+                .unwrap();
+        assert_eq!(with.output, without.output);
+        assert_eq!(with.usage, without.usage);
+    }
+
+    #[tokio::test]
+    async fn scoped_execute_with_no_warnings_emits_no_allowance_event() {
+        let sink = Arc::new(RecordingSink::default());
+        let service = service().with_trace_emitter(emitter_over(&sink));
+
+        PaladinExecutorPort::execute_scoped(&service, &paladin(), "hi", &RunScope::default())
+            .await
+            .unwrap();
+
+        let events = sink.events.lock().unwrap().clone();
+        assert!(
+            events
+                .iter()
+                .all(|r| AllowanceWarning::from_trace_event(&r.event).is_none()),
+            "{events:?}"
+        );
+    }
+
+    /// Drain a scoped stream and return its final chunk's metadata.
+    async fn final_chunk_metadata(
+        service: &PaladinExecutionService,
+        scope: &RunScope,
+    ) -> ChunkMetadata {
+        let mut stream =
+            StreamingExecutorPort::execute_stream_scoped(service, &paladin(), "hi", scope)
+                .await
+                .unwrap();
+        loop {
+            let chunk = stream
+                .recv()
+                .await
+                .expect("stream must emit a final chunk")
+                .unwrap();
+            if chunk.is_final {
+                return chunk.metadata.expect("the final chunk carries metadata");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn streamed_final_chunk_metadata_carries_allowance_warnings() {
+        let service = service();
+        let scope = RunScope::default().with_allowance_warnings(vec![warning()]);
+
+        let metadata = final_chunk_metadata(&service, &scope).await;
+        let execution = metadata
+            .execution
+            .expect("the final chunk carries ExecutionMetadata");
+        assert_eq!(
+            execution.allowance_warning_display().as_deref(),
+            Some("\u{26A0} allowance: 82% of 25.0000 USD (tenant, lifetime cap)")
+        );
+        let text = service
+            .finalize_stream_output(&execution)
+            .unwrap()
+            .expect("a herald is configured");
+        assert_eq!(text.matches("allowance:").count(), 1, "{text}");
+
+        // A scope without a warning renders no allowance line at all.
+        let plain = final_chunk_metadata(&service, &RunScope::default())
+            .await
+            .execution
+            .expect("the final chunk carries ExecutionMetadata");
+        assert_eq!(plain.allowance_warning_display(), None);
+    }
+
+    #[tokio::test]
+    async fn streamed_scope_warnings_are_emitted_once_through_the_emitter() {
+        let sink = Arc::new(RecordingSink::default());
+        let service = service().with_trace_emitter(emitter_over(&sink));
+        let scope = RunScope::default().with_allowance_warnings(vec![warning()]);
+
+        let _ = final_chunk_metadata(&service, &scope).await;
+
+        let events = records_eventually(&sink, 2).await;
+        let count = events
+            .iter()
+            .filter(|r| AllowanceWarning::from_trace_event(&r.event).is_some())
+            .count();
+        assert_eq!(count, 1, "{events:?}");
+    }
+}
+
+/// Phase 51 (plan 51-07, D-00e): the agent's reasoning effort and fallback ride on every
+/// request the execution service builds, and nothing is set when the agent set nothing.
+#[cfg(test)]
+mod reasoning_wiring_tests {
+    use super::*;
+    use crate::core::base::entity::Entity;
+    use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
+    use crate::core::platform::container::reasoning::{ReasoningEffort, ReasoningFallback};
+    use paladin_llm::mock::MockLlmAdapter;
+
+    fn paladin(effort: Option<ReasoningEffort>, fallback: Option<ReasoningFallback>) -> Paladin {
+        let data = PaladinData {
+            system_prompt: "You are a helpful assistant".to_string(),
+            max_loops: MaxLoops::Fixed(1),
+            reasoning_effort: effort,
+            reasoning_fallback: fallback,
+            ..Default::default()
+        };
+        Entity::new(data, Some("ReasoningPaladin".to_string()))
+    }
+
+    fn service(llm: Arc<MockLlmAdapter>) -> PaladinExecutionService {
+        PaladinExecutionService::new(
+            llm,
+            Arc::new(CircuitBreaker::new(5, 3, Duration::from_secs(60))),
+            None,
+            None,
+        )
+    }
+
+    #[tokio::test]
+    async fn the_loop_request_carries_the_agents_effort_and_fallback() {
+        let llm = Arc::new(MockLlmAdapter::new().with_response("ack"));
+        let agent = paladin(
+            Some(ReasoningEffort::High),
+            Some(ReasoningFallback::NearestLower),
+        );
+
+        service(llm.clone()).execute(&agent, "hi").await.unwrap();
+
+        let request = llm.last_request().expect("the model was called");
+        assert_eq!(request.reasoning, Some(ReasoningEffort::High));
+        assert_eq!(
+            request.reasoning_fallback,
+            Some(ReasoningFallback::NearestLower)
+        );
+    }
+
+    #[tokio::test]
+    async fn an_agent_with_no_effort_builds_a_request_with_none() {
+        let llm = Arc::new(MockLlmAdapter::new().with_response("ack"));
+
+        service(llm.clone())
+            .execute(&paladin(None, None), "hi")
+            .await
+            .unwrap();
+
+        let request = llm.last_request().expect("the model was called");
+        assert_eq!(request.reasoning, None);
+        assert_eq!(request.reasoning_fallback, None);
+    }
+
+    #[tokio::test]
+    async fn the_retry_request_carries_the_agents_effort_and_fallback() {
+        let llm = Arc::new(MockLlmAdapter::new().with_response("ack"));
+        let agent = paladin(
+            Some(ReasoningEffort::Medium),
+            Some(ReasoningFallback::NearestHigher),
+        );
+
+        service(llm.clone())
+            .execute_with_retry(&agent, "hi", uuid::Uuid::new_v4(), 0)
+            .await
+            .unwrap();
+
+        let request = llm.last_request().expect("the model was called");
+        assert_eq!(request.reasoning, Some(ReasoningEffort::Medium));
+        assert_eq!(
+            request.reasoning_fallback,
+            Some(ReasoningFallback::NearestHigher)
+        );
+
+        let plain = Arc::new(MockLlmAdapter::new().with_response("ack"));
+        service(plain.clone())
+            .execute_with_retry(&paladin(None, None), "hi", uuid::Uuid::new_v4(), 0)
+            .await
+            .unwrap();
+        let request = plain.last_request().expect("the model was called");
+        assert_eq!(request.reasoning, None);
+        assert_eq!(request.reasoning_fallback, None);
+    }
+
+    async fn drain(service: &PaladinExecutionService, agent: &Paladin) {
+        let mut stream = service.execute_stream(agent, "hi").await.unwrap();
+        while let Some(chunk) = stream.recv().await {
+            if chunk.unwrap().is_final {
+                break;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn the_streaming_request_carries_the_agents_effort_and_fallback_only_when_set() {
+        let llm = Arc::new(MockLlmAdapter::new().with_response("streamed"));
+        let agent = paladin(
+            Some(ReasoningEffort::XHigh),
+            Some(ReasoningFallback::NearestLower),
+        );
+        drain(&service(llm.clone()), &agent).await;
+        let request = llm.last_request().expect("the model was called");
+        assert_eq!(request.reasoning, Some(ReasoningEffort::XHigh));
+        assert_eq!(
+            request.reasoning_fallback,
+            Some(ReasoningFallback::NearestLower)
+        );
+
+        let plain = Arc::new(MockLlmAdapter::new().with_response("streamed"));
+        drain(&service(plain.clone()), &paladin(None, None)).await;
+        let request = plain.last_request().expect("the model was called");
+        assert_eq!(request.reasoning, None);
+        assert_eq!(request.reasoning_fallback, None);
+    }
+
+    /// Research Pitfall 11 / D-11: the reasoning keys start with `paladin.`, so the run-level
+    /// merge carries them, the latest call's value winning.
+    #[test]
+    fn run_metadata_keeps_the_latest_calls_reasoning_keys() {
+        use paladin_core::platform::container::reasoning::{
+            REASONING_EFFECTIVE_METADATA_KEY, REASONING_REQUESTED_METADATA_KEY,
+        };
+        let call = |requested: &str, effective: &str| -> HashMap<String, String> {
+            HashMap::from([
+                (
+                    REASONING_REQUESTED_METADATA_KEY.to_string(),
+                    requested.to_string(),
+                ),
+                (
+                    REASONING_EFFECTIVE_METADATA_KEY.to_string(),
+                    effective.to_string(),
+                ),
+            ])
+        };
+        let mut merged = BTreeMap::new();
+        PaladinExecutionService::merge_run_metadata(&mut merged, &call("high", "high"));
+        PaladinExecutionService::merge_run_metadata(&mut merged, &call("high", "medium"));
+        assert_eq!(
+            merged
+                .get(REASONING_REQUESTED_METADATA_KEY)
+                .map(String::as_str),
+            Some("high")
+        );
+        assert_eq!(
+            merged
+                .get(REASONING_EFFECTIVE_METADATA_KEY)
+                .map(String::as_str),
+            Some("medium")
         );
     }
 }

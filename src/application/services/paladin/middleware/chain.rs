@@ -190,14 +190,14 @@ pub async fn run_around_tool(
 mod tests {
     use super::*;
     use crate::application::services::paladin::middleware::PromptAssembly;
-    use crate::core::base::entity::node::Node;
+    use crate::core::base::entity::Entity;
     use crate::core::platform::container::paladin::PaladinData;
     use paladin_ports::output::llm_port::{FinishReason, LlmResponse, TokenUsage};
     use std::sync::Mutex;
     use uuid::Uuid;
 
     fn make_paladin() -> crate::core::platform::container::paladin::Paladin {
-        Node::new(PaladinData::default(), None)
+        Entity::new(PaladinData::default(), None)
     }
 
     fn make_context(
@@ -215,9 +215,11 @@ mod tests {
             content: "response".to_string(),
             finish_reason: FinishReason::Stop,
             usage: TokenUsage::default(),
+            cost: None,
             created_at: chrono::Utc::now(),
             metadata: Default::default(),
             function_call: None,
+            reasoning: None,
         })
     }
 

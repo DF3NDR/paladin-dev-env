@@ -19,3 +19,6 @@ pub mod eval;
 // Graph/run export CLI (28-13, D-23): `paladin-cli graph export` / `paladin-cli run export`.
 pub mod graph;
 pub mod run;
+
+// Treasurer spend ledger CLI (39-01, D-09): paladin-cli treasury spend.
+pub mod treasury;

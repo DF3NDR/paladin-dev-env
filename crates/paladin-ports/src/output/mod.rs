@@ -7,6 +7,9 @@ pub mod assistant_repository_port;
 /// Authentication port for issuing and verifying bearer tokens.
 pub mod auth_port;
 pub mod battalion_port;
+/// Cadence port (PACE-02, D-07): the shared, cross-call rate-pacing state a provider 429 opens a
+/// gate in, read by the `CadenceLlmAdapter` decorator before every call to that provider and model.
+pub mod cadence_port;
 /// Cancellation probe port (D-14): the seam a durable, cross-instance cancel
 /// signal attaches to the superstep engine through, consulted at every
 /// superstep boundary beside the existing `CancellationToken`.
@@ -18,6 +21,9 @@ pub mod file_storage_port;
 pub mod garrison_port;
 pub mod llm_port;
 pub mod log_port;
+/// Per-model parameter support and limits (ADR-0061): the [`model_profile::ModelProfile`] an
+/// [`llm_port::LlmPort`] reports for one model, beside the adapter-wide `ProviderCapabilities`.
+pub mod model_profile;
 /// Node cache port for per-node result caching (Doc 04 FT-FR-18…20, D-27).
 pub mod node_cache_port;
 pub mod notification_port;
@@ -27,6 +33,9 @@ pub mod paladin_executor_port;
 pub mod paladin_port;
 pub mod paladin_registry;
 pub mod queue_port;
+/// Rate-limit hints (PACE-01, D-04): the parsed retry delay and quota snapshot a provider's 429
+/// carries on `LlmError::RateLimitExceeded`.
+pub mod rate_limit_hints;
 /// SQL database repository port traits.
 pub mod repository_port;
 /// Run queue port (D-06): lease-based work queue for dispatching runs to
@@ -49,6 +58,14 @@ pub mod sanctum_port;
 pub mod scheduler_port;
 /// Search engine port.
 pub mod search_engine_port;
+/// Spend guard port (ALLOW-03, D-04): the seam a per-run allowance check attaches to
+/// the superstep engine through, consulted at every superstep boundary beside the
+/// cancellation signals.
+pub mod spend_guard;
+/// Attempt spend scope (G-50-5a, plan 50-29): the `ATTEMPT_SPEND` task-local through which a
+/// Paladin execution reports every billed call to the Battalion attempt that made it, however
+/// the attempt ends.
+pub mod spend_scope;
 /// Streaming counterpart to `paladin_executor_port` (SSE / token streaming).
 pub mod streaming_executor_port;
 /// Structured output executor port: the bounded JSON-schema repair loop
@@ -59,6 +76,13 @@ pub mod token_counter_port;
 /// Trace event stream port (ENG-FR-21): standardized execution
 /// observability the superstep engine emits, with no consumer yet.
 pub mod trace_sink_port;
+/// Treasury ledger port (LEDGR-01..04, ADR-0053): the append-only, derive-on-read spend ledger
+/// contract every backend adapter (InMemory/SQLite/Postgres, `paladin-storage`) implements.
+pub mod treasury_ledger_port;
+/// Treasury notice port (ALLOW-04, D-16): the store-enforced once-per-window allowance notice
+/// contract the Treasurer claims warn crossings through, implemented beside the ledger by every
+/// `paladin-storage` treasury adapter.
+pub mod treasury_notice_port;
 /// User persistence repository port.
 pub mod user_repository_port;
 /// `ConfinedVault` -- the Vault's namespace-confinement enforcement point

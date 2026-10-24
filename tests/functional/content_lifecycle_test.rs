@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod functional_tests {
     use chrono::Utc;
-    use paladin::core::base::service::node_version_service::{
-        ChangeType, InMemoryNodeVersionRepository, NodeVersionRepository, VersioningError,
+    use paladin::core::base::service::entity_version_service::{
+        ChangeType, EntityVersionRepository, InMemoryEntityVersionRepository, VersioningError,
     };
     use paladin::core::platform::container::content::{ContentItem, ContentType, TextContent};
     use paladin::core::platform::manager::content_service::{
@@ -14,8 +14,8 @@ mod functional_tests {
     #[test]
     fn test_functional_content_item_lifecycle() {
         // Setup
-        let repository: Arc<dyn NodeVersionRepository<_> + Send + Sync> =
-            Arc::new(InMemoryNodeVersionRepository::new());
+        let repository: Arc<dyn EntityVersionRepository<_> + Send + Sync> =
+            Arc::new(InMemoryEntityVersionRepository::new());
         let service = ContentItemService::new(repository.clone());
 
         // Create initial content
@@ -110,7 +110,7 @@ mod functional_tests {
 
         assert_eq!(history.total_versions, 4);
         assert_eq!(history.current_version, 4);
-        assert_eq!(history.node_id, content_id);
+        assert_eq!(history.entity_id, content_id);
 
         // Verify all versions are tracked
         let version_types: Vec<ChangeType> = history
@@ -141,8 +141,8 @@ mod functional_tests {
         let comparison = service.compare_versions(content_id, 1, 3).unwrap();
         assert!(comparison.hash_changed);
         assert_ne!(
-            comparison.version1.node_data.content,
-            comparison.version2.node_data.content
+            comparison.version1.entity_data.content,
+            comparison.version2.entity_data.content
         );
 
         // Test 8: Restore to previous version
@@ -184,7 +184,7 @@ mod functional_tests {
 
     #[test]
     fn test_versioning_disabled_content() {
-        let repository = Arc::new(InMemoryNodeVersionRepository::new());
+        let repository = Arc::new(InMemoryEntityVersionRepository::new());
         let service = ContentItemService::new(repository.clone());
 
         let text_content = TextContent::new(
@@ -221,33 +221,36 @@ mod functional_tests {
 
     #[test]
     fn test_content_node_integration() {
-        // Test that ContentItem properly integrates with Node structure
+        // Test that ContentItem properly integrates with Entity structure
         let text_content =
-            TextContent::new(None, Some("Testing node integration".to_string())).unwrap();
+            TextContent::new(None, Some("Testing entity integration".to_string())).unwrap();
 
         let content_item = ContentItem::new_with_title(
             ContentType::Text(text_content),
-            "Node Integration Test".to_string(),
+            "Entity Integration Test".to_string(),
         )
         .unwrap();
 
-        // Test node properties
-        assert_eq!(content_item.node.uuid, content_item.uuid());
-        assert_eq!(content_item.node.created, content_item.created());
-        assert_eq!(content_item.node.modified, content_item.modified());
-        assert_eq!(content_item.node.name, content_item.title().cloned());
-        assert_eq!(content_item.node.version, content_item.versioning_enabled());
+        // Test entity properties
+        assert_eq!(content_item.entity.uuid, content_item.uuid());
+        assert_eq!(content_item.entity.created, content_item.created());
+        assert_eq!(content_item.entity.modified, content_item.modified());
+        assert_eq!(content_item.entity.name, content_item.title().cloned());
+        assert_eq!(
+            content_item.entity.version,
+            content_item.versioning_enabled()
+        );
 
-        // Test that the node contains the content data
+        // Test that the entity contains the content data
         match content_item.content() {
             ContentType::Text(text) => {
-                assert_eq!(text.content, Some("Testing node integration".to_string()));
-                assert_eq!(content_item.node.node.content, *content_item.content());
+                assert_eq!(text.content, Some("Testing entity integration".to_string()));
+                assert_eq!(content_item.entity.data.content, *content_item.content());
             }
             _ => panic!("Expected text content"),
         }
 
-        println!("✅ Node integration test passed");
+        println!("✅ Entity integration test passed");
     }
 
     #[test]

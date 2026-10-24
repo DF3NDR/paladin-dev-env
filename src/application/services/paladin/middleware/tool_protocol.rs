@@ -245,7 +245,7 @@ impl ExecutionMiddleware for FinishOnPlainAnswerMiddleware {
 mod tests {
     use super::*;
     use crate::application::services::paladin::paladin_execution_service::PaladinExecutionService;
-    use crate::core::base::entity::node::Node;
+    use crate::core::base::entity::Entity;
     use crate::core::platform::container::arsenal::{ArmamentCall, ArmamentResult, ArsenalError};
     use crate::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData};
     use crate::infrastructure::resilience::circuit_breaker::CircuitBreaker;
@@ -259,7 +259,7 @@ mod tests {
             max_loops: MaxLoops::Fixed(max_loops),
             ..Default::default()
         };
-        Node::new(data, None)
+        Entity::new(data, None)
     }
 
     /// A fixed-catalogue `ArsenalPort` that records every call it

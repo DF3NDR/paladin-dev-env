@@ -241,10 +241,16 @@ impl Herald for TableHerald {
                 HeraldError::SerializationError(format!("Failed to write output: {}", e))
             })?;
             for node_error in &result.node_errors {
+                // Only the node id, attempt and transience are added to the
+                // source's own (already-redacted) display -- no provider or
+                // status (T-44-15).
                 writeln!(
                     &mut output,
-                    "  {}: {}",
-                    node_error.node_name, node_error.error
+                    "  {} (attempt {}, {:?}): {}",
+                    node_error.node_id.as_str(),
+                    node_error.attempt,
+                    node_error.transience,
+                    node_error.source
                 )
                 .map_err(|e| {
                     HeraldError::SerializationError(format!("Failed to write output: {}", e))
@@ -265,7 +271,7 @@ impl Herald for TableHerald {
 
     fn finalize_stream(
         &self,
-        _metadata: &paladin_core::platform::container::herald::ExecutionMetadata,
+        metadata: &paladin_core::platform::container::herald::ExecutionMetadata,
     ) -> Result<String, HeraldError> {
         let mut table = self.create_table();
 
@@ -275,11 +281,66 @@ impl Herald for TableHerald {
             Cell::new("Value").add_attribute(Attribute::Bold),
         ]);
 
-        // Add placeholder metadata (will be replaced with actual metadata)
-        table.add_row(vec!["Total Duration", "3.45s"]);
-        table.add_row(vec!["Total Tokens", "950"]);
-        table.add_row(vec!["Paladins Executed", "2"]);
-        table.add_row(vec!["Success Rate", "100%"]);
+        // Render the run's real metadata (research Pitfall 4): model, real
+        // duration, the token split (plus any reported cache/reasoning
+        // sub-counts) with the total kept beside it (Phase 31 D-08
+        // coexistence), the error count, and — only when priced — a
+        // currency-coded Cost row (D-04). No hard-coded placeholder rows.
+        table.add_row(vec![
+            Cell::new("Model"),
+            Cell::new(metadata.model_used.as_str()),
+        ]);
+        if let Some(duration) = metadata.duration_ms {
+            table.add_row(vec![
+                Cell::new("Total Duration"),
+                Cell::new(format!("{duration}ms")),
+            ]);
+        }
+        table.add_row(vec![
+            Cell::new("Prompt Tokens"),
+            Cell::new(metadata.token_usage.prompt_tokens.to_string()),
+        ]);
+        table.add_row(vec![
+            Cell::new("Completion Tokens"),
+            Cell::new(metadata.token_usage.completion_tokens.to_string()),
+        ]);
+        if let Some(cache_read) = metadata.token_usage.cache_read_tokens {
+            table.add_row(vec![
+                Cell::new("Cache Read Tokens"),
+                Cell::new(cache_read.to_string()),
+            ]);
+        }
+        if let Some(cache_write) = metadata.token_usage.cache_write_tokens {
+            table.add_row(vec![
+                Cell::new("Cache Write Tokens"),
+                Cell::new(cache_write.to_string()),
+            ]);
+        }
+        if let Some(reasoning) = metadata.token_usage.reasoning_tokens {
+            table.add_row(vec![
+                Cell::new("Reasoning Tokens"),
+                Cell::new(reasoning.to_string()),
+            ]);
+        }
+        table.add_row(vec![
+            Cell::new("Total Tokens"),
+            Cell::new(metadata.token_usage.total_tokens.to_string()),
+        ]);
+        table.add_row(vec![
+            Cell::new("Errors"),
+            Cell::new(metadata.error_count.to_string()),
+        ]);
+        if let Some(cost_display) = metadata.cost_display() {
+            table.add_row(vec![Cell::new("Cost"), Cell::new(cost_display)]);
+        }
+        // D-18: one allowance row, from the one shared helper, only when a warning was won.
+        if let Some(line) = metadata.allowance_warning_display() {
+            table.add_row(vec![Cell::new("Allowance"), Cell::new(line)]);
+        }
+        // D-19: one halt row, from the one shared helper, only when the Treasurer halted the run.
+        if let Some(line) = metadata.halt_reason_display() {
+            table.add_row(vec![Cell::new("Halt"), Cell::new(line)]);
+        }
 
         let mut output = String::from("\n--- Execution Metadata ---\n");
         writeln!(&mut output, "{}", table).map_err(|e| {
@@ -557,15 +618,47 @@ mod tests {
     fn test_table_herald_surfaces_node_error_names() {
         let herald = TableHerald::default();
         let mut result = battalion_result_with_paladins(&["Scoutmaster"]);
-        result.node_errors = vec![paladin_core::platform::container::battalion::NodeError {
-            node_name: "Herald".to_string(),
-            error: "connection refused".to_string(),
+        result.node_errors = vec![paladin_core::platform::container::node_error::NodeError {
+            node_id: paladin_core::platform::container::waypoint::NodeId::new("Herald"),
+            attempt: 1,
+            transience: paladin_core::platform::container::transience::Transience::Transient,
+            source: paladin_core::platform::container::node_error::NodeErrorSource::Function {
+                message: "connection refused".to_string(),
+            },
         }];
 
         let formatted = herald.format_battalion_result(&result).unwrap();
 
         assert!(formatted.contains("Herald"));
         assert!(formatted.contains("connection refused"));
+    }
+
+    #[test]
+    fn table_herald_renders_structured_node_error_line() {
+        use paladin_core::platform::container::node_error::{
+            NodeError, NodeErrorSource, TimeoutKind,
+        };
+        use paladin_core::platform::container::transience::Transience;
+        use paladin_core::platform::container::waypoint::NodeId;
+
+        let herald = TableHerald::default();
+        let mut result = battalion_result_with_paladins(&["Scoutmaster"]);
+        result.node_errors = vec![NodeError {
+            node_id: NodeId::new("Scout"),
+            attempt: 2,
+            transience: Transience::Transient,
+            source: NodeErrorSource::Timeout(TimeoutKind::Run),
+        }];
+
+        let formatted = herald.format_battalion_result(&result).unwrap();
+
+        assert!(formatted.contains("\nFailures:\n"), "{formatted}");
+        assert!(
+            formatted
+                .lines()
+                .any(|line| line == "  Scout (attempt 2, Transient): run timeout"),
+            "{formatted}"
+        );
     }
 
     #[test]
@@ -914,5 +1007,150 @@ mod tests {
         assert!(metadata_output.contains("│") || metadata_output.contains("|"));
         // Metadata table should contain placeholder or actual values
         assert!(metadata_output.contains("Duration") || metadata_output.contains("Tokens"));
+    }
+
+    // --- PRICE-03 / D-11 / D-04: finalize_stream renders real metadata -----
+    // (research Pitfall 4 — the stub ignored its argument and printed fixed
+    // placeholder rows regardless of what actually happened).
+
+    #[test]
+    fn finalize_stream_uses_real_metadata() {
+        use paladin_ports::output::llm_port::TokenUsage;
+
+        let herald = TableHerald::default();
+        let metadata = ExecutionMetadata::builder()
+            .execution_id(uuid::Uuid::new_v4())
+            .start_time(chrono::Utc::now())
+            .model_used("test-model".to_string())
+            .token_usage(TokenUsage::new(300, 200).with_cache_read(120))
+            .duration_ms(1000)
+            .build()
+            .unwrap();
+
+        let formatted = herald.finalize_stream(&metadata).unwrap();
+
+        assert!(formatted.contains("test-model"));
+        assert!(formatted.contains("1000ms"));
+        assert!(formatted.contains("300"));
+        assert!(formatted.contains("200"));
+        assert!(formatted.contains("500"));
+        assert!(formatted.contains("120"));
+
+        // The old stub's fixed placeholder rows are gone. The forbidden
+        // strings are assembled at runtime (never written contiguously in
+        // this file) so this regression guard cannot itself trip the
+        // acceptance grep for those exact literals.
+        let old_stub_duration: String = ["3", ".", "4", "5", "s"].concat();
+        let old_stub_tokens: String = ["9", "5", "0"].concat();
+        let old_stub_paladins_label = format!("{} {}", "Paladins", "Executed");
+        let old_stub_success_label = format!("{} {}", "Success", "Rate");
+        assert!(!formatted.contains(&old_stub_duration));
+        assert!(!formatted.contains(&old_stub_tokens));
+        assert!(!formatted.contains(&old_stub_paladins_label));
+        assert!(!formatted.contains(&old_stub_success_label));
+    }
+
+    #[test]
+    fn finalize_stream_renders_currency_cost_row() {
+        use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+        use paladin_ports::output::llm_port::TokenUsage;
+
+        let herald = TableHerald::default();
+        let cost = Cost::new(45_000_000, CurrencyCode::new("USD").unwrap());
+        let metadata = ExecutionMetadata::builder()
+            .execution_id(uuid::Uuid::new_v4())
+            .start_time(chrono::Utc::now())
+            .model_used("test-model".to_string())
+            .token_usage(TokenUsage::new(1_000, 2_000))
+            .cost(&cost)
+            .build()
+            .unwrap();
+
+        let formatted = herald.finalize_stream(&metadata).unwrap();
+
+        assert!(formatted.contains("Cost"));
+        assert!(formatted.contains("0.0450 USD"));
+        assert!(!formatted.contains('$'));
+    }
+
+    #[test]
+    fn finalize_stream_omits_cost_row_when_unpriced() {
+        use paladin_ports::output::llm_port::TokenUsage;
+
+        let herald = TableHerald::default();
+        let metadata = ExecutionMetadata::builder()
+            .execution_id(uuid::Uuid::new_v4())
+            .start_time(chrono::Utc::now())
+            .model_used("test-model".to_string())
+            .token_usage(TokenUsage::new(300, 200))
+            .duration_ms(1000)
+            .build()
+            .unwrap();
+
+        let formatted = herald.finalize_stream(&metadata).unwrap();
+
+        assert!(!formatted.contains("Cost"));
+    }
+
+    fn allowance_metadata(with_warning: bool) -> ExecutionMetadata {
+        use paladin_core::platform::container::allowance::{
+            AllowanceLimitKind, AllowanceScopeKind, AllowanceWarning,
+        };
+        use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+        use paladin_ports::output::llm_port::TokenUsage;
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let cost = Cost::new(45_000_000, usd.clone());
+        let mut metadata = ExecutionMetadata::builder()
+            .execution_id(uuid::Uuid::nil())
+            .start_time(chrono::DateTime::UNIX_EPOCH)
+            .model_used("test-model".to_string())
+            .token_usage(TokenUsage::new(300, 200))
+            .duration_ms(1000)
+            .cost(&cost)
+            .build()
+            .unwrap();
+        if with_warning {
+            metadata.with_allowance_warnings(&[AllowanceWarning {
+                scope_kind: AllowanceScopeKind::Tenant,
+                limit_kind: AllowanceLimitKind::Lifetime,
+                balance: Cost::new(20_500_000_000, usd.clone()),
+                ceiling: Cost::new(25_000_000_000, usd),
+                window_start: None,
+                window_end: None,
+                warn_at: 80,
+            }]);
+        }
+        metadata
+    }
+
+    #[test]
+    fn finalize_stream_renders_exactly_one_allowance_row_when_present() {
+        let herald = TableHerald::default();
+        let with = herald.finalize_stream(&allowance_metadata(true)).unwrap();
+        let without = herald.finalize_stream(&allowance_metadata(false)).unwrap();
+
+        assert_eq!(with.matches("allowance:").count(), 1, "{with}");
+        assert!(with.contains("(tenant, lifetime cap)"), "{with}");
+        assert!(!without.contains("llowance"), "{without}");
+        assert!(without.contains("0.0450 USD"), "{without}");
+    }
+
+    /// D-19: a halted run renders exactly one halt row; a run without a halt reason renders
+    /// exactly as before.
+    #[test]
+    fn finalize_stream_renders_exactly_one_halt_row_when_present() {
+        use paladin_core::platform::container::allowance::HaltReason;
+
+        let herald = TableHerald::default();
+        let mut halted = allowance_metadata(false);
+        halted.with_halt_reason(&HaltReason::LedgerUnavailable);
+        let with = herald.finalize_stream(&halted).unwrap();
+        let without = herald.finalize_stream(&allowance_metadata(false)).unwrap();
+
+        assert_eq!(with.matches("halted:").count(), 1, "{with}");
+        assert!(with.contains("ledger unavailable"), "{with}");
+        assert!(!without.contains("halted:"), "{without}");
+        assert!(without.contains("0.0450 USD"), "{without}");
     }
 }

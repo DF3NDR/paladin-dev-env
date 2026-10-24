@@ -88,6 +88,85 @@ impl CancellationProbe for DbCancellationProbe {
     }
 }
 
+/// The per-run [`CancellationProbe`] the worker attaches to every
+/// factory-built engine (Phase 42 D-14, G1): it reports a caller cancel as a
+/// caller cancel, on this instance as well as on any other.
+///
+/// ## Why it exists (G1)
+///
+/// A caller cancel arriving at the instance that dispatches the run fires
+/// only that run's in-process child token (via [`LocalRunTokens`]). The child
+/// token is a child of the coordinator's shutdown token, so the engine sees
+/// the same bare "token cancelled" for a caller cancel and for a worker drain
+/// and cannot tell them apart. This probe answers `true` when:
+///
+/// - the debounced durable-flag probe (`db`, if any) answers `true` -- a
+///   cancel written by any instance; or
+/// - the run's own `local` token is cancelled while the `shutdown` token is
+///   NOT -- a same-instance caller cancel, never a drain.
+///
+/// While `shutdown` is cancelled the local token's state says nothing about
+/// the caller (it is a child of `shutdown`), so only the durable flag counts.
+///
+/// Infallible like the trait: it never fails a run.
+pub struct PerRunCancelProbe {
+    db: Option<Arc<dyn CancellationProbe>>,
+    local: CancellationToken,
+    shutdown: CancellationToken,
+}
+
+impl PerRunCancelProbe {
+    /// Construct the probe from the optional durable-flag probe, the run's
+    /// own child token, and the worker coordinator's shutdown token.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin::application::services::run::cancel::PerRunCancelProbe;
+    /// use paladin_core::platform::container::waypoint::ThreadId;
+    /// use paladin_ports::output::cancellation_probe::CancellationProbe;
+    /// use tokio_util::sync::CancellationToken;
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let shutdown = CancellationToken::new();
+    /// let local = shutdown.child_token();
+    /// let probe = PerRunCancelProbe::new(None, local.clone(), shutdown);
+    ///
+    /// // A same-instance caller cancel fires only the run's own token.
+    /// local.cancel();
+    /// assert!(probe.is_cancelled(&ThreadId::new("t")?).await);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn new(
+        db: Option<Arc<dyn CancellationProbe>>,
+        local: CancellationToken,
+        shutdown: CancellationToken,
+    ) -> Self {
+        Self {
+            db,
+            local,
+            shutdown,
+        }
+    }
+}
+
+#[async_trait]
+impl CancellationProbe for PerRunCancelProbe {
+    async fn is_cancelled(&self, thread: &ThreadId) -> bool {
+        // The local check first: an in-memory flag read, and it lets a
+        // same-instance cancel skip the repository entirely.
+        if self.local.is_cancelled() && !self.shutdown.is_cancelled() {
+            return true;
+        }
+        match &self.db {
+            Some(db) => db.is_cancelled(thread).await,
+            None => false,
+        }
+    }
+}
+
 /// The registry a [`RunWorkerPool`](super::worker::RunWorkerPool) shares
 /// with [`RunSubmissionService`](super::submission::RunSubmissionService)
 /// (via [`RunSubmissionService::with_local_tokens`]) so `cancel` can decide
@@ -328,5 +407,63 @@ mod tests {
             "a clone must observe registrations made through the original"
         );
         assert!(token.is_cancelled());
+    }
+
+    /// A probe double answering a fixed value.
+    struct FixedProbe(bool);
+
+    #[async_trait]
+    impl CancellationProbe for FixedProbe {
+        async fn is_cancelled(&self, _thread: &ThreadId) -> bool {
+            self.0
+        }
+    }
+
+    #[tokio::test]
+    async fn per_run_probe_reports_a_local_cancel_while_not_shutting_down() {
+        let shutdown = CancellationToken::new();
+        let local = shutdown.child_token();
+        let probe = PerRunCancelProbe::new(None, local.clone(), shutdown.clone());
+
+        assert!(!probe.is_cancelled(&thread()).await, "nothing cancelled");
+        local.cancel();
+        assert!(
+            probe.is_cancelled(&thread()).await,
+            "local cancelled, shutdown not -> a caller cancel"
+        );
+    }
+
+    #[tokio::test]
+    async fn per_run_probe_treats_a_drain_as_not_a_caller_cancel() {
+        let shutdown = CancellationToken::new();
+        let local = shutdown.child_token();
+        let probe = PerRunCancelProbe::new(None, local, shutdown.clone());
+
+        // Cancelling the parent cancels the child too: a drain.
+        shutdown.cancel();
+        assert!(
+            !probe.is_cancelled(&thread()).await,
+            "both tokens cancelled and no durable flag -> a drain, not a cancel"
+        );
+    }
+
+    #[tokio::test]
+    async fn per_run_probe_reports_the_durable_flag_even_while_shutting_down() {
+        let shutdown = CancellationToken::new();
+        let local = shutdown.child_token();
+        let probe = PerRunCancelProbe::new(
+            Some(Arc::new(FixedProbe(true))),
+            local.clone(),
+            shutdown.clone(),
+        );
+        assert!(probe.is_cancelled(&thread()).await, "db probe true");
+        shutdown.cancel();
+        assert!(
+            probe.is_cancelled(&thread()).await,
+            "a durable cancel still counts during a drain"
+        );
+
+        let quiet = PerRunCancelProbe::new(Some(Arc::new(FixedProbe(false))), local, shutdown);
+        assert!(!quiet.is_cancelled(&thread()).await);
     }
 }

@@ -31,13 +31,15 @@ use paladin::config::run_stream::RunStreamConfig;
 use paladin::config::run_worker::RunWorkerConfig;
 use paladin::config::schedules::SchedulesConfig;
 use paladin::config::settings::Settings;
+use paladin::config::treasurer::{CadenceBackend, CadenceConfig};
 use paladin::config::waypoint_store::{WaypointStoreBackend, WaypointStoreConfig};
 use paladin::config::webhooks::WebhooksConfig;
 use paladin::infrastructure::adapters::auth::InMemoryTokenAuthAdapter;
-use paladin::infrastructure::web::agent_host::{bind_address, build_agent_registry};
+use paladin::infrastructure::cadence::build_cadence;
+use paladin::infrastructure::web::agent_host::{bind_address, build_agent_registry_with_cadence};
 use paladin::infrastructure::web::facade_provisioner::FacadeProvisioner;
 use paladin::infrastructure::web::run_api_wiring::{
-    ErasedWaypointStore, RunApiConfigs, build_run_api,
+    ErasedWaypointStore, RunApiConfigs, build_run_api_with_cadence, build_treasury_ledger,
 };
 use paladin::infrastructure::web::{
     AgentApiState, AgentAuthConfig, HttpLayersConfig, Principal, RateLimitConfig, ThreadApiState,
@@ -47,6 +49,7 @@ use paladin_battalion::engine::WarEngine;
 use paladin_battalion::engine::shutdown::ShutdownCoordinator;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
+use paladin_core::platform::container::principal::TenantId;
 use paladin_ports::input::parley_port::ParleyPort;
 use paladin_ports::output::auth_port::AuthPort;
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream};
@@ -70,22 +73,71 @@ async fn main() {
     }
 }
 
+/// One boot log line for the rate-pacing configuration: whether pacing is on and the backend
+/// KIND only. The Redis URL is read from the variable `backend.redis.url_env` names and never
+/// reaches this line -- not even the variable's name, which is operator-chosen config that has no
+/// business in a log.
+fn cadence_boot_summary(config: &CadenceConfig) -> String {
+    if !config.enabled {
+        return "Rate pacing disabled (treasurer.cadence.enabled: false)".to_string();
+    }
+    let backend = match config.backend {
+        CadenceBackend::InProcess => "in_process",
+        CadenceBackend::Redis { .. } => "redis",
+    };
+    format!("Rate pacing enabled (treasurer.cadence.backend: {backend})")
+}
+
 /// Load config, build the agent host, and serve until a shutdown signal.
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config_path = config_path();
     info!("Loading configuration from '{config_path}'");
     let settings = Settings::load_from_file(&config_path)?;
 
+    // Boot-time half of PRICE-01: a bad treasurer.pricing entry (or APP_TREASURER_CURRENCY
+    // override) stops the server here, before any agent, provider or engine is built.
+    settings
+        .get_treasurer_config()
+        .validate()
+        .map_err(|e| format!("invalid treasurer configuration: {e}"))?;
+
+    // 39-07/D-08: `RunStoreConfig` moved ahead of the agent registry so the Treasurer's
+    // spend ledger can be built ONCE, from the SAME backend selection `RunApiConfigs` uses
+    // below, and handed to both the resident-agent registry and the runtime provisioner
+    // before either is built. `None` when the run store is disabled (D-08: no ledger
+    // installed with no backend configured) -- every downstream call takes `Option`.
+    let mut run_store_config = RunStoreConfig::default();
+    run_store_config.apply_env_overrides();
+    run_store_config
+        .validate()
+        .map_err(|e| format!("invalid run store configuration: {e}"))?;
+    let treasury_ledger = build_treasury_ledger(&run_store_config).await?;
+
+    // PACE-02, D-08: ONE rate-pacing wiring for the whole process, shared by the resident
+    // agents, the runtime provisioner and the run engine's port below, so a 429 seen through
+    // any of them gates the others' next call to the same provider and model. An invalid
+    // `treasurer.cadence`, or `backend: redis` on a binary without `redis-cadence`, stops the
+    // server here. A configured-but-unreachable Redis does not: construction never connects.
+    let cadence_config = settings.get_treasurer_config().cadence;
+    let cadence = build_cadence(&cadence_config)
+        .map_err(|e| format!("invalid treasurer.cadence configuration: {e}"))?;
+    info!("{}", cadence_boot_summary(&cadence_config));
+
     // Build the resident agents and the runtime provisioner from the same config.
-    // `build_agent_registry` validates the config first, so misconfiguration fails here
-    // with a specific message rather than mid-serve.
-    let registry = build_agent_registry(&settings).await?;
+    // `build_agent_registry_with_cadence` validates the config first, so misconfiguration
+    // fails here with a specific message rather than mid-serve.
+    let registry =
+        build_agent_registry_with_cadence(&settings, treasury_ledger.clone(), cadence.clone())
+            .await?;
     let mut agent_ids: Vec<String> = registry.list().into_iter().map(|(id, _)| id).collect();
     agent_ids.sort();
     // Shared with `build_run_api`'s `CodeAgentResolver` (D-32) below, so a code-registered
     // agent id is runnable through `POST /runs` without a second registry.
     let registry = Arc::new(registry);
-    let provisioner = FacadeProvisioner::from_settings(&settings);
+    let mut provisioner = FacadeProvisioner::from_settings(&settings).with_cadence(cadence.clone());
+    if let Some(ledger) = &treasury_ledger {
+        provisioner = provisioner.with_treasury_ledger(Arc::clone(ledger));
+    }
     let timeouts = settings.timeouts.clone().unwrap_or_default();
     // Cross-cutting HTTP layers (health routes are merged inside `agent_router`).
     let http = settings.http.clone().unwrap_or_default();
@@ -123,12 +175,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Platform API (Phase 27, PLAT-01..06): the seven X-09 config structs, each
     // `Default` + `apply_env_overrides()` + `validate()`'d before ever reaching
     // `build_run_api` -- every one defaults to off / today's-behaviour (D-50), so a
-    // v0.9 config boots this v0.10 binary with no run server at all.
-    let mut run_store_config = RunStoreConfig::default();
-    run_store_config.apply_env_overrides();
-    run_store_config
-        .validate()
-        .map_err(|e| format!("invalid run store configuration: {e}"))?;
+    // v0.9 config boots this v0.10 binary with no run server at all. `run_store_config`
+    // itself was already built above (39-07), ahead of the agent registry, so the
+    // Treasurer's ledger and the run API share the exact same backend selection.
     let mut run_queue_config = RunQueueConfig::default();
     run_queue_config.apply_env_overrides();
     run_queue_config
@@ -177,13 +226,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // enabled but this is `None`.
     let waypoint_store = build_waypoint_store(&waypoint_store_config).await?;
 
-    let run_handles = build_run_api(
+    let run_handles = build_run_api_with_cadence(
         run_configs,
         &settings,
         shutdown_coordinator.clone(),
         waypoint_store.clone(),
         auth.clone(),
         Arc::clone(&registry),
+        cadence,
     )
     .await?;
 
@@ -206,13 +256,20 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         thread_state = thread_state.with_run_submission(run_submission);
     }
 
-    let state = AgentApiState::new(Arc::clone(&registry))
+    let mut state = AgentApiState::new(Arc::clone(&registry))
         .with_provisioner(Arc::new(provisioner))
         .with_timeouts(TimeoutPolicy {
             default_secs: timeouts.default_seconds,
             max_secs: timeouts.max_seconds,
         })
         .with_auth(auth);
+    // Phase 41 D-06, D-07, C4: the agent routes settle spend under the calling principal, so
+    // they share the ONE Treasurer `build_run_api` built over the run store's ledger -- one
+    // policy over one ledger for the run and the agent routes. `None` (no allowances
+    // configured) leaves them ungated, exactly as before.
+    if let Some(treasurer) = run_handles.treasurer.clone() {
+        state = state.with_treasurer(treasurer);
+    }
     let layers = HttpLayersConfig {
         cors_allow_origins: http.cors_allow_origins.clone(),
         body_limit_bytes: http.body_limit_bytes,
@@ -226,7 +283,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Optionally serve the OpenAPI spec + Swagger UI (unversioned, unauthenticated).
     let docs_enabled = http.docs.enabled;
     // `thread_router`'s and `run_router`'s output are merged ALONGSIDE `agent_router`'s,
-    // never inside it, so `AgentApiState` stays untouched (D-24, D-44).
+    // never inside it, so the run pipeline's state stays out of `AgentApiState` (D-24, D-44);
+    // `AgentApiState` carries only the Treasurer's admission handle, attached above.
     let routes = agent_router(state.clone())
         .merge(thread_router(thread_state))
         .merge(run_router(run_handles.run_state));
@@ -328,11 +386,18 @@ const IN_PROCESS_TOKEN_STORE_WARNING: &str = "in-process bearer-token store ENAB
 
 /// Translate the config `auth` section into the web layer's [`AgentAuthConfig`].
 ///
-/// **Fail-closed:** when auth is enabled but no credential source (API keys or an opaque
-/// bearer token) is configured, this returns an error so the server refuses to start rather
-/// than silently serving an open API. When auth is disabled, a warning is logged and the API
-/// is open.
+/// **Fail-closed:** `AuthConfig::validate` runs first (Phase 40, D-05/D-06) -- a malformed,
+/// ambiguous or tenantless key mapping stops the boot with a message naming the entry and
+/// never its secret, even when auth is disabled. Then, when auth is enabled but no credential
+/// source (API keys or an opaque bearer token) is configured, this returns an error so the
+/// server refuses to start rather than silently serving an open API. When auth is disabled, a
+/// warning is logged and the API is open.
+///
+/// The per-key/bearer parsing below cannot fail on a validated config; it stays fallible (no
+/// panicking calls) so the two checks never drift apart silently.
 fn build_auth_config(cfg: &AuthConfig) -> Result<AgentAuthConfig, Box<dyn std::error::Error>> {
+    cfg.validate()?;
+
     if !cfg.enabled {
         warn!(
             "agent API authentication is DISABLED (http.auth.enabled = false) — all agent routes are open"
@@ -341,38 +406,58 @@ fn build_auth_config(cfg: &AuthConfig) -> Result<AgentAuthConfig, Box<dyn std::e
             enabled: false,
             api_keys: HashMap::new(),
             token_verifier: None,
+            bearer_tenant: None,
         });
     }
 
-    let api_keys: HashMap<String, Principal> = cfg
-        .api_keys
-        .iter()
-        .map(|k| {
-            (
-                k.key.clone(),
-                Principal {
-                    id: k.name.clone(),
-                    role: k.role,
-                },
-            )
-        })
-        .collect();
+    let mut api_keys: HashMap<String, Principal> = HashMap::new();
+    for k in &cfg.api_keys {
+        let tenant = TenantId::new(k.tenant.clone()).map_err(|e| {
+            if k.tenant.is_empty() {
+                format!(
+                    "http.auth.api_keys[{}]: 'tenant' is required — every API key must map to \
+                     a tenant (Phase 40, TENANT-01)",
+                    k.name
+                )
+            } else {
+                format!(
+                    "http.auth.api_keys[{}]: 'tenant' is not a valid tenant id: {e}",
+                    k.name
+                )
+            }
+        })?;
+        api_keys.insert(
+            k.key.clone(),
+            Principal::new(k.name.clone(), k.role, tenant),
+        );
+    }
 
     // The bearer-token path reuses the existing AuthPort against the in-process opaque
     // token store. The in-memory adapter verifies tokens it issued in-process, so it is
     // primarily useful when token issuance is co-located; API keys are the standalone
     // service-to-service mechanism.
-    let token_verifier: Option<Arc<dyn AuthPort>> = if cfg.bearer_token.enabled {
-        warn!("{IN_PROCESS_TOKEN_STORE_WARNING}");
-        Some(Arc::new(InMemoryTokenAuthAdapter::new()))
-    } else {
-        None
-    };
+    let (token_verifier, bearer_tenant): (Option<Arc<dyn AuthPort>>, Option<TenantId>) =
+        if cfg.bearer_token.enabled {
+            warn!("{IN_PROCESS_TOKEN_STORE_WARNING}");
+            let tenant_str = cfg.bearer_token.tenant.clone().unwrap_or_default();
+            let tenant = TenantId::new(tenant_str).map_err(|_| {
+                "http.auth.bearer_token: 'tenant' is required when bearer_token.enabled is \
+                 true — bearer-token principals must map to a tenant (Phase 40, TENANT-01)"
+                    .to_string()
+            })?;
+            (
+                Some(Arc::new(InMemoryTokenAuthAdapter::new()) as Arc<dyn AuthPort>),
+                Some(tenant),
+            )
+        } else {
+            (None, None)
+        };
 
     let auth = AgentAuthConfig {
         enabled: true,
         api_keys,
         token_verifier,
+        bearer_tenant,
     };
 
     if !auth.has_credentials() {
@@ -436,7 +521,7 @@ impl PaladinPort for NoRegisteredGraphsPaladinPort {
 }
 
 /// Build the durable waypoint store from [`WaypointStoreConfig`] (HITL-05, D-24/D-25/D-26;
-/// extended by Phase 27 to also feed [`build_run_api`]'s run engine): `Disabled` (the
+/// extended by Phase 27 to also feed [`build_run_api_with_cadence`]'s run engine): `Disabled` (the
 /// default) yields `None`; `Sqlite`/`Postgres` connect a real store, already erased to
 /// `Arc<dyn WaypointPort>` so ONE instance can be shared by both the thread surface's own
 /// `WarEngine` ([`thread_state_from_store`]) and the run engine `build_run_api` constructs.
@@ -497,7 +582,7 @@ async fn build_postgres_waypoint_store(
 /// spawning in-process (PLAT-FR-06, D-19..D-23) -- `None` (Phase 24's exact prior behavior)
 /// when the run store is disabled. [`ErasedWaypointStore`] lets this function build a
 /// concrete-typed `WarEngine`/`ParleyPortAdapter` over the SAME trait-object store
-/// [`build_run_api`]'s own run engine uses, without either function needing to know the
+/// [`build_run_api_with_cadence`]'s own run engine uses, without either function needing to know the
 /// other's concrete backend type.
 fn thread_state_from_store(
     waypoint_store: Option<Arc<dyn WaypointPort>>,
@@ -619,6 +704,7 @@ async fn shutdown_signal(coordinator: ShutdownCoordinator, grace: Duration, grac
 mod tests {
     use super::*;
     use paladin::config::agents::{ApiKeyConfig, BearerTokenAuthConfig};
+    use paladin_core::platform::container::principal::RunReadScope;
     use paladin_core::platform::container::user::UserRole;
     use std::sync::{Mutex, Once};
     use tower::ServiceExt; // for `Router::oneshot`
@@ -678,6 +764,7 @@ mod tests {
             key: format!("test-key-{name}"),
             name: name.to_string(),
             role: UserRole::User,
+            tenant: "test-tenant".to_string(),
         }
     }
 
@@ -688,7 +775,10 @@ mod tests {
         let cfg = AuthConfig {
             enabled: true,
             api_keys: vec![api_key("wired-store-test")],
-            bearer_token: BearerTokenAuthConfig { enabled: true },
+            bearer_token: BearerTokenAuthConfig {
+                enabled: true,
+                tenant: Some("test-tenant".to_string()),
+            },
         };
 
         let result = build_auth_config(&cfg);
@@ -712,7 +802,10 @@ mod tests {
         let cfg = AuthConfig {
             enabled: true,
             api_keys: vec![],
-            bearer_token: BearerTokenAuthConfig { enabled: false },
+            bearer_token: BearerTokenAuthConfig {
+                enabled: false,
+                tenant: None,
+            },
         };
 
         let result = build_auth_config(&cfg);
@@ -721,6 +814,142 @@ mod tests {
             result.is_err(),
             "authentication enabled with no API keys and the token store disabled must refuse \
              to start, not silently build an unauthenticated-but-enabled config"
+        );
+    }
+
+    // --- Phase 40 (TENANT-01, D-05): api_keys[].tenant / bearer_token.tenant fail-closed ---
+
+    #[test]
+    fn build_auth_config_maps_each_api_key_to_its_tenant() {
+        let mut key = api_key("acme-key");
+        key.tenant = "acme".to_string();
+        let cfg = AuthConfig {
+            enabled: true,
+            api_keys: vec![key],
+            bearer_token: BearerTokenAuthConfig {
+                enabled: false,
+                tenant: None,
+            },
+        };
+
+        let auth = build_auth_config(&cfg).expect("a key with a valid tenant must build");
+        let principal = auth
+            .api_keys
+            .get("test-key-acme-key")
+            .expect("the configured key must map to a principal");
+        assert_eq!(principal.tenant_id, TenantId::new("acme").unwrap());
+    }
+
+    #[test]
+    fn build_auth_config_fails_closed_when_an_api_key_has_no_tenant() {
+        let mut key = api_key("ci");
+        key.tenant = String::new();
+        let cfg = AuthConfig {
+            enabled: true,
+            api_keys: vec![key],
+            bearer_token: BearerTokenAuthConfig {
+                enabled: false,
+                tenant: None,
+            },
+        };
+
+        let err = match build_auth_config(&cfg) {
+            Ok(_) => panic!("an API key with no tenant must fail closed"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            err.contains("http.auth.api_keys[ci]: 'tenant' is required"),
+            "expected the fail-closed tenant-required message, got: {err}"
+        );
+        assert!(
+            !err.contains("test-key-ci"),
+            "the error must name only the key's `name`, never its secret `key` value: {err}"
+        );
+    }
+
+    #[test]
+    fn build_auth_config_requires_a_bearer_tenant_when_bearer_is_enabled() {
+        let cfg = AuthConfig {
+            enabled: true,
+            api_keys: vec![api_key("fallback")],
+            bearer_token: BearerTokenAuthConfig {
+                enabled: true,
+                tenant: None,
+            },
+        };
+
+        let err = match build_auth_config(&cfg) {
+            Ok(_) => panic!("bearer_token.enabled with no tenant must fail closed"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            err.contains("http.auth.bearer_token: 'tenant' is required"),
+            "expected the fail-closed bearer tenant-required message, got: {err}"
+        );
+    }
+
+    // --- Phase 40 Plan 03 (D-06): AuthConfig::validate() runs first at boot ---
+
+    #[test]
+    fn build_auth_config_rejects_duplicate_api_key_names_at_boot() {
+        let mut second = api_key("ci");
+        second.key = "test-key-ci-second".to_string();
+        let cfg = AuthConfig {
+            enabled: true,
+            api_keys: vec![api_key("ci"), second],
+            bearer_token: BearerTokenAuthConfig {
+                enabled: false,
+                tenant: None,
+            },
+        };
+
+        let err = match build_auth_config(&cfg) {
+            Ok(_) => panic!("two API keys sharing one name must fail closed at boot"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            err.contains("http.auth.api_keys[ci]: duplicate 'name'"),
+            "expected the duplicate-name message naming the key, got: {err}"
+        );
+        assert!(
+            !err.contains("test-key-ci"),
+            "the error must name only the key's `name`, never a secret `key` value: {err}"
+        );
+    }
+
+    #[test]
+    fn build_auth_config_maps_two_keys_of_one_tenant_to_one_read_scope() {
+        let mut ci = api_key("ci");
+        ci.tenant = "acme".to_string();
+        let mut web = api_key("web");
+        web.tenant = "acme".to_string();
+        let cfg = AuthConfig {
+            enabled: true,
+            api_keys: vec![ci, web],
+            bearer_token: BearerTokenAuthConfig {
+                enabled: false,
+                tenant: None,
+            },
+        };
+
+        let auth = build_auth_config(&cfg).expect("two keys of one tenant must build");
+        let ci = auth
+            .api_keys
+            .get("test-key-ci")
+            .expect("the `ci` key must map to a principal");
+        let web = auth
+            .api_keys
+            .get("test-key-web")
+            .expect("the `web` key must map to a principal");
+        assert_eq!(ci.tenant_id, web.tenant_id);
+        assert_eq!(ci.read_scope(), web.read_scope());
+        assert_eq!(
+            ci.read_scope(),
+            RunReadScope::Tenant(TenantId::new("acme").unwrap())
+        );
+        assert_ne!(
+            ci.id, web.id,
+            "two keys of one tenant stay two distinct principals"
         );
     }
 
@@ -1015,6 +1244,7 @@ mod tests {
             enabled: true,
             api_keys: HashMap::new(),
             token_verifier: None,
+            bearer_tenant: None,
         };
         let thread_state = ThreadApiState::new().with_auth(auth);
         let app = thread_router(thread_state);
@@ -1125,5 +1355,31 @@ mod tests {
             "paths: {:?}",
             spec.paths.paths.keys().collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn cadence_boot_summary_names_the_backend_kind_and_never_the_url_or_variable() {
+        let on = CadenceConfig::default();
+        assert_eq!(
+            cadence_boot_summary(&on),
+            "Rate pacing enabled (treasurer.cadence.backend: in_process)"
+        );
+
+        let off = CadenceConfig {
+            enabled: false,
+            ..CadenceConfig::default()
+        };
+        assert!(cadence_boot_summary(&off).contains("disabled"));
+
+        let redis = CadenceConfig {
+            backend: CadenceBackend::Redis {
+                url_env: "CADENCE_SECRET_URL_VAR".to_string(),
+            },
+            ..CadenceConfig::default()
+        };
+        let line = cadence_boot_summary(&redis);
+        assert!(line.contains("redis"), "{line}");
+        assert!(!line.contains("CADENCE_SECRET_URL_VAR"), "{line}");
+        assert!(!line.contains("://"), "{line}");
     }
 }

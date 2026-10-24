@@ -31,7 +31,7 @@ use paladin_battalion::engine::graph::GateRequestTemplate;
 use paladin_battalion::engine::{
     EdgeSpec, EngineLimits, NodeContext, NodeSpec, StateNode, StateNodeError, WarGraph,
 };
-use paladin_core::base::entity::node::Node;
+use paladin_core::base::entity::Entity;
 use paladin_core::platform::container::aegis::{Aegis, RetryPolicy};
 use paladin_core::platform::container::battalion::campaign::EdgeCondition;
 use paladin_core::platform::container::battlefield::{
@@ -64,7 +64,7 @@ pub fn make_paladin(name: &str) -> Paladin {
         vision_enabled: false,
         ..Default::default()
     };
-    Node::new(data, Some(name.to_string()))
+    Entity::new(data, Some(name.to_string()))
 }
 
 // ---------------------------------------------------------------------------

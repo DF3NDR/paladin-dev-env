@@ -1,0 +1,1 @@
+No external API integration: Phase 40 only extends Paladin's own HTTP API, auth config and storage adapters; the detector's "onboarding"/"API key" hits are the project's own CLI template and `http.auth.api_keys`.

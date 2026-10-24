@@ -109,14 +109,23 @@
 
 use async_trait::async_trait;
 use futures::Stream;
+use std::collections::BTreeMap;
 use std::env;
 
 use paladin_ports::output::llm_port::{
     LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities, StreamingResponse,
 };
+use paladin_ports::output::llm_port::{ReasoningEffort, ReasoningFallback};
+
+use paladin_ports::output::model_profile::{ModelProfile, StopSupport};
 
 use crate::compat::{
-    CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters,
+    CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters, ReasoningWire,
+};
+use crate::redaction::RedactedKey;
+use crate::registry::{
+    DEFAULT_MAX_RETRIES, ModelOverride, ModelRegistry, config_knob_builders,
+    default_timeout_seconds, fallback_from_compat, is_http_url, seeded, seeded_window,
 };
 
 /// Default Qwen (Alibaba DashScope) compatible-mode API base URL — the
@@ -132,21 +141,17 @@ pub const QWEN_DEFAULT_BASE_URL: &str = "https://dashscope-intl.aliyuncs.com/com
 
 /// Default Qwen model requested when `DASHSCOPE_MODEL` is unset.
 ///
-/// `qwen-plus` over `qwen3.7-plus`, live-verified 2026-08-23: both are
-/// present in the live catalog at [`QWEN_DEFAULT_BASE_URL`] and both accept
-/// every sampling parameter this preset declares, so the choice is not about
-/// capability. It is about resilience to retirement. The live catalog
-/// carries `qwen-plus` alongside dated snapshots of it going back to
-/// `qwen-plus-2025-01-25` — evidence that `qwen-plus` is a rolling alias
-/// Alibaba has already silently re-pointed multiple times while keeping the
-/// name stable, the same pattern a caller-facing "always current" name gives
-/// elsewhere. `qwen3.7-plus` is a generation-pinned name: the live catalog
-/// already carries a newer `qwen3.8-*` generation alongside it, so
-/// `qwen3.7-plus` is a future retirement candidate in exactly the way
-/// `moonshot-v1-8k` and `gemini-2.5-flash` were pinned names this same phase
-/// had to refresh after the vendor moved on (17-19, 17-20). A rolling alias
-/// is the more durable shipped default.
-pub const QWEN_DEFAULT_MODEL: &str = "qwen-plus";
+/// `qwen3.8-flash`: the operator-identified current general-purpose model (its cheapest current
+/// tier), measured end to end by the 2026-10-15 live probe (`registry/seeded.rs`, `verified_on`
+/// 2026-10-15). It replaces `qwen-plus`, which stays available and seeded; pin `DASHSCOPE_MODEL`
+/// to keep it.
+///
+/// Trade-off, recorded: the previous reasoning for `qwen-plus` (2026-08-23) was that it is a
+/// rolling alias Alibaba re-points while keeping the name stable, whereas a generation-pinned
+/// name such as this one is a future retirement candidate (the same pattern that forced the
+/// `moonshot-v1-8k` and `gemini-2.5-flash` refreshes). The default now follows the vendor's
+/// current model; the seeded table's date is what tells an operator when it was last checked.
+pub const QWEN_DEFAULT_MODEL: &str = "qwen3.8-flash";
 
 /// Curated fallback model list (D-13), returned when the live `/models`
 /// endpoint fails, is unreachable, or returns an empty list. Never reported
@@ -156,19 +161,72 @@ pub const QWEN_DEFAULT_MODEL: &str = "qwen-plus";
 /// catalog): all three entries are present, undated, general-purpose model
 /// names (no `-vl`/`-audio`/`-image`/`-mt`/`-coder`/`-tts`/`-asr` specialised
 /// suffix), and the first entry matches [`QWEN_DEFAULT_MODEL`].
-pub const QWEN_FALLBACK_MODELS: &[&str] = &["qwen-plus", "qwen-turbo", "qwen3-max"];
+pub const QWEN_FALLBACK_MODELS: &[&str] =
+    &[QWEN_DEFAULT_MODEL, "qwen-plus", "qwen-turbo", "qwen3-max"];
 
 /// Configuration for the Qwen (Alibaba DashScope) adapter.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
+#[non_exhaustive]
 pub struct QwenConfig {
     /// API key for Qwen (DashScope) authentication.
     pub api_key: String,
     /// Base URL for the Qwen compatible-mode API.
     pub base_url: String,
-    /// Default model to use.
+    /// The adapter's default model, which selects the timeout default; each request's own
+    /// `LlmRequest.model` decides what is sent on the wire.
     pub model: String,
     /// Request timeout in seconds.
     pub timeout_seconds: u64,
+    /// Default output budget (`max_tokens`) sent when a request sets none. `None` (the default)
+    /// sends no `max_tokens` key. The value is checked against the model's profiled maximum
+    /// output exactly as a request's own `max_tokens` is (ADR-0061 (i)): above it, the request is
+    /// refused before any HTTP call.
+    pub max_tokens: Option<u32>,
+    /// How many times a retryable error is retried after the first attempt. Defaults to `3`;
+    /// `0` sends each request once. A 429 is never retried here (the Cadence decorator waits)
+    /// and a permanent error is never retried.
+    pub max_retries: u32,
+    /// Adapter-wide context window in tokens, the operator's statement for every model of this
+    /// provider. `None` (the default) keeps the compiled windows. When set it replaces the
+    /// adapter's declared window, the fallback profile's window and every seeded model's window;
+    /// a `context_window` in [`model_overrides`](Self::model_overrides) still wins for that
+    /// model. Construction fails when it is below a model's maximum output.
+    pub context_window: Option<u32>,
+    /// Per-model overrides (D-06), keyed by exact model id and laid over each model's seeded
+    /// entry field by field. Empty by default. Validated at construction; an invalid override
+    /// fails it with an error naming the provider and the model.
+    pub model_overrides: BTreeMap<String, ModelOverride>,
+    /// The provider-level default reasoning effort (Phase 51, D-00e): sent for a request that
+    /// sets none of its own, resolved per request against that request's own model. A request's
+    /// (or an agent's) own effort always wins. `None` (the default, and the only compiled-in
+    /// value, D-00i) sends nothing. Set it only where every model this provider serves supports
+    /// it, or those requests are refused before any HTTP call naming this setting.
+    /// Set with [`with_reasoning_effort`](Self::with_reasoning_effort).
+    pub reasoning_effort: Option<ReasoningEffort>,
+    /// The provider-level default fallback (Phase 51, D-05) applied when the effort in force is
+    /// not one the request's model accepts; a request's own fallback wins. `None` (the default)
+    /// means refuse. Set with [`with_reasoning_fallback`](Self::with_reasoning_fallback).
+    pub reasoning_fallback: Option<ReasoningFallback>,
+}
+
+/// Prints every field except the API key, which is shown as `<redacted>` (D-00a): the key is a
+/// public `String`, so a derived `Debug` would put it into any log line or panic message that
+/// formats the config.
+impl std::fmt::Debug for QwenConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QwenConfig")
+            .field("api_key", &RedactedKey(&self.api_key))
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field("timeout_seconds", &self.timeout_seconds)
+            .field("max_tokens", &self.max_tokens)
+            .field("max_retries", &self.max_retries)
+            .field("context_window", &self.context_window)
+            .field("model_overrides", &self.model_overrides)
+            .field("reasoning_effort", &self.reasoning_effort)
+            .field("reasoning_fallback", &self.reasoning_fallback)
+            .finish()
+    }
 }
 
 impl QwenConfig {
@@ -209,29 +267,67 @@ impl QwenConfig {
             api_key.ok_or_else(|| "DASHSCOPE_API_KEY environment variable not set".to_string())?;
         let base_url = base_url.unwrap_or_else(|| QWEN_DEFAULT_BASE_URL.to_string());
         let model = model.unwrap_or_else(|| QWEN_DEFAULT_MODEL.to_string());
-        let timeout_seconds = timeout_seconds
-            .unwrap_or_else(|| "60".to_string())
-            .parse()
-            .map_err(|_| "Invalid DASHSCOPE_TIMEOUT_SECONDS value".to_string())?;
+        let timeout_seconds = match timeout_seconds {
+            Some(value) => value
+                .parse()
+                .map_err(|_| "Invalid DASHSCOPE_TIMEOUT_SECONDS value".to_string())?,
+            None => default_timeout_seconds(QWEN_PROVIDER, &model, 60),
+        };
 
         let config = Self {
             api_key,
             base_url,
             model,
             timeout_seconds,
+            max_tokens: None,
+            max_retries: DEFAULT_MAX_RETRIES,
+            context_window: None,
+            model_overrides: BTreeMap::new(),
+            reasoning_effort: None,
+            reasoning_fallback: None,
         };
 
         config.validate()?;
         Ok(config)
     }
 
-    /// Create configuration with custom values.
-    pub fn new(api_key: String, base_url: String, model: String) -> Self {
+    /// Create a configuration for `model`, authenticating with `api_key`.
+    ///
+    /// - `api_key`: the Qwen (DashScope) API key, never a URL.
+    /// - `model`: the adapter's default model. It selects the timeout default (300 s for a
+    ///   seeded reasoning model, 60 s otherwise); each request's own `LlmRequest.model`
+    ///   decides what is sent on the wire.
+    ///
+    /// The endpoint is [`QWEN_DEFAULT_BASE_URL`] (replace it with
+    /// [`with_base_url`](Self::with_base_url)) and the timeout is 300 s for a seeded reasoning
+    /// model and 60 s otherwise (replace it with
+    /// [`with_timeout_seconds`](Self::with_timeout_seconds)). Construction is infallible: an
+    /// empty key or model, or a non-`http(s)` endpoint, is refused when the adapter is built.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_llm::qwen::QwenConfig;
+    /// use paladin_llm::qwen::adapter::{QWEN_DEFAULT_BASE_URL, QWEN_DEFAULT_MODEL};
+    ///
+    /// let key = "qwen-example-key".to_string();
+    /// let config = QwenConfig::new(key, QWEN_DEFAULT_MODEL.to_string()).with_timeout_seconds(600);
+    /// assert_eq!(config.base_url, QWEN_DEFAULT_BASE_URL);
+    /// assert_eq!(config.timeout_seconds, 600);
+    /// ```
+    pub fn new(api_key: String, model: String) -> Self {
+        let timeout_seconds = default_timeout_seconds(QWEN_PROVIDER, &model, 60);
         Self {
             api_key,
-            base_url,
+            base_url: QWEN_DEFAULT_BASE_URL.to_string(),
             model,
-            timeout_seconds: 60,
+            timeout_seconds,
+            max_tokens: None,
+            max_retries: DEFAULT_MAX_RETRIES,
+            context_window: None,
+            model_overrides: BTreeMap::new(),
+            reasoning_effort: None,
+            reasoning_fallback: None,
         }
     }
 
@@ -243,8 +339,8 @@ impl QwenConfig {
         if self.base_url.is_empty() {
             return Err("Base URL cannot be empty".to_string());
         }
-        if !self.base_url.starts_with("http") {
-            return Err("Base URL must start with http or https".to_string());
+        if !is_http_url(&self.base_url) {
+            return Err("Base URL must start with http:// or https://".to_string());
         }
         if self.model.is_empty() {
             return Err("Model name cannot be empty".to_string());
@@ -252,6 +348,8 @@ impl QwenConfig {
         Ok(())
     }
 }
+
+config_knob_builders!(QwenConfig);
 
 /// The provider name this adapter reports through [`LlmPort::get_provider_name`]
 /// and that its engine stamps on every `LlmError::ProviderError` (Phase 25 D-03).
@@ -281,7 +379,7 @@ impl QwenAdapter {
             api_key: config.api_key,
             model: config.model,
             timeout_seconds: config.timeout_seconds,
-            max_retries: 3,
+            max_retries: config.max_retries,
             capabilities: CompatCapabilities {
                 supports_streaming: true,
                 supports_tool_calling: false,
@@ -292,7 +390,12 @@ impl QwenAdapter {
                 // boundary; T-17-16).
                 supports_vision: false,
                 supports_embeddings: false,
-                max_context_tokens: Some(131_072),
+                // The default model's seeded window (`seeded::QWEN`, `qwen3.8-flash`, verified
+                // 2026-10-15: the vendor's China/Beijing model page, the only page that states
+                // one), replacing the unevidenced 131,072.
+                max_context_tokens: config
+                    .context_window
+                    .or(seeded_window(seeded::QWEN, QWEN_DEFAULT_MODEL)),
                 supports_system_messages: true,
                 // Live-measured 2026-08-23 against `qwen-plus` and
                 // `qwen3.7-plus` at the shipped Singapore endpoint:
@@ -319,8 +422,19 @@ impl QwenAdapter {
             // individually, returned HTTP 200 with a real completion on both
             // models. No rejection observed — `all()` is the measured
             // declaration, not an unmeasured default.
-            request_parameters: CompatRequestParameters::all(),
+            // Phase 51 (D-04, REASON-02, REASON-06): Qwen's form is `enable_thinking` with an
+            // optional `thinking_budget`. Shipped by the owner's decision at plan 51-11's
+            // checkpoint (2026-10-22) from `51-EFFORT-PROBE.md` (live probe 2026-10-22, commit
+            // 32ce9dd0): `enable_thinking` off and auto were accepted on all 13 models (auto with
+            // reasoning tokens on 11), and `thinking_budget` 1 was accepted where 0 and -1 drew
+            // 400 on 11. The wire has no level field, so every named level refuses (D-03, D-06).
+            // The owner granted this wire although the mechanical D-04 rule cannot mark a
+            // budget-only wire `confirmed` (it has no level rows).
+            request_parameters: CompatRequestParameters::all(ReasoningWire::EnableThinking),
             fallback_models: QWEN_FALLBACK_MODELS.iter().map(|s| s.to_string()).collect(),
+            // No usage-cap (quota) mapping for qwen: its quota-exhaustion body was never captured
+            // (50-SEED-PROBE.md, owner reading R-2: accepted unverified 2026-10-16, plan 50-17),
+            // so an override would be invented evidence (D-11a). The shared status mapping applies.
             error_override: None,
             // WR-04 (`17-REVIEW.md`, T-17-52/T-17-53), superseding the
             // 17-04 comment this replaces: `QWEN_DEFAULT_BASE_URL` is only
@@ -336,10 +450,41 @@ impl QwenAdapter {
             redirect_policy: Some(reqwest::redirect::Policy::none()),
         };
 
+        // ADR-0061 (plan 50-03): the adapter-wide fallback profile is this preset's own
+        // declaration above, restated as a profile; per-model seeded entries arrive in plan
+        // 50-06.
+        // Stop sequences: `Supported { max: None }` is the vendor's published request schema
+        // (A3-50-03); a vendor that rejects `stop` for a model is corrected by that model's
+        // seeded entry (plan 50-06), never by this adapter (D-04a).
+        let fallback = fallback_from_compat(
+            &engine_config.capabilities.clone().into(),
+            &engine_config.request_parameters,
+            StopSupport::Supported { max: None },
+        );
+
+        // PARITY-03: the operator's adapter-wide window, then the per-model overrides, are laid
+        // over the seeded table; either one failing construction names the provider and model.
+        let registry = ModelRegistry::new(QWEN_PROVIDER, seeded::QWEN, fallback)
+            .with_context_window(config.context_window)
+            .and_then(|registry| registry.with_overrides(config.model_overrides))
+            .map_err(|e| {
+                LlmError::AuthenticationError(format!("Invalid Qwen configuration: {e}"))
+            })?;
+
         Ok(Self {
             // Phase 25 D-03: name the engine so every `ProviderError` it
             // emits carries "qwen", not the engine's generic default.
-            engine: CompatEngine::new(engine_config)?.with_provider_name(QWEN_PROVIDER),
+            engine: CompatEngine::new(engine_config)?
+                .with_provider_name(QWEN_PROVIDER)
+                .with_default_max_tokens(config.max_tokens)
+                .with_default_reasoning(config.reasoning_effort, config.reasoning_fallback)
+                // G-50-5a (plan 50-24): no `with_usage_semantics` -- Qwen keeps the engine default
+                // `CompatUsageSemantics::ReasoningInsideCompletion`. Live-measured 2026-10-18
+                // (`50-USAGE-PROBE.md`, operator run on the raw DashScope wire): qwen3.8-flash
+                // reads `reasoning inside completion` (83 + 75 = 158, reasoning 69); qwen-plus
+                // reported no reasoning (`indeterminate`, 30 + 3 = 33), which neither confirms
+                // nor contradicts it.
+                .with_model_registry(registry),
         })
     }
 }
@@ -372,16 +517,96 @@ impl LlmPort for QwenAdapter {
     fn get_capabilities(&self) -> ProviderCapabilities {
         self.engine.capabilities()
     }
+
+    fn model_profile(&self, model: &str) -> Option<ModelProfile> {
+        Some(self.engine.model_profile(model))
+    }
+
+    /// The pre-judging twin of the engine's send-time `in_force` + `admit`: this preset's
+    /// masked profile and provider defaults, the same verdict (D-09).
+    fn check_reasoning(
+        &self,
+        model: &str,
+        effort: Option<ReasoningEffort>,
+        fallback: Option<ReasoningFallback>,
+    ) -> Result<(), LlmError> {
+        self.engine.check_reasoning(model, effort, fallback)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::http_status::map_http_status;
+    use crate::registry;
     use mockito::Server;
-    use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+    use paladin_core::platform::container::prompt::{
+        PromptItem, PromptParameters, PromptType, UserPrompt,
+    };
     use paladin_ports::output::llm_port::FinishReason;
     use serde_json::json;
+
+    /// WR-03: the documented `with_base_url` guarantee is an `http://` or `https://` URL. A value
+    /// that merely starts with `http` (`httpx://x`, a scheme-less `http-gateway...`) must fail
+    /// construction like any other non-HTTP value.
+    #[test]
+    fn a_builder_set_non_http_base_url_fails_qwen_construction() {
+        for bad in [
+            "ftp://x",
+            "",
+            "api.example.com/v1",
+            "httpx://x",
+            "http-gateway.internal/v1",
+            "httpfoo:",
+        ] {
+            let config =
+                QwenConfig::new("k".to_string(), "qwen3.8-flash".to_string()).with_base_url(bad);
+            assert!(
+                config.validate().is_err(),
+                "base URL {bad:?} must fail validation"
+            );
+            assert!(
+                QwenAdapter::new(config).is_err(),
+                "base URL {bad:?} must fail adapter construction"
+            );
+        }
+        for good in ["http://localhost:1", "https://gateway.example/v1"] {
+            let config =
+                QwenConfig::new("k".to_string(), "qwen3.8-flash".to_string()).with_base_url(good);
+            assert!(
+                config.validate().is_ok(),
+                "base URL {good:?} must pass validation"
+            );
+        }
+    }
+
+    // ── QwenConfig::new (SURFACE-02, D-05) ──
+
+    #[test]
+    fn qwen_config_new_takes_key_and_model_and_defaults_the_endpoint() {
+        let config = QwenConfig::new("k".to_string(), "qwen-plus".to_string());
+        assert_eq!(config.base_url, QWEN_DEFAULT_BASE_URL);
+        assert_eq!(config.model, "qwen-plus");
+        assert_eq!(config.api_key, "k");
+        // The timeout default is unchanged: whatever `default_timeout_seconds` answered for the
+        // same model before the endpoint left the constructor.
+        assert_eq!(
+            config.timeout_seconds,
+            default_timeout_seconds(QWEN_PROVIDER, "qwen-plus", 60)
+        );
+        let seeded = QwenConfig::new("k".to_string(), QWEN_DEFAULT_MODEL.to_string());
+        assert_eq!(
+            seeded.timeout_seconds,
+            default_timeout_seconds(QWEN_PROVIDER, QWEN_DEFAULT_MODEL, 60)
+        );
+    }
+
+    #[test]
+    fn qwen_config_with_base_url_replaces_the_default_endpoint() {
+        let config = QwenConfig::new("k".to_string(), "m".to_string())
+            .with_base_url("http://localhost:1234");
+        assert_eq!(config.base_url, "http://localhost:1234");
+    }
 
     fn build_request(model: &str) -> LlmRequest {
         LlmRequest::new(
@@ -392,6 +617,138 @@ mod tests {
             }))
             .unwrap(),
         )
+    }
+
+    #[tokio::test]
+    async fn qwen_stop_reaches_the_wire_in_order() {
+        let mut server = crate::compat::test_support::server().await;
+        let captured = crate::compat::test_support::mock_completion(&mut server).await;
+        let adapter = QwenAdapter::new(
+            QwenConfig::new("test-key".to_string(), QWEN_DEFAULT_MODEL.to_string())
+                .with_base_url(server.url()),
+        )
+        .unwrap();
+        let mut request = build_request(QWEN_DEFAULT_MODEL);
+        request.prompt.entity.data.parameters = PromptParameters {
+            max_tokens: Some(64),
+            temperature: Some(0.5),
+            top_p: None,
+            frequency_penalty: None,
+            presence_penalty: None,
+            stop_sequences: Some(vec!["END".to_string(), "STOP".to_string()]),
+        };
+
+        let response = adapter
+            .generate(request)
+            .await
+            .expect("well-formed response");
+        let body = captured.lock().unwrap().take().expect("a request was sent");
+
+        assert_eq!(body.get("stop"), Some(&json!(["END", "STOP"])));
+        assert!(
+            !response
+                .metadata
+                .contains_key(crate::sampling::PARAMS_OMITTED_METADATA_KEY)
+        );
+        let profile = adapter
+            .model_profile(QWEN_DEFAULT_MODEL)
+            .expect("qwen profiles every model");
+        assert_eq!(
+            profile.temperature,
+            paladin_ports::output::model_profile::ParamSupport::Range(0.0, 1.99)
+        );
+    }
+
+    /// G-50-5a (plan 50-24): the live-measured qwen3.8-flash usage object
+    /// (`50-USAGE-PROBE.md`, 2026-10-18: prompt 83 with 0 cached, completion 75 of which
+    /// reasoning 69, total 158) is read with the engine-default inclusive semantics and
+    /// reconciles with DashScope's own total. Read beside completion it would map to 227.
+    #[tokio::test]
+    async fn qwen_measured_usage_is_read_inside_completion() {
+        use crate::usage_reconcile::USAGE_UNRECONCILED_METADATA_KEY;
+
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                json!({
+                    "id": "cmpl-qwen-measured",
+                    "model": "qwen3.8-flash",
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "391"},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {
+                        "prompt_tokens": 83,
+                        "completion_tokens": 75,
+                        "total_tokens": 158,
+                        "prompt_tokens_details": {"cached_tokens": 0},
+                        "completion_tokens_details": {"reasoning_tokens": 69}
+                    }
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+        let adapter = QwenAdapter::new(
+            QwenConfig::new("test-key".to_string(), "qwen3.8-flash".to_string())
+                .with_base_url(server.url()),
+        )
+        .unwrap();
+
+        let response = adapter
+            .generate(build_request("qwen3.8-flash"))
+            .await
+            .expect("well-formed response");
+
+        let usage = &response.usage;
+        assert_eq!(usage.prompt_tokens, 83);
+        assert_eq!(usage.cache_read_tokens, Some(0));
+        assert_eq!(usage.completion_tokens, 75, "{usage:?}");
+        assert_eq!(usage.reasoning_tokens, Some(69));
+        assert_eq!(usage.total_tokens, 158);
+        assert!(
+            !response
+                .metadata
+                .contains_key(USAGE_UNRECONCILED_METADATA_KEY),
+            "{:?}",
+            response.metadata
+        );
+    }
+
+    #[test]
+    fn qwen_default_model_is_seeded() {
+        let adapter = QwenAdapter::new(
+            QwenConfig::new("test-key".to_string(), QWEN_DEFAULT_MODEL.to_string())
+                .with_base_url("https://example.invalid/v1"),
+        )
+        .unwrap();
+        let profile = adapter
+            .model_profile(QWEN_DEFAULT_MODEL)
+            .expect("qwen profiles every model");
+        // A seeded entry stamps its date on the profile; the adapter-wide fallback carries none.
+        assert_eq!(profile.verified_on.as_deref(), Some("2026-10-15"));
+        assert_eq!(profile.context_window, Some(1_000_000));
+        assert_eq!(
+            adapter.get_capabilities().max_context_tokens,
+            profile.context_window,
+            "the declared window is the default model's seeded window"
+        );
+        // An id outside the table keeps the adapter-wide fallback (D-07).
+        let unseeded = adapter
+            .model_profile("qwen3-max")
+            .expect("qwen profiles every model");
+        assert_eq!(unseeded.verified_on, None);
+    }
+
+    #[test]
+    fn qwen_default_model_is_the_operator_identified_current_model() {
+        assert_eq!(QWEN_DEFAULT_MODEL, "qwen3.8-flash");
+        assert_eq!(QWEN_FALLBACK_MODELS[0], QWEN_DEFAULT_MODEL);
+        assert!(QWEN_FALLBACK_MODELS.contains(&"qwen-plus"));
     }
 
     // ── QwenConfig::from_env() defaulting logic ──
@@ -408,7 +765,12 @@ mod tests {
             .expect("key alone must be sufficient to build a valid config");
         assert_eq!(config.base_url, QWEN_DEFAULT_BASE_URL);
         assert_eq!(config.model, QWEN_DEFAULT_MODEL);
-        assert_eq!(config.timeout_seconds, 60);
+        // The default model is a seeded reasoning model, so its default timeout is the
+        // reasoning-model 300 s (D-13), not the hosted-preset 60 s.
+        assert_eq!(
+            config.timeout_seconds,
+            registry::REASONING_DEFAULT_TIMEOUT_SECONDS
+        );
     }
 
     /// Pins the shipped default to the literal Singapore (international)
@@ -469,11 +831,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = QwenConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            "qwen-plus".to_string(),
-        );
+        let config = QwenConfig::new("test-key".to_string(), "qwen-plus".to_string())
+            .with_base_url(server.url());
         let adapter = QwenAdapter::new(config).unwrap();
 
         let response = adapter
@@ -509,11 +868,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = QwenConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            "qwen-plus".to_string(),
-        );
+        let config = QwenConfig::new("test-key".to_string(), "qwen-plus".to_string())
+            .with_base_url(server.url());
         let adapter = QwenAdapter::new(config).unwrap();
 
         let stream = adapter
@@ -548,11 +904,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = QwenConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            "qwen-plus".to_string(),
-        );
+        let config = QwenConfig::new("test-key".to_string(), "qwen-plus".to_string())
+            .with_base_url(server.url());
         let adapter = QwenAdapter::new(config).unwrap();
 
         let result = adapter.generate(build_request("qwen-plus")).await;
@@ -570,15 +923,12 @@ mod tests {
             .create_async()
             .await;
 
-        let config = QwenConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            "qwen-plus".to_string(),
-        );
+        let config = QwenConfig::new("test-key".to_string(), "qwen-plus".to_string())
+            .with_base_url(server.url());
         let adapter = QwenAdapter::new(config).unwrap();
 
         let result = adapter.generate(build_request("qwen-plus")).await;
-        assert!(matches!(result, Err(LlmError::RateLimitExceeded)));
+        assert!(matches!(result, Err(LlmError::RateLimitExceeded { .. })));
     }
 
     #[tokio::test]
@@ -591,11 +941,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = QwenConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            "qwen-plus".to_string(),
-        );
+        let config = QwenConfig::new("test-key".to_string(), "qwen-plus".to_string())
+            .with_base_url(server.url());
         let adapter = QwenAdapter::new(config).unwrap();
 
         let result = adapter.generate(build_request("qwen-plus")).await;
@@ -612,11 +959,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = QwenConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            "qwen-plus".to_string(),
-        );
+        let config = QwenConfig::new("test-key".to_string(), "qwen-plus".to_string())
+            .with_base_url(server.url());
         let adapter = QwenAdapter::new(config).unwrap();
 
         let result = adapter.generate(build_request("qwen-plus")).await;
@@ -638,11 +982,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = QwenConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            "qwen-plus".to_string(),
-        );
+        let config = QwenConfig::new("test-key".to_string(), "qwen-plus".to_string())
+            .with_base_url(server.url());
         let adapter = QwenAdapter::new(config).unwrap();
 
         let result = adapter.generate(build_request("qwen-plus")).await;
@@ -672,22 +1013,14 @@ mod tests {
 
     #[test]
     fn get_provider_name_returns_qwen() {
-        let config = QwenConfig::new(
-            "test-key".to_string(),
-            QWEN_DEFAULT_BASE_URL.to_string(),
-            QWEN_DEFAULT_MODEL.to_string(),
-        );
+        let config = QwenConfig::new("test-key".to_string(), QWEN_DEFAULT_MODEL.to_string());
         let adapter = QwenAdapter::new(config).unwrap();
         assert_eq!(adapter.get_provider_name(), "qwen");
     }
 
     #[test]
     fn get_capabilities_reports_no_vision_and_no_tool_or_function_calling() {
-        let config = QwenConfig::new(
-            "test-key".to_string(),
-            QWEN_DEFAULT_BASE_URL.to_string(),
-            QWEN_DEFAULT_MODEL.to_string(),
-        );
+        let config = QwenConfig::new("test-key".to_string(), QWEN_DEFAULT_MODEL.to_string());
         let adapter = QwenAdapter::new(config).unwrap();
         let caps = adapter.get_capabilities();
 
@@ -712,14 +1045,25 @@ mod tests {
         struct QwenFixture;
 
         impl crate::conformance::ConformanceFixture for QwenFixture {
+            /// Qwen's wire is `enable_thinking` / `thinking_budget`: no level field, so none.
+            fn effort_wire_value(_body: &serde_json::Value) -> Option<String> {
+                None
+            }
+
             const WIRE: crate::conformance::Wire = crate::conformance::Wire::OpenAiChat;
 
+            fn default_model() -> &'static str {
+                QWEN_DEFAULT_MODEL
+            }
+
+            fn provider_name() -> &'static str {
+                "qwen"
+            }
+
             fn adapter(base_url: &str) -> Arc<dyn LlmPort> {
-                let config = QwenConfig::new(
-                    "test-key".to_string(),
-                    base_url.to_string(),
-                    QWEN_DEFAULT_MODEL.to_string(),
-                );
+                let config =
+                    QwenConfig::new("test-key".to_string(), QWEN_DEFAULT_MODEL.to_string())
+                        .with_base_url(base_url);
                 Arc::new(QwenAdapter::new(config).expect("test config must build"))
             }
 
@@ -756,5 +1100,594 @@ mod tests {
         }
 
         crate::llm_conformance_suite!(QwenFixture);
+    }
+
+    // ── PARITY-03 knobs (plan 50-08, D-12) ──
+
+    const UNSEEDED: &str = "qwen-unseeded-test-model";
+
+    fn knob_config(url: &str, model: &str) -> QwenConfig {
+        QwenConfig::new("test-key".to_string(), model.to_string()).with_base_url(url)
+    }
+
+    #[tokio::test]
+    async fn qwen_max_tokens_default_reaches_the_wire() {
+        use crate::compat::test_support::{mock_completion, send_with_max_tokens, server};
+
+        let mut server = server().await;
+        let captured = mock_completion(&mut server).await;
+        let adapter =
+            QwenAdapter::new(knob_config(&server.url(), UNSEEDED).with_max_tokens(2048)).unwrap();
+
+        let body = send_with_max_tokens(&adapter, &captured, UNSEEDED, None)
+            .await
+            .unwrap();
+        assert_eq!(body["max_tokens"], 2048, "{body}");
+        let body = send_with_max_tokens(&adapter, &captured, UNSEEDED, Some(512))
+            .await
+            .unwrap();
+        assert_eq!(body["max_tokens"], 512, "{body}");
+
+        let plain = QwenAdapter::new(knob_config(&server.url(), UNSEEDED)).unwrap();
+        let body = send_with_max_tokens(&plain, &captured, UNSEEDED, None)
+            .await
+            .unwrap();
+        assert!(body.get("max_tokens").is_none(), "{body}");
+    }
+
+    #[tokio::test]
+    async fn qwen_max_retries_is_read_by_the_engine() {
+        for retries in [0_u32, 1] {
+            let server = crate::compat::test_support::server().await;
+            let adapter =
+                QwenAdapter::new(knob_config(&server.url(), UNSEEDED).with_max_retries(retries))
+                    .unwrap();
+            crate::compat::test_support::attempts_against_a_failing_endpoint(
+                server,
+                &adapter,
+                UNSEEDED,
+                retries as usize + 1,
+            )
+            .await;
+        }
+    }
+
+    #[test]
+    fn qwen_context_window_override_is_declared() {
+        let adapter = QwenAdapter::new(
+            knob_config("https://example.invalid/v1", UNSEEDED).with_context_window(500_000),
+        )
+        .unwrap();
+        assert_eq!(adapter.get_capabilities().max_context_tokens, Some(500_000));
+        let profile = adapter.model_profile(UNSEEDED).unwrap();
+        assert_eq!(profile.context_window, Some(500_000));
+    }
+
+    #[test]
+    fn qwen_model_override_reaches_the_profile_and_invalid_one_fails_construction() {
+        let with_override = |window: u32| {
+            knob_config("https://example.invalid/v1", UNSEEDED).with_model_overrides(
+                std::collections::BTreeMap::from([(
+                    UNSEEDED.to_string(),
+                    crate::registry::ModelOverride {
+                        context_window: Some(window),
+                        ..crate::registry::ModelOverride::default()
+                    },
+                )]),
+            )
+        };
+        let adapter = QwenAdapter::new(with_override(900_000)).unwrap();
+        assert_eq!(
+            adapter.model_profile(UNSEEDED).unwrap().context_window,
+            Some(900_000)
+        );
+        let message = match QwenAdapter::new(with_override(0)) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("a zero window must fail construction"),
+        };
+        assert!(
+            message.contains("qwen") && message.contains(UNSEEDED),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn qwen_config_defaults_a_reasoning_model_to_300s() {
+        // (model, expected default timeout): a seeded reasoning model gets 300 s (D-13); any
+        // other model keeps this preset's compiled default (60 s).
+        for (model, expected) in [
+            (QWEN_DEFAULT_MODEL, 300),
+            ("qwen-plus", 60),
+            // The Phase 50.1 rows: the ones whose default call returned reasoning text get
+            // 300 s, the others keep the hosted-preset 60 s.
+            ("qwen3.8-max", 300),
+            ("qwen3.7-flash", 300),
+            ("qwen3.6-plus", 300),
+            ("qwen3.5-flash", 300),
+            ("qwen-max", 60),
+            ("qwen-flash", 60),
+            ("qwen-plus-latest", 60),
+            (UNSEEDED, 60),
+        ] {
+            let url = "https://example.invalid/v1";
+            assert_eq!(
+                knob_config(url, model).timeout_seconds,
+                expected,
+                "new({model})"
+            );
+            let parts =
+                QwenConfig::from_parts(Some("k".to_string()), None, Some(model.to_string()), None)
+                    .unwrap();
+            assert_eq!(parts.timeout_seconds, expected, "from_parts({model})");
+        }
+        // An explicit environment value always wins.
+        for explicit in ["30", "60", "900"] {
+            let config = QwenConfig::from_parts(
+                Some("k".to_string()),
+                None,
+                Some("qwen3.8-flash".to_string()),
+                Some(explicit.to_string()),
+            )
+            .unwrap();
+            assert_eq!(config.timeout_seconds.to_string(), explicit);
+        }
+    }
+
+    #[test]
+    fn qwen_context_window_below_a_seeded_max_output_fails_construction() {
+        // `qwen3.8-flash` is seeded with a 131,072-token maximum output; a 100,000-token
+        // window contradicts it and is refused, never clamped.
+        let message = match QwenAdapter::new(
+            knob_config("https://example.invalid/v1", QWEN_DEFAULT_MODEL)
+                .with_context_window(100_000),
+        ) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("a window below a seeded maximum output must fail construction"),
+        };
+        for needle in ["qwen", "qwen3.8-flash", "100000", "131072"] {
+            assert!(
+                message.contains(needle),
+                "'{needle}' missing from: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn qwen_config_debug_redacts_the_api_key() {
+        let config = knob_config("https://api.example.invalid/v1", "m");
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("test-key"), "{debug}");
+        assert!(debug.contains("<redacted>"), "{debug}");
+        for needle in [
+            "https://api.example.invalid/v1",
+            "timeout_seconds",
+            "max_retries",
+        ] {
+            assert!(debug.contains(needle), "'{needle}' missing from {debug}");
+        }
+    }
+
+    // ── Phase 51 (REASON-02, REASON-06, D-04): Qwen's reasoning wire ──
+    //
+    // Decision (plan 51-11 checkpoint, owner, 2026-10-22, "apply-verdicts; Qwen: ship
+    // EnableThinking with off/auto/budget seeded from the probe"): Qwen ships `enable_thinking`
+    // with an optional `thinking_budget`. The mechanical D-04 rule cannot mark a budget-only wire
+    // `confirmed` (it has no level rows), so this is the owner's reading of
+    // `51-EFFORT-PROBE.md`'s `### Qwen per model` rows (run 6, plus run 7 for `qwen3.7-max`
+    // `off`; 2026-10-22, commit `32ce9dd0`): `enable_thinking` off was accepted with no
+    // reasoning tokens reported and auto with reasoning tokens, and `thinking_budget` 1 was
+    // accepted (1 reasoning token) where 0 and -1 drew 400, on 11 of 13 models. The named levels
+    // refuse: the vendor has no level field (D-03, D-06). Qwen never converts a level to a
+    // budget.
+
+    #[test]
+    fn qwen_declares_the_enable_thinking_wire() {
+        let adapter =
+            QwenAdapter::new(QwenConfig::new("k".to_string(), "qwen-plus".to_string())).unwrap();
+        assert_eq!(
+            adapter.engine.request_parameters().reasoning,
+            ReasoningWire::EnableThinking
+        );
+    }
+
+    mod reasoning_effort {
+        use super::*;
+        use crate::compat::test_support::{mock_completion, plain_request, send_capturing, server};
+        use crate::reasoning::{
+            REASONING_EFFECTIVE_METADATA_KEY, REASONING_REQUESTED_METADATA_KEY,
+        };
+        use paladin_ports::output::llm_port::ReasoningEffort::{
+            Auto, Budget, High, Low, Max, Medium, Minimal, Off, XHigh,
+        };
+        use paladin_ports::output::llm_port::{ReasoningEffort, ReasoningFallback};
+        use paladin_ports::output::model_profile::{BudgetBounds, EffortLevels, EffortSupport};
+
+        /// The transcript date every Qwen model was probed (runs 6 and 7).
+        const PROBED_ON: &str = "2026-10-22";
+
+        /// The documented upper bound of `thinking_budget` that the seed uses
+        /// (`51-EFFORT-PROBE.md`, `## Vendor-documented bounds and coercions`, Alibaba Cloud
+        /// Model Studio "deep thinking", accessed 2026-10-22: "Value range 1~32768").
+        const DOCUMENTED_MAX: u32 = 32_768;
+
+        /// One row of the transcript table: model, `enable_thinking` off accepted with no
+        /// reasoning tokens, auto accepted with reasoning tokens (the integer), and whether
+        /// `thinking_budget` 1 was accepted while 0 was rejected.
+        struct Row {
+            model: &'static str,
+            off: bool,
+            auto_tokens: Option<u32>,
+            budget: bool,
+        }
+
+        const fn row(model: &'static str, auto_tokens: Option<u32>, budget: bool) -> Row {
+            Row {
+                model,
+                off: true,
+                auto_tokens,
+                budget,
+            }
+        }
+
+        /// Typed from the `### Qwen per model` table and the per-model transcript sections.
+        /// Every model's `off` row: 200, no reasoning-token count (`qwen3.7-max` from run 7).
+        const TRANSCRIPT: [Row; 13] = [
+            row("qwen3.8-flash", Some(50), true),
+            row("qwen3.8-max", Some(47), true),
+            row("qwen3.7-plus", Some(146), true),
+            row("qwen3.7-max", Some(247), true),
+            row("qwen3.7-flash", Some(823), true),
+            row("qwen3.6-plus", Some(2645), true),
+            row("qwen3.6-flash", Some(318), true),
+            row("qwen3.5-plus", Some(4699), true),
+            row("qwen3.5-flash", Some(462), true),
+            row("qwen-plus", Some(1047), true),
+            // auto 200 but no reasoning-token count; budget 1, 0 and -1 all 200 (field ignored).
+            row("qwen-max", None, false),
+            row("qwen-flash", Some(336), true),
+            // auto 400 "parameter.enable_thinking only support stream call"; budget 1 also 400.
+            row("qwen-plus-latest", None, false),
+        ];
+
+        fn expected(row: &Row) -> EffortSupport {
+            let mut levels = EffortLevels::new([])
+                .with_off(row.off)
+                .with_auto(row.auto_tokens.is_some());
+            if row.budget {
+                levels = levels.with_budget(BudgetBounds::new(1, DOCUMENTED_MAX));
+            }
+            EffortSupport::Supported(levels)
+        }
+
+        fn adapter(base_url: &str, model: &str) -> QwenAdapter {
+            QwenAdapter::new(
+                QwenConfig::new("test-key".to_string(), model.to_string()).with_base_url(base_url),
+            )
+            .unwrap()
+        }
+
+        #[test]
+        fn qwen_effort_seed_matches_the_transcript() {
+            let adapter = adapter("https://example.invalid/v1", "qwen-plus");
+            for row in &TRANSCRIPT {
+                let profile = adapter
+                    .model_profile(row.model)
+                    .unwrap_or_else(|| panic!("{}: no profile", row.model));
+                assert_eq!(profile.effort, expected(row), "{}", row.model);
+                assert_eq!(
+                    profile.effort_verified_on.as_deref(),
+                    Some(PROBED_ON),
+                    "{}",
+                    row.model
+                );
+                // The named levels refuse on every Qwen model: no level field exists.
+                match &profile.effort {
+                    EffortSupport::Supported(levels) => {
+                        assert!(levels.levels.is_empty(), "{}", row.model);
+                    }
+                    other => panic!("{}: expected Supported, got {other:?}", row.model),
+                }
+            }
+        }
+
+        #[test]
+        fn qwen_models_outside_the_probe_stay_unmeasured() {
+            // D-02 (owner, plan 51-10): a model the probe did not cover has no effort data.
+            let adapter = adapter("https://example.invalid/v1", "qwen-plus");
+            let profile = adapter.model_profile("qwen-turbo").unwrap();
+            assert_eq!(profile.effort, EffortSupport::Unmeasured);
+            assert_eq!(profile.effort_verified_on, None);
+        }
+
+        #[tokio::test]
+        async fn a_budget_sends_enable_thinking_and_thinking_budget() {
+            // Rows 3 and 4 of `qwen3.8-max`: auto and budget 1 accepted, 0 and -1 rejected.
+            const MODEL: &str = "qwen3.8-max";
+            let mut server = server().await;
+            let captured = mock_completion(&mut server).await;
+            let adapter = adapter(&server.url(), MODEL);
+
+            for n in [1, 512, DOCUMENTED_MAX] {
+                // A budget must be below the request's output cap (the synthetic request's
+                // default is 1000), so the cap is raised above the largest budget.
+                let mut request = plain_request(MODEL).with_reasoning(Budget(n));
+                request.prompt.entity.data.parameters.max_tokens = Some(DOCUMENTED_MAX + 1);
+                let (body, response) = send_capturing(&adapter, &captured, request)
+                    .await
+                    .unwrap_or_else(|e| panic!("budget {n}: {e}"));
+                assert_eq!(body["enable_thinking"], true, "{body}");
+                assert_eq!(body["thinking_budget"], n, "{body}");
+                assert!(body.get("reasoning_effort").is_none(), "{body}");
+                assert!(body.get("thinking").is_none(), "{body}");
+                let spelled = format!("budget:{n}");
+                assert_eq!(response.metadata[REASONING_REQUESTED_METADATA_KEY], spelled);
+                assert_eq!(response.metadata[REASONING_EFFECTIVE_METADATA_KEY], spelled);
+            }
+
+            let (off, _) = send_capturing(
+                &adapter,
+                &captured,
+                plain_request(MODEL).with_reasoning(Off),
+            )
+            .await
+            .unwrap();
+            assert_eq!(off["enable_thinking"], false, "{off}");
+            assert!(off.get("thinking_budget").is_none(), "{off}");
+            let (auto, _) = send_capturing(
+                &adapter,
+                &captured,
+                plain_request(MODEL).with_reasoning(Auto),
+            )
+            .await
+            .unwrap();
+            assert_eq!(auto["enable_thinking"], true, "{auto}");
+            assert!(auto.get("thinking_budget").is_none(), "{auto}");
+        }
+
+        #[tokio::test]
+        async fn an_out_of_bounds_budget_is_refused_before_http() {
+            // Row 5 and 6: 0 and -1 drew 400 (a budget is a positive integer); the documented
+            // upper bound is 32768, so one above it refuses locally.
+            const MODEL: &str = "qwen3.8-max";
+            let mut server = server().await;
+            let captured = mock_completion(&mut server).await;
+            let adapter = adapter(&server.url(), MODEL);
+
+            for requested in [Budget(0), Budget(DOCUMENTED_MAX + 1)] {
+                let error = send_capturing(
+                    &adapter,
+                    &captured,
+                    plain_request(MODEL).with_reasoning(requested),
+                )
+                .await
+                .expect_err("refused");
+                assert!(
+                    matches!(error, LlmError::UnsupportedParameter { .. }),
+                    "{requested}: {error:?}"
+                );
+                assert!(
+                    captured.lock().unwrap().is_none(),
+                    "{requested}: no HTTP hit"
+                );
+            }
+        }
+
+        #[tokio::test]
+        async fn a_row_with_no_evidenced_budget_refuses_every_budget() {
+            // `qwen-max` accepted budgets 1, 0 and -1 alike (the field is ignored) and
+            // `qwen-plus-latest` rejected budget 1 (stream-only), so neither has a `budget`.
+            for model in ["qwen-max", "qwen-plus-latest"] {
+                let mut server = server().await;
+                let captured = mock_completion(&mut server).await;
+                let adapter = adapter(&server.url(), model);
+                let error = send_capturing(
+                    &adapter,
+                    &captured,
+                    plain_request(model).with_reasoning(Budget(1)),
+                )
+                .await
+                .expect_err("no evidenced budget: Budget(1) refuses");
+                assert!(
+                    matches!(error, LlmError::UnsupportedParameter { .. }),
+                    "{model}: {error:?}"
+                );
+                assert!(captured.lock().unwrap().is_none(), "{model}: no HTTP hit");
+            }
+        }
+
+        #[tokio::test]
+        async fn a_row_with_no_evidenced_auto_refuses_auto_but_takes_off() {
+            for model in ["qwen-max", "qwen-plus-latest"] {
+                let mut server = server().await;
+                let captured = mock_completion(&mut server).await;
+                let adapter = adapter(&server.url(), model);
+                let error = send_capturing(
+                    &adapter,
+                    &captured,
+                    plain_request(model).with_reasoning(Auto),
+                )
+                .await
+                .expect_err("auto was not evidenced with reasoning tokens");
+                assert!(
+                    matches!(error, LlmError::UnsupportedParameter { .. }),
+                    "{model}: {error:?}"
+                );
+                assert!(captured.lock().unwrap().is_none(), "{model}: no HTTP hit");
+                let (off, _) = send_capturing(
+                    &adapter,
+                    &captured,
+                    plain_request(model).with_reasoning(Off),
+                )
+                .await
+                .unwrap_or_else(|e| panic!("{model}: {e}"));
+                assert_eq!(off["enable_thinking"], false, "{model}: {off}");
+            }
+        }
+
+        #[tokio::test]
+        async fn a_named_level_refuses_on_every_model_whatever_the_fallback() {
+            // Qwen has no level field (D-03, D-06): a level is never converted to a budget.
+            let mut server = server().await;
+            let captured = mock_completion(&mut server).await;
+            let adapter = adapter(&server.url(), "qwen-plus");
+            for row in &TRANSCRIPT {
+                for fallback in [
+                    ReasoningFallback::Refuse,
+                    ReasoningFallback::NearestLower,
+                    ReasoningFallback::NearestHigher,
+                ] {
+                    for level in [Minimal, Low, Medium, High, XHigh, Max] {
+                        let error = send_capturing(
+                            &adapter,
+                            &captured,
+                            plain_request(row.model)
+                                .with_reasoning(level)
+                                .with_reasoning_fallback(fallback),
+                        )
+                        .await
+                        .expect_err("a level has no Qwen wire form");
+                        assert!(
+                            matches!(error, LlmError::UnsupportedParameter { .. }),
+                            "{} {level} {fallback}: {error:?}",
+                            row.model
+                        );
+                        assert!(
+                            captured.lock().unwrap().is_none(),
+                            "{} {level}: no HTTP hit",
+                            row.model
+                        );
+                    }
+                }
+            }
+        }
+
+        /// Send `effort` / `fallback` through `adapter`'s `generate` and its `check_reasoning`
+        /// and return the check's verdict as the refusal reason (`None` for admitted), asserting
+        /// the two paths agree on both the verdict and the reason text (D-09).
+        async fn agreed_verdict(
+            adapter: &QwenAdapter,
+            model: &str,
+            effort: Option<ReasoningEffort>,
+            fallback: Option<ReasoningFallback>,
+        ) -> Option<String> {
+            let mut request = plain_request(model);
+            if let Some(effort) = effort {
+                request = request.with_reasoning(effort);
+            }
+            if let Some(fallback) = fallback {
+                request = request.with_reasoning_fallback(fallback);
+            }
+            let sent = adapter.generate(request).await;
+            let checked = adapter.check_reasoning(model, effort, fallback);
+            match (sent, checked) {
+                (Ok(_), Ok(())) => None,
+                (
+                    Err(LlmError::UnsupportedParameter {
+                        reason: sent_reason,
+                        ..
+                    }),
+                    Err(LlmError::UnsupportedParameter {
+                        reason: checked_reason,
+                        ..
+                    }),
+                ) => {
+                    assert_eq!(sent_reason, checked_reason);
+                    Some(checked_reason)
+                }
+                other => panic!("generate and check disagree: {other:?}"),
+            }
+        }
+
+        /// D-09, G-2: the provider-level `reasoning_effort` / `reasoning_fallback` reach the
+        /// pre-judging gate. The `enable_thinking` wire carries no level, so the substitution
+        /// row is out of reach here (nothing is listed to substitute); the defaults are shown by
+        /// a refusal that names the line that set it and by a default that rides the wire.
+        #[tokio::test]
+        async fn qwen_check_reasoning_consults_the_provider_defaults() {
+            const MODEL: &str = "qwen-plus";
+            let mut server = server().await;
+            let _captured = mock_completion(&mut server).await;
+            let build = |effort: Option<ReasoningEffort>, fallback: Option<ReasoningFallback>| {
+                let mut config = QwenConfig::new("test-key".to_string(), MODEL.to_string())
+                    .with_base_url(server.url());
+                if let Some(effort) = effort {
+                    config = config.with_reasoning_effort(effort);
+                }
+                if let Some(fallback) = fallback {
+                    config = config.with_reasoning_fallback(fallback);
+                }
+                QwenAdapter::new(config).unwrap()
+            };
+
+            // A provider default no level exists for refuses a no-effort check, naming its key.
+            let reason = agreed_verdict(&build(Some(Medium), None), MODEL, None, None)
+                .await
+                .expect("a provider default of medium is refused on a level-less wire");
+            assert!(
+                reason.ends_with("(set by `llm.qwen.reasoning_effort`)"),
+                "{reason}"
+            );
+            // The trait default (no provider defaults) would have admitted it.
+            assert!(build(None, None).check_reasoning(MODEL, None, None).is_ok());
+
+            // A provider default the wire carries is admitted, and a request-level effort wins.
+            assert_eq!(
+                agreed_verdict(&build(Some(Off), None), MODEL, None, None).await,
+                None
+            );
+            assert_eq!(
+                agreed_verdict(&build(Some(Medium), None), MODEL, Some(Off), None).await,
+                None
+            );
+            // A provider fallback cannot invent a level the wire lacks: the refusal stands.
+            assert!(
+                agreed_verdict(
+                    &build(Some(Medium), Some(ReasoningFallback::NearestLower)),
+                    MODEL,
+                    None,
+                    None
+                )
+                .await
+                .is_some()
+            );
+        }
+
+        #[tokio::test]
+        async fn a_qwen_body_never_carries_two_effort_fields() {
+            let mut server = server().await;
+            let captured = mock_completion(&mut server).await;
+            let adapter = adapter(&server.url(), "qwen-plus");
+            let nine: [ReasoningEffort; 9] = [
+                Off,
+                Auto,
+                Minimal,
+                Low,
+                Medium,
+                High,
+                XHigh,
+                Max,
+                Budget(512),
+            ];
+            let mut sent = 0;
+            for row in &TRANSCRIPT {
+                for requested in nine {
+                    let request = plain_request(row.model)
+                        .with_reasoning(requested)
+                        .with_reasoning_fallback(ReasoningFallback::NearestLower);
+                    if let Ok((body, _)) = send_capturing(&adapter, &captured, request).await {
+                        sent += 1;
+                        assert!(body.get("enable_thinking").is_some(), "{body}");
+                        for other in ["reasoning_effort", "thinking"] {
+                            assert!(
+                                body.get(other).is_none(),
+                                "{} {requested}: second effort field {other}: {body}",
+                                row.model
+                            );
+                        }
+                    }
+                }
+            }
+            assert!(sent > 0, "no effort reached the wire at all");
+        }
     }
 }

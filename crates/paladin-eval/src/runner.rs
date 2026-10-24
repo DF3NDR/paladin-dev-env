@@ -739,15 +739,15 @@ impl PaladinPort for ScenarioPaladinPort {
             context: None,
         }))
         .map_err(|source| PaladinError::ConfigurationError(source.to_string()))?;
-        let request = LlmRequest::new(paladin.node.model.clone(), prompt);
+        let request = LlmRequest::new(paladin.data.model.clone(), prompt);
 
         let response = match &self.llm {
             LlmSource::Scripted(router) => {
-                let llm = router.get(&paladin.node.name).ok_or_else(|| {
+                let llm = router.get(&paladin.data.name).ok_or_else(|| {
                     PaladinError::ConfigurationError(format!(
                         "ScenarioPaladinPort: no ScenarioLlm registered for paladin {:?} \
                          (known: {:?})",
-                        paladin.node.name,
+                        paladin.data.name,
                         router.keys().collect::<Vec<_>>()
                     ))
                 })?;
@@ -755,15 +755,14 @@ impl PaladinPort for ScenarioPaladinPort {
             }
             LlmSource::Live(provider) => provider.generate(request).await,
         }
-        // `paladin_battalion::llm_failure::to_paladin_error` (not the legacy
-        // `PaladinError::LlmError(source.to_string())` string erasure): a
-        // scripted `error:` entry's `LlmErrorKind::Transient` must survive as
-        // `Transience::Transient` so a scenario's Aegis retry policy under
-        // the DEFAULT `TransientOnly` predicate can actually retry it (D-34's
-        // E2E-3 dogfood scenario depends on this) -- the legacy erasure
-        // classifies EVERY `PaladinError::LlmError(_)` as `Transience::
-        // Unknown` (`paladin_core::platform::container::paladin_error::
-        // PaladinError::transience`), which `TransientOnly` never retries.
+        // The runner converts the real `LlmError` with
+        // `paladin_battalion::llm_failure::to_paladin_error`, which keeps the
+        // adapter's own transience: a scripted `error:` entry's
+        // `LlmErrorKind::Transient` survives as `Transience::Transient`, so a
+        // scenario's Aegis retry policy under the DEFAULT `TransientOnly`
+        // predicate can actually retry it (D-34's E2E-3 dogfood scenario
+        // depends on this). A string-only conversion would classify every
+        // failure `Transience::Unknown`, which `TransientOnly` never retries.
         .map_err(|source| paladin_battalion::llm_failure::to_paladin_error(&source))?;
 
         Ok(PaladinResult {
@@ -821,7 +820,7 @@ fn build_llm_router(graph: &WarGraph, root: &ScenarioLlm) -> HashMap<String, Sce
     let mut router = HashMap::new();
     for node_id in graph.node_order() {
         if let Some(NodeSpec::Paladin { paladin, .. }) = graph.node(node_id) {
-            router.insert(paladin.node.name.clone(), root.for_node(node_id.as_str()));
+            router.insert(paladin.data.name.clone(), root.for_node(node_id.as_str()));
         }
     }
     router
@@ -932,7 +931,7 @@ async fn resolve_battlefield<W: WaypointPort>(
 ) -> Result<Battlefield, RunnerError> {
     match outcome {
         RunOutcome::Completed { final_state, .. } => Ok(final_state.clone()),
-        RunOutcome::Halted { waypoint } | RunOutcome::AwaitingInput { waypoint, .. } => {
+        RunOutcome::Halted { waypoint, .. } | RunOutcome::AwaitingInput { waypoint, .. } => {
             let loaded = store
                 .get(thread, waypoint)
                 .await?
@@ -1261,7 +1260,7 @@ mod tests {
     use paladin_battalion::engine::graph::{EdgeSpec, EngineLimits};
     use paladin_battalion::engine::node::{NodeContext, StateNode, StateNodeError};
     use paladin_battalion::engine::{InputMapping, NodeSpec as EngineNodeSpec};
-    use paladin_core::base::entity::node::Node;
+    use paladin_core::base::entity::Entity;
     use paladin_core::platform::container::battlefield::{
         BattlefieldSchema, DispatchRule, FieldSpec,
     };
@@ -1287,7 +1286,7 @@ mod tests {
             vision_enabled: false,
             ..Default::default()
         };
-        Node::new(data, Some(name.to_string()))
+        Entity::new(data, Some(name.to_string()))
     }
 
     fn minimal_scenario(

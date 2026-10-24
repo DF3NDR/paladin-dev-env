@@ -17,12 +17,8 @@ mod anthropic_integration_tests {
         let base_url = env::var("ANTHROPIC_BASE_URL")
             .unwrap_or_else(|_| "https://api.anthropic.com/v1".to_string());
 
-        let config = AnthropicConfig::new(
-            api_key,
-            base_url,
-            "claude-3-5-sonnet-20241022".to_string(),
-            4096,
-        );
+        let config = AnthropicConfig::new(api_key, "claude-3-5-sonnet-20241022".to_string())
+            .with_base_url(base_url);
         AnthropicAdapter::new(config).expect("Failed to create Anthropic adapter")
     }
 

@@ -22,10 +22,15 @@
 //! ## Utilities
 //!
 //! - [`error_aggregation`] — Collect and summarise errors across parallel agent runs
-//! - [`retry`] — Exponential back-off retry helper
 //! - [`llm_failure`] — Structured `LlmError` -> `PaladinError::LlmFailure` conversion
+//! - `aegis_attempt` (crate-private) — The one per-attempt runner the legacy patterns share:
+//!   per-attempt Aegis timeout, retry gated on `PaladinError::transience()`, and the engine's
+//!   backoff
 
 #![warn(missing_docs)]
+
+// Per-attempt Aegis runner shared by the legacy Battalion patterns (crate-private).
+mod aegis_attempt;
 
 // Execution services
 pub mod campaign_service;
@@ -50,12 +55,12 @@ pub mod grove_service;
 /// registers one in code.
 pub mod llm_decision;
 /// The one `LlmError` -> `PaladinError::LlmFailure` conversion (D-02, X-06),
-/// shared by the engine-side and application-side call sites that used to
-/// erase a real `LlmError` into the stringly `PaladinError::LlmError`.
+/// shared by the engine-side and application-side call sites that hold a real
+/// `LlmError`; the converted failure keeps the adapter's transience, status
+/// and provider.
 pub mod llm_failure;
 pub mod maneuver;
 pub mod phalanx_service;
-pub mod retry;
 /// Registered evaluators for `RetryPredicate::Custom` (D-13), resolved
 /// through `engine::registries::EngineRegistries` by `WarGraph::validate`.
 pub mod retry_predicate;

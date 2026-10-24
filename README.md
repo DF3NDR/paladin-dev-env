@@ -76,7 +76,7 @@ re-exports the common types and gates each infrastructure crate behind a feature
 | Crate (package) | Purpose | Key feature flags |
 |---|---|---|
 | `paladin-ai` (umbrella, lib `paladin`) | Entry point; re-exports + feature gating | `llm-openai` *(default)*, `llm-all`, `redis-queue`, `s3-storage`, `qdrant`, `content-processing`, `web-server`, `notifications`, `storage`, `cli`, `full` |
-| `paladin-ai-core` | Pure domain types (`Node<T>`, `Paladin`, `Battalion`, …) | — |
+| `paladin-ai-core` | Pure domain types (`Entity<T>`, `Paladin`, `Battalion`, …) | — |
 | `paladin-ports` | Port trait contracts (hexagonal interfaces) | — |
 | `paladin-battalion` | Multi-agent orchestration runtime | — |
 | `paladin-llm` | LLM provider adapters | `openai`, `anthropic`, `deepseek`, `mock`, `vision` |

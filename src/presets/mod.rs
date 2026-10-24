@@ -21,7 +21,7 @@ use crate::application::services::paladin::middleware::{
 use crate::application::services::paladin::paladin_execution_service::PaladinExecutionService;
 use crate::application::services::paladin::structured::StructuredExecutorExt;
 use crate::config::agent_runtime::{ToolCallLimitConfig, ToolErrorConfig};
-use crate::core::base::entity::node::Node;
+use crate::core::base::entity::Entity;
 use crate::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData};
 use crate::infrastructure::resilience::circuit_breaker::CircuitBreaker;
 use paladin_ports::output::arsenal_port::ArsenalPort;
@@ -304,7 +304,7 @@ pub fn reasoning_agent(
     if let Some(model) = &opts.model {
         data.model = model.clone();
     }
-    let paladin = Node::new(data, None);
+    let paladin = Entity::new(data, None);
 
     let circuit_breaker = opts.circuit_breaker.clone().unwrap_or_else(|| {
         Arc::new(CircuitBreaker::new(

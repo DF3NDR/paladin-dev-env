@@ -71,26 +71,68 @@ use reqwest::{
     header::{CONTENT_TYPE, HeaderMap, HeaderValue},
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::env;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tokio::sync::OnceCell;
 use uuid::Uuid;
 
 use paladin_core::platform::container::prompt::{PromptRole, PromptType};
+use paladin_ports::output::llm_port::ReasoningFallback;
 use paladin_ports::output::llm_port::{
-    FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities, ResponseFormat,
-    StreamingResponse, TokenUsage,
+    FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ModelProfile, ParamSupport,
+    ProviderCapabilities, ReasoningEffort, ResponseFormat, StopSupport, StreamingResponse,
+    TokenUsage,
 };
+use paladin_ports::output::model_profile::ResolvedEffort;
+use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
-use crate::http_status::map_http_status;
+use crate::http_status::map_http_status_with_hints;
+use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
+use crate::reasoning::{self, SubstitutionLog, WireCaps, mask_effort};
 use crate::redaction::{
-    RESPONSE_EXCERPT_CHAR_BUDGET, bounded_excerpt, diagnostic_excerpt, redact_credentials,
+    RESPONSE_EXCERPT_CHAR_BUDGET, RedactedKey, bounded_excerpt, diagnostic_excerpt,
+    redact_credentials,
 };
+use crate::registry::{
+    DEFAULT_MAX_RETRIES, ModelOverride, ModelRegistry, config_knob_builders,
+    default_timeout_seconds, is_http_url, seeded, seeded_window,
+};
+use crate::response_guards::{StreamCompletion, bill, classify_completion};
+use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
+use crate::sse::SseLines;
+use crate::usage_reconcile::{USAGE_UNRECONCILED_METADATA_KEY, UsageLog};
 
 /// The provider name this adapter reports through [`LlmPort::get_provider_name`]
 /// and stamps on every [`LlmError::ProviderError`] it emits (Phase 25 D-03).
 const GEMINI_PROVIDER: &str = "gemini";
+
+/// Parse a `429` response's rate-limit headers through the generic family (PACE-01).
+///
+/// Must run BEFORE `response.text()` consumes the response (research Pitfall 2). Only a 429
+/// is parsed, and no credential header (`x-goog-api-key` included) is read. Gemini's own
+/// body-level `RetryInfo` is deliberately not parsed this phase (research OQ6): a Gemini 429
+/// carries a delay only if the endpoint also sent a `Retry-After` header.
+fn snapshot_rate_limit_hints(
+    status: reqwest::StatusCode,
+    headers: &HeaderMap,
+) -> Option<RateLimitHints> {
+    if status != reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return None;
+    }
+    hints_from_headers(RateLimitHeaderFamily::Generic, SystemTime::now(), |name| {
+        headers.get(name).and_then(|v| v.to_str().ok())
+    })
+}
+
+/// Build the rate-limit error for a Gemini `429` / `RESOURCE_EXHAUSTED`, carrying the header
+/// snapshot when one was taken.
+fn rate_limit_error(hints: Option<RateLimitHints>) -> LlmError {
+    match hints {
+        Some(hints) => LlmError::rate_limited_with_hints(hints),
+        None => LlmError::rate_limited(None),
+    }
+}
 
 /// Default Gemini API base URL — the `v1beta` surface, current as of this
 /// writing `[CITED: ai.google.dev/api]`.
@@ -98,18 +140,16 @@ pub const GEMINI_DEFAULT_BASE_URL: &str = "https://generativelanguage.googleapis
 
 /// Default Gemini model requested when `GEMINI_MODEL` is unset.
 ///
-/// **Refreshed 2026-08-22** from `gemini-2.5-flash`, which Google retired for
-/// new users: a `generateContent` call against it returns *"no longer
-/// available to new users \u2014 please update your code to use
-/// models/gemini-3.6-flash"*. The model remained present in the live
-/// `GET /models` catalog throughout, so the list probe kept passing while
-/// every generate call failed \u2014 catalog presence is not callability, and
-/// only the generate probe distinguishes them.
+/// `gemini-3.5-flash-lite`: the operator-identified current general-purpose model (its cheapest
+/// current tier), measured end to end by the 2026-10-15 live probe (`registry/seeded.rs`,
+/// `verified_on` 2026-10-15). It replaces `gemini-3.6-flash`, which stays available and seeded;
+/// pin `GEMINI_MODEL` to keep it.
 ///
-/// `gemini-3.6-flash` is the identifier Google's own deprecation message
-/// names, and it was verified by a live `generateContent` call on
-/// 2026-08-22 rather than taken from that message on faith.
-pub const GEMINI_DEFAULT_MODEL: &str = "gemini-3.6-flash";
+/// History: refreshed 2026-08-22 from `gemini-2.5-flash`, which Google retired for new users (a
+/// `generateContent` call against it answers *"no longer available to new users"* while the
+/// model stays in the live `GET /models` catalog, so catalog presence is not callability; only a
+/// generate call distinguishes the two).
+pub const GEMINI_DEFAULT_MODEL: &str = "gemini-3.5-flash-lite";
 
 /// Curated fallback model list (D-13), returned when the live `GET /models`
 /// endpoint fails, is unreachable, or returns an empty list. Gemini's
@@ -130,7 +170,11 @@ pub const GEMINI_DEFAULT_MODEL: &str = "gemini-3.6-flash";
 /// the credential available. An unverified identifier is exactly the kind of
 /// entry this refresh exists to remove, so the list carries only what was
 /// measured.
-pub const GEMINI_FALLBACK_MODELS: &[&str] = &["gemini-3.6-flash", "gemini-3.5-flash"];
+///
+/// **Re-checked 2026-10-15** by the live seed probe: all three entries answered `generateContent`
+/// and are in `seeded::GEMINI`; the default comes first.
+pub const GEMINI_FALLBACK_MODELS: &[&str] =
+    &[GEMINI_DEFAULT_MODEL, "gemini-3.6-flash", "gemini-3.5-flash"];
 
 /// The header name Gemini's API expects the credential on. Never the
 /// documented `?key=` query-parameter alternative — see this module's
@@ -166,18 +210,80 @@ const GEMINI_CREDENTIAL_MESSAGE_SIGNATURES: &[&str] = &[
 ];
 
 /// Configuration for the Gemini LLM adapter.
-#[derive(Debug, Clone)]
+///
+/// Marked `#[non_exhaustive]` (owner decision, Phase 50 plan 50-08, option-a): build one with
+/// [`GeminiConfig::new`] or [`GeminiConfig::from_env`] and set fields or call the `with_*`
+/// builders, so a later field is not another break for callers.
+#[derive(Clone)]
+#[non_exhaustive]
 pub struct GeminiConfig {
     /// API key for Gemini authentication, sent as the `x-goog-api-key`
     /// header on every request.
     pub api_key: String,
     /// Base URL for the Gemini API.
     pub base_url: String,
-    /// Default model to use (e.g. `gemini-2.5-flash`).
+    /// The adapter's default model (e.g. `gemini-2.5-flash`), which selects the timeout default;
+    /// each request's own `LlmRequest.model` decides what is sent on the wire.
     pub model: String,
-    /// Request timeout in seconds.
+    /// Request timeout in seconds. [`GeminiConfig::new`] and [`GeminiConfig::from_env`] default
+    /// it to 300 for a seeded reasoning model and to 60 otherwise (D-13); an explicit
+    /// `GEMINI_TIMEOUT_SECONDS` or field assignment always wins. A model marked `reasoning`
+    /// only through [`model_overrides`](Self::model_overrides) does not change this default
+    /// here: set this field in the same place.
     pub timeout_seconds: u64,
+    /// Default output budget (`max_tokens`) sent when a request sets none. `None` (the default)
+    /// sends no `maxOutputTokens`. The value is checked against the model's profiled maximum output
+    /// exactly as a request's own `max_tokens` is (ADR-0061 (i)): above it, the request is
+    /// refused before any HTTP call.
+    pub max_tokens: Option<u32>,
+    /// The retry budget for a retryable error. This adapter's loop counts total attempts, so the
+    /// default `3` sends up to three and `0` or `1` send once. A 429 is never retried here
+    /// (the Cadence decorator waits) and a permanent error is never retried.
+    pub max_retries: u32,
+    /// Adapter-wide context window in tokens, the operator's statement for every model. `None`
+    /// (the default) keeps the compiled windows. When set it replaces the adapter's declared
+    /// window, the fallback profile's window and every seeded model's window; a
+    /// `context_window` in [`model_overrides`](Self::model_overrides) still wins for that model.
+    /// Construction fails when it is below a model's maximum output.
+    pub context_window: Option<u32>,
+    /// Per-model overrides (D-06), keyed by exact model id and laid over each model's seeded
+    /// entry field by field. Empty by default. Validated at construction; an invalid override
+    /// fails it with an error naming the provider and the model.
+    pub model_overrides: BTreeMap<String, ModelOverride>,
+    /// The provider-level default reasoning effort (Phase 51, D-00e): sent for a request that
+    /// sets none of its own, resolved per request against that request's own model. A request's
+    /// (or an agent's) own effort always wins. `None` (the default, and the only compiled-in
+    /// value, D-00i) sends nothing. Set it only where every model this provider serves supports
+    /// it, or those requests are refused before any HTTP call naming this setting.
+    /// Set with [`with_reasoning_effort`](Self::with_reasoning_effort).
+    pub reasoning_effort: Option<ReasoningEffort>,
+    /// The provider-level default fallback (Phase 51, D-05) applied when the effort in force is
+    /// not one the request's model accepts; a request's own fallback wins. `None` (the default)
+    /// means refuse. Set with [`with_reasoning_fallback`](Self::with_reasoning_fallback).
+    pub reasoning_fallback: Option<ReasoningFallback>,
 }
+
+/// Prints every field except the API key, which is shown as `<redacted>` (D-00a): the key is a
+/// public `String`, so a derived `Debug` would put it into any log line or panic message that
+/// formats the config.
+impl std::fmt::Debug for GeminiConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GeminiConfig")
+            .field("api_key", &RedactedKey(&self.api_key))
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field("timeout_seconds", &self.timeout_seconds)
+            .field("max_tokens", &self.max_tokens)
+            .field("max_retries", &self.max_retries)
+            .field("context_window", &self.context_window)
+            .field("model_overrides", &self.model_overrides)
+            .field("reasoning_effort", &self.reasoning_effort)
+            .field("reasoning_fallback", &self.reasoning_fallback)
+            .finish()
+    }
+}
+
+config_knob_builders!(GeminiConfig);
 
 impl GeminiConfig {
     /// Load configuration from environment variables.
@@ -189,7 +295,7 @@ impl GeminiConfig {
     /// - `GEMINI_MODEL` (optional): Default model, defaults to
     ///   [`GEMINI_DEFAULT_MODEL`].
     /// - `GEMINI_TIMEOUT_SECONDS` (optional): Request timeout, defaults to
-    ///   `60`.
+    ///   `300` for a seeded reasoning model and `60` otherwise.
     ///
     /// # Errors
     /// Returns an error if `GEMINI_API_KEY` is absent, or another value
@@ -217,29 +323,68 @@ impl GeminiConfig {
             api_key.ok_or_else(|| "GEMINI_API_KEY environment variable not set".to_string())?;
         let base_url = base_url.unwrap_or_else(|| GEMINI_DEFAULT_BASE_URL.to_string());
         let model = model.unwrap_or_else(|| GEMINI_DEFAULT_MODEL.to_string());
-        let timeout_seconds = timeout_seconds
-            .unwrap_or_else(|| "60".to_string())
-            .parse()
-            .map_err(|_| "Invalid GEMINI_TIMEOUT_SECONDS value".to_string())?;
+        let timeout_seconds = match timeout_seconds {
+            Some(value) => value
+                .parse()
+                .map_err(|_| "Invalid GEMINI_TIMEOUT_SECONDS value".to_string())?,
+            None => default_timeout_seconds(GEMINI_PROVIDER, &model, 60),
+        };
 
         let config = Self {
             api_key,
             base_url,
             model,
             timeout_seconds,
+            max_tokens: None,
+            max_retries: DEFAULT_MAX_RETRIES,
+            context_window: None,
+            model_overrides: BTreeMap::new(),
+            reasoning_effort: None,
+            reasoning_fallback: None,
         };
 
         config.validate()?;
         Ok(config)
     }
 
-    /// Create configuration with custom values.
-    pub fn new(api_key: String, base_url: String, model: String) -> Self {
+    /// Create a configuration for `model`, authenticating with `api_key`.
+    ///
+    /// - `api_key`: the Gemini API key, never a URL.
+    /// - `model`: the adapter's default model. It selects the timeout default (300 s for a
+    ///   seeded reasoning model, 60 s otherwise); each request's own `LlmRequest.model`
+    ///   decides what is sent on the wire.
+    ///
+    /// The endpoint is [`GEMINI_DEFAULT_BASE_URL`] (replace it with
+    /// [`with_base_url`](Self::with_base_url)) and the timeout is 300 s for a seeded reasoning
+    /// model and 60 s otherwise (replace it with
+    /// [`with_timeout_seconds`](Self::with_timeout_seconds)). Construction is infallible: an
+    /// empty key or model, or a non-`http(s)` endpoint, is refused when the adapter is built.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_llm::gemini::GeminiConfig;
+    /// use paladin_llm::gemini::adapter::{GEMINI_DEFAULT_BASE_URL, GEMINI_DEFAULT_MODEL};
+    ///
+    /// let key = "gemini-example-key".to_string();
+    /// let config = GeminiConfig::new(key, GEMINI_DEFAULT_MODEL.to_string())
+    ///     .with_timeout_seconds(600);
+    /// assert_eq!(config.base_url, GEMINI_DEFAULT_BASE_URL);
+    /// assert_eq!(config.timeout_seconds, 600);
+    /// ```
+    pub fn new(api_key: String, model: String) -> Self {
+        let timeout_seconds = default_timeout_seconds(GEMINI_PROVIDER, &model, 60);
         Self {
             api_key,
-            base_url,
+            base_url: GEMINI_DEFAULT_BASE_URL.to_string(),
             model,
-            timeout_seconds: 60,
+            timeout_seconds,
+            max_tokens: None,
+            max_retries: DEFAULT_MAX_RETRIES,
+            context_window: None,
+            model_overrides: BTreeMap::new(),
+            reasoning_effort: None,
+            reasoning_fallback: None,
         }
     }
 
@@ -251,7 +396,7 @@ impl GeminiConfig {
         if self.base_url.is_empty() {
             return Err("Base URL cannot be empty".to_string());
         }
-        if !self.base_url.starts_with("http://") && !self.base_url.starts_with("https://") {
+        if !is_http_url(&self.base_url) {
             return Err("Base URL must start with http:// or https://".to_string());
         }
         if self.model.is_empty() {
@@ -267,6 +412,69 @@ pub struct GeminiAdapter {
     client: Client,
     config: GeminiConfig,
     models_cache: OnceCell<Vec<String>>,
+    /// Resolves the request model to the profile that decides what reaches the wire (ADR-0061).
+    model_registry: ModelRegistry,
+    /// Which (model, parameter) omissions this instance has already warned about.
+    omissions: OmissionLog,
+    /// Which (model, requested, effective) reasoning-effort substitutions this instance has
+    /// already warned about (Phase 51, D-06).
+    substitutions: SubstitutionLog,
+    /// Which (model, adjustment) `response_format` changes this instance has already warned
+    /// about.
+    format_log: FormatLog,
+    /// Which (model, check) usage findings this instance has already warned about (G-50-5a).
+    usage_log: UsageLog,
+}
+
+/// What this adapter declares to the port, stated once so the adapter-wide fallback profile and
+/// [`LlmPort::get_capabilities`] cannot drift apart.
+fn declared_capabilities(context_window: Option<u32>) -> ProviderCapabilities {
+    ProviderCapabilities {
+        supports_streaming: true,
+        // `LlmRequest` has no field through which a tool definition
+        // could travel, and this adapter neither sends `tools`/
+        // `toolConfig` nor parses a function-call part out of a
+        // response (D-08).
+        supports_tool_calling: false,
+        supports_function_calling: false,
+        // Text-only (D-08) — a truthful report of what ships, not an
+        // omission. A Gemini vision adapter is a recorded, deferred
+        // idea, not scope here.
+        supports_vision: false,
+        supports_embeddings: false,
+        // The default model's seeded window (`seeded::GEMINI`, `gemini-3.5-flash-lite`, verified
+        // 2026-10-15: listing `inputTokenLimit`).
+        // The operator's adapter-wide window (PARITY-03) replaces it when set.
+        max_context_tokens: context_window.or(seeded_window(seeded::GEMINI, GEMINI_DEFAULT_MODEL)),
+        supports_system_messages: true,
+        temperature_range: Some((0.0, 2.0)),
+    }
+}
+
+/// The adapter-wide fallback profile, derived from what this adapter's request builder sends
+/// (ADR-0061, D-05): a field it sends maps to `Range`, a field it never sends maps to `NotSent`.
+///
+/// - `temperature`: `Range` over the declared `temperature_range`; `top_p`: `Range(0.0, 1.0)`
+///   (`generationConfig.topP`).
+/// - both penalties: `NotSent` -- `generationConfig` as built here carries no penalty field.
+/// - `stop`: `Supported { max: None }` -- `generationConfig.stopSequences`, which this adapter
+///   already sent before the profile existed.
+/// - `json_object` and `json_schema`: both true -- `responseMimeType` and `responseSchema`.
+fn fallback_profile(context_window: Option<u32>) -> ModelProfile {
+    let caps = declared_capabilities(context_window);
+    let (low, high) = caps.temperature_range.unwrap_or((0.0, 1.0));
+    let mut profile = ModelProfile::new()
+        .with_temperature(ParamSupport::Range(low, high))
+        .with_top_p(ParamSupport::Range(0.0, 1.0))
+        .with_frequency_penalty(ParamSupport::NotSent)
+        .with_presence_penalty(ParamSupport::NotSent)
+        .with_stop_sequences(StopSupport::Supported { max: None })
+        .with_json_object(true)
+        .with_json_schema(true);
+    if let Some(window) = caps.max_context_tokens {
+        profile = profile.with_context_window(window);
+    }
+    profile
 }
 
 impl GeminiAdapter {
@@ -308,14 +516,47 @@ impl GeminiAdapter {
             .build()
             .map_err(|e| LlmError::NetworkError(format!("Failed to create HTTP client: {e}")))?;
 
+        // PARITY-03: the operator's adapter-wide window, then the per-model overrides, are laid
+        // over the seeded table; either one failing construction names the provider and model.
+        let model_registry = ModelRegistry::new(
+            GEMINI_PROVIDER,
+            seeded::GEMINI,
+            fallback_profile(config.context_window),
+        )
+        .with_context_window(config.context_window)
+        .and_then(|registry| registry.with_overrides(config.model_overrides.clone()))
+        .map_err(|e| LlmError::AuthenticationError(format!("Invalid Gemini configuration: {e}")))?;
+
         Ok(Self {
             client,
             config,
             models_cache: OnceCell::new(),
+            model_registry,
+            omissions: OmissionLog::new(),
+            substitutions: SubstitutionLog::new(),
+            format_log: FormatLog::new(),
+            usage_log: UsageLog::new(),
         })
     }
 
-    /// Build the outgoing request body from a port-level [`LlmRequest`].
+    /// The request model's profile as this adapter's wire can honour it: the effort data has
+    /// whatever Gemini's body cannot carry removed ([`GEMINI_REASONING_WIRE`]), so a caller
+    /// reading [`LlmPort::model_profile`] judges exactly what `build_request` will send.
+    fn wire_profile(&self, model: &str) -> ModelProfile {
+        let mut profile = self.model_registry.profile(model);
+        profile.effort = mask_effort(std::mem::take(&mut profile.effort), GEMINI_REASONING_WIRE);
+        profile
+    }
+
+    /// Build the outgoing request body from a port-level [`LlmRequest`], plus the notes the
+    /// buffered path records on its response.
+    ///
+    /// What reaches `generationConfig` is decided by the request model's [`ModelProfile`]
+    /// (ADR-0061, D-01): [`sampling::apply`] sends `temperature`, `topP` and `stopSequences`
+    /// only when the caller set them **and** the profile admits them; a set but inadmissible
+    /// one is omitted and recorded, never clamped or swapped. A `max_tokens` above the
+    /// profile's maximum output is refused before anything is sent. The `response_format`
+    /// follows the profile through [`sampling::apply_response_format`].
     ///
     /// `PromptType::System` (and `PromptType::Text` with
     /// [`PromptRole::System`]) map to the top-level `systemInstruction`
@@ -325,11 +566,14 @@ impl GeminiAdapter {
     /// mapping — Gemini's function surface is out of scope for this adapter
     /// (D-08) — and return [`LlmError::InvalidPrompt`] naming the
     /// unsupported prompt type rather than silently dropping it.
-    fn build_request(&self, request: &LlmRequest) -> Result<GeminiRequest, LlmError> {
+    fn build_request(
+        &self,
+        request: &LlmRequest,
+    ) -> Result<(GeminiRequest, RequestNotes), LlmError> {
         let mut system_instruction = None;
         let mut contents = Vec::new();
 
-        match &request.prompt.node.node.prompt_type {
+        match &request.prompt.entity.data.prompt_type {
             PromptType::System(system_prompt) => {
                 system_instruction = Some(GeminiSystemInstruction {
                     parts: vec![GeminiPart {
@@ -341,7 +585,7 @@ impl GeminiAdapter {
                 contents.push(GeminiContent {
                     role: "user".to_string(),
                     parts: vec![GeminiPart {
-                        text: user_prompt.query.clone(),
+                        text: crate::turn::user_turn_text(user_prompt),
                     }],
                 });
             }
@@ -394,15 +638,63 @@ impl GeminiAdapter {
             }
         }
 
-        let params = &request.prompt.node.node.parameters;
-        // RT-FR-17, D-28: `responseMimeType` is set for either
-        // `ResponseFormat` variant; `responseSchema` carries the schema
-        // value only for `JsonSchema`. `ResponseFormat` is
-        // `#[non_exhaustive]`, so a future variant this match has not been
-        // taught still gets the plain `application/json` mime type rather
-        // than silently sending no JSON-mode hint at all
-        // (EDGE(RT-05/wire shape)).
-        let (response_mime_type, response_schema) = match &request.response_format {
+        let params = &request.prompt.entity.data.parameters;
+        let profile = self.wire_profile(&request.model);
+
+        // The caller's value, else the configured default; either is held to the model's
+        // maximum output before anything is sent.
+        let max_tokens = params.max_tokens.or(self.config.max_tokens);
+        sampling::check_max_tokens(GEMINI_PROVIDER, &request.model, &profile, max_tokens)?;
+
+        // Phase 51 (REASON-02, REASON-06): an explicit effort is sent in the form the model's
+        // profile states or refused here, before any HTTP call and before any retry loop. The
+        // cap a budget is held below is `maxOutputTokens` when one is set.
+        // The request's own effort and fallback win; otherwise the provider-level default applies
+        // (D-00e), judged here against this request's own model.
+        let in_force = reasoning::in_force(
+            GEMINI_PROVIDER,
+            request.reasoning,
+            request.reasoning_fallback,
+            self.config.reasoning_effort,
+            self.config.reasoning_fallback,
+        );
+        let resolved = reasoning::admit(
+            GEMINI_PROVIDER,
+            &request.model,
+            &profile,
+            in_force.effort,
+            in_force.fallback,
+            max_tokens,
+            in_force.source_key.as_deref(),
+            &self.substitutions,
+        )?;
+        let thinking_config = match &resolved {
+            Some(resolved) => map_reasoning(&request.model, resolved)?,
+            None => None,
+        };
+
+        let applied = sampling::apply(&profile, params);
+        let params_omitted = self
+            .omissions
+            .record(GEMINI_PROVIDER, &request.model, &applied);
+
+        let (effective_format, adjustment) =
+            sampling::apply_response_format(&profile, request.response_format.as_ref());
+        let format_adjusted = self
+            .format_log
+            .record(GEMINI_PROVIDER, &request.model, adjustment);
+
+        let unprofiled_model = self
+            .model_registry
+            .note_unprofiled(&request.model)
+            .then(|| request.model.clone());
+
+        // RT-FR-17, D-28 / ADR-0061 (i): `responseMimeType` is set for either
+        // `ResponseFormat` variant the profile admits; `responseSchema` carries the schema
+        // value only for `JsonSchema`. `ResponseFormat` is `#[non_exhaustive]`, but
+        // `apply_response_format` already drops a variant it does not know, so what reaches
+        // this match is one of the two this adapter can express.
+        let (response_mime_type, response_schema) = match &effective_format {
             Some(ResponseFormat::JsonSchema { schema, .. }) => {
                 (Some("application/json".to_string()), Some(schema.clone()))
             }
@@ -411,80 +703,110 @@ impl GeminiAdapter {
         };
 
         let generation_config = GeminiGenerationConfig {
-            temperature: params.temperature,
-            max_output_tokens: params.max_tokens,
-            top_p: params.top_p,
+            temperature: applied.temperature,
+            max_output_tokens: max_tokens,
+            top_p: applied.top_p,
             top_k: None,
-            stop_sequences: params.stop_sequences.clone(),
+            stop_sequences: applied.stop,
             candidate_count: None,
             response_mime_type,
             response_schema,
+            thinking_config,
         };
         let generation_config = if generation_config.temperature.is_some()
             || generation_config.max_output_tokens.is_some()
             || generation_config.top_p.is_some()
             || generation_config.stop_sequences.is_some()
             || generation_config.response_mime_type.is_some()
+            || generation_config.thinking_config.is_some()
         {
             Some(generation_config)
         } else {
             None
         };
 
-        Ok(GeminiRequest {
+        let body = GeminiRequest {
             contents,
             system_instruction,
             generation_config,
-        })
+        };
+        let notes = RequestNotes {
+            params_omitted,
+            format_adjusted,
+            unprofiled_model,
+            reasoning_requested: resolved.map(|r| r.requested.to_string()),
+            reasoning_effective: resolved.map(|r| r.effective.to_string()),
+        };
+        Ok((body, notes))
     }
 
     /// Parse a well-formed Gemini `generateContent` response into an
     /// [`LlmResponse`].
     ///
-    /// Fails with [`LlmError::EmptyCompletion`] under two named conditions
-    /// rather than ever returning `Ok` with empty content — an empty-string
-    /// success is indistinguishable from a valid empty answer to every
-    /// downstream caller:
+    /// Fails with [`LlmError::EmptyCompletion`] rather than ever returning
+    /// `Ok` with empty content — an empty-string success is
+    /// indistinguishable from a valid empty answer to every downstream
+    /// caller. Two conditions:
     ///
     /// 1. `candidates` is empty.
-    /// 2. The mapped finish reason is [`FinishReason::Length`] (Gemini's
-    ///    `MAX_TOKENS`) and the extracted content trims to empty — the
-    ///    reasoning-model truncation signature also detected by
-    ///    [`crate::compat::engine::CompatEngine::detect_empty_completion`]
-    ///    for every compat-preset adapter in this crate.
+    /// 2. The extracted content trims to empty on any finish reason that is
+    ///    not a blocked-content finish (D-11a): `STOP` and `MAX_TOKENS` both
+    ///    qualify, and the payload carries the advice that fits (a larger
+    ///    `max_tokens` for `MAX_TOKENS`). The decision is the shared
+    ///    [`classify_completion`], the same function every other adapter
+    ///    calls, so the rule cannot drift.
+    ///
+    /// A blocked-content finish (`SAFETY`, `RECITATION`, `BLOCKLIST`,
+    /// `PROHIBITED_CONTENT`, `SPII`) maps to [`FinishReason::ContentFilter`]
+    /// and stays `Ok` even with no text (D-09): a blocked output is a finish
+    /// reason the caller inspects, never reported as a token-budget problem.
+    /// Gemini has no refusal signal distinct from those finishes (A2-50-13),
+    /// so no refusal text is passed to the guard.
     fn parse_response(
         &self,
         request_id: Uuid,
         model: &str,
         response: GeminiResponse,
     ) -> Result<LlmResponse, LlmError> {
-        let candidate = response.candidates.first().ok_or_else(|| {
-            LlmError::EmptyCompletion("Gemini response contained no candidates".to_string())
-        })?;
+        // G-50-5a: usage is mapped BEFORE the guard (and before the no-candidates check), so a
+        // call Gemini billed but that is classified as empty carries the same folded usage a
+        // success would have. A body with no `usageMetadata` bills nothing, never a fabricated
+        // zero (D-00c); a success without one still maps the default, as before.
+        let mapped = response.usage_metadata.as_ref().map(map_gemini_usage);
+        let billed = || mapped.as_ref().map(|(usage, _)| usage.clone());
+
+        let Some(candidate) = response.candidates.first() else {
+            return Err(bill(
+                LlmError::empty_completion("Gemini response contained no candidates".to_string()),
+                model,
+                billed(),
+            ));
+        };
 
         let content = candidate_text(candidate);
         let finish_reason = map_finish_reason(candidate.finish_reason.as_deref());
 
-        // Mirrors `crate::compat::engine::CompatEngine::detect_empty_completion` —
-        // the two must stay in step by hand (D-08 keeps Gemini bespoke, so
-        // this parity is not structural; a divergence between the two is a
-        // defect). The predicate is deliberately two conditions, not one: an
-        // empty response under a normal `STOP` finish is a legal empty
-        // answer, the same case every compat preset also lets through. The
-        // finish reason is the discriminator specifically so a `SAFETY` or
-        // `RECITATION` refusal is never misreported as a token-budget
-        // problem — the model declined to answer, and a larger max_tokens
-        // will produce the same refusal.
-        if matches!(finish_reason, FinishReason::Length) && content.trim().is_empty() {
-            return Err(LlmError::EmptyCompletion(format!(
-                "Gemini response finished with MAX_TOKENS and produced no text ({} raw chars) — \
-                 reasoning likely consumed the entire max_tokens budget; retry with a larger \
-                 max_tokens",
-                content.len()
-            )));
-        }
+        classify_completion(
+            GEMINI_PROVIDER,
+            model,
+            &content,
+            &finish_reason,
+            None,
+            &self.config.api_key,
+        )
+        .map_err(|err| bill(err, model, billed()))?;
 
-        let usage = response.usage_metadata.unwrap_or_default();
+        let (usage, vendor_total) =
+            mapped.unwrap_or_else(|| map_gemini_usage(&GeminiUsageMetadata::default()));
+        // G-50-5a: Gemini's own `totalTokenCount` is the check on the mapping -- a disagreement
+        // is warned once and recorded, never written over the mapped total (D-02).
+        let mut metadata = HashMap::new();
+        if let Some(value) = self
+            .usage_log
+            .record(GEMINI_PROVIDER, model, &usage, vendor_total)
+        {
+            metadata.insert(USAGE_UNRECONCILED_METADATA_KEY.to_string(), value);
+        }
 
         Ok(LlmResponse {
             id: Uuid::new_v4(),
@@ -492,10 +814,12 @@ impl GeminiAdapter {
             model: model.to_string(),
             content,
             finish_reason,
-            usage: map_gemini_usage(&usage),
+            usage,
+            cost: None,
             created_at: Utc::now(),
-            metadata: HashMap::new(),
+            metadata,
             function_call: None,
+            reasoning: None,
         })
     }
 
@@ -549,7 +873,23 @@ impl GeminiAdapter {
     /// Verification path: the `live-api-tests` feature with a real
     /// `GEMINI_API_KEY` (17-CONTEXT.md D-15 leaves this available and
     /// deliberately unused this phase).
+    ///
+    /// A thin wrapper over [`Self::map_error_with_hints`], kept so the status-mapping unit
+    /// tests read the same as before PACE-01. Production paths call the hints variant.
+    #[cfg(test)]
     fn map_error(&self, status: u16, body: &str) -> LlmError {
+        self.map_error_with_hints(status, body, None)
+    }
+
+    /// Map a non-2xx Gemini response to [`LlmError`], carrying the parsed rate-limit headers
+    /// of a `429` (PACE-01). Both the `429` arm and the `RESOURCE_EXHAUSTED` arm build the
+    /// rate-limit error from `hints`; see [`Self::map_error`] for every other rule.
+    fn map_error_with_hints(
+        &self,
+        status: u16,
+        body: &str,
+        hints: Option<RateLimitHints>,
+    ) -> LlmError {
         let envelope: Option<GeminiErrorEnvelope> = serde_json::from_str(body).ok();
         let rpc_status = envelope.as_ref().and_then(|e| e.error.status.as_deref());
         let raw_message = envelope
@@ -591,8 +931,8 @@ impl GeminiAdapter {
             }
             400 if rpc_status == Some("INVALID_ARGUMENT") => LlmError::InvalidPrompt(excerpt),
             404 if rpc_status == Some("NOT_FOUND") => LlmError::ModelNotAvailable(excerpt),
-            429 => LlmError::RateLimitExceeded,
-            _ if rpc_status == Some("RESOURCE_EXHAUSTED") => LlmError::RateLimitExceeded,
+            429 => rate_limit_error(hints),
+            _ if rpc_status == Some("RESOURCE_EXHAUSTED") => rate_limit_error(hints),
             // WR-04 (`17-REVIEW.md`, T-17-52): this client's redirect
             // policy is `none` (see `GeminiAdapter::new`), so a `3xx`
             // response is never followed — it arrives here as an ordinary
@@ -632,11 +972,12 @@ impl GeminiAdapter {
                     Some(rpc) => format!("{raw_message} (status={rpc})"),
                     None => raw_message.to_string(),
                 };
-                map_http_status(
+                map_http_status_with_hints(
                     GEMINI_PROVIDER,
                     status,
                     &envelope_text,
                     &self.config.api_key,
+                    hints,
                 )
             }
         }
@@ -655,6 +996,16 @@ impl GeminiAdapter {
     /// `UsageLimitExceeded` (a usage cap resets on a provider-side billing
     /// schedule, not a short window — retrying here would burn the bounded
     /// retry budget before a higher-level breaker ever sees the error).
+    ///
+    /// **A 429 is surfaced on the first attempt (Phase 43 D-02).**
+    /// `RateLimitExceeded` is in the same set, but for a different reason: a
+    /// 429 is the one error whose cure is waiting, and the Cadence decorator
+    /// above this adapter owns waiting with a gate shared by every caller of
+    /// the same provider and model. Retrying it here would re-send into a
+    /// limit the provider just announced and hide the thrash below the
+    /// decorator; the error carries the provider's own `Retry-After` for the
+    /// decorator to honour. Network, timeout, 5xx and decode retries are
+    /// unchanged.
     async fn execute_with_retry<F, Fut, T>(
         &self,
         operation: F,
@@ -677,8 +1028,11 @@ impl GeminiAdapter {
                         e,
                         LlmError::AuthenticationError(_)
                             | LlmError::InvalidPrompt(_)
-                            | LlmError::EmptyCompletion(_)
+                            | LlmError::EmptyCompletion { .. }
+                            | LlmError::Refusal { .. }
                             | LlmError::UsageLimitExceeded { .. }
+                            // D-02: surface the first 429; the Cadence decorator waits.
+                            | LlmError::RateLimitExceeded { .. }
                     ) {
                         return Err(e);
                     }
@@ -717,11 +1071,12 @@ impl GeminiAdapter {
 
         let status = response.status().as_u16();
         if !response.status().is_success() {
+            let hints = snapshot_rate_limit_hints(response.status(), response.headers());
             let body = response
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(self.map_error(status, &body));
+            return Err(self.map_error_with_hints(status, &body, hints));
         }
 
         let body = response.text().await.map_err(|e| {
@@ -787,7 +1142,7 @@ impl GeminiAdapter {
 impl LlmPort for GeminiAdapter {
     async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
         validate_model_identifier(&request.model)?;
-        let gemini_request = self.build_request(&request)?;
+        let (gemini_request, notes) = self.build_request(&request)?;
         let url = format!(
             "{}/models/{}:generateContent",
             self.config.base_url, request.model
@@ -814,11 +1169,14 @@ impl LlmPort for GeminiAdapter {
             let status = response.status().as_u16();
 
             if !response.status().is_success() {
+                // Snapshot the 429 headers BEFORE `.text()` consumes the response
+                // (research Pitfall 2).
+                let hints = snapshot_rate_limit_hints(response.status(), response.headers());
                 let body = response
                     .text()
                     .await
                     .unwrap_or_else(|_| "Unknown error".to_string());
-                return Err(self.map_error(status, &body));
+                return Err(self.map_error_with_hints(status, &body, hints));
             }
 
             // Read the body to a String first, deserialize separately — a
@@ -838,11 +1196,17 @@ impl LlmPort for GeminiAdapter {
             self.parse_response(request.id, &request.model, gemini_response)
         };
 
-        self.execute_with_retry(operation, 3).await
+        let mut response = self
+            .execute_with_retry(operation, self.config.max_retries)
+            .await?;
+        // The request-time notes (ADR-0061 visibility rule) ride on the successful response,
+        // beside any usage finding `parse_response` recorded.
+        response.metadata.extend(notes.into_metadata());
+        Ok(response)
     }
 
     /// Generate a streaming completion. POSTs with `alt=sse` and assembles
-    /// SSE frames via `parse_sse_chunk`.
+    /// SSE frames via `parse_sse_lines`.
     ///
     /// ## Retry (WR-04, `17-REVIEW.md`)
     ///
@@ -865,12 +1229,32 @@ impl LlmPort for GeminiAdapter {
     /// Gemini, so a transient failure can bill the prompt more than once.
     /// The non-retryable set above exists precisely so a failure the
     /// provider has already answered definitively is never retried.
+    ///
+    /// ## Empty output (D-11a)
+    ///
+    /// A stream cannot be classified until it ends, so the text is
+    /// accumulated as frames pass and the shared `classify_completion`
+    /// rule runs on the frame that carries `finishReason` (the last
+    /// candidate frame). A stream that reaches it with no non-blank text
+    /// and a finish reason other than a blocked-content one ends with
+    /// `Err(`[`LlmError::EmptyCompletion`]`)`; a blocked-content finish
+    /// (`SAFETY` and its siblings) stays an `Ok` terminal chunk with
+    /// [`FinishReason::ContentFilter`] (D-09). Frames already yielded stay
+    /// yielded; only the terminal item changes. That error item carries the
+    /// finish frame's `usageMetadata` as its billed usage
+    /// ([`LlmError::billed_usage`], G-50-5a) on the request model, or `None`
+    /// when the frame reported none.
     async fn generate_stream(
         &self,
         request: LlmRequest,
     ) -> Result<Box<dyn Stream<Item = Result<StreamingResponse, LlmError>> + Send>, LlmError> {
         validate_model_identifier(&request.model)?;
-        let gemini_request = self.build_request(&request)?;
+        // ADR-0061 (h), owner reading R-1 (option-b): the omissions, format changes and
+        // unprofiled model `build_request` `warn!`s about are also stamped on the stream's
+        // terminal (finish-reason) chunk, only that chunk, as the buffered path stamps
+        // `LlmResponse.metadata`.
+        let (gemini_request, notes) = self.build_request(&request)?;
+        let stream_metadata = notes.into_metadata();
         let url = format!(
             "{}/models/{}:streamGenerateContent",
             self.config.base_url, request.model
@@ -905,28 +1289,63 @@ impl LlmPort for GeminiAdapter {
 
             if !response.status().is_success() {
                 let status = response.status().as_u16();
+                // Same header snapshot as the buffered path, taken before the body read.
+                let hints = snapshot_rate_limit_hints(response.status(), response.headers());
                 let body = response
                     .text()
                     .await
                     .unwrap_or_else(|_| "Unknown error".to_string());
-                return Err(self.map_error(status, &body));
+                return Err(self.map_error_with_hints(status, &body, hints));
             }
 
             Ok(response)
         };
 
-        let response = self.execute_with_retry(operation, 3).await?;
+        let response = self
+            .execute_with_retry(operation, self.config.max_retries)
+            .await?;
 
-        let stream = response.bytes_stream().flat_map(|chunk_result| {
-            let items: Vec<Result<StreamingResponse, LlmError>> = match chunk_result {
-                Ok(bytes) => parse_sse_chunk(&bytes),
-                Err(e) => vec![Err(LlmError::NetworkError(format!(
-                    "Gemini stream error: {e}"
-                )))],
-            };
+        let model = request.model.clone();
+        let api_key = self.config.api_key.clone();
+        let mut completion = StreamCompletion::default();
+        // G-50-5a: the terminal frame's `totalTokenCount`, reconciled on the `Ok` terminal chunk
+        // against the usage mapped from the same frame. A clone shares this instance's log.
+        let usage_log = self.usage_log.clone();
+        let mut held_vendor_total: Option<u32> = None;
 
-            futures::stream::iter(items)
-        });
+        // A network read can end inside a `data:` line (or inside a multi-byte character), so the
+        // bytes are reassembled into whole lines before any line is parsed (CR-02).
+        let mut sse = SseLines::default();
+        let stream = response
+            .bytes_stream()
+            .map(Some)
+            .chain(futures::stream::iter([None]))
+            .flat_map(move |chunk_option| {
+                // `None` is the end of the body: it releases a final line that had no newline.
+                let chunk_result = match chunk_option {
+                    Some(read) => read.map(|bytes| sse.push(&bytes)),
+                    None => Ok(sse.finish()),
+                };
+                let items: Vec<Result<StreamingResponse, LlmError>> = match chunk_result {
+                    Ok(lines) => {
+                        let mut items = parse_sse_lines(&lines, &mut held_vendor_total);
+                        classify_stream_items(&mut items, &mut completion, &model, &api_key);
+                        reconcile_terminal_usage(
+                            &mut items,
+                            &usage_log,
+                            &model,
+                            &mut held_vendor_total,
+                        );
+                        stamp_terminal_metadata(&mut items, &stream_metadata);
+                        items
+                    }
+                    Err(e) => vec![Err(LlmError::NetworkError(format!(
+                        "Gemini stream error: {e}"
+                    )))],
+                };
+
+                futures::stream::iter(items)
+            });
 
         Ok(Box::new(stream))
     }
@@ -944,23 +1363,32 @@ impl LlmPort for GeminiAdapter {
     }
 
     fn get_capabilities(&self) -> ProviderCapabilities {
-        ProviderCapabilities {
-            supports_streaming: true,
-            // `LlmRequest` has no field through which a tool definition
-            // could travel, and this adapter neither sends `tools`/
-            // `toolConfig` nor parses a function-call part out of a
-            // response (D-08).
-            supports_tool_calling: false,
-            supports_function_calling: false,
-            // Text-only (D-08) — a truthful report of what ships, not an
-            // omission. A Gemini vision adapter is a recorded, deferred
-            // idea, not scope here.
-            supports_vision: false,
-            supports_embeddings: false,
-            max_context_tokens: Some(1_048_576),
-            supports_system_messages: true,
-            temperature_range: Some((0.0, 2.0)),
-        }
+        declared_capabilities(self.config.context_window)
+    }
+
+    fn model_profile(&self, model: &str) -> Option<ModelProfile> {
+        Some(self.wire_profile(model))
+    }
+
+    /// The pre-judging twin of the send-time `in_force` + `admit` in `build_request`:
+    /// same precedence over this adapter's `reasoning_effort` / `reasoning_fallback`, same
+    /// `wire_profile`, same verdict (D-09). The per-model wire form chosen in
+    /// `map_reasoning` only ever refuses what `admit` already refused.
+    fn check_reasoning(
+        &self,
+        model: &str,
+        effort: Option<ReasoningEffort>,
+        fallback: Option<ReasoningFallback>,
+    ) -> Result<(), LlmError> {
+        reasoning::check(
+            GEMINI_PROVIDER,
+            model,
+            || self.wire_profile(model),
+            effort,
+            fallback,
+            self.config.reasoning_effort,
+            self.config.reasoning_fallback,
+        )
     }
 }
 
@@ -1020,6 +1448,91 @@ struct GeminiGenerationConfig {
     /// absent entirely when the caller sets no hint.
     #[serde(rename = "responseSchema", skip_serializing_if = "Option::is_none")]
     response_schema: Option<serde_json::Value>,
+    /// `LlmRequest.reasoning` on the wire (Phase 51): a `thinkingLevel` or a `thinkingBudget`,
+    /// never both. Omitted when no effort is set or the effort is `Auto`, keeping an unset
+    /// request's body byte-identical (D-00i). Placed last so the existing field order is
+    /// untouched. Never carries `includeThoughts` (D-00g).
+    #[serde(rename = "thinkingConfig", skip_serializing_if = "Option::is_none")]
+    thinking_config: Option<GeminiThinkingConfig>,
+}
+
+/// `generationConfig.thinkingConfig`: exactly one of the two members is set.
+#[derive(Debug, Serialize)]
+struct GeminiThinkingConfig {
+    #[serde(rename = "thinkingLevel", skip_serializing_if = "Option::is_none")]
+    thinking_level: Option<&'static str>,
+    #[serde(rename = "thinkingBudget", skip_serializing_if = "Option::is_none")]
+    thinking_budget: Option<u32>,
+}
+
+/// What Gemini's `generateContent` body can carry of a profile's effort data (Phase 51): a
+/// `thinkingLevel`, a `thinkingBudget` (and `0` for `off`), and `auto` as the absence of both.
+///
+/// Confirmed against the dated probe (plan 51-12, D-04; owner decision of 2026-10-22 at plan
+/// 51-11's checkpoint): `51-EFFORT-PROBE.md`'s verdict table marks Gemini's `thinking_level`
+/// confirmed (the invalid value drew 400 on 12 of 12 models, so the field is parsed; the highest
+/// accepted level reports more reasoning tokens than the lowest on 5 of 5 comparable models), and
+/// `thinkingBudget` parsed (400 on 12 of 12). The documented capabilities therefore stand; they
+/// are not `WireCaps::NONE`. No seeded row carries a budget span (the probe file holds no
+/// vendor-documented bound), so a budget refuses on every seeded model until an operator
+/// override states one.
+const GEMINI_REASONING_WIRE: WireCaps = WireCaps {
+    levels: true,
+    off: true,
+    auto: true,
+    budget: true,
+};
+
+/// The `thinkingLevel` spelling of a level, kept in one place so it can change for the whole
+/// adapter. Lower-case, confirmed by the dated probe (research A2, plan 51-12): every seeded level
+/// was accepted in lower-case on 12 of 12 models, and the upper-case `HIGH` was accepted too, so
+/// the lower-case spelling stays. Pinned by a wire-body test.
+fn thinking_level_spelling(effort: ReasoningEffort) -> Option<&'static str> {
+    reasoning::level_spelling(effort)
+}
+
+/// Turn an admitted effort into Gemini's `thinkingConfig`, or `None` when nothing is sent
+/// (`Auto`, or `Off` on a model that does not reason).
+///
+/// A level and a budget never appear together. `Off` is a zero budget.
+///
+/// # Errors
+///
+/// [`LlmError::UnsupportedParameter`] for an effort this wire cannot carry. The profile masking
+/// and `admit` already refuse those, so this is the last line of defence: it can never put a
+/// field on the wire that the request did not ask for.
+fn map_reasoning(
+    model: &str,
+    resolved: &ResolvedEffort,
+) -> Result<Option<GeminiThinkingConfig>, LlmError> {
+    if !resolved.on_wire {
+        return Ok(None);
+    }
+    if let Some(level) = thinking_level_spelling(resolved.effective) {
+        return Ok(Some(GeminiThinkingConfig {
+            thinking_level: Some(level),
+            thinking_budget: None,
+        }));
+    }
+    match resolved.effective {
+        ReasoningEffort::Off => Ok(Some(GeminiThinkingConfig {
+            thinking_level: None,
+            thinking_budget: Some(0),
+        })),
+        // The vendor's own default depth: nothing to send.
+        ReasoningEffort::Auto => Ok(None),
+        ReasoningEffort::Budget(tokens) => Ok(Some(GeminiThinkingConfig {
+            thinking_level: None,
+            thinking_budget: Some(tokens),
+        })),
+        other => Err(LlmError::unsupported_parameter(
+            "reasoning_effort",
+            other.to_string(),
+            GEMINI_PROVIDER,
+            model,
+            "this adapter has no wire form for that effort",
+        )),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1056,13 +1569,21 @@ struct GeminiUsageMetadata {
     prompt_token_count: u32,
     #[serde(default, rename = "candidatesTokenCount")]
     candidates_token_count: u32,
-    // Deliberately unread: `TokenUsage::new` recomputes `total_tokens` as
-    // `prompt_tokens + completion_tokens` (D-02), so the provider's own
-    // reported total is discarded rather than trusted. Kept on the struct so
-    // the deserializer still matches the full wire shape for debugging.
-    #[allow(dead_code)]
+    /// Gemini's own reported total (G-50-5a). Parsed and handed to the
+    /// reconciliation ([`crate::usage_reconcile`]), never copied:
+    /// `TokenUsage::new` derives `total_tokens` as `prompt_tokens +
+    /// completion_tokens` (D-02), and a disagreement is recorded under
+    /// [`USAGE_UNRECONCILED_METADATA_KEY`]. `None` when the key is absent --
+    /// never a fabricated `0`.
     #[serde(default, rename = "totalTokenCount")]
-    total_token_count: u32,
+    total_token_count: Option<u32>,
+    /// Prompt tokens Gemini spent on tool-use (built-in tool) results, billed
+    /// as input and reported **beside** `promptTokenCount` (G-50-5a): folded
+    /// into [`TokenUsage::prompt_tokens`]. Latent today, because
+    /// `GeminiRequest` sends no tools, but correct before one lands. `None`
+    /// when absent.
+    #[serde(default, rename = "toolUsePromptTokenCount")]
+    tool_use_prompt_token_count: Option<u32>,
     /// Cached-content tokens counted toward `prompt_token_count` (D-20 ->
     /// [`TokenUsage::cache_read_tokens`]). `Option<u32>`, not a bare `u32`
     /// like the three fields above, so an absent key maps to `None`
@@ -1080,26 +1601,41 @@ struct GeminiUsageMetadata {
 }
 
 /// Maps Gemini's wire-shape [`GeminiUsageMetadata`] onto [`TokenUsage`],
-/// applying the D-02 inclusive-total contract: `completion_tokens =
-/// candidatesTokenCount + thoughtsTokenCount` (saturating) so `total_tokens`
-/// stays `prompt + completion` — this agrees with Gemini's own documented
-/// `totalTokenCount = prompt + candidates + toolUsePrompt + thoughts`
-/// arithmetic. Gemini reports no cache-write figure, so
-/// [`TokenUsage::cache_write_tokens`] always stays `None`. Shared by both
-/// the non-streaming path and the streaming path's terminal-frame attachment
-/// (D-15) so the two paths cannot drift.
-fn map_gemini_usage(usage: &GeminiUsageMetadata) -> TokenUsage {
+/// applying the D-02 inclusive-total contract: `prompt_tokens =
+/// promptTokenCount + toolUsePromptTokenCount` and `completion_tokens =
+/// candidatesTokenCount + thoughtsTokenCount` (both saturating), so
+/// `total_tokens` stays `prompt + completion` and agrees with Gemini's own
+/// documented `totalTokenCount = prompt + candidates + toolUsePrompt +
+/// thoughts` arithmetic -- every category in that sum lands in a count (plan
+/// 50-23 added the tool-use fold, G-50-5a). Gemini reports no cache-write
+/// figure, so [`TokenUsage::cache_write_tokens`] always stays `None`.
+///
+/// The thoughts fold is live-measured 2026-10-18 (`50-USAGE-PROBE.md`, plan
+/// 50-24): gemini-3.5-flash (23 + 3 + 192 = 218) and gemini-3.6-flash
+/// (23 + 3 + 202 = 228) read `reasoning beside completion`, meaning
+/// `thoughtsTokenCount` sits outside `candidatesTokenCount`. That is the reading
+/// applied here. gemini-3.5-flash-lite reported no thoughts (`indeterminate`).
+/// The tool-use fold is not live-measured, because this adapter sends no tools.
+///
+/// Returns the mapped usage together with Gemini's `totalTokenCount` (when
+/// reported), which the caller reconciles rather than copies (D-02). Shared
+/// by both the non-streaming path and the streaming path's terminal-frame
+/// attachment (D-15) so the two paths cannot drift.
+fn map_gemini_usage(usage: &GeminiUsageMetadata) -> (TokenUsage, Option<u32>) {
     let thoughts = usage.thoughts_token_count.unwrap_or(0);
     let completion_tokens = usage.candidates_token_count.saturating_add(thoughts);
+    let prompt_tokens = usage
+        .prompt_token_count
+        .saturating_add(usage.tool_use_prompt_token_count.unwrap_or(0));
 
-    let mut mapped = TokenUsage::new(usage.prompt_token_count, completion_tokens);
+    let mut mapped = TokenUsage::new(prompt_tokens, completion_tokens);
     if let Some(cached) = usage.cached_content_token_count {
         mapped = mapped.with_cache_read(cached);
     }
     if let Some(thoughts_tokens) = usage.thoughts_token_count {
         mapped = mapped.with_reasoning(thoughts_tokens);
     }
-    mapped
+    (mapped, usage.total_token_count)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1233,14 +1769,15 @@ fn candidate_text(candidate: &GeminiCandidate) -> String {
 /// Map a Gemini `finishReason` string to [`FinishReason`], exhaustively.
 ///
 /// `STOP` maps to [`FinishReason::Stop`], `MAX_TOKENS` to
-/// [`FinishReason::Length`], `SAFETY` to [`FinishReason::ContentFilter`]
-/// (the closest existing variant — Gemini's safety block is a
-/// content-policy decision, matching `ContentFilter`'s semantics). `OTHER`
-/// and `RECITATION` — and any other value this adapter does not
-/// specifically recognise — map to [`FinishReason::Error`] carrying the raw
-/// reason string. This is deliberate: neither has a direct `FinishReason`
-/// equivalent, and coercing either to `Stop` would report a truncated or
-/// blocked generation as a normal completion. An absent `finishReason`
+/// [`FinishReason::Length`]. The blocked-content finishes — `SAFETY`,
+/// `RECITATION`, `BLOCKLIST`, `PROHIBITED_CONTENT` and `SPII` — map to
+/// [`FinishReason::ContentFilter`] (the closest existing variant — each is
+/// a content-policy decision, matching `ContentFilter`'s semantics, and the
+/// shared guard lets that finish through with no text, D-09). `OTHER` — and
+/// any other value this adapter does not specifically recognise — maps to
+/// [`FinishReason::Error`] carrying the raw reason string. This is
+/// deliberate: coercing either to `Stop` would report a truncated or
+/// unexplained generation as a normal completion. An absent `finishReason`
 /// (`None`) maps to `Stop` — the non-terminal-streaming-frame case is
 /// distinguished by callers never invoking this function with `None` for a
 /// frame that has not yet finished.
@@ -1249,27 +1786,124 @@ fn map_finish_reason(reason: Option<&str>) -> FinishReason {
         None => FinishReason::Stop,
         Some("STOP") => FinishReason::Stop,
         Some("MAX_TOKENS") => FinishReason::Length,
-        Some("SAFETY") => FinishReason::ContentFilter,
+        Some("SAFETY" | "RECITATION" | "BLOCKLIST" | "PROHIBITED_CONTENT" | "SPII") => {
+            FinishReason::ContentFilter
+        }
         Some(other) => FinishReason::Error(other.to_string()),
     }
 }
 
-/// Parse one network chunk of Gemini's SSE stream into zero or more
+/// Run the shared empty-output rule over the items of one parsed network chunk (D-11a).
+///
+/// Every `Ok` item's delta is accumulated in `completion`; the item that carries a finish reason
+/// is the terminal chunk, and if [`StreamCompletion::finish`] rejects the accumulated text it is
+/// replaced by that error. Earlier items are untouched, so text and frames already yielded stay
+/// yielded. A blocked-content finish is [`FinishReason::ContentFilter`], which the guard lets
+/// through, so it stays an `Ok` terminal chunk.
+fn classify_stream_items(
+    items: &mut [Result<StreamingResponse, LlmError>],
+    completion: &mut StreamCompletion,
+    model: &str,
+    api_key: &str,
+) {
+    for item in items.iter_mut() {
+        let verdict = match item {
+            Ok(chunk) => {
+                completion.observe_content(&chunk.delta);
+                match &chunk.finish_reason {
+                    // G-50-5a: a rejected terminal carries the finish frame's usage as its
+                    // bill on the request model, `None` when that frame reported none.
+                    Some(finish) => completion
+                        .finish(GEMINI_PROVIDER, model, finish, api_key)
+                        .map_err(|err| bill(err, model, chunk.usage.clone())),
+                    None => Ok(()),
+                }
+            }
+            Err(_) => Ok(()),
+        };
+        if let Err(err) = verdict {
+            *item = Err(err);
+        }
+    }
+}
+
+/// Reconcile the terminal chunk's usage against the vendor total held from the same frame
+/// (G-50-5a), recording any finding under [`USAGE_UNRECONCILED_METADATA_KEY`] on that chunk.
+///
+/// Runs after [`classify_stream_items`], so only an `Ok` terminal chunk is checked and carries a
+/// finding; a terminal replaced with an `Err` carries no metadata (the 50-18 rule). The held
+/// total is taken by the first terminal chunk seen, so it is reconciled once.
+fn reconcile_terminal_usage(
+    items: &mut [Result<StreamingResponse, LlmError>],
+    usage_log: &UsageLog,
+    model: &str,
+    held_vendor_total: &mut Option<u32>,
+) {
+    for item in items.iter_mut() {
+        let Ok(chunk) = item else {
+            continue;
+        };
+        if chunk.finish_reason.is_none() {
+            continue;
+        }
+        let vendor_total = held_vendor_total.take();
+        let finding = chunk
+            .usage
+            .as_ref()
+            .and_then(|usage| usage_log.record(GEMINI_PROVIDER, model, usage, vendor_total));
+        if let Some(value) = finding {
+            let taken = std::mem::replace(chunk, StreamingResponse::delta(String::new()));
+            *chunk = taken.with_metadata(USAGE_UNRECONCILED_METADATA_KEY, value);
+        }
+    }
+}
+
+/// Stamp `metadata` (the request's `paladin.*` visibility keys, ADR-0061 (h)) on the terminal
+/// chunk -- the `Ok` item that carries the finish reason -- and on no other item. A terminal
+/// that [`classify_stream_items`] replaced with an `Err` (an empty answer) carries none.
+fn stamp_terminal_metadata(
+    items: &mut [Result<StreamingResponse, LlmError>],
+    metadata: &HashMap<String, String>,
+) {
+    if metadata.is_empty() {
+        return;
+    }
+    for item in items.iter_mut() {
+        if let Ok(chunk) = item
+            && chunk.finish_reason.is_some()
+        {
+            let taken = std::mem::replace(chunk, StreamingResponse::delta(String::new()));
+            *chunk = metadata.iter().fold(taken, |stamped, (key, value)| {
+                stamped.with_metadata(key.as_str(), value.as_str())
+            });
+        }
+    }
+}
+
+/// Parse the complete SSE lines one network read produced into zero or more
 /// [`StreamingResponse`] items.
 ///
-/// A single chunk can carry more than one complete `data: {...}` event —
-/// common when a mock transport (or a provider whose TCP framing does not
-/// align to event boundaries) writes the whole body at once — so every
+/// The lines come from [`SseLines`], which reassembles a frame that straddles
+/// two reads, so a frame is never parsed in halves (CR-02). One read can carry
+/// more than one complete `data: {...}` event — common when a mock transport
+/// (or a provider whose TCP framing does not align to event boundaries)
+/// writes the whole body at once — so every
 /// `data:`-prefixed line found is emitted as its own item, mirroring
 /// [`crate::compat::engine::CompatEngine::generate_stream`]'s `flat_map`
 /// discipline. There is no `[DONE]` sentinel in Gemini's SSE framing; the
 /// stream simply ends when the body ends. A frame with no `candidates` at
 /// all (e.g. a metadata-only frame) yields no item, not an error.
-fn parse_sse_chunk(bytes: &[u8]) -> Vec<Result<StreamingResponse, LlmError>> {
-    let text = String::from_utf8_lossy(bytes);
+///
+/// The finish-reason frame's `totalTokenCount` is written to `held_vendor_total`
+/// for [`reconcile_terminal_usage`] (G-50-5a); a frame with no usage leaves it
+/// `None`.
+fn parse_sse_lines(
+    lines: &[String],
+    held_vendor_total: &mut Option<u32>,
+) -> Vec<Result<StreamingResponse, LlmError>> {
     let mut items = Vec::new();
 
-    for line in text.lines() {
+    for line in lines {
         let Some(json_str) = line.strip_prefix("data: ") else {
             continue;
         };
@@ -1305,7 +1939,9 @@ fn parse_sse_chunk(bytes: &[u8]) -> Vec<Result<StreamingResponse, LlmError>> {
                     if item.finish_reason.is_some()
                         && let Some(usage) = parsed.usage_metadata.as_ref()
                     {
-                        item = item.with_usage(map_gemini_usage(usage));
+                        let (mapped, vendor_total) = map_gemini_usage(usage);
+                        *held_vendor_total = vendor_total;
+                        item = item.with_usage(mapped);
                     }
 
                     items.push(Ok(item));
@@ -1334,12 +1970,46 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
 
+    /// WR-03: the documented `with_base_url` guarantee is an `http://` or `https://` URL. A value
+    /// that merely starts with `http` (`httpx://x`, a scheme-less `http-gateway...`) must fail
+    /// construction like any other non-HTTP value.
+    #[test]
+    fn a_builder_set_non_http_base_url_fails_gemini_construction() {
+        for bad in [
+            "ftp://x",
+            "",
+            "api.example.com/v1",
+            "httpx://x",
+            "http-gateway.internal/v1",
+            "httpfoo:",
+        ] {
+            let config = GeminiConfig::new("k".to_string(), "gemini-3.5-flash-lite".to_string())
+                .with_base_url(bad);
+            assert!(
+                config.validate().is_err(),
+                "base URL {bad:?} must fail validation"
+            );
+            assert!(
+                GeminiAdapter::new(config).is_err(),
+                "base URL {bad:?} must fail adapter construction"
+            );
+        }
+        for good in ["http://localhost:1", "https://gateway.example/v1"] {
+            let config = GeminiConfig::new("k".to_string(), "gemini-3.5-flash-lite".to_string())
+                .with_base_url(good);
+            assert!(
+                config.validate().is_ok(),
+                "base URL {good:?} must pass validation"
+            );
+        }
+    }
+
     fn test_config(base_url: &str) -> GeminiConfig {
         GeminiConfig::new(
             "test-key-abc123".to_string(),
-            base_url.to_string(),
             "gemini-2.5-flash".to_string(),
         )
+        .with_base_url(base_url)
     }
 
     fn test_adapter(base_url: &str) -> GeminiAdapter {
@@ -1348,6 +2018,71 @@ mod tests {
 
     fn build_request(model: &str, prompt_type: PromptType) -> LlmRequest {
         LlmRequest::new(model, PromptItem::new(prompt_type).unwrap())
+    }
+
+    // ── Dated registry wiring (plan 50-06, D-05/D-08) ──
+
+    #[test]
+    fn gemini_default_model_is_seeded() {
+        let adapter = test_adapter("http://localhost");
+        let (profile, origin) = adapter.model_registry.resolve(GEMINI_DEFAULT_MODEL);
+        assert_eq!(
+            origin,
+            crate::registry::ProfileOrigin::Seeded {
+                verified_on: "2026-10-15"
+            }
+        );
+        assert_eq!(profile.context_window, Some(1_048_576));
+        assert_eq!(
+            adapter.get_capabilities().max_context_tokens,
+            profile.context_window,
+            "the declared window is the default model's seeded window"
+        );
+    }
+
+    #[test]
+    fn gemini_default_model_is_the_operator_identified_current_model() {
+        assert_eq!(GEMINI_DEFAULT_MODEL, "gemini-3.5-flash-lite");
+        assert_eq!(GEMINI_FALLBACK_MODELS[0], GEMINI_DEFAULT_MODEL);
+    }
+
+    #[test]
+    fn gemini_unseeded_model_still_resolves_the_adapter_default() {
+        // `gemini-2.5-flash` answered 404 "no longer available to new users" in the 2026-10-20
+        // probe, so nothing was measured and it stays unseeded (`gemini-3.1-flash-lite`, which
+        // this test used before, was seeded by Phase 50.1).
+        let (_, origin) = test_adapter("http://localhost")
+            .model_registry
+            .resolve("gemini-2.5-flash");
+        assert_eq!(origin, crate::registry::ProfileOrigin::AdapterDefault);
+    }
+
+    // ── GeminiConfig::new (SURFACE-02, D-05) ──
+
+    #[test]
+    fn gemini_config_new_takes_key_and_model_and_defaults_the_endpoint() {
+        let config = GeminiConfig::new("k".to_string(), "gemini-2.5-flash".to_string());
+        assert_eq!(config.base_url, GEMINI_DEFAULT_BASE_URL);
+        assert_eq!(config.model, "gemini-2.5-flash");
+        assert_eq!(config.api_key, "k");
+        // The timeout default is unchanged: 60 s for an unseeded model, 300 s for a seeded
+        // reasoning one, exactly what `default_timeout_seconds` answered before.
+        assert_eq!(
+            config.timeout_seconds,
+            default_timeout_seconds(GEMINI_PROVIDER, "gemini-2.5-flash", 60)
+        );
+        let reasoning = GeminiConfig::new("k".to_string(), GEMINI_DEFAULT_MODEL.to_string());
+        assert_eq!(
+            reasoning.timeout_seconds,
+            default_timeout_seconds(GEMINI_PROVIDER, GEMINI_DEFAULT_MODEL, 60)
+        );
+    }
+
+    #[test]
+    fn gemini_config_with_base_url_replaces_the_default_endpoint() {
+        let config = GeminiConfig::new("k".to_string(), "m".to_string())
+            .with_base_url("http://localhost:1234");
+        assert_eq!(config.base_url, "http://localhost:1234");
     }
 
     // ── GeminiConfig::from_parts / from_env defaulting ──
@@ -1365,7 +2100,32 @@ mod tests {
         assert_eq!(config.api_key, "live-key");
         assert_eq!(config.base_url, GEMINI_DEFAULT_BASE_URL);
         assert_eq!(config.model, GEMINI_DEFAULT_MODEL);
-        assert_eq!(config.timeout_seconds, 60);
+        // The default model is a seeded reasoning model, so its default timeout is the
+        // reasoning-model 300 s (D-13), not the hosted-preset 60 s.
+        assert_eq!(config.timeout_seconds, 300);
+    }
+
+    /// Every Gemini row seeded by Phase 50.1 has `reasoning: true` (listing `thinking=true`), so
+    /// the direct constructor defaults its timeout to the reasoning-model 300 s (D-13); a
+    /// 2.5-generation id the probe could not measure stays unseeded and keeps 60 s.
+    #[test]
+    fn gemini_config_new_defaults_the_phase_50_1_reasoning_rows_to_300_seconds() {
+        for model in [
+            "gemini-4-argon",
+            "gemini-3.8-flash",
+            "gemini-3.7-flash",
+            "gemini-3.1-pro-preview",
+            "gemini-pro-latest",
+            "gemini-flash-latest",
+            "gemini-flash-lite-latest",
+            "gemini-3.1-flash-lite",
+            "gemini-3-flash-preview",
+        ] {
+            let config = GeminiConfig::new("k".to_string(), model.to_string());
+            assert_eq!(config.timeout_seconds, 300, "{model}");
+        }
+        let unseeded = GeminiConfig::new("k".to_string(), "gemini-2.5-flash".to_string());
+        assert_eq!(unseeded.timeout_seconds, 60);
     }
 
     #[test]
@@ -1395,7 +2155,7 @@ mod tests {
             }),
         );
 
-        let gemini_request = adapter.build_request(&request).unwrap();
+        let gemini_request = adapter.build_request(&request).unwrap().0;
         let json = serde_json::to_value(&gemini_request).unwrap();
 
         assert_eq!(json["systemInstruction"]["parts"][0]["text"], "Be terse.");
@@ -1422,7 +2182,7 @@ mod tests {
                 context: None,
             }),
         );
-        let user_gemini = adapter.build_request(&user_request).unwrap();
+        let user_gemini = adapter.build_request(&user_request).unwrap().0;
         assert_eq!(user_gemini.contents[0].role, "user");
 
         let assistant_request = build_request(
@@ -1432,9 +2192,33 @@ mod tests {
                 reasoning: None,
             }),
         );
-        let assistant_gemini = adapter.build_request(&assistant_request).unwrap();
+        let assistant_gemini = adapter.build_request(&assistant_request).unwrap().0;
         // Gemini's assistant-equivalent role is "model", never "assistant".
         assert_eq!(assistant_gemini.contents[0].role, "model");
+    }
+
+    /// Phase 50 (PARITY-08): a present context is appended to the query by the shared
+    /// `user_turn_text` helper; an absent one leaves the query unchanged.
+    #[test]
+    fn gemini_user_turn_appends_context() {
+        let adapter = test_adapter("https://example.invalid");
+        let user_turn = |context: Option<&str>| -> serde_json::Value {
+            let request = build_request(
+                "gemini-2.5-flash",
+                PromptType::User(UserPrompt {
+                    query: "What is 2+2?".to_string(),
+                    context: context.map(str::to_string),
+                }),
+            );
+            let body = serde_json::to_value(adapter.build_request(&request).unwrap().0).unwrap();
+            body["contents"][0]["parts"][0]["text"].clone()
+        };
+
+        assert_eq!(user_turn(None), "What is 2+2?");
+        assert_eq!(
+            user_turn(Some("Extra context.")),
+            "What is 2+2?\n\nExtra context."
+        );
     }
 
     #[test]
@@ -1453,7 +2237,7 @@ mod tests {
             }),
         );
 
-        let gemini_request = adapter.build_request(&request).unwrap();
+        let gemini_request = adapter.build_request(&request).unwrap().0;
         let value = serde_json::to_value(&gemini_request).unwrap();
         let object = value
             .as_object()
@@ -1485,7 +2269,7 @@ mod tests {
         )
         .with_response_format(ResponseFormat::JsonObject);
 
-        let gemini_request = adapter.build_request(&request).unwrap();
+        let gemini_request = adapter.build_request(&request).unwrap().0;
         let json = serde_json::to_value(&gemini_request).unwrap();
 
         assert_eq!(
@@ -1522,7 +2306,7 @@ mod tests {
             strict: true,
         });
 
-        let gemini_request = adapter.build_request(&request).unwrap();
+        let gemini_request = adapter.build_request(&request).unwrap().0;
         let json = serde_json::to_value(&gemini_request).unwrap();
 
         assert_eq!(
@@ -1543,7 +2327,7 @@ mod tests {
             }),
         );
 
-        let gemini_request = adapter.build_request(&request).unwrap();
+        let gemini_request = adapter.build_request(&request).unwrap().0;
         let json = serde_json::to_value(&gemini_request).unwrap();
         let generation_config = json["generationConfig"]
             .as_object()
@@ -1612,9 +2396,24 @@ mod tests {
             FinishReason::Error(reason) => assert_eq!(reason, "OTHER"),
             other => panic!("expected FinishReason::Error(\"OTHER\"), got {other:?}"),
         }
-        match map_finish_reason(Some("RECITATION")) {
-            FinishReason::Error(reason) => assert_eq!(reason, "RECITATION"),
-            other => panic!("expected FinishReason::Error(\"RECITATION\"), got {other:?}"),
+        // Plan 50-13 (D-09/D-11a) flipped RECITATION: it used to be pinned as
+        // `Error("RECITATION")`. It is a blocked-content finish, so it maps to
+        // `ContentFilter` with its siblings -- otherwise the shared guard would
+        // report a recitation block with no text as an empty completion.
+        for blocked in [
+            "SAFETY",
+            "RECITATION",
+            "BLOCKLIST",
+            "PROHIBITED_CONTENT",
+            "SPII",
+        ] {
+            assert!(
+                matches!(
+                    map_finish_reason(Some(blocked)),
+                    FinishReason::ContentFilter
+                ),
+                "{blocked} must map to ContentFilter"
+            );
         }
     }
 
@@ -1629,7 +2428,7 @@ mod tests {
         };
 
         let result = adapter.parse_response(Uuid::new_v4(), "gemini-2.5-flash", response);
-        assert!(matches!(result, Err(LlmError::EmptyCompletion(_))));
+        assert!(matches!(result, Err(LlmError::EmptyCompletion { .. })));
     }
 
     #[test]
@@ -1740,6 +2539,208 @@ mod tests {
         assert_eq!(llm_response.usage, TokenUsage::new(0, 0));
     }
 
+    // ── Plan 50-23 (G-50-5a): tool-use prompt tokens folded, Gemini's own total reconciled ──
+
+    /// A buffered Gemini success body carrying `usage_metadata` as its `usageMetadata`.
+    fn gemini_usage_response_body(usage_metadata: serde_json::Value) -> String {
+        json!({
+            "candidates": [{
+                "content": {"role": "model", "parts": [{"text": "Hi there"}]},
+                "finishReason": "STOP"
+            }],
+            "usageMetadata": usage_metadata
+        })
+        .to_string()
+    }
+
+    /// Serve `body` on the buffered endpoint and return the adapter's response.
+    async fn generate_against(body: String) -> LlmResponse {
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", "/models/gemini-2.5-flash:generateContent")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body)
+            .create_async()
+            .await;
+        let adapter = test_adapter(&server.url());
+        let request = build_request(
+            "gemini-2.5-flash",
+            PromptType::User(UserPrompt {
+                query: "Hello".to_string(),
+                context: None,
+            }),
+        );
+        adapter.generate(request).await.unwrap()
+    }
+
+    /// Tracer (plan 50-23 Task 1): `toolUsePromptTokenCount` is billed input, so it is folded into
+    /// `prompt_tokens` and the mapped total agrees with Gemini's `totalTokenCount` (debug repro
+    /// 430: prompt 100 + toolUse 300 = 400, candidates 20 + thoughts 10 = 30). A total that still
+    /// disagrees is recorded, never copied (D-02).
+    #[tokio::test]
+    async fn gemini_tool_use_prompt_tokens_reach_prompt_tokens() {
+        use crate::usage_reconcile::USAGE_UNRECONCILED_METADATA_KEY;
+
+        let agreeing = generate_against(gemini_usage_response_body(json!({
+            "promptTokenCount": 100,
+            "candidatesTokenCount": 20,
+            "toolUsePromptTokenCount": 300,
+            "thoughtsTokenCount": 10,
+            "totalTokenCount": 430
+        })))
+        .await;
+        assert_eq!(agreeing.usage.prompt_tokens, 400, "prompt + toolUse");
+        assert_eq!(
+            agreeing.usage.completion_tokens, 30,
+            "candidates + thoughts"
+        );
+        assert_eq!(agreeing.usage.reasoning_tokens, Some(10));
+        assert_eq!(agreeing.usage.total_tokens, 430);
+        assert!(
+            !agreeing
+                .metadata
+                .contains_key(USAGE_UNRECONCILED_METADATA_KEY),
+            "an agreeing total records no finding: {:?}",
+            agreeing.metadata
+        );
+
+        let disagreeing = generate_against(gemini_usage_response_body(json!({
+            "promptTokenCount": 100,
+            "candidatesTokenCount": 20,
+            "toolUsePromptTokenCount": 300,
+            "thoughtsTokenCount": 10,
+            "totalTokenCount": 999
+        })))
+        .await;
+        assert_eq!(
+            disagreeing.usage, agreeing.usage,
+            "the mapped usage is kept"
+        );
+        assert_eq!(
+            disagreeing
+                .metadata
+                .get(USAGE_UNRECONCILED_METADATA_KEY)
+                .map(String::as_str),
+            Some("total:vendor=999,mapped=430")
+        );
+    }
+
+    /// G-50-5a (plan 50-24): the live-measured gemini-3.5-flash usage metadata
+    /// (`50-USAGE-PROBE.md`, 2026-10-18: prompt 23, candidates 3, thoughts 192, total 218) maps
+    /// with thoughts folded into completion (3 + 192 = 195) and reconciles with Gemini's own
+    /// `totalTokenCount`. Without the fold it would map to 26 and disagree.
+    #[tokio::test]
+    async fn gemini_measured_thoughts_are_beside_candidates() {
+        use crate::usage_reconcile::USAGE_UNRECONCILED_METADATA_KEY;
+
+        let response = generate_against(gemini_usage_response_body(json!({
+            "promptTokenCount": 23,
+            "candidatesTokenCount": 3,
+            "thoughtsTokenCount": 192,
+            "totalTokenCount": 218
+        })))
+        .await;
+        assert_eq!(response.usage.prompt_tokens, 23);
+        assert_eq!(
+            response.usage.completion_tokens, 195,
+            "candidates + thoughts"
+        );
+        assert_eq!(response.usage.reasoning_tokens, Some(192));
+        assert_eq!(response.usage.total_tokens, 218);
+        assert!(
+            !response
+                .metadata
+                .contains_key(USAGE_UNRECONCILED_METADATA_KEY),
+            "{:?}",
+            response.metadata
+        );
+    }
+
+    #[tokio::test]
+    async fn gemini_absent_total_and_tool_use_map_as_before_with_no_finding() {
+        use crate::usage_reconcile::USAGE_UNRECONCILED_METADATA_KEY;
+
+        let response = generate_against(gemini_usage_response_body(json!({
+            "promptTokenCount": 310,
+            "candidatesTokenCount": 88,
+            "cachedContentTokenCount": 96,
+            "thoughtsTokenCount": 41
+        })))
+        .await;
+        assert_eq!(response.usage.prompt_tokens, 310);
+        assert_eq!(response.usage.completion_tokens, 129);
+        assert_eq!(response.usage.total_tokens, 439);
+        assert_eq!(response.usage.cache_read_tokens, Some(96));
+        assert_eq!(response.usage.reasoning_tokens, Some(41));
+        assert!(
+            !response
+                .metadata
+                .contains_key(USAGE_UNRECONCILED_METADATA_KEY),
+            "an absent vendor total is not a finding: {:?}",
+            response.metadata
+        );
+    }
+
+    #[tokio::test]
+    async fn gemini_stream_terminal_usage_is_folded_and_reconciled() {
+        use crate::usage_reconcile::USAGE_UNRECONCILED_METADATA_KEY;
+
+        let sse_body = concat!(
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hel\"}]}}]}\n\n",
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"lo\"}],\"role\":\"model\"},",
+            "\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":100,",
+            "\"candidatesTokenCount\":20,\"toolUsePromptTokenCount\":300,",
+            "\"thoughtsTokenCount\":10,\"totalTokenCount\":999}}\n\n",
+        );
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", "/models/gemini-2.5-flash:streamGenerateContent")
+            .match_query(Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_body)
+            .create_async()
+            .await;
+        let adapter = test_adapter(&server.url());
+        let request = build_request(
+            "gemini-2.5-flash",
+            PromptType::User(UserPrompt {
+                query: "Hello".to_string(),
+                context: None,
+            }),
+        );
+
+        let mut stream = Box::into_pin(adapter.generate_stream(request).await.unwrap());
+        let mut chunks = Vec::new();
+        while let Some(item) = stream.next().await {
+            chunks.push(item.unwrap());
+        }
+
+        let (terminal, earlier) = chunks.split_last().expect("at least one chunk");
+        assert!(terminal.finish_reason.is_some());
+        let usage = terminal
+            .usage
+            .as_ref()
+            .expect("the terminal chunk carries usage");
+        assert_eq!(usage.prompt_tokens, 400);
+        assert_eq!(usage.completion_tokens, 30);
+        assert_eq!(usage.total_tokens, 430);
+        assert_eq!(
+            terminal
+                .metadata
+                .get(USAGE_UNRECONCILED_METADATA_KEY)
+                .map(String::as_str),
+            Some("total:vendor=999,mapped=430")
+        );
+        for chunk in earlier {
+            assert!(
+                !chunk.metadata.contains_key(USAGE_UNRECONCILED_METADATA_KEY),
+                "only the terminal chunk carries the finding"
+            );
+        }
+    }
+
     // ── WR-03 (new): a truncated-to-empty completion is an error, not a success ──
     //
     // Wire-level facts resolved by reading (not assuming) the code, both recorded
@@ -1764,10 +2765,13 @@ mod tests {
         let result = adapter.parse_response(Uuid::new_v4(), "gemini-2.5-flash", response);
 
         assert!(
-            matches!(result, Err(LlmError::EmptyCompletion(_))),
-            "expected Err(EmptyCompletion(_)) for a MAX_TOKENS finish with no parts, got {result:?}"
+            matches!(result, Err(LlmError::EmptyCompletion { .. })),
+            "expected Err(EmptyCompletion {{ .. }}) for a MAX_TOKENS finish with no parts, got {result:?}"
         );
-        if let Err(LlmError::EmptyCompletion(message)) = result {
+        if let Err(LlmError::EmptyCompletion {
+            detail: message, ..
+        }) = result
+        {
             assert!(
                 message.contains("max_tokens"),
                 "EmptyCompletion message should name the remedy (a larger max_tokens), got: {message}"
@@ -1789,8 +2793,8 @@ mod tests {
         let result = adapter.parse_response(Uuid::new_v4(), "gemini-2.5-flash", response);
 
         assert!(
-            matches!(result, Err(LlmError::EmptyCompletion(_))),
-            "expected Err(EmptyCompletion(_)) for a MAX_TOKENS finish with whitespace-only text, got {result:?}"
+            matches!(result, Err(LlmError::EmptyCompletion { .. })),
+            "expected Err(EmptyCompletion {{ .. }}) for a MAX_TOKENS finish with whitespace-only text, got {result:?}"
         );
     }
 
@@ -1817,28 +2821,29 @@ mod tests {
         assert!(matches!(llm_response.finish_reason, FinishReason::Length));
     }
 
-    /// Adjacency control: exact parity with
-    /// `crate::compat::engine::CompatEngine::detect_empty_completion`, which
-    /// also lets a `STOP`-finished empty response through as `Ok`. **Passes
-    /// today.** Widening the guard to fire on empty content under any finish
-    /// reason would make Gemini stricter than every other adapter in this
-    /// crate — a different inconsistency, not a fix.
+    /// D-11a: an empty response under a normal `STOP` is an empty completion, the same as on
+    /// every other adapter (it used to be pinned as `Ok("")`, parity with the compat engine's
+    /// then-`length`-only check; plan 50-13 flipped it onto the shared guard).
     #[test]
-    fn parse_response_keeps_an_empty_response_that_finished_normally() {
+    fn parse_response_maps_an_empty_stop_to_empty_completion() {
         let adapter = test_adapter("https://example.invalid");
-        let body = json!({
-            "candidates": [{
-                "content": {"role": "model", "parts": []},
-                "finishReason": "STOP"
-            }]
-        });
-        let response: GeminiResponse = serde_json::from_value(body).unwrap();
+        for parts in [json!([]), json!([{"text": ""}]), json!([{"text": "  \n"}])] {
+            let body = json!({
+                "candidates": [{
+                    "content": {"role": "model", "parts": parts},
+                    "finishReason": "STOP"
+                }]
+            });
+            let response: GeminiResponse = serde_json::from_value(body).unwrap();
 
-        let llm_response = adapter
-            .parse_response(Uuid::new_v4(), "gemini-2.5-flash", response)
-            .expect("an empty response that finished normally must still be Ok");
-
-        assert!(llm_response.content.is_empty());
+            match adapter.parse_response(Uuid::new_v4(), "gemini-2.5-flash", response) {
+                Err(LlmError::EmptyCompletion { detail: msg, .. }) => {
+                    assert!(msg.contains("finish_reason=stop"), "{msg}");
+                    assert!(!msg.contains("max_tokens"), "{msg}");
+                }
+                other => panic!("expected Err(EmptyCompletion), got {other:?}"),
+            }
+        }
     }
 
     /// Refusal control: a `SAFETY` finish (content-policy refusal, mapped to
@@ -1861,9 +2866,138 @@ mod tests {
         let result = adapter.parse_response(Uuid::new_v4(), "gemini-2.5-flash", response);
 
         assert!(
-            !matches!(result, Err(LlmError::EmptyCompletion(_))),
+            !matches!(result, Err(LlmError::EmptyCompletion { .. })),
             "a SAFETY refusal must not be reported as EmptyCompletion (token-budget problem), got {result:?}"
         );
+    }
+
+    /// D-09: every blocked-content finish with no text stays an `Ok` `ContentFilter` result,
+    /// not an empty completion.
+    #[test]
+    fn parse_response_keeps_every_blocked_content_finish_as_content_filter() {
+        let adapter = test_adapter("https://example.invalid");
+        for finish in [
+            "SAFETY",
+            "RECITATION",
+            "BLOCKLIST",
+            "PROHIBITED_CONTENT",
+            "SPII",
+        ] {
+            let body = json!({
+                "candidates": [{
+                    "content": {"role": "model", "parts": []},
+                    "finishReason": finish
+                }]
+            });
+            let response: GeminiResponse = serde_json::from_value(body).unwrap();
+
+            let parsed = adapter
+                .parse_response(Uuid::new_v4(), "gemini-2.5-flash", response)
+                .unwrap_or_else(|e| panic!("{finish} with no text must stay Ok, got {e:?}"));
+            assert!(parsed.content.is_empty(), "{finish}");
+            assert!(
+                matches!(parsed.finish_reason, FinishReason::ContentFilter),
+                "{finish}: {:?}",
+                parsed.finish_reason
+            );
+        }
+    }
+
+    // ── Stream: empty output through the shared guard (D-11a) ──
+
+    fn frame(text: &str, finish: Option<&str>) -> String {
+        let mut candidate = json!({"content": {"role": "model", "parts": [{"text": text}]}});
+        if let Some(finish) = finish {
+            candidate["finishReason"] = json!(finish);
+        }
+        format!("data: {}\n\n", json!({"candidates": [candidate]}))
+    }
+
+    async fn run_stream(sse: String) -> Vec<Result<StreamingResponse, LlmError>> {
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", "/models/gemini-2.5-flash:streamGenerateContent")
+            .match_query(Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse)
+            .create_async()
+            .await;
+        let request = build_request(
+            "gemini-2.5-flash",
+            PromptType::User(UserPrompt {
+                query: "Hello".to_string(),
+                context: None,
+            }),
+        );
+        let stream = test_adapter(&server.url())
+            .generate_stream(request)
+            .await
+            .expect("stream must open");
+        let mut stream = Box::into_pin(stream);
+        let mut items = Vec::new();
+        while let Some(item) = stream.next().await {
+            items.push(item);
+        }
+        items
+    }
+
+    #[tokio::test]
+    async fn gemini_empty_stream_is_empty_completion() {
+        let items = run_stream(format!("{}{}", frame("", None), frame("  ", Some("STOP")))).await;
+        assert_eq!(items.len(), 2, "{items:?}");
+        assert!(items[0].is_ok(), "the non-terminal frame stays yielded");
+        match &items[1] {
+            Err(LlmError::EmptyCompletion { detail: msg, .. }) => {
+                assert!(msg.contains("finish_reason=stop"), "{msg}");
+            }
+            other => panic!("expected Err(EmptyCompletion) last, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn gemini_empty_stream_on_max_tokens_advises_a_larger_budget() {
+        let items = run_stream(frame("", Some("MAX_TOKENS"))).await;
+        match items.last() {
+            Some(Err(LlmError::EmptyCompletion { detail: msg, .. })) => {
+                assert!(msg.contains("larger max_tokens"), "{msg}");
+            }
+            other => panic!("expected Err(EmptyCompletion), got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn gemini_blocked_stream_stays_an_ok_content_filter_terminal_chunk() {
+        for finish in [
+            "SAFETY",
+            "RECITATION",
+            "BLOCKLIST",
+            "PROHIBITED_CONTENT",
+            "SPII",
+        ] {
+            let items = run_stream(frame("", Some(finish))).await;
+            assert_eq!(items.len(), 1, "{finish}: {items:?}");
+            let terminal = items[0]
+                .as_ref()
+                .unwrap_or_else(|e| panic!("{finish}: {e:?}"));
+            assert!(
+                matches!(terminal.finish_reason, Some(FinishReason::ContentFilter)),
+                "{finish}: {:?}",
+                terminal.finish_reason
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn gemini_stream_with_text_before_the_terminal_frame_is_fine() {
+        let items = run_stream(format!("{}{}", frame("Hel", None), frame("", Some("STOP")))).await;
+        assert!(items.iter().all(Result::is_ok), "{items:?}");
+        let text: String = items
+            .iter()
+            .filter_map(|i| i.as_ref().ok())
+            .map(|c| c.delta.as_str())
+            .collect();
+        assert_eq!(text, "Hel");
     }
 
     // ── Error mapping ──
@@ -1877,7 +3011,7 @@ mod tests {
         .to_string();
 
         let error = adapter.map_error(429, &body);
-        assert!(matches!(error, LlmError::RateLimitExceeded));
+        assert!(matches!(error, LlmError::RateLimitExceeded { .. }));
     }
 
     #[test]
@@ -1892,7 +3026,7 @@ mod tests {
         // code, since Google's error envelope is ambiguous on HTTP 429
         // alone (see this adapter's map_error doc comment).
         let error = adapter.map_error(500, &body);
-        assert!(matches!(error, LlmError::RateLimitExceeded));
+        assert!(matches!(error, LlmError::RateLimitExceeded { .. }));
     }
 
     #[test]
@@ -2054,7 +3188,7 @@ mod tests {
                     let calls = Arc::clone(&calls_clone);
                     async move {
                         calls.fetch_add(1, Ordering::SeqCst);
-                        Err(LlmError::EmptyCompletion("no text".to_string()))
+                        Err(LlmError::empty_completion("no text".to_string()))
                     }
                 },
                 3,
@@ -2132,7 +3266,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generate_recitation_finish_reason_produces_error_not_stop() {
+    async fn generate_recitation_finish_reason_is_content_filter_not_stop() {
         let mut server = Server::new_async().await;
         server
             .mock("POST", "/models/gemini-2.5-flash:generateContent")
@@ -2159,10 +3293,14 @@ mod tests {
         );
 
         let response = adapter.generate(request).await.unwrap();
-        match response.finish_reason {
-            FinishReason::Error(reason) => assert_eq!(reason, "RECITATION"),
-            other => panic!("expected FinishReason::Error(\"RECITATION\"), got {other:?}"),
-        }
+        // Plan 50-13 flipped this from `Error("RECITATION")` (D-09): a recitation block is a
+        // blocked-content finish, so it is `ContentFilter`, and still never `Stop`.
+        assert!(
+            matches!(response.finish_reason, FinishReason::ContentFilter),
+            "expected ContentFilter, got {:?}",
+            response.finish_reason
+        );
+        assert_eq!(response.content, "partial");
     }
 
     #[tokio::test]
@@ -2190,7 +3328,141 @@ mod tests {
         );
 
         let result = adapter.generate(request).await;
-        assert!(matches!(result, Err(LlmError::RateLimitExceeded)));
+        assert!(matches!(result, Err(LlmError::RateLimitExceeded { .. })));
+    }
+
+    // ── PACE-01 / D-02: a 429 is surfaced on the FIRST attempt, with its delay ──
+    //
+    // The Cadence decorator above this adapter owns waiting; a private retry
+    // loop that re-sent a 429 would hide thrash below it. Network, timeout
+    // and 5xx retries are unchanged (`execute_with_retry_retries_a_retryable_error_up_to_max_retries`).
+
+    fn user_request() -> LlmRequest {
+        build_request(
+            "gemini-2.5-flash",
+            PromptType::User(UserPrompt {
+                query: "Hello".to_string(),
+                context: None,
+            }),
+        )
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn execute_with_retry_surfaces_rate_limit_exceeded_on_the_first_attempt() {
+        let adapter = test_adapter("https://example.invalid");
+        let calls = Arc::new(AtomicU32::new(0));
+        let calls_clone = Arc::clone(&calls);
+
+        let result: Result<(), LlmError> = adapter
+            .execute_with_retry(
+                move || {
+                    let calls = Arc::clone(&calls_clone);
+                    async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        Err(LlmError::rate_limited(None))
+                    }
+                },
+                3,
+            )
+            .await;
+
+        assert!(matches!(result, Err(LlmError::RateLimitExceeded { .. })));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn gemini_429_is_surfaced_on_the_first_attempt_with_its_retry_delay() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("POST", "/models/gemini-2.5-flash:generateContent")
+            .with_status(429)
+            .with_header("retry-after", "7")
+            .with_body(
+                json!({
+                    "error": {"code": 429, "message": "Quota exceeded", "status": "RESOURCE_EXHAUSTED"}
+                })
+                .to_string(),
+            )
+            .expect(1)
+            .create_async()
+            .await;
+
+        let adapter = test_adapter(&server.url());
+        let err = adapter
+            .generate(user_request())
+            .await
+            .expect_err("a 429 must surface as an error");
+
+        mock.assert_async().await;
+        assert!(matches!(err, LlmError::RateLimitExceeded { .. }));
+        assert_eq!(err.retry_after(), Some(Duration::from_secs(7)));
+    }
+
+    #[tokio::test]
+    async fn gemini_stream_open_429_is_surfaced_once_with_its_retry_delay() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("POST", "/models/gemini-2.5-flash:streamGenerateContent")
+            .match_query(Matcher::UrlEncoded("alt".to_string(), "sse".to_string()))
+            .with_status(429)
+            .with_header("retry-after", "7")
+            .with_body(
+                json!({
+                    "error": {"code": 429, "message": "Quota exceeded", "status": "RESOURCE_EXHAUSTED"}
+                })
+                .to_string(),
+            )
+            .expect(1)
+            .create_async()
+            .await;
+
+        let adapter = test_adapter(&server.url());
+        let result = adapter.generate_stream(user_request()).await;
+
+        mock.assert_async().await;
+        match &result {
+            Err(err @ LlmError::RateLimitExceeded { .. }) => {
+                assert_eq!(err.retry_after(), Some(Duration::from_secs(7)));
+            }
+            Ok(_) => panic!("expected a rate-limit error, got Ok(<stream>)"),
+            Err(other) => panic!("expected a rate-limit error, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn gemini_resource_exhausted_envelope_still_maps_to_rate_limit_exceeded() {
+        // The envelope alone (no 429 status, so no header snapshot) still maps to the
+        // rate-limit variant, just without a delay.
+        let adapter = test_adapter("https://example.invalid");
+        let body = json!({
+            "error": {"code": 429, "message": "Quota exceeded", "status": "RESOURCE_EXHAUSTED"}
+        })
+        .to_string();
+
+        let error = adapter.map_error_with_hints(500, &body, None);
+        assert!(matches!(error, LlmError::RateLimitExceeded { .. }));
+        assert_eq!(error.retry_after(), None);
+    }
+
+    #[tokio::test]
+    async fn gemini_429_without_retry_after_carries_no_delay() {
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", "/models/gemini-2.5-flash:generateContent")
+            .with_status(429)
+            .with_body("{}")
+            .expect(1)
+            .create_async()
+            .await;
+
+        let adapter = test_adapter(&server.url());
+        let err = adapter
+            .generate(user_request())
+            .await
+            .expect_err("a 429 must surface as an error");
+
+        assert!(matches!(err, LlmError::RateLimitExceeded { .. }));
+        assert_eq!(err.retry_after(), None);
     }
 
     // ── Streaming ──
@@ -2338,10 +3610,11 @@ mod tests {
             "the finish-reason chunk and the usage chunk must be the SAME (last) chunk"
         );
 
-        let expected = map_gemini_usage(&GeminiUsageMetadata {
+        let (expected, _) = map_gemini_usage(&GeminiUsageMetadata {
             prompt_token_count: 310,
             candidates_token_count: 88,
-            total_token_count: 439,
+            total_token_count: Some(439),
+            tool_use_prompt_token_count: None,
             cached_content_token_count: Some(96),
             thoughts_token_count: Some(41),
         });
@@ -3293,6 +4566,1097 @@ mod tests {
         );
     }
 
+    // ── Phase 50 (PARITY-02, ADR-0061, D-01): the per-model parameter policy ──
+
+    mod parameter_policy {
+        use super::*;
+        use crate::registry::UNPROFILED_MODEL_METADATA_KEY;
+        use crate::sampling::{PARAMS_OMITTED_METADATA_KEY, RESPONSE_FORMAT_ADJUSTED_METADATA_KEY};
+        use paladin_core::platform::container::prompt::PromptParameters;
+        use serde_json::Value;
+        use std::sync::Mutex;
+
+        const MODEL: &str = "gemini-2.5-flash";
+
+        fn request_with(parameters: PromptParameters) -> LlmRequest {
+            let mut request = build_request(
+                MODEL,
+                PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }),
+            );
+            request.prompt.entity.data.parameters = parameters;
+            request
+        }
+
+        fn unset() -> PromptParameters {
+            PromptParameters {
+                max_tokens: None,
+                temperature: None,
+                top_p: None,
+                frequency_penalty: None,
+                presence_penalty: None,
+                stop_sequences: None,
+            }
+        }
+
+        fn completion_json() -> Vec<u8> {
+            json!({
+                "candidates": [{
+                    "content": {"role": "model", "parts": [{"text": "ok"}]},
+                    "finishReason": "STOP"
+                }],
+                "usageMetadata": {
+                    "promptTokenCount": 1,
+                    "candidatesTokenCount": 1,
+                    "totalTokenCount": 2
+                }
+            })
+            .to_string()
+            .into_bytes()
+        }
+
+        /// Runs `generate()` against a mock `generateContent` endpoint, returning the outgoing
+        /// JSON body and the response metadata.
+        async fn generate_capture(
+            request: LlmRequest,
+        ) -> (Value, std::collections::HashMap<String, String>) {
+            let mut server = Server::new_async().await;
+            let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let slot = Arc::clone(&captured);
+            server
+                .mock("POST", "/models/gemini-2.5-flash:generateContent")
+                .with_status(200)
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    completion_json()
+                })
+                .create_async()
+                .await;
+
+            let response = test_adapter(&server.url())
+                .generate(request)
+                .await
+                .expect("the mock answers a well-formed candidate");
+            let body = captured
+                .lock()
+                .unwrap()
+                .take()
+                .expect("the mock must have been called once");
+            (
+                serde_json::from_str(&body).expect("the body must be JSON"),
+                response.metadata,
+            )
+        }
+
+        /// Runs `generate_stream()` against a mock endpoint and returns the outgoing JSON body.
+        async fn stream_capture(request: LlmRequest) -> Value {
+            let mut server = Server::new_async().await;
+            let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let slot = Arc::clone(&captured);
+            server
+                .mock("POST", "/models/gemini-2.5-flash:streamGenerateContent?alt=sse")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    b"data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}]}\n\n".to_vec()
+                })
+                .create_async()
+                .await;
+
+            let stream = test_adapter(&server.url())
+                .generate_stream(request)
+                .await
+                .expect("the stream must open");
+            let mut stream = Box::into_pin(stream);
+            while stream.next().await.is_some() {}
+
+            let body = captured
+                .lock()
+                .unwrap()
+                .take()
+                .expect("the mock must have been called once");
+            serde_json::from_str(&body).expect("the body must be JSON")
+        }
+
+        #[test]
+        fn gemini_model_profile_is_always_some_and_matches_what_the_wire_sends() {
+            let profile = test_adapter("https://example.invalid")
+                .model_profile("any-model")
+                .expect("gemini profiles every model");
+            assert_eq!(profile.temperature, ParamSupport::Range(0.0, 2.0));
+            assert_eq!(profile.top_p, ParamSupport::Range(0.0, 1.0));
+            assert_eq!(profile.frequency_penalty, ParamSupport::NotSent);
+            assert_eq!(profile.presence_penalty, ParamSupport::NotSent);
+            assert_eq!(profile.stop_sequences, StopSupport::Supported { max: None });
+            assert_eq!(profile.context_window, Some(1_048_576));
+            assert!(profile.json_object && profile.json_schema);
+        }
+
+        #[tokio::test]
+        async fn gemini_stop_sequences_keep_declared_order() {
+            let mut parameters = unset();
+            // A duplicate, deliberately: order and duplicates are the caller's.
+            parameters.stop_sequences = Some(vec![
+                "END".to_string(),
+                "STOP".to_string(),
+                "END".to_string(),
+            ]);
+            parameters.temperature = Some(0.5);
+            let (body, metadata) = generate_capture(request_with(parameters)).await;
+
+            assert_eq!(
+                body["generationConfig"]["stopSequences"],
+                json!(["END", "STOP", "END"])
+            );
+            assert_eq!(body["generationConfig"]["temperature"], 0.5);
+            assert!(!metadata.contains_key(PARAMS_OMITTED_METADATA_KEY));
+        }
+
+        #[tokio::test]
+        async fn gemini_stream_follows_the_profile() {
+            let mut parameters = unset();
+            parameters.temperature = Some(2.5);
+            parameters.top_p = Some(0.9);
+            parameters.stop_sequences = Some(vec!["END".to_string(), "STOP".to_string()]);
+            let body = stream_capture(request_with(parameters)).await;
+
+            let config = body["generationConfig"]
+                .as_object()
+                .expect("generationConfig is present");
+            assert!(
+                !config.contains_key("temperature"),
+                "the streaming body omits an inadmissible temperature: {body}"
+            );
+            assert!((config["topP"].as_f64().unwrap() - 0.9).abs() < 1e-6);
+            assert_eq!(config["stopSequences"], json!(["END", "STOP"]));
+        }
+
+        #[tokio::test]
+        async fn gemini_out_of_range_temperature_is_omitted_and_recorded() {
+            let mut at_edge = unset();
+            at_edge.temperature = Some(2.0);
+            let (body, metadata) = generate_capture(request_with(at_edge)).await;
+            assert_eq!(body["generationConfig"]["temperature"], 2.0);
+            assert!(!metadata.contains_key(PARAMS_OMITTED_METADATA_KEY));
+
+            let mut past_edge = unset();
+            past_edge.temperature = Some(2.5);
+            past_edge.top_p = Some(0.9);
+            let (body, metadata) = generate_capture(request_with(past_edge)).await;
+            let config = body["generationConfig"]
+                .as_object()
+                .expect("topP keeps generationConfig present");
+            assert!(
+                !config.contains_key("temperature"),
+                "2.5 is omitted, never clamped to 2.0: {body}"
+            );
+            assert_eq!(
+                metadata
+                    .get(PARAMS_OMITTED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("temperature")
+            );
+        }
+
+        #[tokio::test]
+        async fn gemini_penalties_never_appear_on_the_wire() {
+            // `PromptParameters::default()` carries penalties of 0.0; the generationConfig this
+            // adapter builds has no penalty field, so the omission is recorded, not silent.
+            let (body, metadata) =
+                generate_capture(request_with(PromptParameters::default())).await;
+
+            let text = body.to_string();
+            assert!(
+                !text.contains("enalty"),
+                "no penalty field on the wire: {text}"
+            );
+            assert_eq!(
+                metadata
+                    .get(PARAMS_OMITTED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("frequency_penalty,presence_penalty")
+            );
+        }
+
+        #[tokio::test]
+        async fn gemini_json_schema_still_sets_mime_type_and_schema() {
+            let schema = json!({"type": "object"});
+            let request = request_with(unset()).with_response_format(ResponseFormat::JsonSchema {
+                name: "answer".to_string(),
+                schema: schema.clone(),
+                strict: true,
+            });
+            let (body, metadata) = generate_capture(request).await;
+
+            assert_eq!(
+                body["generationConfig"]["responseMimeType"],
+                "application/json"
+            );
+            assert_eq!(body["generationConfig"]["responseSchema"], schema);
+            assert!(
+                !metadata.contains_key(RESPONSE_FORMAT_ADJUSTED_METADATA_KEY),
+                "nothing changed on the wire, so nothing is recorded: {metadata:?}"
+            );
+        }
+
+        /// Phase 50, owner reading R-1 (option-b): a streamed call stamps the visibility keys
+        /// the buffered path would, on the terminal (finish-reason) chunk only.
+        #[tokio::test]
+        async fn gemini_stream_terminal_chunk_carries_metadata() {
+            let mut server = Server::new_async().await;
+            server
+                .mock("POST", "/models/gemini-2.5-flash:streamGenerateContent?alt=sse")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body(
+                    "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hi\"}]}}]}\n\n\
+                     data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"\"}]},\"finishReason\":\"STOP\"}]}\n\n",
+                )
+                .create_async()
+                .await;
+
+            let mut parameters = unset();
+            parameters.temperature = Some(2.5); // above the profile's (0.0, 2.0)
+            let stream = test_adapter(&server.url())
+                .generate_stream(request_with(parameters))
+                .await
+                .expect("the stream must open");
+            let mut stream = Box::into_pin(stream);
+            let mut chunks = Vec::new();
+            while let Some(item) = stream.next().await {
+                chunks.push(item.expect("every scripted item is Ok"));
+            }
+
+            let terminal = chunks.last().expect("a terminal chunk");
+            assert!(terminal.finish_reason.is_some());
+            assert_eq!(
+                terminal
+                    .metadata
+                    .get(PARAMS_OMITTED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("temperature")
+            );
+            assert_eq!(
+                terminal
+                    .metadata
+                    .get(UNPROFILED_MODEL_METADATA_KEY)
+                    .map(String::as_str),
+                Some(MODEL)
+            );
+            for content in &chunks[..chunks.len() - 1] {
+                assert!(content.metadata.is_empty(), "content chunk: {content:?}");
+            }
+        }
+
+        #[tokio::test]
+        async fn gemini_unprofiled_model_is_stamped() {
+            let (_, metadata) = generate_capture(request_with(unset())).await;
+            assert_eq!(
+                metadata
+                    .get(UNPROFILED_MODEL_METADATA_KEY)
+                    .map(String::as_str),
+                Some(MODEL),
+                "no seeded entry exists yet, so the model runs on the adapter-wide fallback"
+            );
+        }
+
+        #[test]
+        fn gemini_max_tokens_above_a_profiled_maximum_is_refused_by_name() {
+            use crate::registry::{ModelOverride, ModelRegistry};
+
+            let mut adapter = test_adapter("https://example.invalid");
+            let over = ModelOverride {
+                max_output_tokens: Some(1000),
+                ..ModelOverride::default()
+            };
+            adapter.model_registry =
+                ModelRegistry::new(GEMINI_PROVIDER, &[], fallback_profile(None))
+                    .with_overrides(BTreeMap::from([(MODEL.to_string(), over)]))
+                    .expect("a plain max_output_tokens override is valid");
+
+            let mut parameters = unset();
+            parameters.max_tokens = Some(4000);
+            match adapter.build_request(&request_with(parameters)) {
+                Err(LlmError::InvalidPrompt(message)) => {
+                    assert!(message.contains("gemini"), "{message}");
+                    assert!(message.contains(MODEL), "{message}");
+                    assert!(message.contains("max_tokens"), "{message}");
+                }
+                other => panic!("expected InvalidPrompt, got {other:?}"),
+            }
+        }
+    }
+
+    /// Phase 51 (REASON-02, REASON-03, REASON-06): an explicit effort reaches `generationConfig`
+    /// as `thinkingLevel` or `thinkingBudget` exactly as the model's profile states, or is
+    /// refused before any HTTP call.
+    mod reasoning_effort {
+        use super::*;
+        use crate::reasoning::{
+            REASONING_EFFECTIVE_METADATA_KEY, REASONING_REQUESTED_METADATA_KEY,
+        };
+        use paladin_core::platform::container::prompt::PromptParameters;
+        use paladin_core::platform::container::transience::Transience;
+        use paladin_ports::output::llm_port::ReasoningEffort::{High, Low, Medium, Minimal};
+        use paladin_ports::output::llm_port::{ReasoningEffort, ReasoningFallback};
+        use paladin_ports::output::model_profile::{BudgetBounds, EffortLevels, EffortSupport};
+        use serde_json::Value;
+        use std::sync::Mutex;
+
+        const LEVELS_MODEL: &str = "gemini-3.8-flash";
+        const BUDGET_MODEL: &str = "gemini-2.5-flash";
+        const UNMEASURED_MODEL: &str = "gemini-unprofiled-test-model";
+
+        fn request_for(model: &str) -> LlmRequest {
+            build_request(
+                model,
+                PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }),
+            )
+        }
+
+        fn with_max_tokens(mut request: LlmRequest, max_tokens: u32) -> LlmRequest {
+            request.prompt.entity.data.parameters.max_tokens = Some(max_tokens);
+            request
+        }
+
+        /// The levels shape of the 3.x line: three levels and `auto`, no `off`, no budget.
+        fn levels_shape() -> EffortSupport {
+            EffortSupport::Supported(EffortLevels::new([Low, Medium, High]).with_auto(true))
+        }
+
+        /// The budget shape of the 2.5 line: no levels, `off`, `auto` and a budget span.
+        fn budget_shape() -> EffortSupport {
+            EffortSupport::Supported(
+                EffortLevels::new([])
+                    .with_off(true)
+                    .with_auto(true)
+                    .with_budget(BudgetBounds::new(1, 24_576)),
+            )
+        }
+
+        fn adapter_over(base_url: &str, overrides: Vec<(&str, EffortSupport)>) -> GeminiAdapter {
+            let map: BTreeMap<String, ModelOverride> = overrides
+                .into_iter()
+                .map(|(model, effort)| {
+                    (
+                        model.to_string(),
+                        ModelOverride {
+                            effort: Some(effort),
+                            ..ModelOverride::default()
+                        },
+                    )
+                })
+                .collect();
+            GeminiAdapter::new(test_config(base_url).with_model_overrides(map))
+                .expect("a valid override builds")
+        }
+
+        fn ok_body() -> Vec<u8> {
+            json!({
+                "candidates": [{
+                    "content": {"role": "model", "parts": [{"text": "ok"}]},
+                    "finishReason": "STOP"
+                }],
+                "usageMetadata": {
+                    "promptTokenCount": 1,
+                    "candidatesTokenCount": 1,
+                    "totalTokenCount": 2
+                }
+            })
+            .to_string()
+            .into_bytes()
+        }
+
+        /// Send `request` through an adapter carrying `overrides`; returns the raw request body
+        /// (`None` when no HTTP call was made) and the result.
+        async fn send_raw(
+            overrides: Vec<(&str, EffortSupport)>,
+            request: LlmRequest,
+        ) -> (Option<String>, Result<LlmResponse, LlmError>) {
+            let mut server = Server::new_async().await;
+            let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let slot = Arc::clone(&captured);
+            server
+                .mock(
+                    "POST",
+                    Matcher::Regex(r"^/models/[^:/]+:generateContent$".to_string()),
+                )
+                .with_status(200)
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    ok_body()
+                })
+                .create_async()
+                .await;
+            let adapter = adapter_over(&server.url(), overrides);
+            let result = adapter.generate(request).await;
+            let body = captured.lock().unwrap().take();
+            (body, result)
+        }
+
+        /// D-09: `check_reasoning` answers with this adapter's own `llm.gemini.reasoning_*`
+        /// defaults, and agrees with what `generate` does for the same effort.
+        #[tokio::test]
+        async fn gemini_check_reasoning_consults_the_provider_defaults() {
+            const PROBE: &str = "probe-model";
+            let mut server = Server::new_async().await;
+            server
+                .mock(
+                    "POST",
+                    Matcher::Regex(r"^/models/[^:/]+:generateContent$".to_string()),
+                )
+                .with_status(200)
+                .with_body(ok_body())
+                .expect_at_least(0)
+                .create_async()
+                .await;
+            let over = ModelOverride {
+                effort: Some(EffortSupport::Supported(EffortLevels::new([Low, High]))),
+                ..ModelOverride::default()
+            };
+            let adapter = |effort: Option<ReasoningEffort>, fallback: Option<ReasoningFallback>| {
+                let mut config = test_config(&server.url())
+                    .with_model_overrides(BTreeMap::from([(PROBE.to_string(), over.clone())]));
+                if let Some(effort) = effort {
+                    config = config.with_reasoning_effort(effort);
+                }
+                if let Some(fallback) = fallback {
+                    config = config.with_reasoning_fallback(fallback);
+                }
+                GeminiAdapter::new(config).expect("a valid override builds")
+            };
+
+            // A provider fallback substitutes an agent effort the model lacks.
+            let substituting = adapter(None, Some(ReasoningFallback::NearestLower));
+            assert!(
+                substituting
+                    .check_reasoning(PROBE, Some(Medium), None)
+                    .is_ok()
+            );
+            assert!(
+                substituting
+                    .generate(request_for(PROBE).with_reasoning(Medium))
+                    .await
+                    .is_ok()
+            );
+
+            // A provider default effort the model lacks is refused for a caller who sets none.
+            let defaulted = adapter(Some(Medium), None);
+            let LlmError::UnsupportedParameter {
+                reason: checked, ..
+            } = defaulted.check_reasoning(PROBE, None, None).unwrap_err()
+            else {
+                panic!("expected UnsupportedParameter");
+            };
+            let LlmError::UnsupportedParameter {
+                reason: sent,
+                param,
+                ..
+            } = defaulted.generate(request_for(PROBE)).await.unwrap_err()
+            else {
+                panic!("expected UnsupportedParameter");
+            };
+            assert_eq!(param, "reasoning_effort");
+            assert_eq!(checked, sent);
+            assert!(
+                checked.ends_with("(set by `llm.gemini.reasoning_effort`)"),
+                "{checked}"
+            );
+
+            // A listed request effort is served under either default.
+            for port in [&substituting, &defaulted] {
+                assert!(port.check_reasoning(PROBE, Some(High), None).is_ok());
+                assert!(
+                    port.generate(request_for(PROBE).with_reasoning(High))
+                        .await
+                        .is_ok()
+                );
+            }
+
+            // Nothing in force anywhere: nothing judged.
+            assert!(
+                adapter(None, None)
+                    .check_reasoning(PROBE, None, None)
+                    .is_ok()
+            );
+        }
+
+        /// Run a streaming call whose body is `sse`; returns the raw request body and the outcome.
+        async fn stream_raw(
+            overrides: Vec<(&str, EffortSupport)>,
+            request: LlmRequest,
+            sse: &'static str,
+        ) -> (
+            Option<String>,
+            Result<Vec<Result<StreamingResponse, LlmError>>, LlmError>,
+        ) {
+            let mut server = Server::new_async().await;
+            let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let slot = Arc::clone(&captured);
+            server
+                .mock(
+                    "POST",
+                    Matcher::Regex(r"^/models/[^:/]+:streamGenerateContent".to_string()),
+                )
+                .match_query(Matcher::Any)
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    sse.as_bytes().to_vec()
+                })
+                .create_async()
+                .await;
+            let adapter = adapter_over(&server.url(), overrides);
+            let outcome = match adapter.generate_stream(request).await {
+                Err(error) => Err(error),
+                Ok(stream) => {
+                    let mut stream = Box::into_pin(stream);
+                    let mut items = Vec::new();
+                    while let Some(item) = stream.next().await {
+                        items.push(item);
+                    }
+                    Ok(items)
+                }
+            };
+            let body = captured.lock().unwrap().take();
+            (body, outcome)
+        }
+
+        fn json_of(body: Option<String>) -> Value {
+            serde_json::from_str(&body.expect("the request reached the wire"))
+                .expect("the body must be JSON")
+        }
+
+        async fn refused_before_http(
+            overrides: Vec<(&str, EffortSupport)>,
+            request: LlmRequest,
+        ) -> String {
+            let (body, result) = send_raw(overrides, request).await;
+            assert!(
+                body.is_none(),
+                "no request may reach the endpoint: {body:?}"
+            );
+            match result {
+                Err(LlmError::UnsupportedParameter { reason, .. }) => reason,
+                other => panic!("expected UnsupportedParameter, got {other:?}"),
+            }
+        }
+
+        #[tokio::test]
+        async fn a_level_sends_thinking_level_and_no_budget() {
+            let (body, result) = send_raw(
+                vec![(LEVELS_MODEL, levels_shape())],
+                request_for(LEVELS_MODEL).with_reasoning(Medium),
+            )
+            .await;
+            let metadata = result.expect("a listed level is accepted").metadata;
+            let body = json_of(body);
+            assert_eq!(
+                body["generationConfig"]["thinkingConfig"],
+                json!({"thinkingLevel": "medium"})
+            );
+            assert_eq!(metadata[REASONING_REQUESTED_METADATA_KEY], "medium");
+            assert_eq!(metadata[REASONING_EFFECTIVE_METADATA_KEY], "medium");
+        }
+
+        #[tokio::test]
+        async fn an_effort_alone_still_produces_a_generation_config_object() {
+            // No max_tokens, no sampling: the effort is the only reason `generationConfig` exists.
+            let mut request = request_for(LEVELS_MODEL).with_reasoning(High);
+            request.prompt.entity.data.parameters = PromptParameters {
+                max_tokens: None,
+                temperature: None,
+                top_p: None,
+                frequency_penalty: None,
+                presence_penalty: None,
+                stop_sequences: None,
+            };
+            let (body, result) = send_raw(vec![(LEVELS_MODEL, levels_shape())], request).await;
+            result.expect("accepted");
+            assert_eq!(
+                json_of(body)["generationConfig"],
+                json!({"thinkingConfig": {"thinkingLevel": "high"}})
+            );
+        }
+
+        #[tokio::test]
+        async fn the_effort_body_adds_only_the_thinking_config() {
+            let (unset, _) = send_raw(
+                vec![(LEVELS_MODEL, levels_shape())],
+                with_max_tokens(request_for(LEVELS_MODEL), 2048),
+            )
+            .await;
+            let (set, _) = send_raw(
+                vec![(LEVELS_MODEL, levels_shape())],
+                with_max_tokens(request_for(LEVELS_MODEL).with_reasoning(Low), 2048),
+            )
+            .await;
+            let unset = unset.expect("reached the wire");
+            let prefix = unset
+                .strip_suffix("}}")
+                .expect("generationConfig closes the object");
+            assert_eq!(
+                set.expect("reached the wire"),
+                format!("{prefix},\"thinkingConfig\":{{\"thinkingLevel\":\"low\"}}}}}}")
+            );
+        }
+
+        #[tokio::test]
+        async fn auto_sends_no_thinking_config_but_is_still_recorded() {
+            let (body, result) = send_raw(
+                vec![(LEVELS_MODEL, levels_shape())],
+                with_max_tokens(
+                    request_for(LEVELS_MODEL).with_reasoning(ReasoningEffort::Auto),
+                    2048,
+                ),
+            )
+            .await;
+            let metadata = result.expect("auto is accepted").metadata;
+            let body = json_of(body);
+            assert!(
+                body["generationConfig"].get("thinkingConfig").is_none(),
+                "{body}"
+            );
+            assert_eq!(metadata[REASONING_REQUESTED_METADATA_KEY], "auto");
+            assert_eq!(metadata[REASONING_EFFECTIVE_METADATA_KEY], "auto");
+        }
+
+        #[tokio::test]
+        async fn off_on_a_levels_only_profile_is_refused_before_http() {
+            refused_before_http(
+                vec![(LEVELS_MODEL, levels_shape())],
+                request_for(LEVELS_MODEL).with_reasoning(ReasoningEffort::Off),
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn a_budget_inside_the_bounds_sends_thinking_budget_and_no_level() {
+            let (body, result) = send_raw(
+                vec![(BUDGET_MODEL, budget_shape())],
+                with_max_tokens(
+                    request_for(BUDGET_MODEL).with_reasoning(ReasoningEffort::Budget(1024)),
+                    2048,
+                ),
+            )
+            .await;
+            result.expect("a budget inside the bounds is accepted");
+            let body = json_of(body);
+            assert_eq!(
+                body["generationConfig"]["thinkingConfig"],
+                json!({"thinkingBudget": 1024})
+            );
+            assert_eq!(body["generationConfig"]["maxOutputTokens"], 2048);
+        }
+
+        #[tokio::test]
+        async fn on_wire_off_sends_a_zero_budget() {
+            let (body, result) = send_raw(
+                vec![(BUDGET_MODEL, budget_shape())],
+                request_for(BUDGET_MODEL).with_reasoning(ReasoningEffort::Off),
+            )
+            .await;
+            result.expect("off is accepted");
+            assert_eq!(
+                json_of(body)["generationConfig"]["thinkingConfig"],
+                json!({"thinkingBudget": 0})
+            );
+        }
+
+        #[tokio::test]
+        async fn a_budget_that_leaves_no_output_room_is_refused_and_never_raises_the_cap() {
+            let reason = refused_before_http(
+                vec![(BUDGET_MODEL, budget_shape())],
+                with_max_tokens(
+                    request_for(BUDGET_MODEL).with_reasoning(ReasoningEffort::Budget(2048)),
+                    2048,
+                ),
+            )
+            .await;
+            assert!(reason.contains("max_tokens"), "{reason}");
+        }
+
+        #[tokio::test]
+        async fn a_budget_outside_the_bounds_is_refused_before_http() {
+            for budget in [0, 24_577] {
+                refused_before_http(
+                    vec![(BUDGET_MODEL, budget_shape())],
+                    with_max_tokens(
+                        request_for(BUDGET_MODEL).with_reasoning(ReasoningEffort::Budget(budget)),
+                        32_000,
+                    ),
+                )
+                .await;
+            }
+        }
+
+        #[tokio::test]
+        async fn a_budget_on_a_levels_only_profile_is_refused_and_a_level_on_a_budget_only_one() {
+            refused_before_http(
+                vec![(LEVELS_MODEL, levels_shape())],
+                with_max_tokens(
+                    request_for(LEVELS_MODEL).with_reasoning(ReasoningEffort::Budget(1024)),
+                    2048,
+                ),
+            )
+            .await;
+            // No conversion between the two forms (REASON-06): a level is not turned into a budget.
+            refused_before_http(
+                vec![(BUDGET_MODEL, budget_shape())],
+                request_for(BUDGET_MODEL).with_reasoning(High),
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn an_unmeasured_model_is_refused_naming_the_override() {
+            let (body, result) = send_raw(
+                Vec::new(),
+                request_for(UNMEASURED_MODEL).with_reasoning(High),
+            )
+            .await;
+            assert!(body.is_none(), "{body:?}");
+            let error = result.expect_err("an unmeasured model refuses an explicit effort");
+            assert_eq!(error.transience(), Transience::Permanent);
+            match error {
+                LlmError::UnsupportedParameter {
+                    reason,
+                    provider,
+                    model,
+                    ..
+                } => {
+                    assert_eq!(provider, "gemini");
+                    assert_eq!(model, UNMEASURED_MODEL);
+                    assert!(
+                        reason.contains("llm.gemini.models.gemini-unprofiled-test-model.effort"),
+                        "{reason}"
+                    );
+                }
+                other => panic!("expected UnsupportedParameter, got {other:?}"),
+            }
+        }
+
+        #[tokio::test]
+        async fn a_substituting_fallback_sends_the_nearest_lower_level_and_records_both() {
+            let two = EffortSupport::Supported(EffortLevels::new([Low, High]));
+            let (body, result) = send_raw(
+                vec![(LEVELS_MODEL, two)],
+                request_for(LEVELS_MODEL)
+                    .with_reasoning(Medium)
+                    .with_reasoning_fallback(ReasoningFallback::NearestLower),
+            )
+            .await;
+            let metadata = result.expect("a substitution is accepted").metadata;
+            assert_eq!(
+                json_of(body)["generationConfig"]["thinkingConfig"],
+                json!({"thinkingLevel": "low"})
+            );
+            assert_eq!(metadata[REASONING_REQUESTED_METADATA_KEY], "medium");
+            assert_eq!(metadata[REASONING_EFFECTIVE_METADATA_KEY], "low");
+        }
+
+        #[tokio::test]
+        async fn an_unset_effort_sends_no_thinking_config_and_stamps_nothing() {
+            let (body, result) = send_raw(
+                vec![(LEVELS_MODEL, levels_shape())],
+                request_for(LEVELS_MODEL),
+            )
+            .await;
+            let metadata = result.expect("accepted").metadata;
+            assert!(!metadata.contains_key(REASONING_REQUESTED_METADATA_KEY));
+            assert!(!metadata.contains_key(REASONING_EFFECTIVE_METADATA_KEY));
+            assert!(!body.expect("reached the wire").contains("thinkingConfig"));
+        }
+
+        #[tokio::test]
+        async fn no_body_asks_for_thought_text() {
+            // D-00g: `includeThoughts` is never sent; the Phase 50 typed fields are the surface.
+            for (model, shape, effort) in [
+                (LEVELS_MODEL, levels_shape(), High),
+                (BUDGET_MODEL, budget_shape(), ReasoningEffort::Off),
+                (BUDGET_MODEL, budget_shape(), ReasoningEffort::Budget(512)),
+            ] {
+                let (body, result) = send_raw(
+                    vec![(model, shape)],
+                    with_max_tokens(request_for(model).with_reasoning(effort), 2048),
+                )
+                .await;
+                result.expect("accepted");
+                assert!(
+                    !body.expect("reached the wire").contains("includeThoughts"),
+                    "{effort}"
+                );
+            }
+        }
+
+        const STREAM_BODY: &str = concat!(
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hel\"}]}}]}\n\n",
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"lo\"}],\"role\":\"model\"},",
+            "\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":10,",
+            "\"candidatesTokenCount\":8,\"thoughtsTokenCount\":41,\"totalTokenCount\":59}}\n\n",
+        );
+
+        #[tokio::test]
+        async fn the_stream_sends_the_same_thinking_config_and_stamps_only_the_terminal_chunk() {
+            let (body, outcome) = stream_raw(
+                vec![(LEVELS_MODEL, levels_shape())],
+                request_for(LEVELS_MODEL).with_reasoning(High),
+                STREAM_BODY,
+            )
+            .await;
+            assert_eq!(
+                json_of(body)["generationConfig"]["thinkingConfig"],
+                json!({"thinkingLevel": "high"})
+            );
+            let items = outcome.expect("the stream opens");
+            let chunks: Vec<&StreamingResponse> = items
+                .iter()
+                .map(|i| i.as_ref().expect("every item is Ok"))
+                .collect();
+            let (terminal, earlier) = chunks.split_last().expect("a terminal chunk");
+            assert_eq!(terminal.metadata[REASONING_REQUESTED_METADATA_KEY], "high");
+            assert_eq!(terminal.metadata[REASONING_EFFECTIVE_METADATA_KEY], "high");
+            for chunk in earlier {
+                assert!(chunk.metadata.is_empty(), "earlier chunk: {chunk:?}");
+            }
+            // REASON-05: thoughts tokens still reach the typed usage field.
+            let usage = terminal
+                .usage
+                .as_ref()
+                .expect("usage rides the terminal chunk");
+            assert_eq!(usage.reasoning_tokens, Some(41));
+        }
+
+        #[tokio::test]
+        async fn the_stream_sends_a_budget_and_a_zero_budget_like_the_buffered_path() {
+            let (budget, _) = stream_raw(
+                vec![(BUDGET_MODEL, budget_shape())],
+                with_max_tokens(
+                    request_for(BUDGET_MODEL).with_reasoning(ReasoningEffort::Budget(1024)),
+                    2048,
+                ),
+                STREAM_BODY,
+            )
+            .await;
+            assert_eq!(
+                json_of(budget)["generationConfig"]["thinkingConfig"],
+                json!({"thinkingBudget": 1024})
+            );
+            let (off, _) = stream_raw(
+                vec![(BUDGET_MODEL, budget_shape())],
+                request_for(BUDGET_MODEL).with_reasoning(ReasoningEffort::Off),
+                STREAM_BODY,
+            )
+            .await;
+            assert_eq!(
+                json_of(off)["generationConfig"]["thinkingConfig"],
+                json!({"thinkingBudget": 0})
+            );
+        }
+
+        #[tokio::test]
+        async fn a_refused_effort_fails_the_stream_before_any_http_call() {
+            let (body, outcome) = stream_raw(
+                vec![(LEVELS_MODEL, levels_shape())],
+                request_for(LEVELS_MODEL).with_reasoning(ReasoningEffort::Off),
+                STREAM_BODY,
+            )
+            .await;
+            assert!(body.is_none(), "{body:?}");
+            assert!(matches!(
+                outcome,
+                Err(LlmError::UnsupportedParameter { .. })
+            ));
+        }
+
+        /// The transcript date every Gemini model was probed (run 9).
+        const PROBED_ON: &str = "2026-10-22";
+
+        /// `(model, minimal accepted, off, auto)` as `51-EFFORT-PROBE.md` evidences them (run 9):
+        /// `low`, `medium` and `high` were accepted on all twelve; `minimal` was rejected (400)
+        /// on six and accepted (no count) on six; `off` = `thinkingBudget` 0 accepted with no
+        /// reasoning-token count; `auto` = the default call reported more than 0 reasoning
+        /// tokens.
+        fn transcript() -> [(&'static str, bool, bool, bool); 12] {
+            [
+                ("gemini-4-argon", false, true, true),
+                ("gemini-3.8-flash", false, false, true),
+                ("gemini-3.7-flash", false, false, true),
+                ("gemini-3.1-pro-preview", false, false, true),
+                ("gemini-pro-latest", false, false, true),
+                ("gemini-flash-latest", false, false, true),
+                ("gemini-flash-lite-latest", true, false, false),
+                ("gemini-3.1-flash-lite", true, true, false),
+                ("gemini-3-flash-preview", true, true, true),
+                ("gemini-3.5-flash-lite", true, false, false),
+                ("gemini-3.6-flash", true, true, true),
+                ("gemini-3.5-flash", true, true, true),
+            ]
+        }
+
+        fn expected(minimal: bool, off: bool, auto: bool) -> EffortSupport {
+            let levels: Vec<ReasoningEffort> = if minimal {
+                vec![Minimal, Low, Medium, High]
+            } else {
+                vec![Low, Medium, High]
+            };
+            EffortSupport::Supported(EffortLevels::new(levels).with_off(off).with_auto(auto))
+        }
+
+        #[test]
+        fn gemini_effort_seed_matches_the_transcript() {
+            let adapter = adapter_over("https://example.invalid/v1", Vec::new());
+            for (model, minimal, off, auto) in transcript() {
+                let profile = adapter
+                    .model_profile(model)
+                    .unwrap_or_else(|| panic!("{model}: no profile"));
+                assert_eq!(profile.effort, expected(minimal, off, auto), "{model}");
+                assert_eq!(
+                    profile.effort_verified_on.as_deref(),
+                    Some(PROBED_ON),
+                    "{model}"
+                );
+                let EffortSupport::Supported(levels) = profile.effort else {
+                    panic!("{model}: Supported");
+                };
+                // Budgets 128 and 1 were accepted and -5 rejected, but no vendor-documented
+                // bound is in the probe file, so no span is seeded (judgement call, SUMMARY).
+                assert_eq!(levels.budget, None, "{model}");
+            }
+        }
+
+        /// Research A2: the lowercase spelling is the one pinned. The transcript accepted
+        /// lowercase everywhere (12 of 12) and uppercase `HIGH` too; lowercase is kept.
+        #[tokio::test]
+        async fn thinking_level_is_sent_in_lowercase_on_every_seeded_level() {
+            for (model, minimal, ..) in transcript() {
+                let mut levels = vec![Low, Medium, High];
+                if minimal {
+                    levels.insert(0, ReasoningEffort::Minimal);
+                }
+                for level in levels {
+                    let (body, result) =
+                        send_raw(Vec::new(), request_for(model).with_reasoning(level)).await;
+                    result.unwrap_or_else(|e| panic!("{model}/{level}: {e}"));
+                    let body: Value =
+                        serde_json::from_str(&body.expect("reached the wire")).unwrap();
+                    assert_eq!(
+                        body["generationConfig"]["thinkingConfig"],
+                        serde_json::json!({"thinkingLevel": level.to_string()}),
+                        "{model}/{level}"
+                    );
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn off_and_auto_follow_the_seeded_flags() {
+            for (model, _, off, auto) in transcript() {
+                let (body, result) = send_raw(
+                    Vec::new(),
+                    request_for(model).with_reasoning(ReasoningEffort::Off),
+                )
+                .await;
+                if off {
+                    result.unwrap_or_else(|e| panic!("{model}: {e}"));
+                    let body: Value = serde_json::from_str(&body.unwrap()).unwrap();
+                    assert_eq!(
+                        body["generationConfig"]["thinkingConfig"],
+                        serde_json::json!({"thinkingBudget": 0}),
+                        "{model}"
+                    );
+                } else {
+                    assert!(body.is_none(), "{model}: off reached the wire");
+                    assert!(
+                        matches!(result, Err(LlmError::UnsupportedParameter { .. })),
+                        "{model}: {result:?}"
+                    );
+                }
+                let (body, result) = send_raw(
+                    Vec::new(),
+                    request_for(model).with_reasoning(ReasoningEffort::Auto),
+                )
+                .await;
+                if auto {
+                    result.unwrap_or_else(|e| panic!("{model}: {e}"));
+                    let body: Value = serde_json::from_str(&body.unwrap()).unwrap();
+                    assert!(
+                        body["generationConfig"].get("thinkingConfig").is_none(),
+                        "{model}: {body}"
+                    );
+                } else {
+                    assert!(body.is_none(), "{model}: auto reached the wire");
+                    assert!(
+                        matches!(result, Err(LlmError::UnsupportedParameter { .. })),
+                        "{model}: {result:?}"
+                    );
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn a_level_the_probe_rejected_and_every_budget_refuse_before_http() {
+            for (model, minimal, ..) in transcript() {
+                let mut refused = vec![
+                    ReasoningEffort::XHigh,
+                    ReasoningEffort::Max,
+                    ReasoningEffort::Budget(128),
+                ];
+                if !minimal {
+                    refused.push(ReasoningEffort::Minimal);
+                }
+                for effort in refused {
+                    let (body, result) =
+                        send_raw(Vec::new(), request_for(model).with_reasoning(effort)).await;
+                    assert!(body.is_none(), "{model}/{effort}: reached the wire");
+                    assert!(
+                        matches!(result, Err(LlmError::UnsupportedParameter { .. })),
+                        "{model}/{effort}: {result:?}"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn the_reported_profile_keeps_levels_auto_off_and_budget() {
+            let adapter = adapter_over(
+                "http://localhost:1",
+                vec![
+                    (BUDGET_MODEL, budget_shape()),
+                    (LEVELS_MODEL, levels_shape()),
+                ],
+            );
+            let EffortSupport::Supported(budget) =
+                adapter.model_profile(BUDGET_MODEL).unwrap().effort
+            else {
+                panic!("a wire that carries every form keeps the override Supported");
+            };
+            assert!(budget.off && budget.auto);
+            assert_eq!(budget.budget, Some(BudgetBounds::new(1, 24_576)));
+            let EffortSupport::Supported(levels) =
+                adapter.model_profile(LEVELS_MODEL).unwrap().effort
+            else {
+                panic!("Supported");
+            };
+            assert_eq!(levels.levels, [Low, Medium, High]);
+            assert_eq!(
+                adapter.model_profile(UNMEASURED_MODEL).unwrap().effort,
+                EffortSupport::Unmeasured
+            );
+        }
+    }
+
     // ── Shared conformance suite (RT-06, D-31) ──
     //
     // Nested in its own module (rather than inline in `mod tests`) so every generated test's
@@ -3308,7 +5672,28 @@ mod tests {
         struct GeminiFixture;
 
         impl crate::conformance::ConformanceFixture for GeminiFixture {
+            /// Gemini's `generationConfig.thinkingConfig.thinkingLevel`, lower-cased.
+            fn effort_wire_value(body: &serde_json::Value) -> Option<String> {
+                body.get("generationConfig")
+                    .and_then(|config| config.get("thinkingConfig"))
+                    .and_then(|config| config.get("thinkingLevel"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_lowercase)
+            }
+
             const WIRE: crate::conformance::Wire = crate::conformance::Wire::Gemini;
+
+            fn default_model() -> &'static str {
+                GEMINI_DEFAULT_MODEL
+            }
+
+            fn provider_name() -> &'static str {
+                "gemini"
+            }
+
+            fn api_key() -> &'static str {
+                "test-key-abc123"
+            }
 
             fn adapter(base_url: &str) -> Arc<dyn LlmPort> {
                 Arc::new(test_adapter(base_url))
@@ -3357,5 +5742,260 @@ mod tests {
         }
 
         crate::llm_conformance_suite!(GeminiFixture);
+    }
+}
+
+/// The PARITY-03 knobs on `GeminiConfig` (plan 50-08, D-12): each one is read by the adapter.
+#[cfg(test)]
+mod knob_tests {
+    use super::*;
+    use crate::test_support::{
+        attempts_against_a_failing_endpoint_at, mock_capture, send_with_max_tokens, server,
+    };
+    use crate::window::effective_capabilities;
+    use serde_json::json;
+
+    const UNSEEDED: &str = "gemini-unseeded-test-model";
+
+    fn path_for(model: &str) -> String {
+        format!("/models/{model}:generateContent")
+    }
+
+    fn config(base_url: &str, model: &str) -> GeminiConfig {
+        GeminiConfig::new("test-key".to_string(), model.to_string()).with_base_url(base_url)
+    }
+
+    fn window_override(window: u32) -> ModelOverride {
+        ModelOverride {
+            context_window: Some(window),
+            ..ModelOverride::default()
+        }
+    }
+
+    fn response() -> serde_json::Value {
+        json!({
+            "candidates": [{
+                "content": {"role": "model", "parts": [{"text": "ok"}]},
+                "finishReason": "STOP"
+            }],
+            "usageMetadata": {
+                "promptTokenCount": 1,
+                "candidatesTokenCount": 1,
+                "totalTokenCount": 2
+            }
+        })
+    }
+
+    fn error_of(config: GeminiConfig) -> String {
+        match GeminiAdapter::new(config) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("construction must fail"),
+        }
+    }
+
+    fn sent(body: &serde_json::Value) -> Option<u64> {
+        body["generationConfig"]
+            .get("maxOutputTokens")
+            .and_then(|v| v.as_u64())
+    }
+
+    #[tokio::test]
+    async fn gemini_max_tokens_default_reaches_the_wire() {
+        let mut server = server().await;
+        let captured = mock_capture(&mut server, &path_for(UNSEEDED), response()).await;
+        let url = server.url();
+
+        let adapter = GeminiAdapter::new(config(&url, UNSEEDED).with_max_tokens(2048)).unwrap();
+        let body = send_with_max_tokens(&adapter, &captured, UNSEEDED, None)
+            .await
+            .unwrap();
+        assert_eq!(sent(&body), Some(2048), "{body}");
+        // A request's own value wins.
+        let body = send_with_max_tokens(&adapter, &captured, UNSEEDED, Some(512))
+            .await
+            .unwrap();
+        assert_eq!(sent(&body), Some(512), "{body}");
+
+        // No configured default: no `maxOutputTokens`, as before PARITY-03.
+        let plain = GeminiAdapter::new(config(&url, UNSEEDED)).unwrap();
+        let body = send_with_max_tokens(&plain, &captured, UNSEEDED, None)
+            .await
+            .unwrap();
+        assert_eq!(sent(&body), None, "{body}");
+    }
+
+    #[tokio::test]
+    async fn gemini_max_tokens_default_is_checked_against_the_profile() {
+        let mut server = server().await;
+        let model = "gemini-3.5-flash-lite";
+        let captured = mock_capture(&mut server, &path_for(model), response()).await;
+        // The model is seeded with a 65,536-token maximum output.
+        let adapter =
+            GeminiAdapter::new(config(&server.url(), model).with_max_tokens(100_000)).unwrap();
+        let Err(LlmError::InvalidPrompt(message)) =
+            send_with_max_tokens(&adapter, &captured, model, None).await
+        else {
+            panic!("a default above the model's maximum output must be InvalidPrompt");
+        };
+        for needle in ["max_tokens", "100000", "65536"] {
+            assert!(
+                message.contains(needle),
+                "'{needle}' missing from: {message}"
+            );
+        }
+        assert!(captured.lock().unwrap().is_none(), "nothing was sent");
+    }
+
+    #[tokio::test]
+    async fn gemini_max_retries_is_read_by_the_adapter() {
+        // This adapter's loop counts total attempts (its long-standing convention): the budget
+        // `n` sends up to `n` requests on a retryable 5xx.
+        for (budget, attempts) in [(1_u32, 1_usize), (2, 2)] {
+            let server = server().await;
+            let adapter =
+                GeminiAdapter::new(config(&server.url(), UNSEEDED).with_max_retries(budget))
+                    .unwrap();
+            attempts_against_a_failing_endpoint_at(
+                server,
+                &path_for(UNSEEDED),
+                &adapter,
+                UNSEEDED,
+                attempts,
+            )
+            .await;
+        }
+    }
+
+    #[test]
+    fn gemini_context_window_override_is_declared() {
+        let adapter = GeminiAdapter::new(
+            config("https://example.invalid/v1", UNSEEDED).with_context_window(500_000),
+        )
+        .unwrap();
+        assert_eq!(adapter.get_capabilities().max_context_tokens, Some(500_000));
+        assert_eq!(
+            adapter.model_profile(UNSEEDED).unwrap().context_window,
+            Some(500_000)
+        );
+    }
+
+    #[test]
+    fn context_window_override_beats_a_seeded_window_on_gemini() {
+        let model = "gemini-3.5-flash-lite";
+        let base = || config("https://example.invalid/v1", model);
+        let seeded = GeminiAdapter::new(base()).unwrap();
+        assert_eq!(
+            seeded.model_profile(model).unwrap().context_window,
+            Some(1_048_576)
+        );
+
+        // The operator's adapter-wide statement beats the compiled seeded fact ...
+        let adapter = GeminiAdapter::new(base().with_context_window(500_000)).unwrap();
+        assert_eq!(
+            adapter.model_profile(model).unwrap().context_window,
+            Some(500_000)
+        );
+        assert_eq!(
+            effective_capabilities(&adapter, model).max_context_tokens,
+            Some(500_000)
+        );
+
+        // ... and a per-model override beats both.
+        let adapter = GeminiAdapter::new(base().with_context_window(500_000).with_model_overrides(
+            BTreeMap::from([(model.to_string(), window_override(900_000))]),
+        ))
+        .unwrap();
+        assert_eq!(
+            adapter.model_profile(model).unwrap().context_window,
+            Some(900_000)
+        );
+
+        // A window below the seeded maximum output is refused, never clamped.
+        let message = error_of(base().with_context_window(40_000));
+        for needle in ["gemini", model, "40000", "65536"] {
+            assert!(
+                message.contains(needle),
+                "'{needle}' missing from: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn gemini_invalid_override_fails_construction_naming_provider_and_model() {
+        let with_override = |over: ModelOverride| {
+            config("https://example.invalid/v1", UNSEEDED)
+                .with_model_overrides(BTreeMap::from([(UNSEEDED.to_string(), over)]))
+        };
+        let adapter = GeminiAdapter::new(with_override(window_override(900_000))).unwrap();
+        assert_eq!(
+            adapter.model_profile(UNSEEDED).unwrap().context_window,
+            Some(900_000)
+        );
+        for over in [
+            window_override(0),
+            ModelOverride {
+                context_window: Some(1_000),
+                max_output_tokens: Some(2_000_000),
+                ..ModelOverride::default()
+            },
+        ] {
+            let message = error_of(with_override(over));
+            assert!(
+                message.contains("gemini") && message.contains(UNSEEDED),
+                "the error must name the provider and the model: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn gemini_config_defaults_a_reasoning_model_to_300s() {
+        // Every seeded Gemini model is a reasoning model; an unknown one keeps 60 s.
+        for (model, expected) in [
+            ("gemini-3.5-flash-lite", 300),
+            ("gemini-3.6-flash", 300),
+            (GEMINI_DEFAULT_MODEL, 300),
+            (UNSEEDED, 60),
+        ] {
+            assert_eq!(
+                config("https://example.invalid/v1", model).timeout_seconds,
+                expected,
+                "new({model})"
+            );
+            let parts = GeminiConfig::from_parts(
+                Some("k".to_string()),
+                None,
+                Some(model.to_string()),
+                None,
+            )
+            .unwrap();
+            assert_eq!(parts.timeout_seconds, expected, "from_parts({model})");
+        }
+        // An explicit environment value always wins.
+        for explicit in ["30", "60", "900"] {
+            let parts = GeminiConfig::from_parts(
+                Some("k".to_string()),
+                None,
+                Some("gemini-3.5-flash-lite".to_string()),
+                Some(explicit.to_string()),
+            )
+            .unwrap();
+            assert_eq!(parts.timeout_seconds.to_string(), explicit);
+        }
+    }
+
+    #[test]
+    fn gemini_config_debug_redacts_the_api_key() {
+        let config = config("https://api.example.invalid/v1", "gemini-3.5-flash-lite");
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("test-key"), "{debug}");
+        assert!(debug.contains("<redacted>"), "{debug}");
+        for needle in [
+            "https://api.example.invalid/v1",
+            "timeout_seconds",
+            "max_retries",
+            "max_tokens",
+        ] {
+            assert!(debug.contains(needle), "'{needle}' missing from {debug}");
+        }
     }
 }

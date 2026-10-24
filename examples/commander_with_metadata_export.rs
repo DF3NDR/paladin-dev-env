@@ -15,14 +15,15 @@
 use async_trait::async_trait;
 use paladin::application::services::battalion::commander::CommanderBuilder;
 use paladin::application::services::paladin::error::PaladinError;
-use paladin::core::base::entity::node::Node;
-use paladin::core::platform::container::battalion::{
-    BattalionConfig, BattalionStrategy, ErrorStrategy,
-};
+use paladin::core::base::entity::Entity;
+use paladin::core::platform::container::aegis::{Aegis, ErrorHandlerSpec, TimeoutPolicy};
+use paladin::core::platform::container::battalion::{BattalionConfig, BattalionStrategy};
+use paladin::core::platform::container::battlefield::StateDelta;
 use paladin::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream, StopReason};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use std::{fs, io};
 
 /// Mock PaladinPort that simulates realistic execution with metrics
@@ -31,11 +32,11 @@ struct MockPaladinPort;
 #[async_trait]
 impl PaladinPort for MockPaladinPort {
     async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
-        println!("\n🎯 {} executing...", paladin.node.name);
+        println!("\n🎯 {} executing...", paladin.data.name);
         println!("   📝 Input: {}", input);
 
         // Simulate realistic processing delay (varies by Paladin)
-        let delay_ms = match paladin.node.name.as_str() {
+        let delay_ms = match paladin.data.name.as_str() {
             name if name.contains("Analyzer") => 500,
             name if name.contains("Processor") => 800,
             name if name.contains("Synthesizer") => 600,
@@ -44,8 +45,8 @@ impl PaladinPort for MockPaladinPort {
         tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
 
         // Generate output with realistic token counts
-        let output = format!("{} completed: {}", paladin.node.name, input);
-        let token_count = match paladin.node.name.as_str() {
+        let output = format!("{} completed: {}", paladin.data.name, input);
+        let token_count = match paladin.data.name.as_str() {
             name if name.contains("Analyzer") => 450,
             name if name.contains("Processor") => 650,
             name if name.contains("Synthesizer") => 550,
@@ -93,7 +94,7 @@ fn create_paladin(name: &str, role: &str) -> Paladin {
         vision_enabled: false,
         ..Default::default()
     };
-    Node::new(data, None)
+    Entity::new(data, None)
 }
 
 /// Create the metadata output directory
@@ -133,20 +134,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     println!("📋 Created 3 Paladins for parallel execution:");
-    println!("   1. {} - Data analysis", analyzer.node.name);
-    println!("   2. {} - Data processing", processor.node.name);
-    println!("   3. {} - Report synthesis", synthesizer.node.name);
+    println!("   1. {} - Data analysis", analyzer.data.name);
+    println!("   2. {} - Data processing", processor.data.name);
+    println!("   3. {} - Report synthesis", synthesizer.data.name);
 
     // Step 4: Create Battalion configuration with metadata export
     let config = BattalionConfig::new("metadata_export_demo")
-        .with_timeout(120)
-        .with_error_strategy(ErrorStrategy::ContinueOnError) // Continue on errors to capture all metrics
+        .with_aegis(Aegis {
+            timeout: Some(TimeoutPolicy {
+                run_timeout: Some(Duration::from_secs(120)), // bounds each Paladin attempt
+                idle_timeout: None,
+            }),
+            // Absorb failures to continue and capture every Paladin's metrics
+            on_error: Some(ErrorHandlerSpec::Absorb {
+                fallback_delta: StateDelta::new(),
+            }),
+            ..Aegis::default()
+        })
         .with_metadata_dir(metadata_dir.clone()); // Enable metadata export
 
     println!("\n⚙️  Configuration:");
     println!("   • Strategy: Phalanx (concurrent execution)");
-    println!("   • Timeout: 120 seconds");
-    println!("   • Error Strategy: ContinueOnError");
+    println!("   • Per-attempt Timeout: 120 seconds");
+    println!("   • On Error: absorb the failure and continue");
     println!("   • Metadata Export: ENABLED ✓");
 
     // Step 5: Create Commander with Phalanx strategy

@@ -57,7 +57,7 @@ async fn test_openai_integration() {
                 assert!(response.usage.total_tokens > 0, "Should have token usage");
                 break;
             }
-            Err(LlmError::RateLimitExceeded) if retries < max_retries => {
+            Err(LlmError::RateLimitExceeded { .. }) if retries < max_retries => {
                 retries += 1;
                 let delay = Duration::from_secs(2_u64.pow(retries)); // Exponential backoff
                 println!(
@@ -68,7 +68,7 @@ async fn test_openai_integration() {
                 );
                 tokio::time::sleep(delay).await;
             }
-            Err(LlmError::RateLimitExceeded) => {
+            Err(LlmError::RateLimitExceeded { .. }) => {
                 println!(
                     "Rate limit exceeded after {} retries. This is expected for free tier API keys.",
                     max_retries
@@ -95,12 +95,12 @@ async fn test_openai_integration() {
 #[tokio::test]
 async fn test_adapter_configuration() {
     // Test config validation without making API calls
-    let config = OpenAIConfig::new("test-key".to_string());
+    let config = OpenAIConfig::new("test-key".to_string(), "gpt-3.5-turbo".to_string());
 
     assert!(config.validate().is_ok(), "Config should be valid");
 
     // Test invalid configs
-    let invalid_config = OpenAIConfig::new("".to_string());
+    let invalid_config = OpenAIConfig::new("".to_string(), "gpt-3.5-turbo".to_string());
     assert!(
         invalid_config.validate().is_err(),
         "Empty API key should be invalid"
@@ -110,7 +110,7 @@ async fn test_adapter_configuration() {
 #[tokio::test]
 async fn test_model_mapping() {
     // Test the adapter's model mapping without API calls
-    let config = OpenAIConfig::new("test-key".to_string());
+    let config = OpenAIConfig::new("test-key".to_string(), "gpt-3.5-turbo".to_string());
 
     let adapter = OpenAIAdapter::new(config).expect("Should create adapter");
 
@@ -137,7 +137,7 @@ async fn test_openai_models() {
             println!("Available models: {:?}", models);
             assert!(!models.is_empty(), "Should have at least one model");
         }
-        Err(LlmError::RateLimitExceeded) => {
+        Err(LlmError::RateLimitExceeded { .. }) => {
             println!("Rate limit exceeded when fetching models - this is expected");
         }
         Err(e) => {

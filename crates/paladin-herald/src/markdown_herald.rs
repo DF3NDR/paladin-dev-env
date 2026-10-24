@@ -395,7 +395,16 @@ impl Herald for MarkdownHerald {
         if !result.node_errors.is_empty() {
             output.push_str(&self.heading(self.config.heading_level + 1, "Failures"));
             for node_error in &result.node_errors {
-                output.push_str(&self.format_field(&node_error.node_name, &node_error.error));
+                // Only the node id, attempt and transience are added to the
+                // source's own (already-redacted) display -- no provider or
+                // status (T-44-15).
+                output.push_str(&self.format_field(
+                    node_error.node_id.as_str(),
+                    &format!(
+                        "attempt {}, {:?}: {}",
+                        node_error.attempt, node_error.transience, node_error.source
+                    ),
+                ));
             }
             output.push('\n');
         }
@@ -419,8 +428,16 @@ impl Herald for MarkdownHerald {
             output.push_str(&self.format_field("Duration", &format!("{}ms", duration)));
         }
         output.push_str(&self.token_usage_block(&metadata.token_usage));
-        if let Some(cost) = metadata.cost_estimate {
-            output.push_str(&self.format_field("Cost", &format!("${:.4}", cost)));
+        if let Some(display) = metadata.cost_display() {
+            output.push_str(&self.format_field("Cost", &display));
+        }
+        // D-18: one allowance line, from the one shared helper, only when a warning was won.
+        if let Some(line) = metadata.allowance_warning_display() {
+            output.push_str(&self.format_field("Allowance", &line));
+        }
+        // D-19: one halt line, from the one shared helper, only when the Treasurer halted the run.
+        if let Some(line) = metadata.halt_reason_display() {
+            output.push_str(&self.format_field("Halt", &line));
         }
 
         Ok(output)
@@ -735,9 +752,13 @@ mod tests {
             total_tokens: 400,
             paladin_success_count: 2,
             paladin_failure_count: 1,
-            node_errors: vec![paladin_core::platform::container::battalion::NodeError {
-                node_name: "Herald".to_string(),
-                error: "connection refused".to_string(),
+            node_errors: vec![paladin_core::platform::container::node_error::NodeError {
+                node_id: paladin_core::platform::container::waypoint::NodeId::new("Herald"),
+                attempt: 1,
+                transience: paladin_core::platform::container::transience::Transience::Transient,
+                source: paladin_core::platform::container::node_error::NodeErrorSource::Function {
+                    message: "connection refused".to_string(),
+                },
             }],
         };
 
@@ -750,7 +771,7 @@ mod tests {
 
         // Failure detail: each node error's name and text rendered.
         assert!(formatted.contains("**Herald:**"));
-        assert!(formatted.contains("connection refused"));
+        assert!(formatted.contains("function error: connection refused"));
 
         // paladin_results order is preserved.
         let scout_pos = formatted.find("Scout output").unwrap();
@@ -815,6 +836,86 @@ mod tests {
     }
 
     #[test]
+    fn markdown_herald_renders_structured_node_error_line() {
+        use paladin_core::platform::container::node_error::{
+            NodeError, NodeErrorSource, TimeoutKind,
+        };
+        use paladin_core::platform::container::transience::Transience;
+        use paladin_core::platform::container::waypoint::NodeId;
+
+        let herald = MarkdownHerald::with_config(MarkdownHeraldConfig {
+            include_colors: false,
+            heading_level: 2,
+        });
+        let mut result = create_test_battalion_result();
+        result.node_errors = vec![NodeError {
+            node_id: NodeId::new("Scout"),
+            attempt: 2,
+            transience: Transience::Transient,
+            source: NodeErrorSource::Timeout(TimeoutKind::Run),
+        }];
+
+        let formatted = herald.format_battalion_result(&result).unwrap();
+
+        assert!(formatted.contains("### Failures"), "{formatted}");
+        assert!(
+            formatted
+                .lines()
+                .any(|line| line == "**Scout:** attempt 2, Transient: run timeout"),
+            "{formatted}"
+        );
+    }
+
+    #[test]
+    fn herald_node_error_line_adds_no_provider_detail() {
+        use paladin_core::platform::container::node_error::{NodeError, NodeErrorSource};
+        use paladin_core::platform::container::transience::Transience;
+        use paladin_core::platform::container::waypoint::NodeId;
+
+        // T-44-15: the herald line adds only node id, attempt and transience to
+        // the source's own (already-redacted) display -- never the provider or
+        // the HTTP status the structured source also carries.
+        let mut result = create_test_battalion_result();
+        result.node_errors = vec![NodeError {
+            node_id: NodeId::new("Scout"),
+            attempt: 1,
+            transience: Transience::Permanent,
+            source: NodeErrorSource::Llm {
+                kind: "LlmFailure".to_string(),
+                status: Some(401),
+                provider: Some("openai".to_string()),
+                message: "[REDACTED] rejected".to_string(),
+            },
+        }];
+
+        let markdown = MarkdownHerald::with_config(MarkdownHeraldConfig {
+            include_colors: false,
+            heading_level: 2,
+        })
+        .format_battalion_result(&result)
+        .unwrap();
+        #[cfg_attr(not(feature = "table"), allow(unused_mut))]
+        let mut rendered_by = vec![("markdown", markdown)];
+        // The Table herald is feature-gated; cover it whenever it is built.
+        #[cfg(feature = "table")]
+        rendered_by.push((
+            "table",
+            crate::table_herald::TableHerald::default()
+                .format_battalion_result(&result)
+                .unwrap(),
+        ));
+
+        for (label, rendered) in rendered_by {
+            let line = rendered
+                .lines()
+                .find(|line| line.contains("[REDACTED] rejected"))
+                .unwrap_or_else(|| panic!("{label} has no node-error line: {rendered}"));
+            assert!(!line.contains("openai"), "{label}: {line}");
+            assert!(!line.contains("401"), "{label}: {line}");
+        }
+    }
+
+    #[test]
     fn test_format_stream_chunk() {
         let herald = MarkdownHerald::new();
         let chunk = StreamChunk::builder()
@@ -851,6 +952,110 @@ mod tests {
         assert!(formatted.contains("### Execution Metadata"));
         assert!(formatted.contains("1234ms"));
         assert!(formatted.contains("500"));
+    }
+
+    #[test]
+    fn finalize_stream_renders_currency_code() {
+        use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+        use paladin_ports::output::llm_port::TokenUsage;
+
+        let herald = MarkdownHerald::with_config(MarkdownHeraldConfig {
+            include_colors: false,
+            heading_level: 2,
+        });
+        let cost = Cost::new(45_000_000, CurrencyCode::new("USD").unwrap());
+        let metadata = ExecutionMetadata::builder()
+            .execution_id(uuid::Uuid::new_v4())
+            .start_time(chrono::Utc::now())
+            .model_used("gpt-4".to_string())
+            .token_usage(TokenUsage::new(300, 200))
+            .duration_ms(1234)
+            .cost(&cost)
+            .build()
+            .unwrap();
+
+        let formatted = herald.finalize_stream(&metadata).unwrap();
+        assert!(formatted.contains("0.0450 USD"), "{formatted}");
+        assert!(
+            !formatted.contains('$'),
+            "no dollar sign once a currency is configured: {formatted}"
+        );
+    }
+
+    fn allowance_metadata(with_warning: bool) -> ExecutionMetadata {
+        use paladin_core::platform::container::allowance::{
+            AllowanceLimitKind, AllowanceScopeKind, AllowanceWarning,
+        };
+        use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+        use paladin_ports::output::llm_port::TokenUsage;
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let cost = Cost::new(45_000_000, usd.clone());
+        let mut metadata = ExecutionMetadata::builder()
+            .execution_id(uuid::Uuid::nil())
+            .start_time(chrono::DateTime::UNIX_EPOCH)
+            .model_used("gpt-4".to_string())
+            .token_usage(TokenUsage::new(300, 200))
+            .duration_ms(1234)
+            .cost(&cost)
+            .build()
+            .unwrap();
+        if with_warning {
+            metadata.with_allowance_warnings(&[AllowanceWarning {
+                scope_kind: AllowanceScopeKind::Tenant,
+                limit_kind: AllowanceLimitKind::Lifetime,
+                balance: Cost::new(20_500_000_000, usd.clone()),
+                ceiling: Cost::new(25_000_000_000, usd),
+                window_start: None,
+                window_end: None,
+                warn_at: 80,
+            }]);
+        }
+        metadata
+    }
+
+    #[test]
+    fn finalize_stream_renders_exactly_one_allowance_line_when_present() {
+        let herald = MarkdownHerald::with_config(MarkdownHeraldConfig {
+            include_colors: false,
+            heading_level: 2,
+        });
+        let with = herald.finalize_stream(&allowance_metadata(true)).unwrap();
+        let without = herald.finalize_stream(&allowance_metadata(false)).unwrap();
+
+        assert_eq!(with.matches("allowance:").count(), 1, "{with}");
+        assert!(with.contains("(tenant, lifetime cap)"), "{with}");
+        // Removing the one added field returns the pre-change rendering byte for byte.
+        let line = herald.format_field(
+            "Allowance",
+            &allowance_metadata(true)
+                .allowance_warning_display()
+                .unwrap(),
+        );
+        assert_eq!(with.replace(&line, ""), without);
+        assert!(!without.contains("allowance"), "{without}");
+    }
+
+    /// D-19: a halted run renders exactly one halt line; a run without a halt reason renders
+    /// exactly as before.
+    #[test]
+    fn finalize_stream_renders_exactly_one_halt_line_when_present() {
+        use paladin_core::platform::container::allowance::HaltReason;
+
+        let herald = MarkdownHerald::with_config(MarkdownHeraldConfig {
+            include_colors: false,
+            heading_level: 2,
+        });
+        let mut halted = allowance_metadata(false);
+        halted.with_halt_reason(&HaltReason::LedgerUnavailable);
+        let with = herald.finalize_stream(&halted).unwrap();
+        let without = herald.finalize_stream(&allowance_metadata(false)).unwrap();
+
+        assert_eq!(with.matches("halted:").count(), 1, "{with}");
+        assert!(with.contains("(ledger unavailable)"), "{with}");
+        let line = herald.format_field("Halt", &halted.halt_reason_display().unwrap());
+        assert_eq!(with.replace(&line, ""), without);
+        assert!(!without.contains("halted:"), "{without}");
     }
 
     #[test]

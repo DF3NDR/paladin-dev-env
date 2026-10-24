@@ -1,4 +1,5 @@
 pub mod aegis;
+pub mod allowance;
 pub mod arsenal;
 pub mod assistant;
 pub mod autonomous_config;
@@ -10,6 +11,9 @@ pub mod citadel_error;
 pub mod comment;
 pub mod content;
 pub mod content_list;
+/// Treasurer cost arithmetic (PRICE-02): `Cost`, `CurrencyCode`, `PriceRow`, `PriceTable`,
+/// `cost_of_call`, `CostTally` — pure fixed-point `i64` nano-unit cost, no floating point.
+pub mod cost;
 pub mod directive;
 pub mod document;
 pub mod execution_result;
@@ -30,9 +34,11 @@ pub mod paladin_config;
 pub mod paladin_error;
 pub mod parley;
 pub mod planning;
+pub mod principal;
 pub mod prompt;
 pub mod queue_config;
 pub mod queue_item;
+pub mod reasoning;
 pub mod registry_error;
 pub mod run;
 pub mod run_schedule;
@@ -47,6 +53,10 @@ pub mod token_usage;
 /// their supporting types (D-01, D-02).
 pub mod trace;
 pub mod transience;
+/// Treasurer spend-ledger domain types (LEDGR-01..04, ADR-0053): `LedgerScope`,
+/// `SettlementKey`, `ReservationId`, `LedgerEntryKind`, `SpendRow` and the port's
+/// request/query types. Pure value types, no I/O.
+pub mod treasury_ledger;
 pub mod trigger;
 pub mod user;
 pub mod user_group;

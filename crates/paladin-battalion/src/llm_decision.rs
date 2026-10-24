@@ -303,11 +303,13 @@ pub(crate) fn llm_error_class(error: &LlmError) -> &'static str {
         LlmError::NetworkError(_) => "network error",
         LlmError::AuthenticationError(_) => "authentication error",
         LlmError::InvalidPrompt(_) => "invalid prompt",
-        LlmError::RateLimitExceeded => "rate limit exceeded",
+        LlmError::RateLimitExceeded { .. } => "rate limit exceeded",
         LlmError::UsageLimitExceeded { .. } => "usage limit exceeded",
         LlmError::ModelNotAvailable(_) => "model not available",
         LlmError::TokenLimitExceeded => "token limit exceeded",
-        LlmError::EmptyCompletion(_) => "empty completion",
+        LlmError::EmptyCompletion { .. } => "empty completion",
+        LlmError::Refusal { .. } => "refusal",
+        LlmError::UnsupportedParameter { .. } => "unsupported parameter",
         LlmError::ProcessingError(_) => "processing error",
         LlmError::Timeout(_) => "timeout",
         LlmError::ProviderError { .. } => "provider error",
@@ -323,6 +325,22 @@ pub(crate) fn llm_error_class(error: &LlmError) -> &'static str {
 mod tests {
     use super::*;
     use paladin_llm::mock::MockLlmAdapter;
+
+    /// D-09: a refusal has its own fixed class label, never the provider's
+    /// refusal text (egress-boundary rule).
+    #[test]
+    fn llm_error_class_labels_a_refusal() {
+        let err = LlmError::refusal("openai", "m", "sensitive vendor text");
+        assert_eq!(llm_error_class(&err), "refusal");
+    }
+
+    /// D-00f: an unsupported-parameter refusal has its own fixed class label and the label never
+    /// carries the reason text.
+    #[test]
+    fn llm_error_class_labels_an_unsupported_parameter() {
+        let err = LlmError::unsupported_parameter("reasoning_effort", "high", "p", "m", "why");
+        assert_eq!(llm_error_class(&err), "unsupported parameter");
+    }
 
     fn make_evaluator(llm: Arc<dyn LlmPort>) -> LlmDecisionEvaluator {
         LlmDecisionEvaluator::new(
@@ -478,7 +496,7 @@ mod tests {
     #[tokio::test]
     async fn llm_error_surfaces_as_a_typed_evaluator_error() {
         let llm: Arc<dyn LlmPort> =
-            Arc::new(MockLlmAdapter::new().with_error(LlmError::RateLimitExceeded));
+            Arc::new(MockLlmAdapter::new().with_error(LlmError::rate_limited(None)));
         let evaluator = make_evaluator(llm);
         let source = NodeId::new("triage");
         let urgent = NodeId::new("urgent");

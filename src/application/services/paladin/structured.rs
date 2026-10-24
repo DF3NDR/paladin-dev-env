@@ -195,7 +195,7 @@ impl<T: StructuredExecutorPort + ?Sized> StructuredExecutorExt for T {}
 mod tests {
     use super::*;
     use crate::application::services::paladin::paladin_execution_service::PaladinExecutionService;
-    use crate::core::base::entity::node::Node;
+    use crate::core::base::entity::Entity;
     use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
     use crate::infrastructure::resilience::circuit_breaker::CircuitBreaker;
     use paladin_llm::mock::MockLlmAdapter;
@@ -222,7 +222,7 @@ mod tests {
             max_loops: MaxLoops::Fixed(3),
             ..Default::default()
         };
-        Node::new(data, None)
+        Entity::new(data, None)
     }
 
     fn service_with(llm: Arc<MockLlmAdapter>) -> PaladinExecutionService {

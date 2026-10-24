@@ -20,7 +20,7 @@ The workspace is a single umbrella crate (`paladin-ai`, published lib name
 
 | Crate (package) | Directory | Layer | Purpose | Key exports |
 |---|---|---|---|---|
-| `paladin-ai-core` | `crates/paladin-core` | Core domain | Pure domain types, zero infrastructure deps | `Node<T>`, `Paladin`, `PaladinConfig`, `Battalion`, `BattalionConfig`, `Garrison`, `Arsenal`, `Herald`, `Sanctum`, `Trigger` |
+| `paladin-ai-core` | `crates/paladin-core` | Core domain | Pure domain types, zero infrastructure deps | `Entity<T>`, `Paladin`, `PaladinConfig`, `Battalion`, `BattalionConfig`, `Garrison`, `Arsenal`, `Herald`, `Sanctum`, `Trigger` |
 | `paladin-ports` | `crates/paladin-ports` | Application boundary | Port trait contracts (hexagonal interfaces) | `LlmPort`, `GarrisonPort`, `SanctumPort`, `ArsenalPort`, `OrchestratorPort`, `FullQueuePort`, `NotificationDeliveryPort`, `FileStoragePort`, `EmbeddingPort`, `PaladinExecutorPort`, `BattalionPort` |
 | `paladin-battalion` | `crates/paladin-battalion` | Application services | Multi-agent orchestration runtime | `FormationExecutionService`, `PhalanxExecutionService`, `CampaignExecutionService`, `ChainOfCommandExecutionService`, `Commander`, `CommanderBuilder`, `ConclaveExecutionService`, `CouncilExecutionService`, `GroveExecutionService`, `ManeuverExecutionService` |
 | `paladin-llm` | `crates/paladin-llm` | Infrastructure | LLM provider adapters | `OpenAIAdapter`, `AnthropicAdapter`, `DeepSeekAdapter`, `MockLlmAdapter`, `LlmProviderFactory` |

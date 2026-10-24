@@ -7,7 +7,7 @@ use paladin::application::cli::config::paladin_config::{
     GarrisonConfig, PaladinYamlConfig, ProviderConfig,
 };
 use paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService;
-use paladin::core::base::entity::node::Node;
+use paladin::core::base::entity::Entity;
 use paladin::core::platform::container::paladin::{MaxLoops, PaladinData, PaladinStatus};
 use paladin::infrastructure::resilience::circuit_breaker::CircuitBreaker;
 use paladin_ports::output::llm_port::{LlmError, LlmPort};
@@ -25,7 +25,7 @@ use crate::helpers::MockLlmAdapter;
 async fn test_llm_rate_limit_error() {
     // Arrange: Mock that simulates rate limiting
     let mock_llm = Arc::new(MockLlmAdapter::new());
-    mock_llm.add_failure(LlmError::RateLimitExceeded);
+    mock_llm.add_failure(LlmError::rate_limited(None));
 
     let paladin_data = PaladinData {
         system_prompt: "Test system".to_string(),
@@ -39,7 +39,7 @@ async fn test_llm_rate_limit_error() {
         vision_enabled: false,
         ..Default::default()
     };
-    let paladin = Node::new(paladin_data, None);
+    let paladin = Entity::new(paladin_data, None);
 
     let circuit_breaker = Arc::new(CircuitBreaker::new(3, 2, Duration::from_secs(30)));
     let service =
@@ -71,7 +71,7 @@ async fn test_llm_timeout_error() {
         vision_enabled: false,
         ..Default::default()
     };
-    let paladin = Node::new(paladin_data, None);
+    let paladin = Entity::new(paladin_data, None);
 
     let circuit_breaker = Arc::new(CircuitBreaker::new(3, 2, Duration::from_secs(30)));
     let service =
@@ -102,7 +102,7 @@ async fn test_llm_authentication_error() {
         vision_enabled: false,
         ..Default::default()
     };
-    let paladin = Node::new(paladin_data, None);
+    let paladin = Entity::new(paladin_data, None);
 
     let circuit_breaker = Arc::new(CircuitBreaker::new(3, 2, Duration::from_secs(30)));
     let service =
@@ -138,7 +138,7 @@ async fn test_llm_network_error() {
         vision_enabled: false,
         ..Default::default()
     };
-    let paladin = Node::new(paladin_data, None);
+    let paladin = Entity::new(paladin_data, None);
 
     let circuit_breaker = Arc::new(CircuitBreaker::new(3, 2, Duration::from_secs(30)));
     let service =
@@ -236,7 +236,7 @@ async fn test_empty_input_string() {
         vision_enabled: false,
         ..Default::default()
     };
-    let paladin = Node::new(paladin_data, None);
+    let paladin = Entity::new(paladin_data, None);
 
     let circuit_breaker = Arc::new(CircuitBreaker::new(3, 2, Duration::from_secs(30)));
     let service =
@@ -270,7 +270,7 @@ async fn test_very_large_input() {
         vision_enabled: false,
         ..Default::default()
     };
-    let paladin = Node::new(paladin_data, None);
+    let paladin = Entity::new(paladin_data, None);
 
     let circuit_breaker = Arc::new(CircuitBreaker::new(3, 2, Duration::from_secs(30)));
     let service =
@@ -307,7 +307,7 @@ async fn test_special_characters_in_input() {
         vision_enabled: false,
         ..Default::default()
     };
-    let paladin = Node::new(paladin_data, None);
+    let paladin = Entity::new(paladin_data, None);
 
     let circuit_breaker = Arc::new(CircuitBreaker::new(3, 2, Duration::from_secs(30)));
     let service =

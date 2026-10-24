@@ -4,10 +4,11 @@ slug: observability-tooling
 # status lifecycle: draft (seeded by plan-phase) → validated (set by validate-phase §6)
 # audit-milestone §5.5 distinguishes NOT-VALIDATED (draft) from PARTIAL (validated + nyquist_compliant: false) (#2117)
 status: validated
-nyquist_compliant: false
+nyquist_compliant: true
 wave_0_complete: true
 created: 2026-09-08
 validated: 2026-09-09
+reconciled: "2026-10-24 by Phase 46 plan 46-03 (D-15): 28-UAT 2/2 passed; overhead deviation accepted and recorded in WINDOWS rows 35/61; no test written"
 ---
 
 # Phase 28 — Validation Strategy
@@ -17,9 +18,11 @@ validated: 2026-09-09
 Retroactively audited 2026-09-09 by `/gsd-validate-phase 28` on HEAD `0bab5ac4`
 (branch `feature/phase-28`). Every `<automated>` verify command from all 17 PLAN
 files was re-run in this session; results below are measured, not carried from
-SUMMARY claims. `nyquist_compliant` stays `false` only because two human
-sign-offs are outstanding in `28-UAT.md` (policy adjudications, not untested
-behaviour — see Manual-Only Verifications). Re-run this command once those close.
+SUMMARY claims. `nyquist_compliant` was `false` on that date only because two
+human sign-offs were outstanding in `28-UAT.md` (policy adjudications, not untested
+behaviour — see Manual-Only Verifications). Both closed in `28-UAT.md` (2/2 passed,
+2026-09-09) and the file was promoted to `nyquist_compliant: true` on 2026-10-24 by Phase 46
+plan 46-03 (D-15), reconcile-only: no test was written and no per-task row was re-measured.
 
 ---
 
@@ -68,7 +71,7 @@ Test type legend: **unit** = in-crate `#[cfg(test)]`; **integ** = `tests/` binar
 | 28-05-03 | 05 | 2 | OBS-04 | T-28-05-01 | Scenario file carries structured parameters only; golden JSON Schema frozen | unit + golden | `cargo test -p paladin-eval --lib scripted_llm && cargo test -p paladin-eval --test schema_golden` | ✅ | ✅ green (6 + 1) |
 | 28-06-01 | 06 | 3 | OBS-02 | T-28-06-01 / T-28-06-03 | Log records carry field names and byte sizes only; `worker_run_result_is_identical_with_and_without_sinks` | unit | `cargo test -p paladin-ai --lib infrastructure::telemetry` | ✅ | ✅ green (12) |
 | 28-06-02 | 06 | 3 | OBS-02 | T-28-06-04 | Below-engine producers take `Arc<dyn TraceEmitter>` (one per-run counter); `middleware_emits_one_event_per_action` | unit | `cargo test -p paladin-llm --lib fallback && cargo test -p paladin-ai --lib services::paladin::middleware` | ✅ | ✅ green (19 + 90) |
-| 28-06-03 | 06 | 3 | OBS-02 | T-28-06-02 | Bench measures `none`/`log_sink`/`composite` overhead; evidence recorded. **Measured FAIL vs PRD 07 ≤3% bar (+22.18% / +18.46%)** — adjudication pending, see Manual-Only | bench + gate | `cargo bench --bench engine_benchmarks -- bench_superstep_cost --test && test -s .planning/phases/28-observability-tooling/28-BENCH-EVIDENCE.md` | ✅ | ⚠ measured, bar FAIL awaiting adjudication (UAT #1) |
+| 28-06-03 | 06 | 3 | OBS-02 | T-28-06-02 | Bench measures `none`/`log_sink`/`composite` overhead; evidence recorded. **Measured FAIL vs PRD 07 ≤3% bar (+22.18% / +18.46%)** — accepted deviation, recorded in WINDOWS rows 35/61, see Manual-Only | bench + gate | `cargo bench --bench engine_benchmarks -- bench_superstep_cost --test && test -s .planning/phases/28-observability-tooling/28-BENCH-EVIDENCE.md` | ✅ | ✅ measured; bar FAIL accepted as a recorded deviation (UAT #1 pass, D-37; WINDOWS 35, amended by 61 after the Phase 45 re-measure) |
 | 28-07-01 | 07 | 3 | OBS-03 | T-28-07-01 / T-28-07-02 | `escape_neutralizes_quotes`, `escape_neutralizes_quotes_and_angle_brackets`; `GraphShape` carries ids/kinds/flags only | unit | `cargo test -p paladin-battalion --lib engine::export` | ✅ | ✅ green (18) |
 | 28-07-02 | 07 | 3 | OBS-03 | T-28-07-03 | Five fixtures × two formats as committed goldens; explicit `UPDATE_GOLDEN=1` bless path | golden | `cargo test -p paladin-battalion --test export_golden && test "$(ls crates/paladin-battalion/tests/golden/export/*.mermaid \| wc -l)" -ge 5` | ✅ | ✅ green (4; 6 `.mermaid` goldens present) |
 | 28-08-01 | 08 | 3 | OBS-04 | T-28-08-04 | `run_status_fails_when_run_never_finished` — no silently-passing assertion | unit | `cargo test -p paladin-eval --lib assertion` | ✅ | ✅ green (38) |
@@ -103,7 +106,7 @@ Test type legend: **unit** = in-crate `#[cfg(test)]`; **integ** = `tests/` binar
 | Requirement | Tasks | Automated & green | Notes |
 |---|---|---|---|
 | OBS-01 | 28-01-02..04, 28-02-01, 28-03-01..03 | 8/8 | — |
-| OBS-02 | 28-02-01..03, 28-04-02..03, 28-06-01..03, 28-09-01..02, 28-11-01..03 | 13/13 measured | 28-06-03's bench runs and is recorded; its ≤3% verdict is FAIL pending adjudication |
+| OBS-02 | 28-02-01..03, 28-04-02..03, 28-06-01..03, 28-09-01..02, 28-11-01..03 | 13/13 measured | 28-06-03's bench runs and is recorded; its ≤3% verdict is FAIL, an accepted and recorded deviation (WINDOWS 35/61; `28-UAT.md` test 1 pass) |
 | OBS-03 | 28-07-01..02, 28-10-01..02, 28-13-01..02, 28-14-01..02, 28-15-01..02 | 10/10 | — |
 | OBS-04 | 28-05-02..03, 28-08-01..03, 28-12-01..03, 28-16-01..02 | 10/10 | — |
 
@@ -124,12 +127,12 @@ Existing infrastructure covers all phase requirements. No stubs or fixtures were
 
 ## Manual-Only Verifications
 
-Both items are policy sign-offs, not untested behaviour: the measurements and tests behind them are automated and green in the map above. They are the two pending items in `28-UAT.md` and the `human_verification` block of `28-VERIFICATION.md`.
+Both items were policy sign-offs, not untested behaviour: the measurements and tests behind them are automated and green in the map above. They were the two pending items in `28-UAT.md` and the `human_verification` block of `28-VERIFICATION.md`; both are now closed (`28-UAT.md`: 2/2 passed, 2026-09-09).
 
 | Behavior | Requirement | Why Manual | Test Instructions |
 |----------|-------------|------------|-------------------|
-| Superstep overhead with tracing ≤3% (PRD 07 acceptance 6, D-37) — measured **+22.18% (`log_sink`) / +18.46% (`composite`)** vs untraced baseline | OBS-02 (28-06-03) | D-37 made the bar non-CI-gating ("the record is the gate") and routed a FAIL to close-out adjudication; a test cannot make that maintainer decision. No WINDOWS.md row exists yet for the FAIL (only #33/#34 for this phase). | Read `28-BENCH-EVIDENCE.md`. Decide: (a) accept the deviation for v0.10.0 and add a WINDOWS.md row, (b) re-scope the bar to an I/O-bound superstep, or (c) require `TraceDispatcher::emit` / `LogTraceSink` optimisation first. Record the decision in WINDOWS.md or an ADR amendment, then close UAT #1. To re-measure: `cargo bench --bench engine_benchmarks -- bench_superstep_cost`. |
-| Six judgment-tier prohibitions hold: 28-01 state values never traced by default; 28-05 scenario files are not an execution vector; 28-06 observability never load-bearing; 28-09 OTel headers redacted and no redirect-follow; 28-12 live eval mode triple-gated; 28-15 dev-ui auth-gated and names-only | OBS-01..04 | `verification: judgment` tier in the PLAN frontmatter — automated tests exist for each (`delta_merged_carries_names_not_values_by_default`, no serde derive on `CustomAssertion`, `permanently_blocking_sink_never_stalls_emit` / `panicking_sink_does_not_kill_the_consumer`, `otel_debug_redacts_header_values` + `otlp_client_does_not_follow_redirects`, `live_mode_requires_flag_and_env_and_keys`, `dev_ui_unauthenticated_request_is_rejected` + `serialized_view_contains_no_field_values`) but the escalation-gate policy requires a human sign-off rather than a verifier-issued pass. | Review the named tests and `28-SECURITY.md`, confirm each prohibition on HEAD, and close UAT #2. |
+| Superstep overhead with tracing ≤3% (PRD 07 acceptance 6, D-37) — measured **+22.18% (`log_sink`) / +18.46% (`composite`)** vs untraced baseline | OBS-02 (28-06-03) | D-37 made the bar non-CI-gating ("the record is the gate") and routed a FAIL to close-out adjudication; a test cannot make that maintainer decision. **Closed:** `28-UAT.md` test 1 = pass (2026-09-09); the maintainer accepted the deviation for v0.10.x under D-37, recorded as WINDOWS.md row 35 (accepted deviation, waived) and amended by row 61 (Phase 45 OBS-05 re-measure, +19.36% / +16.19%, figure accepted at Phase 45 UAT test 4); also recorded in the root `CHANGELOG.md` `[0.10.0]` Known limitations. The deviation is cited here, not re-litigated. | Closed. Evidence: `28-UAT.md` test 1 (pass), `28-BENCH-EVIDENCE.md`, WINDOWS.md rows 35 and 61. To re-measure: `cargo bench --bench engine_benchmarks -- bench_superstep_cost`. |
+| Six judgment-tier prohibitions hold: 28-01 state values never traced by default; 28-05 scenario files are not an execution vector; 28-06 observability never load-bearing; 28-09 OTel headers redacted and no redirect-follow; 28-12 live eval mode triple-gated; 28-15 dev-ui auth-gated and names-only | OBS-01..04 | `verification: judgment` tier in the PLAN frontmatter — automated tests exist for each (`delta_merged_carries_names_not_values_by_default`, no serde derive on `CustomAssertion`, `permanently_blocking_sink_never_stalls_emit` / `panicking_sink_does_not_kill_the_consumer`, `otel_debug_redacts_header_values` + `otlp_client_does_not_follow_redirects`, `live_mode_requires_flag_and_env_and_keys`, `dev_ui_unauthenticated_request_is_rejected` + `serialized_view_contains_no_field_values`) but the escalation-gate policy requires a human sign-off rather than a verifier-issued pass. **Closed:** `28-UAT.md` test 2 = pass (2026-09-09). | Closed. Evidence: `28-UAT.md` test 2 (pass), `28-SECURITY.md`, and the named tests (automated rows 28-01-02, 28-05-02, 28-06-01..02, 28-09-01..02, 28-12-03, 28-14-01, 28-15-01 above). |
 
 ---
 
@@ -140,9 +143,9 @@ Both items are policy sign-offs, not untested behaviour: the measurements and te
 - [x] Wave 0 covers all MISSING references (none were missing)
 - [x] No watch-mode flags
 - [x] Feedback latency < 28s for single-crate quick commands (feature-leg builds excepted, see Test Infrastructure)
-- [ ] `nyquist_compliant: true` set in frontmatter — blocked on the two manual sign-offs above (UAT #1, #2); re-run `/gsd-validate-phase 28` after they close
+- [x] `nyquist_compliant: true` set in frontmatter — the two manual sign-offs above closed (`28-UAT.md` 2/2 passed); promoted 2026-10-24 by Phase 46 plan 46-03 (D-15)
 
-**Approval:** validated 2026-09-09 (PARTIAL — 41 automated, 2 manual-only policy sign-offs pending)
+**Approval:** validated 2026-09-09; promoted to compliant 2026-10-24 (Phase 46 plan 46-03, D-15) -- 41 automated, 2 manual-only sign-offs closed
 
 ---
 
@@ -158,3 +161,20 @@ Both items are policy sign-offs, not untested behaviour: the measurements and te
 - **Escalated to manual-only:** 28-06-03's ≤3% tracing-overhead bar. The measurement is automated and honest (FAIL); closing it is a maintainer policy decision, already tracked as UAT #1. The judgment-tier prohibition sign-off (UAT #2) was recorded alongside it because both are needed before `nyquist_compliant` can flip.
 - **Not spawned:** `gsd-nyquist-auditor` — no requirement lacks an automated test, so there was nothing for it to generate.
 - **Re-run evidence:** all 44 verify commands executed on HEAD `0bab5ac4` in this session (43 green as written, 1 green after recalibration). Feature legs built and run locally: `otel` (7 + 2), `cli` (6 + 6 + 7), `dev-ui` (17), `sqlite` (21). Postgres adapter tests self-skip locally and are covered by CI's `postgres-integration` job (97/97, `28-CI-EVIDENCE.md`).
+
+---
+
+## Validation Audit 2026-10-24
+
+| Metric | Count |
+|--------|-------|
+| Gaps found | 0 |
+| Resolved | 0 |
+| Escalated | 0 |
+
+- **Closed, not resolved:** the two 2026-09-09 escalations (28-06-03 overhead adjudication, judgment-tier prohibitions) were closed by human UAT passes (`28-UAT.md` tests 1 and 2), not by a test; the accepted overhead deviation is cited at WINDOWS rows 35 and 61 and the CHANGELOG `[0.10.0]` Known limitations, not re-worded. No auditor spawned, no test written (D-14).
+- **Re-run on HEAD 2026-10-24 (Phase 46 plan 46-03):** `cargo test --offline -p paladin-battalion --test export_golden` (4 passed), `cargo test --offline -p paladin-eval --test schema_golden` (1 passed), `cargo test --offline -p paladin-eval --test assertion_snapshots` (12 passed), `cargo test --offline -p paladin-battalion --lib engine::hooks` (21 passed; the map's 15 was the 2026-09-09 count, tests have been added since). Map rows are otherwise carried from the 2026-09-09 audit.
+
+## Gaps
+
+None.

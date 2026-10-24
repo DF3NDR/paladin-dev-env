@@ -6,29 +6,64 @@
 //! max_tokens required, and different message structure.
 
 use async_trait::async_trait;
-use chrono::Utc;
 use futures::{Stream, StreamExt};
 use reqwest::{
     Client,
     header::{CONTENT_TYPE, HeaderMap, HeaderValue},
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::env;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use uuid::Uuid;
 
 use paladin_core::platform::container::prompt::PromptType;
+use paladin_ports::output::llm_port::ReasoningFallback;
 use paladin_ports::output::llm_port::{
-    FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities,
-    StreamingResponse, TokenUsage,
+    FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ModelProfile, ParamSupport,
+    ProviderCapabilities, ReasoningEffort, StopSupport, StreamingResponse, TokenUsage,
 };
+use paladin_ports::output::model_profile::{EffortLevels, EffortSupport, ResolvedEffort};
 
-use crate::http_status::map_http_status;
+use crate::http_status::map_http_status_with_hints;
+use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
+use crate::reasoning::{self, SubstitutionLog, WireCaps, mask_effort};
+use crate::redaction::RedactedKey;
+use crate::registry::{
+    DEFAULT_MAX_RETRIES, ModelOverride, ModelRegistry, config_knob_builders,
+    default_timeout_seconds, is_http_url, seeded, seeded_window,
+};
+use crate::response_guards::{StreamCompletion, bill, classify_completion};
+use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
+use crate::sse::SseLines;
+use crate::usage_reconcile::{USAGE_UNRECONCILED_METADATA_KEY, UsageLog};
+use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
 /// The provider name this adapter reports through [`LlmPort::get_provider_name`]
 /// and stamps on every [`LlmError::ProviderError`] it emits.
 const ANTHROPIC_PROVIDER: &str = "anthropic";
+
+/// Default Anthropic model requested when `ANTHROPIC_MODEL` is unset.
+///
+/// `claude-haiku-5-5`: the operator-identified current general-purpose model (its cheapest
+/// current tier), the one Anthropic entry measured end to end by the 2026-10-15 live probe
+/// (`registry/seeded.rs`, `verified_on` 2026-10-15). It replaces the retired
+/// October-2024 Sonnet id this constant's predecessor named inline, which now answers 404
+/// `not_found_error`. Pin `ANTHROPIC_MODEL` to keep any other model.
+pub const ANTHROPIC_DEFAULT_MODEL: &str = "claude-haiku-5-5";
+
+/// The Anthropic endpoint [`AnthropicConfig::new`] and [`AnthropicConfig::from_env`] use when no
+/// other is chosen, and the compiled default of the layered `llm.anthropic` configuration.
+///
+/// Replace it with [`AnthropicConfig::with_base_url`] (or `ANTHROPIC_BASE_URL` for `from_env`).
+pub const ANTHROPIC_DEFAULT_BASE_URL: &str = "https://api.anthropic.com/v1";
+
+/// The `max_tokens` budget [`AnthropicConfig::new`], [`AnthropicConfig::from_env`] and the
+/// layered config path (`config::bridge`) use when neither `ANTHROPIC_MAX_TOKENS`, the config
+/// block nor [`AnthropicConfig::with_max_tokens`] sets one (owner decision D-07,
+/// `compiled-default`, 2026-10-20: one value on every construction path, whatever the model).
+/// The Claude API requires the field, so this adapter always has a value.
+pub(crate) const ANTHROPIC_DEFAULT_MAX_TOKENS: u32 = 4096;
 
 /// The exact phrase observed VERBATIM in Anthropic's HTTP 400
 /// `invalid_request_error` body when an account has reached its configured
@@ -40,20 +75,122 @@ const ANTHROPIC_PROVIDER: &str = "anthropic";
 /// [`AnthropicAdapter::map_error`] so that branch is never shadowed.
 const ANTHROPIC_USAGE_CAP_SIGNATURE: &str = "You have reached your specified API usage limits";
 
+/// The `error.details.error_code` Anthropic documents on a workspace spend-cap `429`
+/// (`platform.claude.com/docs/en/api/rate-limits`): the response carries no `retry-after`, and
+/// "retrying, including the SDK's automatic retries, fails until access resumes" -- an account
+/// wall, not a rate limit, so pacing on it is futile (research Pitfall 6).
+const ENFORCED_SPEND_LIMIT_REACHED: &str = "enforced_spend_limit_reached";
+
+/// Whether a `429` body is the spend-cap response rather than a transient rate limit.
+///
+/// Compares only the short `error.details.error_code` identifier of the parsed JSON; it never
+/// renders or stores any body text, and a body that is not JSON (or lacks the field) is simply
+/// "not a spend cap".
+fn signals_enforced_spend_limit(body: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
+        return false;
+    };
+    value
+        .get("error")
+        .and_then(|error| error.get("details"))
+        .and_then(|details| details.get("error_code"))
+        .and_then(|code| code.as_str())
+        == Some(ENFORCED_SPEND_LIMIT_REACHED)
+}
+
+/// Parse a `429` response's rate-limit headers. Must run BEFORE `response.text()` consumes the
+/// response (research Pitfall 2). Only a 429 is parsed, and no credential header is read.
+fn snapshot_rate_limit_hints(
+    status: reqwest::StatusCode,
+    headers: &HeaderMap,
+) -> Option<RateLimitHints> {
+    if status != reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return None;
+    }
+    hints_from_headers(
+        RateLimitHeaderFamily::Anthropic,
+        SystemTime::now(),
+        |name| headers.get(name).and_then(|v| v.to_str().ok()),
+    )
+}
+
 /// Configuration for Anthropic Claude LLM adapter.
-#[derive(Debug, Clone)]
+///
+/// Marked `#[non_exhaustive]` (owner decision, Phase 50 plan 50-08, option-a): build one with
+/// [`AnthropicConfig::new`] or [`AnthropicConfig::from_env`] and set fields or call the `with_*`
+/// builders, so a later field is not another break for callers.
+#[derive(Clone)]
+#[non_exhaustive]
 pub struct AnthropicConfig {
     /// API key for Anthropic authentication.
     pub api_key: String,
     /// Base URL for Anthropic API.
     pub base_url: String,
-    /// Default model to use (e.g., claude-3-5-sonnet-20241022).
+    /// The adapter's default model, which selects the timeout default;
+    /// [`ANTHROPIC_DEFAULT_MODEL`] when constructed from the environment with `ANTHROPIC_MODEL`
+    /// unset. Each request's own `LlmRequest.model` decides what is sent on the wire.
     pub model: String,
-    /// Default max tokens for responses (required by Claude API).
+    /// Output budget (`max_tokens`, required by the Claude API) sent when a request sets none.
+    /// [`AnthropicConfig::new`], [`AnthropicConfig::from_env`] and the layered path all default it
+    /// to 4,096 whatever the model; raise it with [`AnthropicConfig::with_max_tokens`] (or
+    /// `ANTHROPIC_MAX_TOKENS` for `from_env`). Checked against the model's profiled maximum output exactly as a request's own
+    /// `max_tokens` is (ADR-0061 (i)): above it, the request is refused before any HTTP call.
     pub max_tokens: u32,
-    /// Request timeout in seconds.
+    /// Request timeout in seconds. [`AnthropicConfig::new`] and [`AnthropicConfig::from_env`]
+    /// default it to 300 for a seeded reasoning model and to 60 otherwise (D-13); an explicit
+    /// `ANTHROPIC_TIMEOUT_SECONDS`, [`AnthropicConfig::with_timeout_seconds`] or field assignment
+    /// always wins. A model marked `reasoning`
+    /// only through [`model_overrides`](Self::model_overrides) does not change this default
+    /// here: set this field in the same place.
     pub timeout_seconds: u64,
+    /// The retry budget for a retryable error. This adapter's loop counts total attempts, so the
+    /// default `3` sends up to three and `0` or `1` send once. A 429 is never retried here
+    /// (the Cadence decorator waits) and a permanent error is never retried.
+    pub max_retries: u32,
+    /// Adapter-wide context window in tokens, the operator's statement for every model. `None`
+    /// (the default) keeps the compiled windows. When set it replaces the adapter's declared
+    /// window, the fallback profile's window and every seeded model's window; a
+    /// `context_window` in [`model_overrides`](Self::model_overrides) still wins for that model.
+    /// Construction fails when it is below a model's maximum output.
+    pub context_window: Option<u32>,
+    /// Per-model overrides (D-06), keyed by exact model id and laid over each model's seeded
+    /// entry field by field. Empty by default. Validated at construction; an invalid override
+    /// fails it with an error naming the provider and the model.
+    pub model_overrides: BTreeMap<String, ModelOverride>,
+    /// The provider-level default reasoning effort (Phase 51, D-00e): sent for a request that
+    /// sets none of its own, resolved per request against that request's own model. A request's
+    /// (or an agent's) own effort always wins. `None` (the default, and the only compiled-in
+    /// value, D-00i) sends nothing. Set it only where every model this provider serves supports
+    /// it, or those requests are refused before any HTTP call naming this setting.
+    /// Set with [`with_reasoning_effort`](Self::with_reasoning_effort).
+    pub reasoning_effort: Option<ReasoningEffort>,
+    /// The provider-level default fallback (Phase 51, D-05) applied when the effort in force is
+    /// not one the request's model accepts; a request's own fallback wins. `None` (the default)
+    /// means refuse. Set with [`with_reasoning_fallback`](Self::with_reasoning_fallback).
+    pub reasoning_fallback: Option<ReasoningFallback>,
 }
+
+/// Prints every field except the API key, which is shown as `<redacted>` (D-00a): the key is a
+/// public `String`, so a derived `Debug` would put it into any log line or panic message that
+/// formats the config.
+impl std::fmt::Debug for AnthropicConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AnthropicConfig")
+            .field("api_key", &RedactedKey(&self.api_key))
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field("max_tokens", &self.max_tokens)
+            .field("timeout_seconds", &self.timeout_seconds)
+            .field("max_retries", &self.max_retries)
+            .field("context_window", &self.context_window)
+            .field("model_overrides", &self.model_overrides)
+            .field("reasoning_effort", &self.reasoning_effort)
+            .field("reasoning_fallback", &self.reasoning_fallback)
+            .finish()
+    }
+}
+
+config_knob_builders!(AnthropicConfig, plain_max_tokens);
 
 impl AnthropicConfig {
     /// Load configuration from environment variables.
@@ -63,7 +200,8 @@ impl AnthropicConfig {
     /// - `ANTHROPIC_BASE_URL` (optional): API base URL
     /// - `ANTHROPIC_MODEL` (optional): Default model
     /// - `ANTHROPIC_MAX_TOKENS` (optional): Default max tokens
-    /// - `ANTHROPIC_TIMEOUT_SECONDS` (optional): Request timeout
+    /// - `ANTHROPIC_TIMEOUT_SECONDS` (optional): Request timeout, 300 for a seeded reasoning
+    ///   model and 60 otherwise
     ///
     /// # Errors
     /// Returns error if required environment variables are missing or invalid.
@@ -72,20 +210,22 @@ impl AnthropicConfig {
             .map_err(|_| "ANTHROPIC_API_KEY environment variable not set")?;
 
         let base_url = env::var("ANTHROPIC_BASE_URL")
-            .unwrap_or_else(|_| "https://api.anthropic.com/v1".to_string());
+            .unwrap_or_else(|_| ANTHROPIC_DEFAULT_BASE_URL.to_string());
 
-        let model = env::var("ANTHROPIC_MODEL")
-            .unwrap_or_else(|_| "claude-3-5-sonnet-20241022".to_string());
+        let model =
+            env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| ANTHROPIC_DEFAULT_MODEL.to_string());
 
         let max_tokens = env::var("ANTHROPIC_MAX_TOKENS")
-            .unwrap_or_else(|_| "4096".to_string())
+            .unwrap_or_else(|_| ANTHROPIC_DEFAULT_MAX_TOKENS.to_string())
             .parse()
             .map_err(|_| "Invalid ANTHROPIC_MAX_TOKENS value")?;
 
-        let timeout_seconds = env::var("ANTHROPIC_TIMEOUT_SECONDS")
-            .unwrap_or_else(|_| "60".to_string())
-            .parse()
-            .map_err(|_| "Invalid ANTHROPIC_TIMEOUT_SECONDS value")?;
+        let timeout_seconds = match env::var("ANTHROPIC_TIMEOUT_SECONDS") {
+            Ok(value) => value
+                .parse()
+                .map_err(|_| "Invalid ANTHROPIC_TIMEOUT_SECONDS value")?,
+            Err(_) => default_timeout_seconds(ANTHROPIC_PROVIDER, &model, 60),
+        };
 
         let config = Self {
             api_key,
@@ -93,20 +233,60 @@ impl AnthropicConfig {
             model,
             max_tokens,
             timeout_seconds,
+            max_retries: DEFAULT_MAX_RETRIES,
+            context_window: None,
+            model_overrides: BTreeMap::new(),
+            reasoning_effort: None,
+            reasoning_fallback: None,
         };
 
         config.validate()?;
         Ok(config)
     }
 
-    /// Create configuration with custom values.
-    pub fn new(api_key: String, base_url: String, model: String, max_tokens: u32) -> Self {
+    /// Create a configuration for `model`, authenticating with `api_key`.
+    ///
+    /// - `api_key`: the Anthropic API key, never a URL.
+    /// - `model`: the adapter's default model. It selects the timeout default (300 s for a
+    ///   seeded reasoning model, 60 s otherwise); each request's own `LlmRequest.model`
+    ///   decides what is sent on the wire.
+    ///
+    /// The endpoint is [`ANTHROPIC_DEFAULT_BASE_URL`] (replace it with
+    /// [`with_base_url`](Self::with_base_url)); the timeout is 300 s for a seeded reasoning model
+    /// and 60 s otherwise (replace it with
+    /// [`with_timeout_seconds`](Self::with_timeout_seconds)).
+    ///
+    /// `max_tokens`, the output budget the Claude API requires on every request, is 4,096 for
+    /// every `model`, the same value [`from_env`](Self::from_env) and the layered
+    /// `llm.anthropic` configuration use, so the three construction paths agree. A model's
+    /// larger seeded maximum output is not used here: ask for it with
+    /// [`with_max_tokens`](Self::with_max_tokens). Construction is infallible: an empty key or
+    /// model, or a non-`http(s)` endpoint, is refused when the adapter is built.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_llm::anthropic::AnthropicConfig;
+    /// use paladin_llm::anthropic::adapter::ANTHROPIC_DEFAULT_BASE_URL;
+    ///
+    /// let key = "sk-ant-example".to_string();
+    /// let config = AnthropicConfig::new(key, "claude-haiku-5-5".to_string()).with_max_tokens(16_000);
+    /// assert_eq!(config.base_url, ANTHROPIC_DEFAULT_BASE_URL);
+    /// assert_eq!(config.max_tokens, 16_000);
+    /// ```
+    pub fn new(api_key: String, model: String) -> Self {
+        let timeout_seconds = default_timeout_seconds(ANTHROPIC_PROVIDER, &model, 60);
         Self {
             api_key,
-            base_url,
+            base_url: ANTHROPIC_DEFAULT_BASE_URL.to_string(),
             model,
-            max_tokens,
-            timeout_seconds: 60,
+            max_tokens: ANTHROPIC_DEFAULT_MAX_TOKENS,
+            timeout_seconds,
+            max_retries: DEFAULT_MAX_RETRIES,
+            context_window: None,
+            model_overrides: BTreeMap::new(),
+            reasoning_effort: None,
+            reasoning_fallback: None,
         }
     }
 
@@ -118,7 +298,7 @@ impl AnthropicConfig {
         if self.base_url.is_empty() {
             return Err("Base URL cannot be empty".to_string());
         }
-        if !self.base_url.starts_with("http://") && !self.base_url.starts_with("https://") {
+        if !is_http_url(&self.base_url) {
             return Err("Base URL must start with http:// or https://".to_string());
         }
         if self.model.is_empty() {
@@ -135,6 +315,73 @@ impl AnthropicConfig {
 pub struct AnthropicAdapter {
     pub(crate) client: Client,
     pub(crate) config: AnthropicConfig,
+    /// Resolves the request model to the profile that decides what reaches the wire (ADR-0061).
+    model_registry: ModelRegistry,
+    /// Which (model, parameter) omissions this instance has already warned about.
+    omissions: OmissionLog,
+    /// Which (model, adjustment) `response_format` changes this instance has already warned
+    /// about.
+    format_log: FormatLog,
+    /// Which (model, check) usage findings this instance has already warned about (G-50-5a).
+    /// Anthropic reports no vendor total, so only the containment checks can fire.
+    usage_log: UsageLog,
+    /// Which (model, requested, effective) reasoning-effort substitutions this instance has
+    /// already warned about (Phase 51, D-06).
+    substitutions: SubstitutionLog,
+}
+
+/// What this adapter declares to the port, stated once so the adapter-wide fallback profile and
+/// [`LlmPort::get_capabilities`] cannot drift apart.
+fn declared_capabilities(context_window: Option<u32>) -> ProviderCapabilities {
+    ProviderCapabilities {
+        supports_streaming: true,
+        // `LlmRequest` carries no field through which a tool definition could
+        // travel, and this adapter neither sends `tools` nor parses `tool_calls`
+        // out of a response. The flag describes what this adapter does, not what
+        // the vendor's API offers (WEB-03, D-14).
+        supports_tool_calling: false,
+        supports_function_calling: false,
+        supports_vision: true,
+        supports_embeddings: false,
+        // The default model's seeded window (`seeded::ANTHROPIC`, `claude-haiku-5-5`, verified
+        // 2026-10-15: listing `max_input_tokens`), so this declaration describes the model a
+        // caller gets when it names none.
+        // The operator's adapter-wide window (PARITY-03) replaces it when set.
+        max_context_tokens: context_window
+            .or(seeded_window(seeded::ANTHROPIC, ANTHROPIC_DEFAULT_MODEL)),
+        supports_system_messages: true,
+        temperature_range: Some((0.0, 1.0)),
+    }
+}
+
+/// The adapter-wide fallback profile, derived from what this adapter's request builder sends
+/// (ADR-0061, D-05): a field it sends maps to `Range`, a field it never sends maps to `NotSent`.
+///
+/// - `temperature` and `top_p`: `NotSent`. This adapter has never put either on the wire --
+///   current Claude models (Opus 4.7 and later) answer `400` to a non-default value -- so the
+///   honest fallback states what it sends. An agent that asks for an explicit temperature is
+///   therefore refused at build, naming `anthropic`, the model and `temperature`, instead of
+///   having the value validated and then silently discarded (the behaviour this replaces).
+///   Per-model entries seeded in plan 50-06 may re-open a range for a model the live probe
+///   shows accepts one.
+/// - both penalties: `NotSent` -- the Messages API has no such field.
+/// - `stop`: `Supported { max: None }` -- the Messages API field `stop_sequences`.
+/// - `json_object` and `json_schema`: false -- the adapter is prompt-only for JSON today, so a
+///   requested format is recorded as `omitted` rather than silently ignored.
+fn fallback_profile(context_window: Option<u32>) -> ModelProfile {
+    let caps = declared_capabilities(context_window);
+    let mut profile = ModelProfile::new()
+        .with_temperature(ParamSupport::NotSent)
+        .with_top_p(ParamSupport::NotSent)
+        .with_frequency_penalty(ParamSupport::NotSent)
+        .with_presence_penalty(ParamSupport::NotSent)
+        .with_stop_sequences(StopSupport::Supported { max: None })
+        .with_json_object(false)
+        .with_json_schema(false);
+    if let Some(window) = caps.max_context_tokens {
+        profile = profile.with_context_window(window);
+    }
+    profile
 }
 
 impl AnthropicAdapter {
@@ -164,7 +411,40 @@ impl AnthropicAdapter {
             .build()
             .map_err(|e| LlmError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
 
-        Ok(Self { client, config })
+        // PARITY-03: the operator's adapter-wide window, then the per-model overrides, are laid
+        // over the seeded table; either one failing construction names the provider and model.
+        let model_registry = ModelRegistry::new(
+            ANTHROPIC_PROVIDER,
+            seeded::ANTHROPIC,
+            fallback_profile(config.context_window),
+        )
+        .with_context_window(config.context_window)
+        .and_then(|registry| registry.with_overrides(config.model_overrides.clone()))
+        .map_err(|e| {
+            LlmError::AuthenticationError(format!("Invalid Anthropic configuration: {e}"))
+        })?;
+
+        Ok(Self {
+            client,
+            config,
+            model_registry,
+            omissions: OmissionLog::new(),
+            format_log: FormatLog::new(),
+            usage_log: UsageLog::new(),
+            substitutions: SubstitutionLog::new(),
+        })
+    }
+
+    /// The request model's profile as this adapter's wire can honour it: the effort data has
+    /// whatever Anthropic's body cannot carry removed ([`ANTHROPIC_REASONING_WIRE`]), so a caller
+    /// reading [`LlmPort::model_profile`] judges exactly what `build_request` will send.
+    fn wire_profile(&self, model: &str) -> ModelProfile {
+        let mut profile = self.model_registry.profile(model);
+        profile.effort = mask_effort(
+            std::mem::take(&mut profile.effort),
+            ANTHROPIC_REASONING_WIRE,
+        );
+        profile
     }
 
     /// Build HTTP headers for Anthropic API requests.
@@ -180,54 +460,56 @@ impl AnthropicAdapter {
         Ok(headers)
     }
 
-    /// Convert LlmRequest to Claude API format.
-    fn build_request(&self, request: &LlmRequest) -> Result<ClaudeRequest, LlmError> {
+    /// Convert LlmRequest to Claude API format, plus the notes the buffered path records on its
+    /// response.
+    ///
+    /// What reaches the wire is decided by the request model's [`ModelProfile`] (ADR-0061,
+    /// D-01): [`sampling::apply`] sends `temperature`, `top_p` and `stop_sequences` only when
+    /// the caller set them **and** the profile admits them. With the adapter-wide fallback
+    /// `temperature` and `top_p` are `NotSent`, so a set value is omitted and recorded (one
+    /// `warn!` per instance per model and parameter, and `paladin.params_omitted` on the
+    /// response) -- the honest form of what used to be a silent `None`. The effective
+    /// `max_tokens` (the caller's, else the configured one) is checked against the profile's
+    /// maximum output before anything is sent. A requested `response_format` is routed through
+    /// [`sampling::apply_response_format`]; this adapter has no JSON mode, so it is recorded as
+    /// `omitted`.
+    fn build_request(
+        &self,
+        request: &LlmRequest,
+    ) -> Result<(ClaudeRequest, RequestNotes), LlmError> {
         let mut system_message = None;
         let mut messages = Vec::new();
 
-        match &request.prompt.node.node.prompt_type {
+        match &request.prompt.entity.data.prompt_type {
             PromptType::System(system_prompt) => {
                 system_message = Some(system_prompt.instructions.clone());
             }
             PromptType::User(user_prompt) => {
                 messages.push(ClaudeMessage {
                     role: "user".to_string(),
-                    content: user_prompt.query.clone(),
+                    content: crate::turn::user_turn_text(user_prompt),
                 });
             }
             PromptType::Text(text_prompt) => {
                 let role = match &text_prompt.role {
+                    // A system-role text prompt becomes the `system` field and carries no
+                    // message of its own.
                     paladin_core::platform::container::prompt::PromptRole::System => {
                         system_message = Some(text_prompt.content.clone());
-                        return Ok(ClaudeRequest {
-                            model: request.model.clone(),
-                            messages: vec![],
-                            system: system_message,
-                            max_tokens: request
-                                .prompt
-                                .node
-                                .node
-                                .parameters
-                                .max_tokens
-                                .unwrap_or(self.config.max_tokens),
-                            // Phase 23.1: current Claude models (e.g. claude-opus-4-8)
-                            // reject an explicit `temperature` ("deprecated for this
-                            // model") — and restrict other sampling overrides — so omit
-                            // both and let the API default apply. `skip_serializing_if`
-                            // drops the `None`s from the request body entirely.
-                            temperature: None,
-                            top_p: None,
-                            stream: false,
-                        });
+                        None
                     }
-                    paladin_core::platform::container::prompt::PromptRole::User => "user",
-                    paladin_core::platform::container::prompt::PromptRole::Assistant => "assistant",
-                    paladin_core::platform::container::prompt::PromptRole::Function => "user",
+                    paladin_core::platform::container::prompt::PromptRole::User => Some("user"),
+                    paladin_core::platform::container::prompt::PromptRole::Assistant => {
+                        Some("assistant")
+                    }
+                    paladin_core::platform::container::prompt::PromptRole::Function => Some("user"),
                 };
-                messages.push(ClaudeMessage {
-                    role: role.to_string(),
-                    content: text_prompt.content.clone(),
-                });
+                if let Some(role) = role {
+                    messages.push(ClaudeMessage {
+                        role: role.to_string(),
+                        content: text_prompt.content.clone(),
+                    });
+                }
             }
             PromptType::Assistant(assistant_prompt) => {
                 messages.push(ClaudeMessage {
@@ -242,75 +524,170 @@ impl AnthropicAdapter {
             }
         }
 
-        let max_tokens = request
-            .prompt
-            .node
-            .node
-            .parameters
-            .max_tokens
-            .unwrap_or(self.config.max_tokens);
+        let params = &request.prompt.entity.data.parameters;
+        let profile = self.wire_profile(&request.model);
 
-        Ok(ClaudeRequest {
+        let max_tokens = params.max_tokens.unwrap_or(self.config.max_tokens);
+        sampling::check_max_tokens(
+            ANTHROPIC_PROVIDER,
+            &request.model,
+            &profile,
+            Some(max_tokens),
+        )?;
+
+        // Phase 51 (D-00h): an explicit effort is sent in the form the model's profile states or
+        // refused here, before any HTTP call and before any retry loop -- never routed through
+        // the omit-and-log path below. `max_tokens` is always set on this wire, so the
+        // budget-below-`max_tokens` rule always has a cap to hold a budget to.
+        // The request's own effort and fallback win; otherwise the provider-level default applies
+        // (D-00e), judged here against this request's own model.
+        let in_force = reasoning::in_force(
+            ANTHROPIC_PROVIDER,
+            request.reasoning,
+            request.reasoning_fallback,
+            self.config.reasoning_effort,
+            self.config.reasoning_fallback,
+        );
+        let resolved = reasoning::admit(
+            ANTHROPIC_PROVIDER,
+            &request.model,
+            &profile,
+            in_force.effort,
+            in_force.fallback,
+            Some(max_tokens),
+            in_force.source_key.as_deref(),
+            &self.substitutions,
+        )?;
+        let (output_config, thinking) = match &resolved {
+            Some(resolved) => {
+                let levels = match &profile.effort {
+                    EffortSupport::Supported(levels) => Some(levels),
+                    _ => None,
+                };
+                map_reasoning(&request.model, resolved, levels)?
+            }
+            None => (None, None),
+        };
+
+        let applied = sampling::apply(&profile, params);
+        let params_omitted = self
+            .omissions
+            .record(ANTHROPIC_PROVIDER, &request.model, &applied);
+
+        // This adapter has no JSON mode (the fallback profile says so), so a requested format
+        // is never sent: record it as `omitted` instead of ignoring it silently. The returned
+        // effective format is `None` whenever the profile has no JSON mode.
+        let (_effective_format, adjustment) =
+            sampling::apply_response_format(&profile, request.response_format.as_ref());
+        let format_adjusted =
+            self.format_log
+                .record(ANTHROPIC_PROVIDER, &request.model, adjustment);
+
+        let unprofiled_model = self
+            .model_registry
+            .note_unprofiled(&request.model)
+            .then(|| request.model.clone());
+
+        let body = ClaudeRequest {
             model: request.model.clone(),
             messages,
             system: system_message,
             max_tokens,
-            // Phase 23.1: current Claude models (e.g. claude-opus-4-8) reject an
-            // explicit `temperature` ("deprecated for this model") and restrict other
-            // sampling overrides — omit both and let the API default apply
-            // (`skip_serializing_if` drops the `None`s from the request body).
-            temperature: None,
-            top_p: None,
+            // ADR-0061: the profile decides, not a hard-coded `None`. Current Claude models
+            // (e.g. claude-opus-4-8) reject an explicit `temperature` ("deprecated for this
+            // model") and restrict other sampling overrides, which is why the adapter-wide
+            // fallback states both `NotSent`; `skip_serializing_if` drops a `None` from the
+            // request body entirely.
+            temperature: applied.temperature,
+            top_p: applied.top_p,
+            stop_sequences: applied.stop,
             stream: false,
-        })
+            output_config,
+            thinking,
+        };
+        let notes = RequestNotes {
+            params_omitted,
+            format_adjusted,
+            unprofiled_model,
+            reasoning_requested: resolved.map(|r| r.requested.to_string()),
+            reasoning_effective: resolved.map(|r| r.effective.to_string()),
+        };
+        Ok((body, notes))
     }
 
     /// Parse Claude API response into LlmResponse.
     ///
-    /// Fails loud via [`detect_no_text_content`] instead of ever returning
-    /// `Ok` with empty content — an empty-string success is indistinguishable
-    /// from a valid empty answer to every downstream caller, and is exactly
-    /// what produced a 0-byte `PoC.t.sol` before this fix. Recovers ALL
-    /// text-bearing blocks via [`concat_text_blocks`] in array order, not
-    /// just the first, so a text block that follows a `thinking` block is no
-    /// longer silently dropped.
+    /// Every outcome is decided by the shared [`classify_completion`] guard (PARITY-05), after
+    /// the stop reason has been mapped by name (see [`map_stop_reason`]):
+    ///
+    /// - `stop_reason: "refusal"` is checked BEFORE emptiness (RESEARCH Pitfall 1). Anthropic
+    ///   reports a refusal as HTTP 200 with `content: []`, so an empty check first would report
+    ///   it as an empty completion with max-tokens advice. The refusal text is built from
+    ///   `stop_details` by [`refusal_text`] and reaches [`LlmError::Refusal`] through
+    ///   `diagnostic_excerpt` (redacted, then bounded).
+    /// - A response with no text on any other stop reason is [`LlmError::EmptyCompletion`] --
+    ///   an empty-string success would be indistinguishable from a valid empty answer to every
+    ///   downstream caller, and is exactly what produced a 0-byte `PoC.t.sol` before this
+    ///   guard existed. The error also names the content-block types the response carried.
+    ///
+    /// All text-bearing blocks are recovered in array order by [`concat_text_blocks`], not just
+    /// the first, so a text block that follows a `thinking` block is not dropped. The text of
+    /// the `thinking` blocks, in the same order, becomes [`LlmResponse::reasoning`] (D-11).
     fn parse_response(
         &self,
         request_id: Uuid,
         response: ClaudeResponse,
     ) -> Result<LlmResponse, LlmError> {
-        if let Some(err) =
-            detect_no_text_content(&response.content, response.stop_reason.as_deref())
-        {
-            return Err(err);
-        }
-
         let content = concat_text_blocks(&response.content);
+        let finish_reason = map_stop_reason(response.stop_reason.as_deref());
+        let refusal = refusal_text(
+            response.stop_reason.as_deref(),
+            response.stop_details.as_ref(),
+        );
 
-        let finish_reason = match response.stop_reason.as_deref() {
-            Some("end_turn") => FinishReason::Stop,
-            Some("max_tokens") => FinishReason::Length,
-            Some("stop_sequence") => FinishReason::Stop,
-            _ => FinishReason::Error("unknown".to_string()),
-        };
+        // G-50-5a: usage is mapped BEFORE the guard, so a call Anthropic billed but the guard
+        // classifies as refused or empty carries the same folded usage a success would have,
+        // on the served model the response names.
+        let usage = map_claude_usage(&response.usage);
 
-        Ok(LlmResponse {
-            id: Uuid::new_v4(),
-            request_id,
-            model: response.model,
-            content,
-            finish_reason,
-            usage: map_claude_usage(&response.usage),
-            created_at: Utc::now(),
-            metadata: HashMap::new(),
-            function_call: None,
-        })
+        classify_completion(
+            ANTHROPIC_PROVIDER,
+            &response.model,
+            &content,
+            &finish_reason,
+            refusal.as_deref(),
+            &self.config.api_key,
+        )
+        .map_err(|err| {
+            bill(
+                with_block_census(err, &response.content, &self.config.api_key),
+                &response.model,
+                Some(usage.clone()),
+            )
+        })?;
+
+        // `with_reasoning` stores blank text (every captured thinking block carries an empty
+        // `thinking` string) as `None`.
+        Ok(
+            LlmResponse::new(request_id, response.model, content, finish_reason, usage)
+                .with_reasoning(concat_thinking_blocks(&response.content)),
+        )
     }
 
-    /// Map a non-2xx Anthropic response to [`LlmError`].
+    /// Map a non-2xx Anthropic response to [`LlmError`] with no rate-limit headers.
+    ///
+    /// A thin wrapper over [`Self::map_error_with_hints`], kept so the status-mapping unit
+    /// tests read the same as before PACE-01. Production paths call the hints variant.
+    #[cfg(test)]
+    fn map_error(&self, status: u16, body: &str) -> LlmError {
+        self.map_error_with_hints(status, body, None)
+    }
+
+    /// Map a non-2xx Anthropic response to [`LlmError`], carrying the parsed rate-limit
+    /// headers of a `429` (PACE-01).
     ///
     /// Two Anthropic-specific pre-checks run first; everything else is the
-    /// crate-wide [`map_http_status`] (Phase 25 D-03, FT-FR-01), which
+    /// crate-wide [`map_http_status_with_hints`] (Phase 25 D-03, FT-FR-01), which
     /// redacts the raw `body` before bounding it and emits a typed
     /// `ProviderError { status }` for every status without a dedicated
     /// variant.
@@ -330,8 +707,21 @@ impl AnthropicAdapter {
     ///   client's redirect policy is `none` (see [`Self::new`]), so a `3xx`
     ///   response is never followed — it arrives here as an ordinary
     ///   non-success status instead.
-    fn map_error(&self, status: u16, body: &str) -> LlmError {
+    /// - a `429` whose body carries `error.details.error_code ==
+    ///   "enforced_spend_limit_reached"` is the workspace spend cap, not a rate limit
+    ///   (research Pitfall 6): it maps to the permanent [`LlmError::UsageLimitExceeded`], so it
+    ///   is neither retried nor paced. Any other `429` carries `hints` through the generic arm.
+    fn map_error_with_hints(
+        &self,
+        status: u16,
+        body: &str,
+        hints: Option<RateLimitHints>,
+    ) -> LlmError {
         match status {
+            429 if signals_enforced_spend_limit(body) => LlmError::UsageLimitExceeded {
+                provider: ANTHROPIC_PROVIDER.to_string(),
+                regain_hint: None,
+            },
             403 => LlmError::AuthenticationError(
                 "API key does not have permission for this resource.".to_string(),
             ),
@@ -365,7 +755,13 @@ impl AnthropicAdapter {
                     regain_hint: extract_regain_hint(&redacted),
                 }
             }
-            _ => map_http_status(ANTHROPIC_PROVIDER, status, body, &self.config.api_key),
+            _ => map_http_status_with_hints(
+                ANTHROPIC_PROVIDER,
+                status,
+                body,
+                &self.config.api_key,
+                hints,
+            ),
         }
     }
 
@@ -403,12 +799,19 @@ impl AnthropicAdapter {
                     // all; retrying here would burn retries before the breaker
                     // ever sees the error, defeating its "does not burn
                     // retries" guarantee.
+                    //
+                    // `RateLimitExceeded` is surfaced on the FIRST 429 (D-02, PACE-02): one
+                    // layer -- the Cadence -- sees every 429 the instant it happens, so
+                    // `Retry-After` is honoured on the first hit and no thrash hides below
+                    // the decorator. Network and 5xx failures are still retried here.
                     if matches!(
                         e,
                         LlmError::AuthenticationError(_)
                             | LlmError::InvalidPrompt(_)
-                            | LlmError::EmptyCompletion(_)
+                            | LlmError::EmptyCompletion { .. }
+                            | LlmError::Refusal { .. }
                             | LlmError::UsageLimitExceeded { .. }
+                            | LlmError::RateLimitExceeded { .. }
                     ) {
                         return Err(e);
                     }
@@ -429,7 +832,7 @@ impl AnthropicAdapter {
 #[async_trait]
 impl LlmPort for AnthropicAdapter {
     async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
-        let claude_request = self.build_request(&request)?;
+        let (claude_request, notes) = self.build_request(&request)?;
         let headers = self.build_headers()?;
 
         let operation = || async {
@@ -445,11 +848,14 @@ impl LlmPort for AnthropicAdapter {
             let status = response.status().as_u16();
 
             if !response.status().is_success() {
+                // Snapshot the 429 headers BEFORE `.text()` consumes the response
+                // (research Pitfall 2).
+                let hints = snapshot_rate_limit_hints(response.status(), response.headers());
                 let body = response
                     .text()
                     .await
                     .unwrap_or_else(|_| "Unknown error".to_string());
-                return Err(self.map_error(status, &body));
+                return Err(self.map_error_with_hints(status, &body, hints));
             }
 
             let body = response.text().await.map_err(|e| {
@@ -473,14 +879,47 @@ impl LlmPort for AnthropicAdapter {
             self.parse_response(request.id, claude_response)
         };
 
-        self.execute_with_retry(operation, 3).await
+        let mut response = self
+            .execute_with_retry(operation, self.config.max_retries)
+            .await?;
+        // The request-time notes (ADR-0061 visibility rule) ride on the successful response.
+        response.metadata = notes.into_metadata();
+        // G-50-5a: Anthropic reports no total of its own, so the mapped usage is checked for
+        // containment only (`vendor_total = None`); a finding is warned once and recorded.
+        if let Some(value) =
+            self.usage_log
+                .record(ANTHROPIC_PROVIDER, &request.model, &response.usage, None)
+        {
+            response
+                .metadata
+                .insert(USAGE_UNRECONCILED_METADATA_KEY.to_string(), value);
+        }
+        Ok(response)
     }
 
+    /// Stream a completion.
+    ///
+    /// The stream's real stop reason and refusal details are held from `message_delta` and
+    /// applied on the terminal `message_stop` chunk (RESEARCH Pitfall 2), where the shared
+    /// `classify_completion` rule runs on the accumulated text. A refusal (which may arrive
+    /// after partial output) therefore ends the stream with `Err(`[`LlmError::Refusal`]`)`, and
+    /// a stream that carried no text ends with `Err(`[`LlmError::EmptyCompletion`]`)` (D-11a).
+    /// Chunks already yielded stay yielded: partial text and `thinking_delta` reasoning are not
+    /// withdrawn, only the terminal item becomes the typed error. That error item carries the
+    /// merged `message_start`/`message_delta` usage as its billed usage
+    /// ([`LlmError::billed_usage`], G-50-5a) on the request model, or `None` when the stream
+    /// reported no usage. A `thinking_delta` is yielded as
+    /// an empty-delta chunk carrying [`StreamingResponse::reasoning`], in wire order.
     async fn generate_stream(
         &self,
         request: LlmRequest,
     ) -> Result<Box<dyn Stream<Item = Result<StreamingResponse, LlmError>> + Send>, LlmError> {
-        let mut claude_request = self.build_request(&request)?;
+        // ADR-0061 (h), owner reading R-1 (option-b): the omissions, format changes and
+        // unprofiled model `build_request` `warn!`s about are also stamped on the stream's
+        // terminal chunk (`message_stop`, only that chunk), as the buffered path stamps
+        // `LlmResponse.metadata`.
+        let (mut claude_request, notes) = self.build_request(&request)?;
+        let stream_metadata = notes.into_metadata();
         claude_request.stream = true;
 
         let headers = self.build_headers()?;
@@ -496,11 +935,13 @@ impl LlmPort for AnthropicAdapter {
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
+            // Same header snapshot as the generate path, taken before the body read.
+            let hints = snapshot_rate_limit_hints(response.status(), response.headers());
             let body = response
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(self.map_error(status, &body));
+            return Err(self.map_error_with_hints(status, &body, hints));
         }
 
         // D-14 terminal-chunk contract: Anthropic's wire has no `[DONE]`
@@ -520,93 +961,183 @@ impl LlmPort for AnthropicAdapter {
         // subsequent event (including `message_stop` itself) whenever a test
         // or a real transport delivered more than one frame per chunk.
         let mut held_usage: Option<ClaudeUsage> = None;
+        // The real stop reason and refusal details, held beside the usage until `message_stop`
+        // (RESEARCH Pitfall 2), the response model for naming it in an error, and the
+        // accumulator the shared guard classifies at the terminal chunk.
+        let mut held_stop_reason: Option<String> = None;
+        let mut held_stop_details: Option<AnthropicStopDetails> = None;
+        let mut model = claude_request.model.clone();
+        let mut completion = StreamCompletion::default();
+        let api_key = self.config.api_key.clone();
+        // G-50-5a: the terminal usage is checked for containment (no vendor total) into this
+        // instance's log, keyed on the request model as the buffered path is.
+        let usage_log = self.usage_log.clone();
+        let usage_model = claude_request.model.clone();
 
-        let stream = response.bytes_stream().flat_map(move |chunk_result| {
-            let items: Vec<Result<StreamingResponse, LlmError>> = match chunk_result {
-                Ok(bytes) => {
-                    let text = String::from_utf8_lossy(&bytes).into_owned();
-                    let mut items = Vec::new();
+        // A network read can end inside a `data:` line (or inside a multi-byte character), so the
+        // bytes are reassembled into whole lines before any line is parsed (CR-02).
+        let mut sse = SseLines::default();
+        let stream = response
+            .bytes_stream()
+            .map(Some)
+            .chain(futures::stream::iter([None]))
+            .flat_map(move |chunk_option| {
+                // `None` is the end of the body: it releases a final line that had no newline.
+                let chunk_result = match chunk_option {
+                    Some(read) => read.map(|bytes| sse.push(&bytes)),
+                    None => Ok(sse.finish()),
+                };
+                let items: Vec<Result<StreamingResponse, LlmError>> = match chunk_result {
+                    Ok(lines) => {
+                        let mut items = Vec::new();
 
-                    for line in text.lines() {
-                        let Some(json_str) = line.strip_prefix("data: ") else {
-                            continue;
-                        };
-                        if json_str.trim() == "[DONE]" {
-                            continue;
+                        for line in &lines {
+                            let Some(json_str) = line.strip_prefix("data: ") else {
+                                continue;
+                            };
+                            if json_str.trim() == "[DONE]" {
+                                continue;
+                            }
+
+                            let Ok(event) = serde_json::from_str::<ClaudeStreamEvent>(json_str)
+                            else {
+                                // Never skipped silently: name the event type only, never its body
+                                // (it can echo a credential) and never serde's message (it can quote
+                                // the offending value).
+                                log::warn!(
+                                    target: "paladin::anthropic",
+                                    "skipping an unparsable stream event (type: {})",
+                                    unparsable_event_type(json_str)
+                                );
+                                continue;
+                            };
+
+                            match event.event_type.as_str() {
+                                "content_block_delta" => {
+                                    if let Some(delta) = event.delta {
+                                        if let Some(text) = delta.text {
+                                            completion.observe_content(&text);
+                                            items.push(Ok(StreamingResponse::delta(text)));
+                                        }
+                                        if let Some(thinking) = delta.thinking {
+                                            items.push(Ok(StreamingResponse::delta("")
+                                                .with_reasoning(thinking)));
+                                        }
+                                    }
+                                }
+                                "message_start" => {
+                                    if let Some(message) = event.message {
+                                        if let Some(started) = message.model {
+                                            model = started;
+                                        }
+                                        if let Some(usage) = message.usage {
+                                            held_usage = Some(merge_claude_stream_usage(
+                                                held_usage.take(),
+                                                usage,
+                                            ));
+                                        }
+                                    }
+                                }
+                                "message_delta" => {
+                                    if let Some(usage) = event.usage {
+                                        held_usage = Some(merge_claude_stream_usage(
+                                            held_usage.take(),
+                                            usage,
+                                        ));
+                                    }
+                                    if let Some(delta) = event.delta {
+                                        if let Some(reason) = delta.stop_reason {
+                                            held_stop_reason = Some(reason);
+                                        }
+                                        if let Some(details) = delta.stop_details {
+                                            held_stop_details = Some(details);
+                                        }
+                                    }
+                                }
+                                "message_stop" => {
+                                    // A stream that never reported a stop reason keeps the
+                                    // pre-50-13 terminal `Stop`; a reported one is mapped by name.
+                                    let finish = match held_stop_reason.as_deref() {
+                                        None => FinishReason::Stop,
+                                        reason => map_stop_reason(reason),
+                                    };
+                                    if let Some(refusal) = refusal_text(
+                                        held_stop_reason.as_deref(),
+                                        held_stop_details.as_ref(),
+                                    ) {
+                                        completion.observe_refusal(&refusal);
+                                    }
+                                    match completion.finish(
+                                        ANTHROPIC_PROVIDER,
+                                        &model,
+                                        &finish,
+                                        &api_key,
+                                    ) {
+                                        Ok(()) => {
+                                            let mut terminal = StreamingResponse::terminal(finish);
+                                            if let Some(usage) = held_usage.take() {
+                                                let mapped = map_claude_usage(&usage);
+                                                // Only the `Ok` terminal chunk carries a finding;
+                                                // an `Err` terminal carries no metadata.
+                                                if let Some(value) = usage_log.record(
+                                                    ANTHROPIC_PROVIDER,
+                                                    &usage_model,
+                                                    &mapped,
+                                                    None,
+                                                ) {
+                                                    terminal = terminal.with_metadata(
+                                                        USAGE_UNRECONCILED_METADATA_KEY,
+                                                        value,
+                                                    );
+                                                }
+                                                terminal = terminal.with_usage(mapped);
+                                            }
+                                            for (key, value) in &stream_metadata {
+                                                terminal = terminal
+                                                    .with_metadata(key.as_str(), value.as_str());
+                                            }
+                                            items.push(Ok(terminal));
+                                        }
+                                        // G-50-5a: the error carries the merged
+                                        // `message_start`/`message_delta` usage as its bill on
+                                        // the request model, `None` when none arrived.
+                                        Err(err) => items.push(Err(bill(
+                                            err,
+                                            &usage_model,
+                                            held_usage.take().map(|usage| map_claude_usage(&usage)),
+                                        ))),
+                                    }
+                                }
+                                _ => {}
+                            }
                         }
 
-                        let Ok(event) = serde_json::from_str::<ClaudeStreamEvent>(json_str) else {
-                            continue;
-                        };
-
-                        match event.event_type.as_str() {
-                            "content_block_delta" => {
-                                if let Some(text) = event.delta.and_then(|d| d.text) {
-                                    items.push(Ok(StreamingResponse::delta(text)));
-                                }
-                            }
-                            "message_start" => {
-                                if let Some(usage) = event.message.and_then(|m| m.usage) {
-                                    held_usage =
-                                        Some(merge_claude_stream_usage(held_usage.take(), usage));
-                                }
-                            }
-                            "message_delta" => {
-                                if let Some(usage) = event.usage {
-                                    held_usage =
-                                        Some(merge_claude_stream_usage(held_usage.take(), usage));
-                                }
-                            }
-                            "message_stop" => {
-                                let mut terminal = StreamingResponse::terminal(FinishReason::Stop);
-                                if let Some(usage) = held_usage.take() {
-                                    terminal = terminal.with_usage(map_claude_usage(&usage));
-                                }
-                                items.push(Ok(terminal));
-                            }
-                            _ => {}
-                        }
+                        items
                     }
+                    Err(e) => vec![Err(LlmError::ProcessingError(format!(
+                        "Stream error: {}",
+                        e
+                    )))],
+                };
 
-                    items
-                }
-                Err(e) => vec![Err(LlmError::ProcessingError(format!(
-                    "Stream error: {}",
-                    e
-                )))],
-            };
-
-            futures::stream::iter(items)
-        });
+                futures::stream::iter(items)
+            });
 
         Ok(Box::new(stream))
     }
 
+    /// Whether `model` is in the dated Anthropic table (`seeded::ANTHROPIC`). The table lists
+    /// the models the live probe measured, so a current model that was not probed is reported
+    /// `false` here yet still runs, on the adapter-wide fallback profile (D-07).
     async fn validate_model(&self, model: &str) -> Result<bool, LlmError> {
-        let valid_models = [
-            "claude-3-5-sonnet-20241022",
-            "claude-3-5-sonnet-20240620",
-            "claude-3-opus-20240229",
-            "claude-3-sonnet-20240229",
-            "claude-3-haiku-20240307",
-            "claude-2.1",
-            "claude-2.0",
-            "claude-instant-1.2",
-        ];
-        Ok(valid_models.contains(&model))
+        Ok(seeded::ANTHROPIC.iter().any(|entry| entry.model == model))
     }
 
     async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
-        Ok(vec![
-            "claude-3-5-sonnet-20241022".to_string(),
-            "claude-3-5-sonnet-20240620".to_string(),
-            "claude-3-opus-20240229".to_string(),
-            "claude-3-sonnet-20240229".to_string(),
-            "claude-3-haiku-20240307".to_string(),
-            "claude-2.1".to_string(),
-            "claude-2.0".to_string(),
-            "claude-instant-1.2".to_string(),
-        ])
+        Ok(seeded::ANTHROPIC
+            .iter()
+            .map(|entry| entry.model.to_string())
+            .collect())
     }
 
     fn get_provider_name(&self) -> &'static str {
@@ -614,20 +1145,32 @@ impl LlmPort for AnthropicAdapter {
     }
 
     fn get_capabilities(&self) -> ProviderCapabilities {
-        ProviderCapabilities {
-            supports_streaming: true,
-            // `LlmRequest` carries no field through which a tool definition could
-            // travel, and this adapter neither sends `tools` nor parses `tool_calls`
-            // out of a response. The flag describes what this adapter does, not what
-            // the vendor's API offers (WEB-03, D-14).
-            supports_tool_calling: false,
-            supports_function_calling: false,
-            supports_vision: true,
-            supports_embeddings: false,
-            max_context_tokens: Some(200_000),
-            supports_system_messages: true,
-            temperature_range: Some((0.0, 1.0)),
-        }
+        declared_capabilities(self.config.context_window)
+    }
+
+    fn model_profile(&self, model: &str) -> Option<ModelProfile> {
+        Some(self.wire_profile(model))
+    }
+
+    /// The pre-judging twin of the send-time `in_force` + `admit` in `build_request`:
+    /// same precedence over this adapter's `reasoning_effort` / `reasoning_fallback`, same
+    /// `wire_profile`, same verdict (D-09). The per-model wire form chosen in
+    /// `map_reasoning` only ever refuses what `admit` already refused.
+    fn check_reasoning(
+        &self,
+        model: &str,
+        effort: Option<ReasoningEffort>,
+        fallback: Option<ReasoningFallback>,
+    ) -> Result<(), LlmError> {
+        reasoning::check(
+            ANTHROPIC_PROVIDER,
+            model,
+            || self.wire_profile(model),
+            effort,
+            fallback,
+            self.config.reasoning_effort,
+            self.config.reasoning_fallback,
+        )
     }
 }
 
@@ -644,8 +1187,128 @@ struct ClaudeRequest {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     top_p: Option<f32>,
+    /// The caller's stop sequences, in declared order with duplicates kept, when the model's
+    /// profile admits their count (ADR-0061 (a), D-11a). Absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stop_sequences: Option<Vec<String>>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     stream: bool,
+    /// `LlmRequest.reasoning` as a listed level, on the wire as `output_config.effort`
+    /// (Phase 51, D-00h). Omitted entirely when no effort is set or the effort travels as the
+    /// `thinking` switch alone, keeping an unset request's body byte-identical (D-00i). Placed
+    /// last so the existing field order is untouched.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_config: Option<ClaudeOutputConfig>,
+    /// Anthropic's thinking switch: `adaptive` beside a level whose profile says
+    /// `enable_thinking_with_level` and for `Auto`; `disabled` for `Off`; `enabled` with
+    /// `budget_tokens` for a budget, and only on a model whose profile carries budget bounds.
+    /// Never carries `display` (D-00g). Omitted otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<ClaudeThinking>,
+}
+
+/// `ClaudeRequest.output_config`'s only shape this adapter sends: `{"effort": "<level>"}`.
+#[derive(Debug, Serialize)]
+struct ClaudeOutputConfig {
+    effort: &'static str,
+}
+
+/// `ClaudeRequest.thinking`'s shapes: `{"type": "adaptive"}`, `{"type": "disabled"}` and the
+/// legacy `{"type": "enabled", "budget_tokens": n}`. It has no field through which reasoning
+/// text could be requested (D-00g).
+#[derive(Debug, Serialize)]
+struct ClaudeThinking {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    budget_tokens: Option<u32>,
+}
+
+/// What Anthropic's request body can carry of a profile's effort data (Phase 51, D-00h): a
+/// listed level (`output_config.effort`), `off` and `auto` (the `thinking` switch) and, on a model
+/// whose profile carries budget bounds, the legacy `thinking.budget_tokens`.
+///
+/// Confirmed against the dated probe (plan 51-12, D-04; owner decision of 2026-10-22 at plan
+/// 51-11's checkpoint): `51-EFFORT-PROBE.md`'s verdict table marks Anthropic's `output_config`
+/// confirmed (the invalid value drew 400 on 11 of 11 models, so the field is parsed; the highest
+/// accepted level reports more reasoning tokens than the lowest on 7 of 9 comparable models). The
+/// documented capabilities therefore stand; they are not `WireCaps::NONE`. No seeded row carries
+/// a budget span (the vendor-documented section names no fixed upper bound), so a budget refuses
+/// on every seeded model until an operator override states one.
+const ANTHROPIC_REASONING_WIRE: WireCaps = WireCaps {
+    levels: true,
+    off: true,
+    auto: true,
+    budget: true,
+};
+
+/// Turn an admitted effort into Anthropic's two wire fields.
+///
+/// `levels` is the model's (masked) effort data: its `enable_thinking_with_level` flag decides
+/// whether a level also sends `thinking: {type: adaptive}`.
+///
+/// # Errors
+///
+/// [`LlmError::UnsupportedParameter`] for an effort this wire cannot carry. The profile masking
+/// and `admit` already refuse those, so this is the last line of defence: it can never put a
+/// field on the wire that the request did not ask for.
+fn map_reasoning(
+    model: &str,
+    resolved: &ResolvedEffort,
+    levels: Option<&EffortLevels>,
+) -> Result<(Option<ClaudeOutputConfig>, Option<ClaudeThinking>), LlmError> {
+    if !resolved.on_wire {
+        return Ok((None, None));
+    }
+    if let Some(level) = reasoning::level_spelling(resolved.effective) {
+        let thinking = levels
+            .filter(|l| l.enable_thinking_with_level)
+            .map(|_| ClaudeThinking {
+                kind: "adaptive",
+                budget_tokens: None,
+            });
+        return Ok((Some(ClaudeOutputConfig { effort: level }), thinking));
+    }
+    match resolved.effective {
+        // `Off` switches thinking off; `Auto` lets the model decide its own depth.
+        ReasoningEffort::Off => {
+            return Ok((
+                None,
+                Some(ClaudeThinking {
+                    kind: "disabled",
+                    budget_tokens: None,
+                }),
+            ));
+        }
+        ReasoningEffort::Auto => {
+            return Ok((
+                None,
+                Some(ClaudeThinking {
+                    kind: "adaptive",
+                    budget_tokens: None,
+                }),
+            ));
+        }
+        // The legacy form reaches only a model whose profile carries budget bounds (D-00h);
+        // `admit` has already held the budget to those bounds and below `max_tokens`.
+        ReasoningEffort::Budget(tokens) if levels.is_some_and(|l| l.budget.is_some()) => {
+            return Ok((
+                None,
+                Some(ClaudeThinking {
+                    kind: "enabled",
+                    budget_tokens: Some(tokens),
+                }),
+            ));
+        }
+        _ => {}
+    }
+    Err(LlmError::unsupported_parameter(
+        "reasoning_effort",
+        resolved.effective.to_string(),
+        ANTHROPIC_PROVIDER,
+        model,
+        "this adapter has no wire form for that effort",
+    ))
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -661,7 +1324,25 @@ struct ClaudeResponse {
     model: String,
     content: Vec<ClaudeContent>,
     stop_reason: Option<String>,
+    /// Present (possibly with `null` members) when the model refused; see [`AnthropicStopDetails`].
+    #[serde(default)]
+    stop_details: Option<AnthropicStopDetails>,
     usage: ClaudeUsage,
+}
+
+/// The `stop_details` object that accompanies `stop_reason: "refusal"` (RESEARCH, cited vendor
+/// fact): `{ type, category, explanation }`. `category` is one of `cyber`, `bio`,
+/// `frontier_llm`, `general_harms`, and either member may be `null`.
+///
+/// Buffered responses carry it at the top level, streamed ones on `message_delta.delta`. Both
+/// members are vendor-supplied text, so they only ever reach an error through
+/// `diagnostic_excerpt` (redact, then bound).
+#[derive(Debug, Default, Deserialize)]
+struct AnthropicStopDetails {
+    #[serde(default)]
+    category: Option<String>,
+    #[serde(default)]
+    explanation: Option<String>,
 }
 
 /// A single content block in an Anthropic response.
@@ -674,14 +1355,17 @@ struct ClaudeResponse {
 /// optional, not required: a required `String` here was the entire root
 /// cause of this adapter's original thinking-block deserialization bug.
 /// `content_type` is read by the block-type census in
-/// [`detect_no_text_content`], so it is genuinely load-bearing, not dead
-/// code kept only for documentation.
+/// [`with_block_census`], so it is genuinely load-bearing, not dead code kept only for
+/// documentation. `thinking` is present only on a `thinking` block and feeds
+/// [`LlmResponse::reasoning`] through [`concat_thinking_blocks`] (D-11).
 #[derive(Debug, Deserialize)]
 struct ClaudeContent {
     #[serde(rename = "type")]
     content_type: String,
     #[serde(default)]
     text: Option<String>,
+    #[serde(default)]
+    thinking: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -856,42 +1540,117 @@ fn concat_text_blocks(content: &[ClaudeContent]) -> String {
         .collect()
 }
 
-/// Detect a response with no recoverable text.
+/// The `type` of an event line that failed to parse as a [`ClaudeStreamEvent`], for the
+/// `warn!` that replaces the old silent skip. `unknown` when the line is not JSON or has no
+/// string `type`; otherwise only a bounded run of identifier characters, so the log line can
+/// never carry the event's body.
+fn unparsable_event_type(json_str: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(json_str)
+        .ok()
+        .and_then(|value| value.get("type")?.as_str().map(sanitize_token))
+        .filter(|event_type| !event_type.is_empty())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Concatenate the text of every `thinking` content block, in array order (D-11).
 ///
-/// Fires when every content block is skipped by [`concat_text_blocks`] —
-/// the concatenated text is empty or whitespace-only. This is the same
-/// class of failure DeepSeek's `detect_empty_completion` guards against: a
-/// reasoning model can spend its entire `max_tokens` budget on hidden
-/// thinking and emit no visible answer at all (verified live against
-/// `claude-sonnet-5`, see this module's captured-fixture tests). Returning
-/// `Ok("")` here would let that truncation masquerade as a valid empty
-/// completion — exactly what produced a 0-byte `PoC.t.sol` in production.
+/// Only a block that actually carries a `thinking` string contributes; `redacted_thinking`
+/// (opaque `data`) and every other block type are skipped, the same degrade-to-ignored rule
+/// [`concat_text_blocks`] follows. No separator is inserted, mirroring the streaming path.
+fn concat_thinking_blocks(content: &[ClaudeContent]) -> String {
+    content
+        .iter()
+        .filter_map(|block| block.thinking.as_deref())
+        .collect()
+}
+
+/// Map an Anthropic `stop_reason` to a [`FinishReason`], naming every documented value
+/// (RESEARCH State of the Art):
 ///
-/// The message names the block-type census and the stop reason so the next
-/// reader learns "the model spent its whole budget thinking" in one step
-/// instead of three rounds of debugging. Remediation advice is deliberately
-/// NOT repeated here — [`LlmError::EmptyCompletion`]'s own `Display` already
-/// appends it, and duplicating it would read as noise.
-fn detect_no_text_content(
-    content: &[ClaudeContent],
+/// | `stop_reason` | finish reason |
+/// |---|---|
+/// | `end_turn`, `stop_sequence` | `Stop` |
+/// | `max_tokens`, `model_context_window_exceeded` | `Length` (A1-50-13: truncation) |
+/// | `tool_use` | `FunctionCall` |
+/// | `pause_turn` | `Error("pause_turn")` |
+/// | `refusal` | `Error("refusal")`, never read: [`refusal_text`] makes the guard return
+///   [`LlmError::Refusal`] first |
+/// | any other value | `Error("unknown: <value>")` |
+/// | absent | `Error("unknown")` |
+///
+/// The unknown value is wrapped as vendor text in a finish reason (not an error message), so it
+/// is bounded to a short run of identifier characters; the full value is never trusted.
+fn map_stop_reason(stop_reason: Option<&str>) -> FinishReason {
+    match stop_reason {
+        Some("end_turn" | "stop_sequence") => FinishReason::Stop,
+        Some("max_tokens" | "model_context_window_exceeded") => FinishReason::Length,
+        Some("tool_use") => FinishReason::FunctionCall,
+        Some("pause_turn") => FinishReason::Error("pause_turn".to_string()),
+        Some("refusal") => FinishReason::Error("refusal".to_string()),
+        Some(other) => FinishReason::Error(format!("unknown: {}", sanitize_token(other))),
+        None => FinishReason::Error("unknown".to_string()),
+    }
+}
+
+/// Keep only the leading identifier characters of a vendor-supplied token (at most 64), so a
+/// hostile or malformed value cannot smuggle control characters or a secret into a finish
+/// reason or a log line.
+fn sanitize_token(token: &str) -> String {
+    token
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+        .take(64)
+        .collect()
+}
+
+/// The refusal text for [`classify_completion`], or `None` when the stop reason is not
+/// `refusal`.
+///
+/// Built from `stop_details.category` and `stop_details.explanation`, joined with `"; "` (either
+/// may be `null`); when both are absent the text is `stop_reason=refusal`, so a refusal is never
+/// anonymous. The result is raw vendor text -- the guard redacts it before bounding it.
+fn refusal_text(
     stop_reason: Option<&str>,
-) -> Option<LlmError> {
-    if !concat_text_blocks(content).trim().is_empty() {
+    details: Option<&AnthropicStopDetails>,
+) -> Option<String> {
+    if stop_reason != Some("refusal") {
         return None;
     }
+    let category = details
+        .and_then(|d| d.category.as_deref())
+        .filter(|c| !c.trim().is_empty())
+        .map(|c| format!("category={c}"));
+    let explanation = details
+        .and_then(|d| d.explanation.as_deref())
+        .filter(|e| !e.trim().is_empty())
+        .map(str::to_string);
+    let parts: Vec<String> = category.into_iter().chain(explanation).collect();
+    if parts.is_empty() {
+        Some("stop_reason=refusal".to_string())
+    } else {
+        Some(parts.join("; "))
+    }
+}
 
-    let block_types = content
-        .iter()
-        .map(|block| block.content_type.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    Some(LlmError::EmptyCompletion(format!(
-        "{} content block(s) with no text (types: [{}]), stop_reason={}",
-        content.len(),
-        block_types,
-        stop_reason.unwrap_or("none")
-    )))
+/// Add the content-block census to an [`LlmError::EmptyCompletion`] so the reader learns "the
+/// model spent its whole budget thinking" in one step (the guard's own payload names only the
+/// finish reason). Any other error passes through untouched. The block-type names are vendor
+/// text, so they go through `diagnostic_excerpt`.
+fn with_block_census(mut err: LlmError, content: &[ClaudeContent], api_key: &str) -> LlmError {
+    // The detail is extended in place, so any other field the variant carries is kept as is.
+    if let LlmError::EmptyCompletion { detail, .. } = &mut err {
+        let block_types = content
+            .iter()
+            .map(|block| block.content_type.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        *detail = format!(
+            "{detail}; {} content block(s) (types: [{}])",
+            content.len(),
+            crate::redaction::diagnostic_excerpt(&block_types, api_key)
+        );
+    }
+    err
 }
 
 #[derive(Debug, Deserialize)]
@@ -917,6 +1676,9 @@ struct ClaudeStreamEvent {
 struct ClaudeStreamMessage {
     #[serde(default)]
     usage: Option<ClaudeUsage>,
+    /// The response model, used to name the provider's model in a refusal or empty completion.
+    #[serde(default)]
+    model: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -924,7 +1686,18 @@ struct ClaudeDelta {
     #[serde(rename = "type")]
     #[allow(dead_code)]
     delta_type: Option<String>,
+    /// A `text_delta`'s text.
+    #[serde(default)]
     text: Option<String>,
+    /// A `thinking_delta`'s text (D-11).
+    #[serde(default)]
+    thinking: Option<String>,
+    /// On `message_delta`: the real stop reason, held until `message_stop` (Pitfall 2).
+    #[serde(default)]
+    stop_reason: Option<String>,
+    /// On `message_delta`: the refusal details, when `stop_reason` is `refusal`.
+    #[serde(default)]
+    stop_details: Option<AnthropicStopDetails>,
 }
 
 #[cfg(test)]
@@ -934,38 +1707,64 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
 
+    /// WR-03: the documented `with_base_url` guarantee is an `http://` or `https://` URL. A value
+    /// that merely starts with `http` (`httpx://x`, a scheme-less `http-gateway...`) must fail
+    /// construction like any other non-HTTP value.
+    #[test]
+    fn a_builder_set_non_http_base_url_fails_anthropic_construction() {
+        for bad in [
+            "ftp://x",
+            "",
+            "api.example.com/v1",
+            "httpx://x",
+            "http-gateway.internal/v1",
+            "httpfoo:",
+        ] {
+            let config = AnthropicConfig::new("k".to_string(), "claude-haiku-5-5".to_string())
+                .with_base_url(bad);
+            assert!(
+                config.validate().is_err(),
+                "base URL {bad:?} must fail validation"
+            );
+            assert!(
+                AnthropicAdapter::new(config).is_err(),
+                "base URL {bad:?} must fail adapter construction"
+            );
+        }
+        for good in ["http://localhost:1", "https://gateway.example/v1"] {
+            let config = AnthropicConfig::new("k".to_string(), "claude-haiku-5-5".to_string())
+                .with_base_url(good);
+            assert!(
+                config.validate().is_ok(),
+                "base URL {good:?} must pass validation"
+            );
+        }
+    }
+
     #[test]
     fn test_anthropic_config_validation() {
         let config = AnthropicConfig::new(
             "sk-ant-test123".to_string(),
-            "https://api.anthropic.com/v1".to_string(),
             "claude-3-5-sonnet-20241022".to_string(),
-            4096,
         );
         assert!(config.validate().is_ok());
 
-        let config_empty_key = AnthropicConfig::new(
-            "".to_string(),
-            "https://api.anthropic.com/v1".to_string(),
-            "claude-3-5-sonnet-20241022".to_string(),
-            4096,
-        );
+        let config_empty_key =
+            AnthropicConfig::new("".to_string(), "claude-3-5-sonnet-20241022".to_string());
         assert!(config_empty_key.validate().is_err());
 
         let config_invalid_url = AnthropicConfig::new(
             "sk-ant-test123".to_string(),
-            "invalid-url".to_string(),
             "claude-3-5-sonnet-20241022".to_string(),
-            4096,
-        );
+        )
+        .with_base_url("invalid-url".to_string());
         assert!(config_invalid_url.validate().is_err());
 
         let config_zero_tokens = AnthropicConfig::new(
             "sk-ant-test123".to_string(),
-            "https://api.anthropic.com/v1".to_string(),
             "claude-3-5-sonnet-20241022".to_string(),
-            0,
-        );
+        )
+        .with_max_tokens(0);
         assert!(config_zero_tokens.validate().is_err());
     }
 
@@ -973,9 +1772,7 @@ mod tests {
     async fn test_anthropic_adapter_creation() {
         let config = AnthropicConfig::new(
             "sk-ant-test123".to_string(),
-            "https://api.anthropic.com/v1".to_string(),
             "claude-3-5-sonnet-20241022".to_string(),
-            4096,
         );
         assert!(AnthropicAdapter::new(config).is_ok());
     }
@@ -984,9 +1781,7 @@ mod tests {
     async fn test_anthropic_provider_capabilities() {
         let config = AnthropicConfig::new(
             "sk-ant-test123".to_string(),
-            "https://api.anthropic.com/v1".to_string(),
             "claude-3-5-sonnet-20241022".to_string(),
-            4096,
         );
         let adapter = AnthropicAdapter::new(config).unwrap();
         let capabilities = adapter.get_capabilities();
@@ -997,9 +1792,106 @@ mod tests {
         assert!(!capabilities.supports_tool_calling);
         assert!(capabilities.supports_vision);
         assert!(capabilities.supports_system_messages);
-        assert_eq!(capabilities.max_context_tokens, Some(200_000));
+        assert_eq!(capabilities.max_context_tokens, Some(1_000_000));
         assert_eq!(capabilities.temperature_range, Some((0.0, 1.0)));
         assert_eq!(adapter.get_provider_name(), "anthropic");
+    }
+
+    // ── Dated registry wiring (plan 50-06, D-05/D-08) ─────────────────────
+
+    fn seeded_test_adapter() -> AnthropicAdapter {
+        AnthropicAdapter::new(AnthropicConfig::new(
+            "test-key".to_string(),
+            ANTHROPIC_DEFAULT_MODEL.to_string(),
+        ))
+        .expect("a valid config builds")
+    }
+
+    #[test]
+    fn anthropic_default_model_is_seeded() {
+        let (profile, origin) = seeded_test_adapter()
+            .model_registry
+            .resolve(ANTHROPIC_DEFAULT_MODEL);
+        assert_eq!(
+            origin,
+            crate::registry::ProfileOrigin::Seeded {
+                verified_on: "2026-10-15"
+            }
+        );
+        assert_eq!(profile.verified_on.as_deref(), Some("2026-10-15"));
+        assert_eq!(profile.context_window, Some(1_000_000));
+    }
+
+    #[test]
+    fn anthropic_default_model_is_the_operator_identified_current_model() {
+        assert_eq!(ANTHROPIC_DEFAULT_MODEL, "claude-haiku-5-5");
+    }
+
+    #[test]
+    fn anthropic_capabilities_report_the_default_models_seeded_window() {
+        assert_eq!(
+            seeded_test_adapter().get_capabilities().max_context_tokens,
+            Some(1_000_000)
+        );
+    }
+
+    #[test]
+    fn anthropic_unlisted_model_still_resolves_the_adapter_default() {
+        // Not `claude-opus-4-8`: Phase 50.1 (SURFACE-06) seeded it.
+        let (_, origin) = seeded_test_adapter()
+            .model_registry
+            .resolve("claude-unlisted-test-model");
+        assert_eq!(origin, crate::registry::ProfileOrigin::AdapterDefault);
+    }
+
+    /// SURFACE-06 (D-14): `claude-opus-4-8`, the model web3sec runs, is in the dated table, so
+    /// the adapter resolves it as seeded (2026-10-20, `50.1-SEED-PROBE.md`) and never as the
+    /// adapter-wide fallback.
+    #[test]
+    fn anthropic_opus_4_8_resolves_seeded_through_the_adapter() {
+        let (profile, origin) = seeded_test_adapter()
+            .model_registry
+            .resolve("claude-opus-4-8");
+        assert_eq!(
+            origin,
+            crate::registry::ProfileOrigin::Seeded {
+                verified_on: "2026-10-20"
+            }
+        );
+        assert_eq!(profile.context_window, Some(1_000_000));
+        assert_eq!(profile.max_output_tokens, Some(128_000));
+    }
+
+    #[tokio::test]
+    async fn anthropic_available_models_are_the_seeded_table_ids_in_order() {
+        let models = seeded_test_adapter().get_available_models().await.unwrap();
+        let table: Vec<String> = seeded::ANTHROPIC
+            .iter()
+            .map(|entry| entry.model.to_string())
+            .collect();
+        assert_eq!(models, table);
+        assert!(models.contains(&ANTHROPIC_DEFAULT_MODEL.to_string()));
+    }
+
+    #[tokio::test]
+    async fn anthropic_validate_model_accepts_a_seeded_id_and_rejects_a_claude_3_id() {
+        let adapter = seeded_test_adapter();
+        assert!(
+            adapter
+                .validate_model(ANTHROPIC_DEFAULT_MODEL)
+                .await
+                .unwrap()
+        );
+        for retired in [
+            "claude-3-5-sonnet-20241022",
+            "claude-2.1",
+            "claude-instant-1.2",
+        ] {
+            assert!(
+                !adapter.validate_model(retired).await.unwrap(),
+                "{retired} is retired and must not validate"
+            );
+        }
     }
 
     // ── Fixtures ─────────────────────────────────────────────────────────
@@ -1057,9 +1949,7 @@ stake, so an attacker donating to himself alone is a strict loss.";
     fn test_adapter() -> AnthropicAdapter {
         let config = AnthropicConfig::new(
             "sk-ant-test123".to_string(),
-            "https://api.anthropic.com/v1".to_string(),
             "claude-3-5-sonnet-20241022".to_string(),
-            4096,
         );
         AnthropicAdapter::new(config).expect("test config must build a valid adapter")
     }
@@ -1167,7 +2057,7 @@ stake, so an attacker donating to himself alone is a strict loss.";
         let result = adapter.parse_response(Uuid::new_v4(), response);
 
         match result {
-            Err(LlmError::EmptyCompletion(msg)) => {
+            Err(LlmError::EmptyCompletion { detail: msg, .. }) => {
                 assert!(
                     msg.contains("thinking"),
                     "message must name the block type it saw: {msg}"
@@ -1177,7 +2067,7 @@ stake, so an attacker donating to himself alone is a strict loss.";
                     "message must name the stop reason it arrived with: {msg}"
                 );
             }
-            other => panic!("expected Err(LlmError::EmptyCompletion(_)), got {other:?}"),
+            other => panic!("expected Err(LlmError::EmptyCompletion {{ .. }}), got {other:?}"),
         }
     }
 
@@ -1232,7 +2122,7 @@ stake, so an attacker donating to himself alone is a strict loss.";
                     let calls = Arc::clone(&calls_clone);
                     async move {
                         calls.fetch_add(1, Ordering::SeqCst);
-                        Err(LlmError::EmptyCompletion("no text".to_string()))
+                        Err(LlmError::empty_completion("no text".to_string()))
                     }
                 },
                 3,
@@ -1303,7 +2193,7 @@ stake, so an attacker donating to himself alone is a strict loss.";
         ));
         assert!(matches!(
             adapter.map_error(429, "slow down"),
-            LlmError::RateLimitExceeded
+            LlmError::RateLimitExceeded { .. }
         ));
         assert!(matches!(
             adapter.map_error(400, "bad prompt"),
@@ -1491,6 +2381,339 @@ stake, so an attacker donating to himself alone is a strict loss.";
         );
     }
 
+    // ── Phase 43 (PACE-01, D-02, Pitfall 6): first-429 surfacing and header hints ──
+
+    #[tokio::test(start_paused = true)]
+    async fn test_execute_with_retry_invokes_operation_exactly_once_on_rate_limit_exceeded() {
+        let adapter = test_adapter();
+        let calls = Arc::new(AtomicU32::new(0));
+        let calls_clone = Arc::clone(&calls);
+
+        let result: Result<(), LlmError> = adapter
+            .execute_with_retry(
+                move || {
+                    let calls = Arc::clone(&calls_clone);
+                    async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        Err(LlmError::rate_limited(None))
+                    }
+                },
+                3,
+            )
+            .await;
+
+        assert!(matches!(result, Err(LlmError::RateLimitExceeded { .. })));
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "a 429 is surfaced on the first attempt (D-02): the Cadence above paces the next call"
+        );
+    }
+
+    /// Phase 50 (PARITY-08): a present context is appended to the query by the shared
+    /// `user_turn_text` helper; an absent one leaves the query unchanged.
+    #[test]
+    fn anthropic_user_turn_appends_context() {
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+
+        let adapter = test_adapter();
+        let user_turn = |context: Option<&str>| -> serde_json::Value {
+            let request = LlmRequest::new(
+                "claude-opus-4-8",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "What is 2+2?".to_string(),
+                    context: context.map(str::to_string),
+                }))
+                .unwrap(),
+            );
+            let body = serde_json::to_value(adapter.build_request(&request).unwrap().0).unwrap();
+            body["messages"][0]["content"].clone()
+        };
+
+        assert_eq!(user_turn(None), "What is 2+2?");
+        assert_eq!(
+            user_turn(Some("Extra context.")),
+            "What is 2+2?\n\nExtra context."
+        );
+    }
+
+    mod rate_limit_wiring {
+        use super::*;
+        use mockito::Server;
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+        use paladin_ports::output::rate_limit_hints::{RateLimitDimensionKind, RetryDelaySource};
+
+        const SECS: fn(u64) -> Duration = Duration::from_secs;
+
+        /// A fixed response `Date` so every RFC 3339 reset below has an exact expected delta
+        /// (the resets are measured from the response `Date` when it parses).
+        const RESPONSE_DATE: &str = "Tue, 14 Nov 2023 22:11:40 GMT";
+
+        fn adapter_at(base_url: &str) -> AnthropicAdapter {
+            AnthropicAdapter::new(
+                AnthropicConfig::new("sk-ant-test123".to_string(), "claude-opus-4-8".to_string())
+                    .with_base_url(base_url),
+            )
+            .expect("test config must build a valid adapter")
+        }
+
+        fn build_request() -> LlmRequest {
+            LlmRequest::new(
+                "claude-opus-4-8",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))
+                .expect("a user prompt must build"),
+            )
+        }
+
+        fn with_ratelimit_headers(mock: mockito::Mock, retry_after: Option<&str>) -> mockito::Mock {
+            let mock = mock
+                .with_header("date", RESPONSE_DATE)
+                .with_header("anthropic-ratelimit-requests-limit", "50")
+                .with_header("anthropic-ratelimit-requests-remaining", "0")
+                .with_header("anthropic-ratelimit-requests-reset", "2023-11-14T22:13:30Z")
+                .with_header("anthropic-ratelimit-tokens-limit", "40000")
+                .with_header("anthropic-ratelimit-tokens-remaining", "39000")
+                .with_header("anthropic-ratelimit-tokens-reset", "2023-11-14T22:13:25Z")
+                .with_header("anthropic-ratelimit-input-tokens-limit", "30000")
+                .with_header("anthropic-ratelimit-input-tokens-remaining", "29000")
+                .with_header(
+                    "anthropic-ratelimit-input-tokens-reset",
+                    "2023-11-14T22:13:21Z",
+                )
+                .with_header("anthropic-ratelimit-output-tokens-limit", "8000")
+                .with_header("anthropic-ratelimit-output-tokens-remaining", "0")
+                .with_header(
+                    "anthropic-ratelimit-output-tokens-reset",
+                    "2023-11-14T22:14:20Z",
+                );
+            match retry_after {
+                Some(v) => mock.with_header("retry-after", v),
+                None => mock,
+            }
+        }
+
+        fn assert_four_dimensions(err: &LlmError) {
+            let hints = err.rate_limit_hints().expect("the 429 headers were parsed");
+            for (kind, limit, remaining, reset) in [
+                (RateLimitDimensionKind::Requests, 50, 0, 110),
+                (RateLimitDimensionKind::Tokens, 40_000, 39_000, 105),
+                (RateLimitDimensionKind::InputTokens, 30_000, 29_000, 101),
+                (RateLimitDimensionKind::OutputTokens, 8_000, 0, 160),
+            ] {
+                let dim = hints.dimension(kind);
+                assert_eq!(dim.limit(), Some(limit), "{kind:?}");
+                assert_eq!(dim.remaining(), Some(remaining), "{kind:?}");
+                assert_eq!(dim.reset_after(), Some(SECS(reset)), "{kind:?}");
+            }
+        }
+
+        const RATE_LIMIT_BODY: &str = r#"{"type":"error","error":{"type":"rate_limit_error","message":"Number of request tokens has exceeded your per-minute rate limit"}}"#;
+
+        #[tokio::test]
+        async fn anthropic_429_is_surfaced_once_with_its_retry_delay_and_four_dimensions() {
+            let mut server = Server::new_async().await;
+            let mock = with_ratelimit_headers(
+                server
+                    .mock("POST", "/messages")
+                    .with_status(429)
+                    .with_body(RATE_LIMIT_BODY),
+                Some("7"),
+            )
+            .expect(1)
+            .create_async()
+            .await;
+
+            // `execute_with_retry(.., max_retries)` with the default of 3: three attempts are allowed; a
+            // 429 must use only one.
+            let started = std::time::Instant::now();
+            let err = adapter_at(&server.url())
+                .generate(build_request())
+                .await
+                .expect_err("a 429 is an error");
+
+            assert!(matches!(err, LlmError::RateLimitExceeded { .. }), "{err:?}");
+            assert_eq!(err.retry_after(), Some(SECS(7)));
+            assert_eq!(
+                err.rate_limit_hints()
+                    .and_then(|h| h.explicit_retry_after()),
+                Some((SECS(7), RetryDelaySource::RetryAfter))
+            );
+            assert_four_dimensions(&err);
+            assert!(
+                started.elapsed() < Duration::from_millis(900),
+                "a surfaced 429 must not sleep through the retry back-off ({:?})",
+                started.elapsed()
+            );
+            // The raw RFC 3339 strings never reach a rendered error (T-43-10).
+            for rendered in [format!("{err}"), format!("{err:?}")] {
+                assert!(!rendered.contains("2023-11-14T"), "{rendered}");
+            }
+            mock.assert_async().await;
+        }
+
+        #[tokio::test]
+        async fn anthropic_429_without_retry_after_uses_the_exhausted_reset() {
+            let mut server = Server::new_async().await;
+            let mock = with_ratelimit_headers(
+                server
+                    .mock("POST", "/messages")
+                    .with_status(429)
+                    .with_body(RATE_LIMIT_BODY),
+                None,
+            )
+            .expect(1)
+            .create_async()
+            .await;
+
+            let err = adapter_at(&server.url())
+                .generate(build_request())
+                .await
+                .expect_err("a 429 is an error");
+
+            // Requests (110 s) and output tokens (160 s) are exhausted: the larger stands in.
+            assert_eq!(err.retry_after(), Some(SECS(160)));
+            assert_eq!(
+                err.rate_limit_hints()
+                    .and_then(|h| h.effective_retry_after()),
+                Some((SECS(160), RetryDelaySource::ResetHeader))
+            );
+            mock.assert_async().await;
+        }
+
+        #[tokio::test]
+        async fn anthropic_stream_429_carries_the_same_hints() {
+            let mut server = Server::new_async().await;
+            let mock = with_ratelimit_headers(
+                server
+                    .mock("POST", "/messages")
+                    .with_status(429)
+                    .with_body(RATE_LIMIT_BODY),
+                Some("7"),
+            )
+            .expect(1)
+            .create_async()
+            .await;
+
+            let result = adapter_at(&server.url())
+                .generate_stream(build_request())
+                .await;
+            let err = match result {
+                Err(err) => err,
+                Ok(_) => panic!("expected Err(RateLimitExceeded), got Ok(<stream>)"),
+            };
+
+            assert!(matches!(err, LlmError::RateLimitExceeded { .. }), "{err:?}");
+            assert_eq!(err.retry_after(), Some(SECS(7)));
+            assert_four_dimensions(&err);
+            mock.assert_async().await;
+        }
+
+        #[tokio::test]
+        async fn anthropic_429_with_no_rate_limit_header_carries_no_hints() {
+            let mut server = Server::new_async().await;
+            let mock = server
+                .mock("POST", "/messages")
+                .with_status(429)
+                .with_body(RATE_LIMIT_BODY)
+                .expect(1)
+                .create_async()
+                .await;
+
+            let err = adapter_at(&server.url())
+                .generate(build_request())
+                .await
+                .expect_err("a 429 is an error");
+
+            assert!(matches!(err, LlmError::RateLimitExceeded { .. }), "{err:?}");
+            assert_eq!(err.retry_after(), None);
+            assert!(err.rate_limit_hints().is_none());
+            mock.assert_async().await;
+        }
+
+        const SPEND_CAP_BODY: &str = r#"{"type":"error","error":{"type":"rate_limit_error","message":"You have reached your workspace spend limit.","details":{"error_code":"enforced_spend_limit_reached"}}}"#;
+
+        #[tokio::test]
+        async fn anthropic_spend_cap_429_maps_to_usage_limit_exceeded_once() {
+            let mut server = Server::new_async().await;
+            // No retry-after, exactly as Anthropic documents for the spend-cap 429.
+            let mock = server
+                .mock("POST", "/messages")
+                .with_status(429)
+                .with_body(SPEND_CAP_BODY)
+                .expect(1)
+                .create_async()
+                .await;
+
+            let err = adapter_at(&server.url())
+                .generate(build_request())
+                .await
+                .expect_err("a spend-cap 429 is an error");
+
+            match &err {
+                LlmError::UsageLimitExceeded {
+                    provider,
+                    regain_hint,
+                } => {
+                    assert_eq!(provider, "anthropic");
+                    assert_eq!(*regain_hint, None);
+                }
+                other => panic!("expected UsageLimitExceeded, got {other:?}"),
+            }
+            mock.assert_async().await;
+        }
+
+        #[tokio::test]
+        async fn anthropic_stream_spend_cap_429_maps_to_usage_limit_exceeded() {
+            let mut server = Server::new_async().await;
+            let mock = server
+                .mock("POST", "/messages")
+                .with_status(429)
+                .with_body(SPEND_CAP_BODY)
+                .expect(1)
+                .create_async()
+                .await;
+
+            let result = adapter_at(&server.url())
+                .generate_stream(build_request())
+                .await;
+            assert!(
+                matches!(&result, Err(LlmError::UsageLimitExceeded { .. })),
+                "expected UsageLimitExceeded, got {:?}",
+                result.as_ref().err()
+            );
+            mock.assert_async().await;
+        }
+
+        #[test]
+        fn map_error_distinguishes_the_spend_cap_from_ordinary_429_bodies() {
+            let adapter = adapter_at("http://127.0.0.1:1");
+            for body in [
+                RATE_LIMIT_BODY,
+                r#"{"error":{"details":{"error_code":"something_else"}}}"#,
+                r#"{"error":{"message":"mentions enforced_spend_limit_reached in prose only"}}"#,
+                r#"{"error":"enforced_spend_limit_reached"}"#,
+                "not json",
+                "",
+            ] {
+                assert!(
+                    matches!(
+                        adapter.map_error(429, body),
+                        LlmError::RateLimitExceeded { .. }
+                    ),
+                    "body {body:?}"
+                );
+            }
+            // The same body on another status is not a rate-limit error either way.
+            assert!(!matches!(
+                adapter.map_error(500, SPEND_CAP_BODY),
+                LlmError::UsageLimitExceeded { .. }
+            ));
+        }
+    }
+
     // ── Phase 26 (RT-05, D-28): the documented no-native-mode path ─────────
 
     /// Anthropic has no native structured-output mode (D-28): `ClaudeRequest`
@@ -1523,12 +2746,9 @@ stake, so an attacker donating to himself alone is a strict loss.";
             .create_async()
             .await;
 
-        let config = AnthropicConfig::new(
-            "sk-ant-test123".to_string(),
-            server.url(),
-            "claude-opus-4-8".to_string(),
-            4096,
-        );
+        let config =
+            AnthropicConfig::new("sk-ant-test123".to_string(), "claude-opus-4-8".to_string())
+                .with_base_url(server.url());
         let adapter =
             AnthropicAdapter::new(config).expect("test config must build a valid adapter");
 
@@ -1562,6 +2782,350 @@ stake, so an attacker donating to himself alone is a strict loss.";
         );
     }
 
+    // ── Phase 50 (PARITY-02, ADR-0061, D-01): the per-model parameter policy ──
+
+    mod parameter_policy {
+        use super::*;
+        use crate::registry::UNPROFILED_MODEL_METADATA_KEY;
+        use crate::sampling::{PARAMS_OMITTED_METADATA_KEY, RESPONSE_FORMAT_ADJUSTED_METADATA_KEY};
+        use mockito::Server;
+        use paladin_core::platform::container::prompt::{
+            PromptItem, PromptParameters, PromptType, UserPrompt,
+        };
+        use paladin_ports::output::llm_port::ResponseFormat;
+        use serde_json::{Value, json};
+        use std::sync::Mutex as StdMutex;
+
+        /// A model id that is in no seeded table, so these tests exercise the adapter-wide
+        /// fallback profile (`claude-opus-4-8` was seeded by Phase 50.1, SURFACE-06; its own
+        /// seeded behaviour is tested separately below).
+        const MODEL: &str = "claude-unseeded-test-model";
+
+        fn adapter_at(base_url: &str) -> AnthropicAdapter {
+            AnthropicAdapter::new(
+                AnthropicConfig::new("sk-ant-test123".to_string(), MODEL.to_string())
+                    .with_base_url(base_url),
+            )
+            .expect("test config must build a valid adapter")
+        }
+
+        fn request_with(parameters: PromptParameters) -> LlmRequest {
+            let mut request = LlmRequest::new(
+                MODEL,
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))
+                .expect("a user prompt must build"),
+            );
+            request.prompt.entity.data.parameters = parameters;
+            request
+        }
+
+        fn unset() -> PromptParameters {
+            PromptParameters {
+                max_tokens: None,
+                temperature: None,
+                top_p: None,
+                frequency_penalty: None,
+                presence_penalty: None,
+                stop_sequences: None,
+            }
+        }
+
+        /// Runs `generate()` against a mock `/messages` endpoint, returning the outgoing JSON
+        /// body and the response metadata.
+        async fn generate_capture(
+            request: LlmRequest,
+        ) -> (Value, std::collections::HashMap<String, String>) {
+            let mut server = Server::new_async().await;
+            let captured: Arc<StdMutex<Option<String>>> = Arc::new(StdMutex::new(None));
+            let slot = Arc::clone(&captured);
+            server
+                .mock("POST", "/messages")
+                .with_status(200)
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    TEXT_ONLY_OPUS_4_8_JSON.as_bytes().to_vec()
+                })
+                .create_async()
+                .await;
+
+            let response = adapter_at(&server.url())
+                .generate(request)
+                .await
+                .expect("the mock answers a well-formed message");
+            let body = captured
+                .lock()
+                .unwrap()
+                .take()
+                .expect("the mock must have been called once");
+            (
+                serde_json::from_str(&body).expect("the body must be JSON"),
+                response.metadata,
+            )
+        }
+
+        /// Runs `generate_stream()` against a mock endpoint and returns the outgoing JSON body.
+        async fn stream_capture(request: LlmRequest) -> Value {
+            let mut server = Server::new_async().await;
+            let captured: Arc<StdMutex<Option<String>>> = Arc::new(StdMutex::new(None));
+            let slot = Arc::clone(&captured);
+            server
+                .mock("POST", "/messages")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    b"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n".to_vec()
+                })
+                .create_async()
+                .await;
+
+            let stream = adapter_at(&server.url())
+                .generate_stream(request)
+                .await
+                .expect("the stream must open");
+            let mut stream = Box::into_pin(stream);
+            while stream.next().await.is_some() {}
+
+            let body = captured
+                .lock()
+                .unwrap()
+                .take()
+                .expect("the mock must have been called once");
+            serde_json::from_str(&body).expect("the body must be JSON")
+        }
+
+        #[test]
+        fn anthropic_model_profile_states_temperature_and_top_p_not_sent() {
+            let profile = test_adapter()
+                .model_profile("any-model")
+                .expect("anthropic profiles every model");
+            assert_eq!(profile.temperature, ParamSupport::NotSent);
+            assert_eq!(profile.top_p, ParamSupport::NotSent);
+            assert_eq!(profile.frequency_penalty, ParamSupport::NotSent);
+            assert_eq!(profile.presence_penalty, ParamSupport::NotSent);
+            assert_eq!(profile.stop_sequences, StopSupport::Supported { max: None });
+            // The fallback window follows the declared capabilities, which describe the default
+            // model's seeded window (plan 50-06).
+            assert_eq!(profile.context_window, Some(1_000_000));
+            assert!(!profile.json_object && !profile.json_schema);
+        }
+
+        #[tokio::test]
+        async fn anthropic_temperature_is_omitted_and_recorded() {
+            let mut parameters = unset();
+            parameters.temperature = Some(0.7);
+            parameters.top_p = Some(0.9);
+            let (body, metadata) = generate_capture(request_with(parameters)).await;
+
+            assert!(
+                body.get("temperature").is_none(),
+                "the Messages request carries no temperature: {body}"
+            );
+            assert!(body.get("top_p").is_none(), "nor top_p: {body}");
+            assert_eq!(
+                metadata
+                    .get(PARAMS_OMITTED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("temperature,top_p"),
+                "the omission that used to be silent is now recorded"
+            );
+        }
+
+        #[tokio::test]
+        async fn anthropic_unset_values_are_neither_sent_nor_recorded() {
+            let (body, metadata) = generate_capture(request_with(unset())).await;
+            let obj = body.as_object().expect("body must be a JSON object");
+
+            for key in ["temperature", "top_p", "stop_sequences"] {
+                assert!(!obj.contains_key(key), "{key} was never set: {obj:?}");
+            }
+            assert_eq!(obj["max_tokens"], 4096, "the configured max_tokens applies");
+            assert!(!metadata.contains_key(PARAMS_OMITTED_METADATA_KEY));
+        }
+
+        #[tokio::test]
+        async fn anthropic_stop_sequences_keep_declared_order() {
+            let mut parameters = unset();
+            // A duplicate, deliberately: order and duplicates are the caller's.
+            parameters.stop_sequences = Some(vec![
+                "END".to_string(),
+                "STOP".to_string(),
+                "END".to_string(),
+            ]);
+            let (body, metadata) = generate_capture(request_with(parameters)).await;
+
+            assert_eq!(body["stop_sequences"], json!(["END", "STOP", "END"]));
+            assert!(!metadata.contains_key(PARAMS_OMITTED_METADATA_KEY));
+        }
+
+        #[tokio::test]
+        async fn anthropic_stream_follows_the_profile() {
+            let mut parameters = unset();
+            parameters.temperature = Some(0.7);
+            parameters.stop_sequences = Some(vec!["END".to_string(), "STOP".to_string()]);
+            let body = stream_capture(request_with(parameters)).await;
+
+            assert!(
+                body.get("temperature").is_none(),
+                "the streaming body omits the temperature too: {body}"
+            );
+            assert_eq!(body["stop_sequences"], json!(["END", "STOP"]));
+            assert_eq!(body["stream"], true);
+        }
+
+        #[tokio::test]
+        async fn anthropic_response_format_is_recorded_as_omitted() {
+            let request = request_with(unset()).with_response_format(ResponseFormat::JsonObject);
+            let (body, metadata) = generate_capture(request).await;
+
+            assert!(
+                body.get("response_format").is_none(),
+                "Anthropic has no native JSON mode: {body}"
+            );
+            assert_eq!(
+                metadata
+                    .get(RESPONSE_FORMAT_ADJUSTED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("omitted"),
+                "the never-sent format is now recorded, not silently ignored"
+            );
+
+            let (_, metadata) = generate_capture(request_with(unset())).await;
+            assert!(
+                !metadata.contains_key(RESPONSE_FORMAT_ADJUSTED_METADATA_KEY),
+                "no format requested, nothing adjusted"
+            );
+        }
+
+        /// Phase 50, owner reading R-1 (option-b): a streamed call stamps the visibility keys
+        /// the buffered path would, on the terminal chunk (`message_stop`) only.
+        #[tokio::test]
+        async fn anthropic_stream_terminal_chunk_carries_metadata() {
+            let mut server = Server::new_async().await;
+            server
+                .mock("POST", "/messages")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body(
+                    "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hi\"}}\n\n\
+                     data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":2}}\n\n\
+                     data: {\"type\":\"message_stop\"}\n\n",
+                )
+                .create_async()
+                .await;
+
+            let mut parameters = unset();
+            // The current Anthropic models are `NotSent` for temperature, so a bare request that
+            // carries one has it omitted and recorded.
+            parameters.temperature = Some(0.5);
+            let stream = adapter_at(&server.url())
+                .generate_stream(request_with(parameters))
+                .await
+                .expect("the stream must open");
+            let mut stream = Box::into_pin(stream);
+            let mut chunks = Vec::new();
+            while let Some(item) = stream.next().await {
+                chunks.push(item.expect("every scripted item is Ok"));
+            }
+
+            let terminal = chunks.last().expect("a terminal chunk");
+            assert!(terminal.finish_reason.is_some());
+            assert_eq!(
+                terminal
+                    .metadata
+                    .get(PARAMS_OMITTED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("temperature")
+            );
+            assert_eq!(
+                terminal
+                    .metadata
+                    .get(UNPROFILED_MODEL_METADATA_KEY)
+                    .map(String::as_str),
+                Some(MODEL)
+            );
+            for content in &chunks[..chunks.len() - 1] {
+                assert!(content.metadata.is_empty(), "content chunk: {content:?}");
+            }
+        }
+
+        #[tokio::test]
+        async fn anthropic_unprofiled_model_is_stamped() {
+            let (_, metadata) = generate_capture(request_with(unset())).await;
+            assert_eq!(
+                metadata
+                    .get(UNPROFILED_MODEL_METADATA_KEY)
+                    .map(String::as_str),
+                Some(MODEL),
+                "no seeded entry exists for this id, so it runs on the adapter-wide fallback"
+            );
+        }
+
+        /// SURFACE-06 (D-14): a call to `claude-opus-4-8` is on a seeded profile, so the
+        /// response carries no `paladin.unprofiled_model` stamp (the converse of
+        /// `anthropic_unprofiled_model_is_stamped`).
+        #[tokio::test]
+        async fn anthropic_opus_4_8_is_not_stamped_unprofiled() {
+            let mut request = request_with(unset());
+            request.model = "claude-opus-4-8".to_string();
+            let (_, metadata) = generate_capture(request).await;
+            assert!(
+                !metadata.contains_key(UNPROFILED_MODEL_METADATA_KEY),
+                "claude-opus-4-8 is seeded, so no unprofiled stamp: {metadata:?}"
+            );
+        }
+
+        #[test]
+        fn anthropic_max_tokens_above_a_profiled_maximum_is_refused_by_name() {
+            use crate::registry::{ModelOverride, ModelRegistry};
+            use std::collections::BTreeMap;
+
+            let mut adapter = test_adapter();
+            let over = ModelOverride {
+                max_output_tokens: Some(1000),
+                ..ModelOverride::default()
+            };
+            adapter.model_registry =
+                ModelRegistry::new(ANTHROPIC_PROVIDER, &[], fallback_profile(None))
+                    .with_overrides(BTreeMap::from([(MODEL.to_string(), over)]))
+                    .expect("a plain max_output_tokens override is valid");
+
+            // No max_tokens on the request: the configured 4096 is what would be sent.
+            match adapter.build_request(&request_with(unset())) {
+                Err(LlmError::InvalidPrompt(message)) => {
+                    assert!(message.contains("anthropic"), "{message}");
+                    assert!(message.contains(MODEL), "{message}");
+                    assert!(message.contains("max_tokens"), "{message}");
+                }
+                other => panic!("expected InvalidPrompt, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn anthropic_system_role_text_prompt_still_becomes_the_system_field() {
+            use paladin_core::platform::container::prompt::{PromptRole, TextPrompt};
+
+            let mut request = request_with(unset());
+            request.prompt = PromptItem::new(PromptType::Text(TextPrompt {
+                content: "Be terse.".to_string(),
+                role: PromptRole::System,
+            }))
+            .expect("a text prompt must build");
+            let (body, _) = test_adapter()
+                .build_request(&request)
+                .expect("a system-role text prompt builds");
+            let body = serde_json::to_value(body).unwrap();
+
+            assert_eq!(body["system"], "Be terse.");
+            assert_eq!(body["messages"], json!([]));
+        }
+    }
+
     // ── Plan 31-04 (D-14/D-15/D-19): event-accumulation streaming usage ───
 
     mod streaming_usage_wiring {
@@ -1571,12 +3135,9 @@ stake, so an attacker donating to himself alone is a strict loss.";
         use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
 
         fn adapter_at(base_url: &str) -> AnthropicAdapter {
-            let config = AnthropicConfig::new(
-                "sk-ant-test123".to_string(),
-                base_url.to_string(),
-                "claude-sonnet-5".to_string(),
-                4096,
-            );
+            let config =
+                AnthropicConfig::new("sk-ant-test123".to_string(), "claude-sonnet-5".to_string())
+                    .with_base_url(base_url);
             AnthropicAdapter::new(config).expect("test config must build a valid adapter")
         }
 
@@ -1612,13 +3173,11 @@ stake, so an attacker donating to himself alone is a strict loss.";
                 .to_string()
         }
 
-        /// Stands in for `crate::conformance::cases::streaming_usage_equals_non_streaming_usage`
-        /// (D-19, plan 31-04): Anthropic's event-accumulation wire shape (usage split across
-        /// `message_start`/`message_delta`, no `[DONE]` sentinel) diverges too far from
-        /// `ConformanceFixture`'s single-`stream_body()`-string assumption to instantiate the
-        /// shared macro, so this test asserts the identical three properties by hand: exactly
-        /// one chunk carries a finish reason, that SAME chunk is the only one carrying usage,
-        /// and its usage equals the non-streaming path's `LlmResponse.usage` field-for-field.
+        /// Predates Anthropic's place in the shared suite (plan 50-15 added the fixture, whose
+        /// `streaming_usage_equals_non_streaming_usage` case now asserts the same three
+        /// properties). Kept as the pin on the cached-prompt Sonnet fixture: exactly one chunk
+        /// carries a finish reason, that SAME chunk is the only one carrying usage, and its usage
+        /// equals the non-streaming path's `LlmResponse.usage` field-for-field.
         #[tokio::test]
         async fn message_stop_is_the_only_usage_bearing_chunk_and_equals_the_non_streaming_usage() {
             let mut non_stream_server = Server::new_async().await;
@@ -1715,6 +3274,1795 @@ stake, so an attacker donating to himself alone is a strict loss.";
                 .find(|c| c.finish_reason.is_some())
                 .expect("stream must still end with a message_stop terminal chunk");
             assert_eq!(terminal.usage, None);
+        }
+    }
+
+    // ── Shared conformance suite (PARITY-07, plan 50-15) ──
+    //
+    // Anthropic joins the suite every other adapter already answers. Its Messages API framing
+    // (`content[]` blocks; usage split across `message_start` and `message_delta` and no `[DONE]`
+    // sentinel) is carried by `Wire::Anthropic`, whose default bodies this fixture inherits for
+    // every case except the three below. Nested in its own module so every generated test's full
+    // path contains "conformance" (`cargo test --lib conformance` selects it).
+    /// Plan 50-23 (G-50-5a): Anthropic reports no vendor total, so both paths run the
+    /// containment checks only -- a thinking count that escapes `output_tokens` is recorded.
+    mod usage_reconciliation {
+        use super::*;
+        use crate::usage_reconcile::USAGE_UNRECONCILED_METADATA_KEY;
+        use futures::StreamExt;
+        use mockito::Server;
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+
+        fn adapter_at(base_url: &str) -> AnthropicAdapter {
+            let config =
+                AnthropicConfig::new("sk-ant-test123".to_string(), "claude-sonnet-5".to_string())
+                    .with_base_url(base_url);
+            AnthropicAdapter::new(config).expect("test config must build a valid adapter")
+        }
+
+        fn build_request() -> LlmRequest {
+            LlmRequest::new(
+                "claude-sonnet-5",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))
+                .expect("a user prompt must build"),
+            )
+        }
+
+        /// `thinking_tokens` 25 against `output_tokens` 10: a reading the inclusive contract
+        /// cannot hold.
+        const ESCAPING_THINKING_JSON: &str = r#"{"model":"claude-sonnet-5","id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"OK"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":16,"output_tokens":10,"output_tokens_details":{"thinking_tokens":25}}}"#;
+
+        async fn generate_from(body: &'static str) -> LlmResponse {
+            let mut server = Server::new_async().await;
+            server
+                .mock("POST", "/messages")
+                .with_status(200)
+                .with_body(body)
+                .create_async()
+                .await;
+            adapter_at(&server.url())
+                .generate(build_request())
+                .await
+                .expect("a well-formed body must parse")
+        }
+
+        #[tokio::test]
+        async fn anthropic_thinking_beyond_output_is_a_reasoning_finding() {
+            let response = generate_from(ESCAPING_THINKING_JSON).await;
+            assert_eq!(response.usage.completion_tokens, 10, "the mapping is kept");
+            assert_eq!(
+                response
+                    .metadata
+                    .get(USAGE_UNRECONCILED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("reasoning:reasoning=25,completion=10")
+            );
+        }
+
+        #[tokio::test]
+        async fn anthropic_normal_usage_records_no_finding() {
+            let response = generate_from(CACHED_PROMPT_SONNET_5_JSON).await;
+            assert!(
+                !response
+                    .metadata
+                    .contains_key(USAGE_UNRECONCILED_METADATA_KEY),
+                "{:?}",
+                response.metadata
+            );
+        }
+
+        #[tokio::test]
+        async fn anthropic_stream_terminal_records_a_reasoning_finding() {
+            let sse = "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\
+                 \"role\":\"assistant\",\"model\":\"claude-sonnet-5\",\"content\":[],\"stop_reason\":null,\
+                 \"stop_sequence\":null,\"usage\":{\"input_tokens\":16,\"output_tokens\":1}}}\n\n\
+                 data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"OK\"}}\n\n\
+                 data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\
+                 \"usage\":{\"output_tokens\":10,\"output_tokens_details\":{\"thinking_tokens\":25}}}\n\n\
+                 data: {\"type\":\"message_stop\"}\n\n";
+            let mut server = Server::new_async().await;
+            server
+                .mock("POST", "/messages")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body(sse)
+                .create_async()
+                .await;
+            let stream = adapter_at(&server.url())
+                .generate_stream(build_request())
+                .await
+                .expect("streaming call must succeed");
+            let mut stream = Box::into_pin(stream);
+            let mut chunks = Vec::new();
+            while let Some(item) = stream.next().await {
+                chunks.push(item.expect("every chunk must parse"));
+            }
+
+            let (terminal, earlier) = chunks.split_last().expect("a terminal chunk");
+            assert!(terminal.finish_reason.is_some());
+            assert_eq!(
+                terminal
+                    .metadata
+                    .get(USAGE_UNRECONCILED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("reasoning:reasoning=25,completion=10")
+            );
+            assert!(
+                earlier
+                    .iter()
+                    .all(|chunk| !chunk.metadata.contains_key(USAGE_UNRECONCILED_METADATA_KEY))
+            );
+        }
+    }
+
+    mod conformance_suite {
+        use super::*;
+        use serde_json::json;
+
+        struct AnthropicFixture;
+
+        impl crate::conformance::ConformanceFixture for AnthropicFixture {
+            /// Anthropic's `output_config.effort`.
+            fn effort_wire_value(body: &serde_json::Value) -> Option<String> {
+                body.get("output_config")
+                    .and_then(|config| config.get("effort"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+            }
+
+            const WIRE: crate::conformance::Wire = crate::conformance::Wire::Anthropic;
+
+            fn default_model() -> &'static str {
+                ANTHROPIC_DEFAULT_MODEL
+            }
+
+            fn provider_name() -> &'static str {
+                "anthropic"
+            }
+
+            fn adapter(base_url: &str) -> Arc<dyn LlmPort> {
+                let mut config = AnthropicConfig::new(
+                    "test-key".to_string(),
+                    ANTHROPIC_DEFAULT_MODEL.to_string(),
+                )
+                .with_base_url(base_url);
+                // The suite measures one attempt per call (the status cases would otherwise sleep
+                // through this adapter's retry back-off), like the OpenAI fixture's `max_retries: 0`.
+                config.max_retries = 0;
+                config.timeout_seconds = 5;
+                Arc::new(AnthropicAdapter::new(config).expect("test config must build"))
+            }
+
+            fn success_body() -> String {
+                // The usage object is the full real shape (cache read, cache write and thinking
+                // counts) so the D-19 stream-versus-buffered case compares every sub-count.
+                // `input_tokens` 85 + cache read 512 + cache write 128 = prompt 725.
+                json!({
+                    "id": "msg_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": ANTHROPIC_DEFAULT_MODEL,
+                    "content": [{"type": "text", "text": "Hi there"}],
+                    "stop_reason": "end_turn",
+                    "stop_sequence": null,
+                    "usage": {
+                        "input_tokens": 85,
+                        "cache_creation_input_tokens": 128,
+                        "cache_read_input_tokens": 512,
+                        "output_tokens": 40,
+                        "output_tokens_details": {"thinking_tokens": 0}
+                    }
+                })
+                .to_string()
+            }
+
+            fn stream_body() -> String {
+                // D-19: `message_start` carries the input and cache figures and `message_delta`
+                // the output and thinking figures; merged at `message_stop` they equal
+                // `success_body()`'s usage field-for-field.
+                concat!(
+                    "event: message_start\n",
+                    "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",",
+                    "\"role\":\"assistant\",\"model\":\"claude-haiku-5-5\",\"content\":[],\"stop_reason\":null,",
+                    "\"stop_sequence\":null,\"usage\":{\"input_tokens\":85,\"cache_creation_input_tokens\":128,",
+                    "\"cache_read_input_tokens\":512,\"output_tokens\":1}}}\n\n",
+                    "event: content_block_delta\n",
+                    "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hel\"}}\n\n",
+                    "event: content_block_delta\n",
+                    "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"lo \"}}\n\n",
+                    "event: content_block_delta\n",
+                    "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"world\"}}\n\n",
+                    "event: message_delta\n",
+                    "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},",
+                    "\"usage\":{\"output_tokens\":40,\"output_tokens_details\":{\"thinking_tokens\":0}}}\n\n",
+                    "event: message_stop\n",
+                    "data: {\"type\":\"message_stop\"}\n\n",
+                )
+                .to_string()
+            }
+
+            // Anthropic's stream parser skips an unparsable event with a `warn!` naming only its
+            // bounded type (`anthropic_stream_skips_a_malformed_event_and_keeps_going`), so the
+            // after-the-first-chunk case asserts that documented alternative.
+            fn malformed_frame() -> crate::conformance::MalformedFrame {
+                crate::conformance::MalformedFrame::SkippedWithWarning
+            }
+
+            fn error_body(status: u16) -> String {
+                json!({
+                    "type": "error",
+                    "error": {"type": "api_error", "message": format!("mock error for status {status}")}
+                })
+                .to_string()
+            }
+        }
+
+        crate::llm_conformance_suite!(AnthropicFixture);
+    }
+
+    /// Refusals, stop reasons, thinking text and the stream's real stop reason (plan 50-13,
+    /// D-09/D-11/D-11a; RESEARCH Pitfalls 1 and 2).
+    mod response_parity {
+        use super::*;
+        use futures::StreamExt;
+        use mockito::Server;
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+
+        fn parse(body: &str) -> Result<LlmResponse, LlmError> {
+            let response: ClaudeResponse =
+                serde_json::from_str(body).expect("test body must deserialize");
+            test_adapter().parse_response(Uuid::new_v4(), response)
+        }
+
+        fn body(content: &str, stop_reason: &str, stop_details: &str) -> String {
+            format!(
+                r#"{{"id":"msg_1","model":"claude-opus-5","content":{content},"stop_reason":{stop_reason},"stop_details":{stop_details},"usage":{{"input_tokens":3,"output_tokens":4}}}}"#
+            )
+        }
+
+        #[test]
+        fn anthropic_refusal_is_typed_not_an_empty_completion() {
+            let result = parse(&body(
+                "[]",
+                r#""refusal""#,
+                r#"{"type":"refusal","category":"cyber","explanation":"This request seeks malware."}"#,
+            ));
+            match result {
+                Err(LlmError::Refusal {
+                    provider,
+                    model,
+                    detail,
+                    ..
+                }) => {
+                    assert_eq!(provider, "anthropic");
+                    assert_eq!(model, "claude-opus-5");
+                    assert!(detail.contains("cyber"), "{detail}");
+                    assert!(detail.contains("seeks malware"), "{detail}");
+                }
+                other => panic!("expected Err(Refusal), got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn anthropic_refusal_with_null_details_names_the_stop_reason() {
+            for details in [
+                "null",
+                r#"{"type":"refusal","category":null,"explanation":null}"#,
+            ] {
+                match parse(&body("[]", r#""refusal""#, details)) {
+                    Err(LlmError::Refusal { detail, .. }) => {
+                        assert!(detail.contains("stop_reason=refusal"), "{detail}");
+                    }
+                    other => panic!("expected Err(Refusal), got {other:?}"),
+                }
+            }
+        }
+
+        #[test]
+        fn anthropic_refusal_wins_over_partial_text() {
+            let result = parse(&body(
+                r#"[{"type":"text","text":"Sure, here is"}]"#,
+                r#""refusal""#,
+                r#"{"type":"refusal","category":"bio","explanation":null}"#,
+            ));
+            assert!(
+                matches!(result, Err(LlmError::Refusal { .. })),
+                "{result:?}"
+            );
+        }
+
+        #[test]
+        fn anthropic_refusal_detail_redacts_the_configured_key_before_bounding() {
+            // The key sits just before the character budget, so bounding first would keep a
+            // prefix of it.
+            let key = "sk-ant-test123";
+            let mut explanation = "a".repeat(RESPONSE_EXCERPT_CHAR_BUDGET - 6);
+            explanation.push_str(key);
+            explanation.push_str(&"b".repeat(100));
+            let details =
+                format!(r#"{{"type":"refusal","category":null,"explanation":"{explanation}"}}"#);
+            match parse(&body("[]", r#""refusal""#, &details)) {
+                Err(LlmError::Refusal { detail, .. }) => {
+                    assert!(!detail.contains(key), "{detail}");
+                    assert!(!detail.contains("sk-ant"), "key prefix leaked: {detail}");
+                    assert!(!detail.contains("test123"), "key tail leaked: {detail}");
+                }
+                other => panic!("expected Err(Refusal), got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn anthropic_stop_reasons_map_by_name() {
+            let text = r#"[{"type":"text","text":"ok"}]"#;
+            for (wire, expected) in [
+                ("end_turn", FinishReason::Stop),
+                ("stop_sequence", FinishReason::Stop),
+                ("max_tokens", FinishReason::Length),
+                ("model_context_window_exceeded", FinishReason::Length),
+                ("tool_use", FinishReason::FunctionCall),
+                ("pause_turn", FinishReason::Error("pause_turn".to_string())),
+                (
+                    "something_new",
+                    FinishReason::Error("unknown: something_new".to_string()),
+                ),
+            ] {
+                let response = parse(&body(text, &format!("\"{wire}\""), "null"))
+                    .unwrap_or_else(|e| panic!("{wire} must parse: {e:?}"));
+                assert_eq!(
+                    std::mem::discriminant(&response.finish_reason),
+                    std::mem::discriminant(&expected),
+                    "{wire}"
+                );
+                if let FinishReason::Error(label) = &expected {
+                    assert!(
+                        matches!(&response.finish_reason, FinishReason::Error(got) if got == label),
+                        "{wire}: {:?}",
+                        response.finish_reason
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn anthropic_unknown_stop_reason_is_bounded_to_identifier_characters() {
+            let finish = map_stop_reason(Some("odd value\nwith sk-ant-secret"));
+            assert!(
+                matches!(&finish, FinishReason::Error(label) if label == "unknown: odd"),
+                "{finish:?}"
+            );
+        }
+
+        #[test]
+        fn anthropic_tool_use_without_text_stays_ok() {
+            let response = parse(&body(
+                r#"[{"type":"tool_use","id":"toolu_1","name":"lookup","input":{}}]"#,
+                r#""tool_use""#,
+                "null",
+            ))
+            .expect("a tool_use stop with no text is a valid response");
+            assert!(matches!(response.finish_reason, FinishReason::FunctionCall));
+        }
+
+        #[test]
+        fn anthropic_empty_content_on_end_turn_is_an_empty_completion() {
+            for content in ["[]", r#"[{"type":"text","text":"  "}]"#] {
+                match parse(&body(content, r#""end_turn""#, "null")) {
+                    Err(LlmError::EmptyCompletion { detail: msg, .. }) => {
+                        assert!(msg.contains("finish_reason=stop"), "{msg}");
+                        assert!(msg.contains("content block(s)"), "{msg}");
+                    }
+                    other => panic!("expected Err(EmptyCompletion), got {other:?}"),
+                }
+            }
+        }
+
+        #[test]
+        fn anthropic_context_window_stop_with_no_text_names_the_cause() {
+            match parse(&body("[]", r#""model_context_window_exceeded""#, "null")) {
+                Err(LlmError::EmptyCompletion { detail: msg, .. }) => {
+                    assert!(msg.contains("finish_reason=length"), "{msg}");
+                }
+                other => panic!("expected Err(EmptyCompletion), got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn anthropic_thinking_text_reaches_reasoning_in_block_order() {
+            let response = parse(&body(
+                r#"[{"type":"thinking","thinking":"First, ","signature":"s1"},{"type":"redacted_thinking","data":"opaque"},{"type":"thinking","thinking":"then second.","signature":"s2"},{"type":"text","text":"The answer."}]"#,
+                r#""end_turn""#,
+                "null",
+            ))
+            .expect("thinking plus text must parse");
+            assert_eq!(response.reasoning.as_deref(), Some("First, then second."));
+            assert_eq!(response.content, "The answer.");
+        }
+
+        #[test]
+        fn anthropic_blank_thinking_is_no_reasoning() {
+            let response = parse(&body(
+                r#"[{"type":"thinking","thinking":"","signature":"s"},{"type":"text","text":"ok"}]"#,
+                r#""end_turn""#,
+                "null",
+            ))
+            .expect("must parse");
+            assert!(response.reasoning.is_none());
+        }
+
+        #[test]
+        fn unparsable_event_type_names_only_a_bounded_type() {
+            assert_eq!(
+                unparsable_event_type(r#"{"type":"content_block_delta","index":"oops"}"#),
+                "content_block_delta"
+            );
+            assert_eq!(unparsable_event_type("not json sk-ant-secret"), "unknown");
+            assert_eq!(unparsable_event_type(r#"{"no_type":1}"#), "unknown");
+            assert_eq!(unparsable_event_type(r#"{"type":7}"#), "unknown");
+            let hostile = format!(r#"{{"type":"{}"}}"#, "x".repeat(500));
+            assert_eq!(unparsable_event_type(&hostile).len(), 64);
+        }
+
+        // ── stream ────────────────────────────────────────────────────────
+
+        fn adapter_at(base_url: &str) -> AnthropicAdapter {
+            let config =
+                AnthropicConfig::new("sk-ant-test123".to_string(), "claude-sonnet-5".to_string())
+                    .with_base_url(base_url);
+            AnthropicAdapter::new(config).expect("test config must build a valid adapter")
+        }
+
+        fn stream_request() -> LlmRequest {
+            LlmRequest::new(
+                "claude-sonnet-5",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))
+                .expect("a user prompt must build"),
+            )
+        }
+
+        const START: &str = "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude-sonnet-5\",\"usage\":{\"input_tokens\":5,\"output_tokens\":1}}}\n\n";
+        const STOP: &str = "data: {\"type\":\"message_stop\"}\n\n";
+
+        fn text_delta(text: &str) -> String {
+            format!(
+                "data: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\"{text}\"}}}}\n\n"
+            )
+        }
+
+        fn thinking_delta(text: &str) -> String {
+            format!(
+                "data: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"thinking_delta\",\"thinking\":\"{text}\"}}}}\n\n"
+            )
+        }
+
+        fn message_delta(stop_reason: &str, stop_details: &str) -> String {
+            format!(
+                "data: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"{stop_reason}\",\"stop_sequence\":null,\"stop_details\":{stop_details}}},\"usage\":{{\"output_tokens\":7}}}}\n\n"
+            )
+        }
+
+        async fn run_stream(sse: String) -> Vec<Result<StreamingResponse, LlmError>> {
+            let mut server = Server::new_async().await;
+            server
+                .mock("POST", "/messages")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body(sse)
+                .create_async()
+                .await;
+            let stream = adapter_at(&server.url())
+                .generate_stream(stream_request())
+                .await
+                .expect("streaming call must start");
+            let mut stream = Box::into_pin(stream);
+            let mut items = Vec::new();
+            while let Some(item) = stream.next().await {
+                items.push(item);
+            }
+            items
+        }
+
+        #[tokio::test]
+        async fn anthropic_stream_maps_the_real_stop_reason_on_the_terminal_chunk() {
+            for (wire, expect_length) in [("max_tokens", true), ("end_turn", false)] {
+                let items = run_stream(format!(
+                    "{START}{}{}{STOP}",
+                    text_delta("Hi"),
+                    message_delta(wire, "null")
+                ))
+                .await;
+                let terminal = items
+                    .last()
+                    .expect("stream must end")
+                    .as_ref()
+                    .expect("terminal chunk must be Ok");
+                assert_eq!(
+                    matches!(terminal.finish_reason, Some(FinishReason::Length)),
+                    expect_length,
+                    "{wire}: {:?}",
+                    terminal.finish_reason
+                );
+                assert!(terminal.usage.is_some(), "usage rides the terminal chunk");
+            }
+        }
+
+        #[tokio::test]
+        async fn anthropic_stream_refusal_after_partial_text_ends_in_refusal() {
+            let items = run_stream(format!(
+                "{START}{}{}{}{STOP}",
+                text_delta("Sure, "),
+                text_delta("here "),
+                message_delta(
+                    "refusal",
+                    r#"{"type":"refusal","category":"cyber","explanation":"No."}"#
+                )
+            ))
+            .await;
+            assert_eq!(items.len(), 3, "two text items then the refusal: {items:?}");
+            assert_eq!(items[0].as_ref().expect("text").delta, "Sure, ");
+            assert_eq!(items[1].as_ref().expect("text").delta, "here ");
+            match &items[2] {
+                Err(LlmError::Refusal {
+                    provider,
+                    model,
+                    detail,
+                    ..
+                }) => {
+                    assert_eq!(provider, "anthropic");
+                    assert_eq!(model, "claude-sonnet-5");
+                    assert!(detail.contains("cyber"), "{detail}");
+                }
+                other => panic!("expected Err(Refusal) last, got {other:?}"),
+            }
+        }
+
+        #[tokio::test]
+        async fn anthropic_stream_thinking_deltas_reach_reasoning_in_wire_order() {
+            let items = run_stream(format!(
+                "{START}{}{}{}{}{STOP}",
+                thinking_delta("one "),
+                thinking_delta("two"),
+                text_delta("Answer"),
+                message_delta("end_turn", "null")
+            ))
+            .await;
+            let reasoning: Vec<&str> = items
+                .iter()
+                .filter_map(|i| i.as_ref().ok()?.reasoning.as_deref())
+                .collect();
+            assert_eq!(reasoning, vec!["one ", "two"]);
+            let text: String = items
+                .iter()
+                .filter_map(|i| i.as_ref().ok())
+                .map(|c| c.delta.as_str())
+                .collect();
+            assert_eq!(text, "Answer");
+            assert!(items.iter().all(Result::is_ok));
+        }
+
+        #[tokio::test]
+        async fn anthropic_empty_stream_is_empty_completion() {
+            let items = run_stream(format!(
+                "{START}{}{}{}{STOP}",
+                thinking_delta("pondering "),
+                thinking_delta("more"),
+                message_delta("end_turn", "null")
+            ))
+            .await;
+            assert_eq!(items.len(), 3, "{items:?}");
+            // The reasoning already yielded stays yielded.
+            assert_eq!(
+                items[0].as_ref().expect("reasoning").reasoning.as_deref(),
+                Some("pondering ")
+            );
+            assert_eq!(
+                items[1].as_ref().expect("reasoning").reasoning.as_deref(),
+                Some("more")
+            );
+            match &items[2] {
+                Err(LlmError::EmptyCompletion { detail: msg, .. }) => {
+                    assert!(msg.contains("finish_reason=stop"), "{msg}");
+                }
+                other => panic!("expected Err(EmptyCompletion) last, got {other:?}"),
+            }
+        }
+
+        #[tokio::test]
+        async fn anthropic_stream_skips_a_malformed_event_and_keeps_going() {
+            let items = run_stream(format!(
+                "{START}data: {{\"type\":\"content_block_delta\",\"index\":\"bad\"\n\n{}{}{STOP}",
+                text_delta("ok"),
+                message_delta("end_turn", "null")
+            ))
+            .await;
+            assert!(items.iter().all(Result::is_ok), "{items:?}");
+            assert_eq!(items[0].as_ref().expect("text").delta, "ok");
+        }
+    }
+
+    /// Phase 51 (REASON-02, REASON-03, REASON-06): an explicit effort reaches the wire in the form
+    /// the model's profile states, or is refused before any HTTP call (D-00h).
+    mod reasoning_effort {
+        use super::*;
+        use crate::reasoning::{
+            REASONING_EFFECTIVE_METADATA_KEY, REASONING_REQUESTED_METADATA_KEY,
+        };
+        use mockito::Server;
+        use paladin_core::platform::container::prompt::{PromptItem, UserPrompt};
+        use paladin_core::platform::container::transience::Transience;
+        use paladin_ports::output::llm_port::ReasoningEffort::{High, Low, Max, Medium, XHigh};
+        use paladin_ports::output::llm_port::{ReasoningEffort, ReasoningFallback};
+        use paladin_ports::output::model_profile::{BudgetBounds, EffortLevels, EffortSupport};
+        use serde_json::{Value, json};
+        use std::sync::Mutex as StdMutex;
+
+        const OPUS_4_8: &str = "claude-opus-4-8";
+        /// A model id with no seeded row, so it stays `Unmeasured` and refuses an explicit effort.
+        const UNPROFILED: &str = "claude-unprofiled-test-model";
+        const OPUS_4_6: &str = "claude-opus-4-6";
+
+        fn request_for(model: &str) -> LlmRequest {
+            LlmRequest::new(
+                model,
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))
+                .expect("a user prompt must build"),
+            )
+        }
+
+        fn adapter_over(base_url: &str, overrides: Vec<(&str, EffortSupport)>) -> AnthropicAdapter {
+            let map: BTreeMap<String, ModelOverride> = overrides
+                .into_iter()
+                .map(|(model, effort)| {
+                    (
+                        model.to_string(),
+                        ModelOverride {
+                            effort: Some(effort),
+                            ..ModelOverride::default()
+                        },
+                    )
+                })
+                .collect();
+            let config =
+                AnthropicConfig::new("sk-ant-test123".to_string(), "claude-haiku-5-5".to_string())
+                    .with_base_url(base_url)
+                    .with_model_overrides(map);
+            AnthropicAdapter::new(config).expect("a valid override builds")
+        }
+
+        /// Send `request` through an adapter carrying `overrides` against a mock `/messages`;
+        /// returns the raw request body (`None` when no HTTP call was made) and the result.
+        async fn send_raw(
+            overrides: Vec<(&str, EffortSupport)>,
+            request: LlmRequest,
+        ) -> (Option<String>, Result<LlmResponse, LlmError>) {
+            let mut server = Server::new_async().await;
+            let captured: Arc<StdMutex<Option<String>>> = Arc::new(StdMutex::new(None));
+            let slot = Arc::clone(&captured);
+            server
+                .mock("POST", "/messages")
+                .with_status(200)
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    TEXT_ONLY_OPUS_4_8_JSON.as_bytes().to_vec()
+                })
+                .create_async()
+                .await;
+            let adapter = adapter_over(&server.url(), overrides);
+            let result = adapter.generate(request).await;
+            let body = captured.lock().unwrap().take();
+            (body, result)
+        }
+
+        /// D-09: `check_reasoning` answers with this adapter's own `llm.anthropic.reasoning_*`
+        /// defaults, and agrees with what `generate` does for the same effort.
+        #[tokio::test]
+        async fn anthropic_check_reasoning_consults_the_provider_defaults() {
+            const PROBE: &str = "probe-model";
+            let mut server = Server::new_async().await;
+            server
+                .mock("POST", "/messages")
+                .with_status(200)
+                .with_body(TEXT_ONLY_OPUS_4_8_JSON)
+                .expect_at_least(0)
+                .create_async()
+                .await;
+            let over = ModelOverride {
+                effort: Some(EffortSupport::Supported(EffortLevels::new([Low, High]))),
+                ..ModelOverride::default()
+            };
+            let adapter = |effort: Option<ReasoningEffort>, fallback: Option<ReasoningFallback>| {
+                let mut config = AnthropicConfig::new(
+                    "sk-ant-test123".to_string(),
+                    "claude-haiku-5-5".to_string(),
+                )
+                .with_base_url(server.url())
+                .with_model_overrides(BTreeMap::from([(PROBE.to_string(), over.clone())]));
+                if let Some(effort) = effort {
+                    config = config.with_reasoning_effort(effort);
+                }
+                if let Some(fallback) = fallback {
+                    config = config.with_reasoning_fallback(fallback);
+                }
+                AnthropicAdapter::new(config).expect("a valid override builds")
+            };
+
+            // A provider fallback substitutes an agent effort the model lacks.
+            let substituting = adapter(None, Some(ReasoningFallback::NearestLower));
+            assert!(
+                substituting
+                    .check_reasoning(PROBE, Some(Medium), None)
+                    .is_ok()
+            );
+            assert!(
+                substituting
+                    .generate(request_for(PROBE).with_reasoning(Medium))
+                    .await
+                    .is_ok()
+            );
+
+            // A provider default effort the model lacks is refused for a caller who sets none.
+            let defaulted = adapter(Some(Medium), None);
+            let LlmError::UnsupportedParameter {
+                reason: checked, ..
+            } = defaulted.check_reasoning(PROBE, None, None).unwrap_err()
+            else {
+                panic!("expected UnsupportedParameter");
+            };
+            let LlmError::UnsupportedParameter {
+                reason: sent,
+                param,
+                ..
+            } = defaulted.generate(request_for(PROBE)).await.unwrap_err()
+            else {
+                panic!("expected UnsupportedParameter");
+            };
+            assert_eq!(param, "reasoning_effort");
+            assert_eq!(checked, sent);
+            assert!(
+                checked.ends_with("(set by `llm.anthropic.reasoning_effort`)"),
+                "{checked}"
+            );
+
+            // A listed request effort is served under either default.
+            for port in [&substituting, &defaulted] {
+                assert!(port.check_reasoning(PROBE, Some(High), None).is_ok());
+                assert!(
+                    port.generate(request_for(PROBE).with_reasoning(High))
+                        .await
+                        .is_ok()
+                );
+            }
+
+            // Nothing in force anywhere: nothing judged.
+            assert!(
+                adapter(None, None)
+                    .check_reasoning(PROBE, None, None)
+                    .is_ok()
+            );
+        }
+
+        fn json_of(body: Option<String>) -> Value {
+            serde_json::from_str(&body.expect("the request reached the wire"))
+                .expect("the body must be JSON")
+        }
+
+        /// claude-opus-4-8's shape: levels, off, auto, no budget form, adaptive thinking beside
+        /// a level when `paired`.
+        fn opus_4_8_levels(paired: bool) -> EffortSupport {
+            EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High, XHigh, Max])
+                    .with_off(true)
+                    .with_auto(true)
+                    .with_enable_thinking_with_level(paired),
+            )
+        }
+
+        /// claude-opus-4-6's shape: levels, off, auto and the legacy budget form.
+        fn opus_4_6_budget() -> EffortSupport {
+            EffortSupport::Supported(
+                EffortLevels::new([Low, Medium, High, Max])
+                    .with_off(true)
+                    .with_auto(true)
+                    .with_budget(BudgetBounds::new(1024, 32_000)),
+            )
+        }
+
+        #[tokio::test]
+        async fn a_level_sends_output_config_effort_and_adaptive_thinking_when_the_profile_pairs_them()
+         {
+            let (body, result) = send_raw(
+                vec![(OPUS_4_8, opus_4_8_levels(true))],
+                request_for(OPUS_4_8).with_reasoning(High),
+            )
+            .await;
+            result.expect("a listed level is accepted");
+            let body = json_of(body);
+            assert_eq!(body["output_config"], json!({"effort": "high"}));
+            assert_eq!(body["thinking"], json!({"type": "adaptive"}));
+        }
+
+        #[tokio::test]
+        async fn a_level_sends_only_output_config_when_the_profile_does_not_pair_thinking() {
+            let (body, result) = send_raw(
+                vec![(OPUS_4_8, opus_4_8_levels(false))],
+                request_for(OPUS_4_8).with_reasoning(High),
+            )
+            .await;
+            result.expect("a listed level is accepted");
+            let body = json_of(body);
+            assert_eq!(body["output_config"], json!({"effort": "high"}));
+            assert!(body.get("thinking").is_none(), "{body}");
+        }
+
+        #[tokio::test]
+        async fn the_effort_body_is_the_unset_body_plus_the_two_trailing_fields() {
+            let (unset, _) = send_raw(
+                vec![(OPUS_4_8, opus_4_8_levels(true))],
+                request_for(OPUS_4_8),
+            )
+            .await;
+            let (set, _) = send_raw(
+                vec![(OPUS_4_8, opus_4_8_levels(true))],
+                request_for(OPUS_4_8).with_reasoning(High),
+            )
+            .await;
+            let unset = unset.expect("the unset request reached the wire");
+            let prefix = unset.strip_suffix('}').expect("a JSON object");
+            assert_eq!(
+                set.expect("the effort request reached the wire"),
+                format!(
+                    "{prefix},\"output_config\":{{\"effort\":\"high\"}},\"thinking\":{{\"type\":\"adaptive\"}}}}"
+                )
+            );
+        }
+
+        #[tokio::test]
+        async fn the_response_records_requested_and_effective_effort() {
+            let (_, result) = send_raw(
+                vec![(OPUS_4_8, opus_4_8_levels(true))],
+                request_for(OPUS_4_8).with_reasoning(High),
+            )
+            .await;
+            let metadata = result.expect("accepted").metadata;
+            assert_eq!(
+                metadata
+                    .get(REASONING_REQUESTED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("high")
+            );
+            assert_eq!(
+                metadata
+                    .get(REASONING_EFFECTIVE_METADATA_KEY)
+                    .map(String::as_str),
+                Some("high")
+            );
+        }
+
+        #[tokio::test]
+        async fn an_unset_effort_sends_neither_field_and_stamps_nothing() {
+            let (body, result) = send_raw(
+                vec![(OPUS_4_8, opus_4_8_levels(true))],
+                request_for(OPUS_4_8),
+            )
+            .await;
+            let metadata = result.expect("accepted").metadata;
+            assert!(!metadata.contains_key(REASONING_REQUESTED_METADATA_KEY));
+            assert!(!metadata.contains_key(REASONING_EFFECTIVE_METADATA_KEY));
+            let body = body.expect("reached the wire");
+            assert!(
+                !body.contains("output_config") && !body.contains("thinking"),
+                "{body}"
+            );
+        }
+
+        #[tokio::test]
+        async fn an_effort_on_an_unmeasured_model_is_refused_before_any_http_call() {
+            let (body, result) =
+                send_raw(Vec::new(), request_for(UNPROFILED).with_reasoning(High)).await;
+            assert!(
+                body.is_none(),
+                "no request may reach the endpoint: {body:?}"
+            );
+            let error = result.expect_err("an unmeasured model refuses an explicit effort");
+            assert_eq!(error.transience(), Transience::Permanent);
+            match error {
+                LlmError::UnsupportedParameter {
+                    reason,
+                    provider,
+                    model,
+                    ..
+                } => {
+                    assert_eq!(provider, "anthropic");
+                    assert_eq!(model, UNPROFILED);
+                    assert!(
+                        reason.contains("llm.anthropic.models.claude-unprofiled-test-model.effort"),
+                        "{reason}"
+                    );
+                }
+                other => panic!("expected UnsupportedParameter, got {other:?}"),
+            }
+        }
+
+        #[tokio::test]
+        async fn an_unlisted_level_is_refused_before_any_http_call() {
+            let (body, result) = send_raw(
+                vec![(OPUS_4_8, opus_4_8_levels(true))],
+                request_for(OPUS_4_8).with_reasoning(ReasoningEffort::Minimal),
+            )
+            .await;
+            assert!(body.is_none(), "{body:?}");
+            assert!(matches!(result, Err(LlmError::UnsupportedParameter { .. })));
+        }
+
+        #[tokio::test]
+        async fn a_substituting_fallback_sends_the_nearest_lower_level_and_records_both() {
+            let levels = EffortSupport::Supported(EffortLevels::new([Low, High]));
+            let (body, result) = send_raw(
+                vec![(OPUS_4_8, levels)],
+                request_for(OPUS_4_8)
+                    .with_reasoning(Medium)
+                    .with_reasoning_fallback(ReasoningFallback::NearestLower),
+            )
+            .await;
+            let metadata = result.expect("a substitution is accepted").metadata;
+            assert_eq!(json_of(body)["output_config"], json!({"effort": "low"}));
+            assert_eq!(metadata[REASONING_REQUESTED_METADATA_KEY], "medium");
+            assert_eq!(metadata[REASONING_EFFECTIVE_METADATA_KEY], "low");
+        }
+
+        /// Send `request` and assert it was refused as `UnsupportedParameter` with no HTTP hit;
+        /// returns the refusal's reason text.
+        async fn refused_before_http(
+            overrides: Vec<(&str, EffortSupport)>,
+            request: LlmRequest,
+        ) -> String {
+            let (body, result) = send_raw(overrides, request).await;
+            assert!(
+                body.is_none(),
+                "no request may reach the endpoint: {body:?}"
+            );
+            match result {
+                Err(LlmError::UnsupportedParameter { reason, .. }) => reason,
+                other => panic!("expected UnsupportedParameter, got {other:?}"),
+            }
+        }
+
+        fn with_max_tokens(mut request: LlmRequest, max_tokens: u32) -> LlmRequest {
+            request.prompt.entity.data.parameters.max_tokens = Some(max_tokens);
+            request
+        }
+
+        #[tokio::test]
+        async fn a_budget_inside_the_profile_bounds_sends_the_legacy_enabled_form() {
+            let (body, result) = send_raw(
+                vec![(OPUS_4_6, opus_4_6_budget())],
+                with_max_tokens(
+                    request_for(OPUS_4_6).with_reasoning(ReasoningEffort::Budget(2048)),
+                    4096,
+                ),
+            )
+            .await;
+            result.expect("a budget inside the bounds is accepted");
+            let body = json_of(body);
+            assert_eq!(
+                body["thinking"],
+                json!({"type": "enabled", "budget_tokens": 2048})
+            );
+            assert!(body.get("output_config").is_none(), "{body}");
+            assert_eq!(body["max_tokens"], 4096);
+        }
+
+        #[tokio::test]
+        async fn a_budget_below_the_profile_minimum_is_refused_before_http() {
+            let reason = refused_before_http(
+                vec![(OPUS_4_6, opus_4_6_budget())],
+                with_max_tokens(
+                    request_for(OPUS_4_6).with_reasoning(ReasoningEffort::Budget(1023)),
+                    4096,
+                ),
+            )
+            .await;
+            assert!(reason.contains("1024"), "names the lower bound: {reason}");
+        }
+
+        #[tokio::test]
+        async fn a_budget_above_the_profile_maximum_is_refused_before_http() {
+            refused_before_http(
+                vec![(OPUS_4_6, opus_4_6_budget())],
+                with_max_tokens(
+                    request_for(OPUS_4_6).with_reasoning(ReasoningEffort::Budget(32_001)),
+                    64_000,
+                ),
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn a_budget_that_leaves_no_output_room_is_refused_and_never_raises_max_tokens() {
+            let reason = refused_before_http(
+                vec![(OPUS_4_6, opus_4_6_budget())],
+                with_max_tokens(
+                    request_for(OPUS_4_6).with_reasoning(ReasoningEffort::Budget(4096)),
+                    4096,
+                ),
+            )
+            .await;
+            assert!(reason.contains("max_tokens"), "{reason}");
+        }
+
+        #[tokio::test]
+        async fn a_budget_on_a_model_without_budget_bounds_is_refused_so_the_deprecated_form_never_ships()
+         {
+            let reason = refused_before_http(
+                vec![(OPUS_4_8, opus_4_8_levels(true))],
+                with_max_tokens(
+                    request_for(OPUS_4_8).with_reasoning(ReasoningEffort::Budget(2048)),
+                    4096,
+                ),
+            )
+            .await;
+            assert!(reason.contains("budget"), "{reason}");
+        }
+
+        #[tokio::test]
+        async fn off_sends_thinking_disabled_and_no_output_config() {
+            let (body, result) = send_raw(
+                vec![(OPUS_4_8, opus_4_8_levels(true))],
+                request_for(OPUS_4_8).with_reasoning(ReasoningEffort::Off),
+            )
+            .await;
+            let metadata = result.expect("off is accepted").metadata;
+            let body = json_of(body);
+            assert_eq!(body["thinking"], json!({"type": "disabled"}));
+            assert!(body.get("output_config").is_none(), "{body}");
+            assert_eq!(metadata[REASONING_REQUESTED_METADATA_KEY], "off");
+            assert_eq!(metadata[REASONING_EFFECTIVE_METADATA_KEY], "off");
+        }
+
+        #[tokio::test]
+        async fn off_on_a_profile_that_cannot_turn_reasoning_off_is_refused_before_http() {
+            let no_off = EffortSupport::Supported(EffortLevels::new([Low, High]));
+            refused_before_http(
+                vec![(OPUS_4_8, no_off)],
+                request_for(OPUS_4_8).with_reasoning(ReasoningEffort::Off),
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn auto_sends_adaptive_thinking_and_no_output_config() {
+            let (body, result) = send_raw(
+                vec![(OPUS_4_8, opus_4_8_levels(false))],
+                request_for(OPUS_4_8).with_reasoning(ReasoningEffort::Auto),
+            )
+            .await;
+            let metadata = result.expect("auto is accepted").metadata;
+            let body = json_of(body);
+            assert_eq!(body["thinking"], json!({"type": "adaptive"}));
+            assert!(body.get("output_config").is_none(), "{body}");
+            assert_eq!(metadata[REASONING_REQUESTED_METADATA_KEY], "auto");
+        }
+
+        #[tokio::test]
+        async fn auto_on_a_profile_without_auto_is_refused_before_http() {
+            let no_auto = EffortSupport::Supported(EffortLevels::new([Low, High]).with_off(true));
+            refused_before_http(
+                vec![(OPUS_4_8, no_auto)],
+                request_for(OPUS_4_8).with_reasoning(ReasoningEffort::Auto),
+            )
+            .await;
+        }
+
+        #[tokio::test]
+        async fn no_body_asks_for_reasoning_text() {
+            // D-00g: the Phase 50 typed fields are the only surface; nothing requests text.
+            for (overrides, effort, max_tokens) in [
+                (opus_4_8_levels(true), High, 4096),
+                (opus_4_8_levels(true), ReasoningEffort::Off, 4096),
+                (opus_4_8_levels(true), ReasoningEffort::Auto, 4096),
+                (opus_4_6_budget(), ReasoningEffort::Budget(2048), 4096),
+            ] {
+                let model = if matches!(effort, ReasoningEffort::Budget(_)) {
+                    OPUS_4_6
+                } else {
+                    OPUS_4_8
+                };
+                let (body, result) = send_raw(
+                    vec![(model, overrides)],
+                    with_max_tokens(request_for(model).with_reasoning(effort), max_tokens),
+                )
+                .await;
+                result.expect("accepted");
+                let body = body.expect("reached the wire");
+                assert!(
+                    !body.contains("display") && !body.contains("includeThoughts"),
+                    "{effort}: {body}"
+                );
+            }
+        }
+
+        /// Run a streaming call against a mock whose body is `sse`; returns the raw request body
+        /// (`None` when no HTTP call was made) and the outcome.
+        async fn stream_raw(
+            overrides: Vec<(&str, EffortSupport)>,
+            request: LlmRequest,
+            sse: String,
+        ) -> (
+            Option<String>,
+            Result<Vec<Result<StreamingResponse, LlmError>>, LlmError>,
+        ) {
+            let mut server = Server::new_async().await;
+            let captured: Arc<StdMutex<Option<String>>> = Arc::new(StdMutex::new(None));
+            let slot = Arc::clone(&captured);
+            server
+                .mock("POST", "/messages")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    sse.clone().into_bytes()
+                })
+                .create_async()
+                .await;
+            let adapter = adapter_over(&server.url(), overrides);
+            let outcome = match adapter.generate_stream(request).await {
+                Err(error) => Err(error),
+                Ok(stream) => {
+                    let mut stream = Box::into_pin(stream);
+                    let mut items = Vec::new();
+                    while let Some(item) = stream.next().await {
+                        items.push(item);
+                    }
+                    Ok(items)
+                }
+            };
+            let body = captured.lock().unwrap().take();
+            (body, outcome)
+        }
+
+        /// A stream that thinks, answers, and reports 3 thinking tokens inside 7 output tokens.
+        fn thinking_stream() -> String {
+            [
+                "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude-opus-4-8\",\"usage\":{\"input_tokens\":5,\"output_tokens\":1}}}\n\n",
+                "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"hmm \"}}\n\n",
+                "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"Answer\"}}\n\n",
+                "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":7,\"output_tokens_details\":{\"thinking_tokens\":3}}}\n\n",
+                "data: {\"type\":\"message_stop\"}\n\n",
+            ]
+            .concat()
+        }
+
+        #[tokio::test]
+        async fn the_stream_sends_the_same_fields_and_stamps_only_the_terminal_chunk() {
+            let (body, outcome) = stream_raw(
+                vec![(OPUS_4_8, opus_4_8_levels(true))],
+                request_for(OPUS_4_8).with_reasoning(High),
+                thinking_stream(),
+            )
+            .await;
+            let body = json_of(body);
+            assert_eq!(body["output_config"], json!({"effort": "high"}));
+            assert_eq!(body["thinking"], json!({"type": "adaptive"}));
+            assert_eq!(body["stream"], true);
+
+            let items = outcome.expect("the stream opens");
+            let chunks: Vec<&StreamingResponse> = items
+                .iter()
+                .map(|i| i.as_ref().expect("every item is Ok"))
+                .collect();
+            let (terminal, earlier) = chunks.split_last().expect("a terminal chunk");
+            assert_eq!(terminal.metadata[REASONING_REQUESTED_METADATA_KEY], "high");
+            assert_eq!(terminal.metadata[REASONING_EFFECTIVE_METADATA_KEY], "high");
+            for chunk in earlier {
+                assert!(chunk.metadata.is_empty(), "earlier chunk: {chunk:?}");
+            }
+            // D-00g / REASON-05: thinking text and tokens still reach the typed fields.
+            let reasoning: Vec<&str> = chunks
+                .iter()
+                .filter_map(|c| c.reasoning.as_deref())
+                .collect();
+            assert_eq!(reasoning, vec!["hmm "]);
+            let usage = terminal
+                .usage
+                .as_ref()
+                .expect("usage rides the terminal chunk");
+            assert_eq!(usage.reasoning_tokens, Some(3));
+        }
+
+        #[tokio::test]
+        async fn the_stream_sends_off_and_budget_in_the_same_forms_as_the_buffered_path() {
+            let (off, _) = stream_raw(
+                vec![(OPUS_4_8, opus_4_8_levels(true))],
+                request_for(OPUS_4_8).with_reasoning(ReasoningEffort::Off),
+                thinking_stream(),
+            )
+            .await;
+            assert_eq!(json_of(off)["thinking"], json!({"type": "disabled"}));
+
+            let (budget, _) = stream_raw(
+                vec![(OPUS_4_6, opus_4_6_budget())],
+                with_max_tokens(
+                    request_for(OPUS_4_6).with_reasoning(ReasoningEffort::Budget(2048)),
+                    4096,
+                ),
+                thinking_stream(),
+            )
+            .await;
+            assert_eq!(
+                json_of(budget)["thinking"],
+                json!({"type": "enabled", "budget_tokens": 2048})
+            );
+        }
+
+        #[tokio::test]
+        async fn a_refused_effort_fails_the_stream_before_any_http_call() {
+            let (body, outcome) = stream_raw(
+                vec![(OPUS_4_8, opus_4_8_levels(true))],
+                with_max_tokens(
+                    request_for(OPUS_4_8).with_reasoning(ReasoningEffort::Budget(2048)),
+                    4096,
+                ),
+                thinking_stream(),
+            )
+            .await;
+            assert!(body.is_none(), "{body:?}");
+            assert!(matches!(
+                outcome,
+                Err(LlmError::UnsupportedParameter { .. })
+            ));
+        }
+
+        #[tokio::test]
+        async fn a_thinking_only_response_is_still_an_empty_completion_under_an_effort() {
+            // The runtime backstop (`detect_no_text_content`) is unchanged by an explicit effort.
+            let mut server = Server::new_async().await;
+            server
+                .mock("POST", "/messages")
+                .with_status(200)
+                .with_body(THINKING_ONLY_SONNET_5_JSON)
+                .create_async()
+                .await;
+            let adapter = adapter_over(
+                &server.url(),
+                vec![("claude-sonnet-5", opus_4_8_levels(true))],
+            );
+            let result = adapter
+                .generate(request_for("claude-sonnet-5").with_reasoning(High))
+                .await;
+            assert!(
+                matches!(result, Err(LlmError::EmptyCompletion { .. })),
+                "{result:?}"
+            );
+        }
+
+        #[test]
+        fn the_reported_profile_keeps_levels_off_auto_and_budget() {
+            let adapter = adapter_over("http://localhost:1", vec![(OPUS_4_6, opus_4_6_budget())]);
+            let EffortSupport::Supported(levels) = adapter.model_profile(OPUS_4_6).unwrap().effort
+            else {
+                panic!("a wire that carries every form keeps the override Supported");
+            };
+            assert_eq!(levels.levels, [Low, Medium, High, Max]);
+            assert!(levels.off && levels.auto);
+            assert_eq!(levels.budget, Some(BudgetBounds::new(1024, 32_000)));
+        }
+
+        /// The transcript date every Anthropic model was probed (run 2).
+        const PROBED_ON: &str = "2026-10-22";
+
+        /// `(model, levels, off, auto, paired)` as `51-EFFORT-PROBE.md` evidences them (run 2):
+        /// levels accepted through `output_config`; `off` = the `thinking` disabled row accepted
+        /// with no reasoning tokens reported; `auto` = the adaptive row accepted with more than 0
+        /// reasoning tokens; `paired` = the owner's pairing set (`enable_thinking_with_level`),
+        /// the four models whose thinking tokens appear only beside `thinking: adaptive`.
+        #[allow(clippy::type_complexity)]
+        fn transcript() -> Vec<(&'static str, Vec<ReasoningEffort>, bool, bool, bool)> {
+            let five = vec![Low, Medium, High, XHigh, Max];
+            let four = vec![Low, Medium, High, Max];
+            vec![
+                // off 200 rt=0; auto rt=95.
+                ("claude-haiku-5-5", five.clone(), true, true, false),
+                // off 200 rt=0; auto rt=0 (not seeded); paired max 41 against 0 alone.
+                ("claude-opus-4-8", five.clone(), true, false, true),
+                // off 400; auto rt=30.
+                ("claude-fable-5-1", five.clone(), false, true, false),
+                // off 400; auto rt=11.
+                ("claude-fable-5", five.clone(), false, true, false),
+                // off 400; auto rt=8.
+                ("claude-opus-5-5", five.clone(), false, true, false),
+                // off 200 rt=0; auto rt=12.
+                ("claude-opus-5", five.clone(), true, true, false),
+                // off 400; auto rt=0 (not seeded).
+                ("claude-sonnet-5-5", five.clone(), false, false, false),
+                // off 200 rt=0; auto rt=0 (not seeded).
+                ("claude-sonnet-5", five.clone(), true, false, false),
+                // off 200 rt=0; auto rt=0 (not seeded); paired max 50 against 0 alone.
+                ("claude-opus-4-7", five, true, false, true),
+                // xhigh drew 400; off 200 (no count); auto rt=46; paired max 48.
+                ("claude-opus-4-6", four.clone(), true, true, true),
+                // xhigh drew 400; off 200 (no count); auto rt=46; paired max 48.
+                ("claude-sonnet-4-6", four, true, true, true),
+            ]
+        }
+
+        fn expected(
+            levels: &[ReasoningEffort],
+            off: bool,
+            auto: bool,
+            paired: bool,
+        ) -> EffortSupport {
+            EffortSupport::Supported(
+                EffortLevels::new(levels.iter().copied())
+                    .with_off(off)
+                    .with_auto(auto)
+                    .with_enable_thinking_with_level(paired),
+            )
+        }
+
+        #[test]
+        fn anthropic_effort_seed_matches_the_transcript() {
+            let adapter = adapter_over("https://example.invalid/v1", Vec::new());
+            for (model, levels, off, auto, paired) in transcript() {
+                let profile = adapter
+                    .model_profile(model)
+                    .unwrap_or_else(|| panic!("{model}: no profile"));
+                assert_eq!(
+                    profile.effort,
+                    expected(&levels, off, auto, paired),
+                    "{model}"
+                );
+                assert_eq!(
+                    profile.effort_verified_on.as_deref(),
+                    Some(PROBED_ON),
+                    "{model}"
+                );
+            }
+            // `thinking_budget` 1024 was accepted on the 4.6 pair, but the vendor-documented
+            // section names no fixed maximum, so no model carries a span (judgement call, SUMMARY).
+            for (model, ..) in transcript() {
+                let EffortSupport::Supported(levels) = adapter.model_profile(model).unwrap().effort
+                else {
+                    panic!("{model}: Supported");
+                };
+                assert_eq!(levels.budget, None, "{model}");
+                assert!(levels.coerced.is_empty(), "{model}");
+            }
+        }
+
+        #[tokio::test]
+        async fn seeded_levels_reach_the_wire_and_pair_adaptive_thinking_only_on_the_pairing_set() {
+            for (model, levels, _, _, paired) in transcript() {
+                for level in levels {
+                    let (body, result) =
+                        send_raw(Vec::new(), request_for(model).with_reasoning(level)).await;
+                    result.unwrap_or_else(|e| panic!("{model}/{level}: {e}"));
+                    let body = json_of(body);
+                    assert_eq!(body["output_config"], json!({"effort": level.to_string()}));
+                    if paired {
+                        assert_eq!(body["thinking"], json!({"type": "adaptive"}), "{model}");
+                    } else {
+                        assert!(body.get("thinking").is_none(), "{model}: {body}");
+                    }
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn off_and_auto_follow_the_seeded_flags() {
+            for (model, _, off, auto, _) in transcript() {
+                for (effort, supported, wire) in [
+                    (ReasoningEffort::Off, off, "disabled"),
+                    (ReasoningEffort::Auto, auto, "adaptive"),
+                ] {
+                    let (body, result) =
+                        send_raw(Vec::new(), request_for(model).with_reasoning(effort)).await;
+                    if supported {
+                        result.unwrap_or_else(|e| panic!("{model}/{effort}: {e}"));
+                        let body = json_of(body);
+                        assert_eq!(body["thinking"], json!({"type": wire}), "{model}/{effort}");
+                        assert!(body.get("output_config").is_none(), "{model}: {body}");
+                    } else {
+                        assert!(body.is_none(), "{model}/{effort}: reached the wire");
+                        assert!(
+                            matches!(result, Err(LlmError::UnsupportedParameter { .. })),
+                            "{model}/{effort}: {result:?}"
+                        );
+                    }
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn a_level_the_probe_did_not_accept_and_every_budget_refuse_before_http() {
+            for (model, levels, ..) in transcript() {
+                let mut refused: Vec<ReasoningEffort> = ReasoningEffort::LEVELS
+                    .into_iter()
+                    .filter(|level| !levels.contains(level))
+                    .collect();
+                refused.push(ReasoningEffort::Budget(2048));
+                for effort in refused {
+                    let (body, result) =
+                        send_raw(Vec::new(), request_for(model).with_reasoning(effort)).await;
+                    assert!(body.is_none(), "{model}/{effort}: reached the wire");
+                    assert!(
+                        matches!(result, Err(LlmError::UnsupportedParameter { .. })),
+                        "{model}/{effort}: {result:?}"
+                    );
+                }
+            }
+        }
+
+        /// web3sec's `claude-opus-4-8`: every level the transcript evidences sends
+        /// `output_config.effort` beside `thinking: adaptive`, as the trailing two body fields.
+        #[tokio::test]
+        async fn claude_opus_4_8_takes_every_evidenced_level_through_the_shipped_adapter() {
+            let (unset, _) = send_raw(Vec::new(), request_for(OPUS_4_8)).await;
+            let unset = unset.expect("the unset request reached the wire");
+            let prefix = unset.strip_suffix('}').expect("a JSON object");
+            for level in ["low", "medium", "high", "xhigh", "max"] {
+                let effort = match level {
+                    "low" => Low,
+                    "medium" => Medium,
+                    "high" => High,
+                    "xhigh" => XHigh,
+                    _ => Max,
+                };
+                let (set, result) =
+                    send_raw(Vec::new(), request_for(OPUS_4_8).with_reasoning(effort)).await;
+                result.unwrap_or_else(|e| panic!("{level}: {e}"));
+                assert_eq!(
+                    set.expect("reached the wire"),
+                    format!(
+                        "{prefix},\"output_config\":{{\"effort\":\"{level}\"}},\"thinking\":{{\"type\":\"adaptive\"}}}}"
+                    ),
+                    "{level}"
+                );
+            }
+        }
+
+        #[test]
+        fn an_unmeasured_model_stays_unmeasured_in_the_reported_profile() {
+            let adapter = adapter_over("http://localhost:1", Vec::new());
+            assert_eq!(
+                adapter.model_profile(UNPROFILED).unwrap().effort,
+                EffortSupport::Unmeasured
+            );
+        }
+    }
+}
+
+/// The PARITY-03 knobs on `AnthropicConfig` (plan 50-08, D-12): each one is read by the adapter.
+#[cfg(test)]
+mod knob_tests {
+    use super::*;
+    use crate::test_support::{
+        attempts_against_a_failing_endpoint_at, mock_capture, send_with_max_tokens, server,
+    };
+    use crate::window::effective_capabilities;
+    use serde_json::json;
+
+    const UNSEEDED: &str = "claude-unseeded-test-model";
+    const PATH: &str = "/messages";
+
+    fn config(base_url: &str, model: &str) -> AnthropicConfig {
+        AnthropicConfig::new("test-key".to_string(), model.to_string()).with_base_url(base_url)
+    }
+
+    fn window_override(window: u32) -> ModelOverride {
+        ModelOverride {
+            context_window: Some(window),
+            ..ModelOverride::default()
+        }
+    }
+
+    fn response() -> serde_json::Value {
+        json!({
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "test-model",
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": null,
+            "usage": {"input_tokens": 1, "output_tokens": 1}
+        })
+    }
+
+    fn error_of(config: AnthropicConfig) -> String {
+        match AnthropicAdapter::new(config) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("construction must fail"),
+        }
+    }
+
+    #[test]
+    fn anthropic_new_takes_key_and_model_and_defaults_the_rest() {
+        // The consumer muster pins this signature; the knobs arrive through builders.
+        let config = AnthropicConfig::new("test-key".to_string(), "claude-haiku-5-5".to_string());
+        assert_eq!(config.base_url, ANTHROPIC_DEFAULT_BASE_URL);
+        assert_eq!(config.model, "claude-haiku-5-5");
+        assert_eq!(config.max_tokens, 4096);
+        assert_eq!(config.timeout_seconds, 60);
+        assert_eq!(config.max_retries, 3);
+        assert_eq!(config.context_window, None);
+        assert!(config.model_overrides.is_empty());
+    }
+
+    /// D-07, `compiled-default` (owner decision, 2026-10-20): `new` sets the one compiled
+    /// output budget for every model, seeded or not, so no default moves when a model is seeded
+    /// and `new` agrees with `from_env` and the layered path. The seeded maximum output (128,000
+    /// for the default model) is reachable only through `with_max_tokens`.
+    #[test]
+    fn anthropic_new_max_tokens_is_the_compiled_default_for_every_model() {
+        assert_eq!(ANTHROPIC_DEFAULT_MAX_TOKENS, 4096);
+        for model in ["claude-haiku-5-5", UNSEEDED, "claude-opus-4-8"] {
+            let config = AnthropicConfig::new("test-key".to_string(), model.to_string());
+            assert_eq!(config.max_tokens, ANTHROPIC_DEFAULT_MAX_TOKENS, "{model}");
+        }
+        // `claude-opus-4-8` is seeded (Phase 50.1) with a 128,000 maximum output; `new` still
+        // sends 4,096 for it, and the seeded maximum is reachable only through `with_max_tokens`.
+        let opus_maximum = seeded::ANTHROPIC
+            .iter()
+            .find(|entry| entry.model == "claude-opus-4-8")
+            .and_then(|entry| (entry.build)().max_output_tokens);
+        assert_eq!(opus_maximum, Some(128_000));
+        let config = AnthropicConfig::new("k".to_string(), "claude-haiku-5-5".to_string())
+            .with_max_tokens(16);
+        assert_eq!(config.max_tokens, 16);
+        let seeded_maximum = seeded::ANTHROPIC
+            .iter()
+            .find(|entry| entry.model == "claude-haiku-5-5")
+            .and_then(|entry| (entry.build)().max_output_tokens);
+        assert_eq!(seeded_maximum, Some(128_000));
+        let config = AnthropicConfig::new("k".to_string(), "claude-haiku-5-5".to_string())
+            .with_max_tokens(seeded_maximum.unwrap());
+        assert_eq!(config.max_tokens, 128_000);
+    }
+
+    /// A seeded model whose row says `reasoning: false` keeps the provider's own 60 s default:
+    /// only a seeded reasoning row moves `new` to 300 s (Phase 50 D-13). `claude-opus-4-8`'s
+    /// default call carried no reasoning text (`50.1-SEED-PROBE.md`, probe 1), so it is 60 s.
+    #[test]
+    fn anthropic_new_timeout_for_seeded_opus_4_8_is_the_non_reasoning_default() {
+        let config = AnthropicConfig::new("k".to_string(), "claude-opus-4-8".to_string());
+        assert_eq!(config.timeout_seconds, 60);
+    }
+
+    /// The two Phase 50.1 Anthropic rows whose default call returned reasoning text
+    /// (`claude-fable-5`, `claude-opus-5`; `50.1-SEED-PROBE.md`, probe 1) move `new` to the
+    /// reasoning-model 300 s (D-13); every other seeded Anthropic row stays at 60 s.
+    #[test]
+    fn anthropic_new_timeout_is_300_only_for_the_seeded_reasoning_rows() {
+        for entry in seeded::ANTHROPIC {
+            let reasoning = (entry.build)().reasoning;
+            let config = AnthropicConfig::new("k".to_string(), entry.model.to_string());
+            let expected = if reasoning { 300 } else { 60 };
+            assert_eq!(config.timeout_seconds, expected, "{}", entry.model);
+        }
+        for model in ["claude-fable-5", "claude-opus-5"] {
+            let config = AnthropicConfig::new("k".to_string(), model.to_string());
+            assert_eq!(config.timeout_seconds, 300, "{model}");
+        }
+    }
+
+    #[test]
+    fn anthropic_new_timeout_follows_the_model_and_builders_override_it() {
+        // Unchanged D-13 default: 60 s for a non-reasoning model.
+        let config = AnthropicConfig::new("k".to_string(), UNSEEDED.to_string());
+        assert_eq!(config.timeout_seconds, 60);
+        let config = config
+            .with_timeout_seconds(7)
+            .with_base_url("https://example.invalid/v1");
+        assert_eq!(config.timeout_seconds, 7);
+        assert_eq!(config.base_url, "https://example.invalid/v1");
+    }
+
+    #[tokio::test]
+    async fn anthropic_max_tokens_is_the_default_output_budget_on_the_wire() {
+        let mut server = server().await;
+        let captured = mock_capture(&mut server, PATH, response()).await;
+        let url = server.url();
+
+        let adapter = AnthropicAdapter::new(config(&url, UNSEEDED).with_max_tokens(2048)).unwrap();
+        let body = send_with_max_tokens(&adapter, &captured, UNSEEDED, None)
+            .await
+            .unwrap();
+        assert_eq!(body["max_tokens"], 2048, "{body}");
+        // A request's own value wins.
+        let body = send_with_max_tokens(&adapter, &captured, UNSEEDED, Some(512))
+            .await
+            .unwrap();
+        assert_eq!(body["max_tokens"], 512, "{body}");
+    }
+
+    #[tokio::test]
+    async fn anthropic_max_tokens_default_is_checked_against_the_profile() {
+        let mut server = server().await;
+        let captured = mock_capture(&mut server, PATH, response()).await;
+        let over = ModelOverride {
+            max_output_tokens: Some(1000),
+            ..ModelOverride::default()
+        };
+        let adapter = AnthropicAdapter::new(
+            config(&server.url(), UNSEEDED)
+                .with_max_tokens(2048)
+                .with_model_overrides(BTreeMap::from([(UNSEEDED.to_string(), over)])),
+        )
+        .unwrap();
+        let Err(LlmError::InvalidPrompt(message)) =
+            send_with_max_tokens(&adapter, &captured, UNSEEDED, None).await
+        else {
+            panic!("a default above the model's maximum output must be InvalidPrompt");
+        };
+        for needle in ["max_tokens", "2048", "1000"] {
+            assert!(
+                message.contains(needle),
+                "'{needle}' missing from: {message}"
+            );
+        }
+        assert!(captured.lock().unwrap().is_none(), "nothing was sent");
+    }
+
+    #[tokio::test]
+    async fn anthropic_max_retries_is_read_by_the_adapter() {
+        // This adapter's loop counts total attempts (its long-standing convention): the budget
+        // `n` sends up to `n` requests on a retryable 5xx.
+        for (budget, attempts) in [(1_u32, 1_usize), (2, 2)] {
+            let server = server().await;
+            let adapter =
+                AnthropicAdapter::new(config(&server.url(), UNSEEDED).with_max_retries(budget))
+                    .unwrap();
+            attempts_against_a_failing_endpoint_at(server, PATH, &adapter, UNSEEDED, attempts)
+                .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn anthropic_429_is_one_attempt_whatever_the_retry_budget() {
+        let mut server = server().await;
+        let mock = server
+            .mock("POST", PATH)
+            .with_status(429)
+            .with_body(r#"{"type":"error","error":{"type":"rate_limit_error","message":"slow"}}"#)
+            .expect(1)
+            .create_async()
+            .await;
+        let adapter =
+            AnthropicAdapter::new(config(&server.url(), UNSEEDED).with_max_retries(5)).unwrap();
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let outcome = send_with_max_tokens(&adapter, &captured, UNSEEDED, None).await;
+        assert!(matches!(outcome, Err(LlmError::RateLimitExceeded { .. })));
+        mock.assert_async().await;
+    }
+
+    #[test]
+    fn anthropic_context_window_override_is_declared() {
+        let adapter = AnthropicAdapter::new(
+            config("https://example.invalid/v1", UNSEEDED).with_context_window(500_000),
+        )
+        .unwrap();
+        assert_eq!(adapter.get_capabilities().max_context_tokens, Some(500_000));
+        assert_eq!(
+            adapter.model_profile(UNSEEDED).unwrap().context_window,
+            Some(500_000)
+        );
+    }
+
+    #[test]
+    fn context_window_override_beats_a_seeded_window_on_anthropic() {
+        let base = || config("https://example.invalid/v1", "claude-haiku-5-5");
+        let seeded = AnthropicAdapter::new(base()).unwrap();
+        assert_eq!(
+            seeded
+                .model_profile("claude-haiku-5-5")
+                .unwrap()
+                .context_window,
+            Some(1_000_000)
+        );
+
+        let adapter = AnthropicAdapter::new(base().with_context_window(500_000)).unwrap();
+        assert_eq!(
+            adapter
+                .model_profile("claude-haiku-5-5")
+                .unwrap()
+                .context_window,
+            Some(500_000)
+        );
+        assert_eq!(
+            effective_capabilities(&adapter, "claude-haiku-5-5").max_context_tokens,
+            Some(500_000)
+        );
+
+        let adapter =
+            AnthropicAdapter::new(base().with_context_window(500_000).with_model_overrides(
+                BTreeMap::from([("claude-haiku-5-5".to_string(), window_override(900_000))]),
+            ))
+            .unwrap();
+        assert_eq!(
+            adapter
+                .model_profile("claude-haiku-5-5")
+                .unwrap()
+                .context_window,
+            Some(900_000)
+        );
+
+        // A window below the seeded maximum output is refused, never clamped.
+        let message = error_of(base().with_context_window(100_000));
+        for needle in ["anthropic", "claude-haiku-5-5", "100000", "128000"] {
+            assert!(
+                message.contains(needle),
+                "'{needle}' missing from: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn anthropic_invalid_override_fails_construction_naming_provider_and_model() {
+        let with_override = |over: ModelOverride| {
+            config("https://example.invalid/v1", UNSEEDED)
+                .with_model_overrides(BTreeMap::from([(UNSEEDED.to_string(), over)]))
+        };
+        let adapter = AnthropicAdapter::new(with_override(window_override(900_000))).unwrap();
+        assert_eq!(
+            adapter.model_profile(UNSEEDED).unwrap().context_window,
+            Some(900_000)
+        );
+        for over in [
+            window_override(0),
+            ModelOverride {
+                context_window: Some(1_000),
+                max_output_tokens: Some(2_000_000),
+                ..ModelOverride::default()
+            },
+        ] {
+            let message = error_of(with_override(over));
+            assert!(
+                message.contains("anthropic") && message.contains(UNSEEDED),
+                "the error must name the provider and the model: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn anthropic_config_defaults_a_reasoning_model_to_300s() {
+        // No Anthropic entry is seeded as a reasoning model, so every model keeps today's 60 s
+        // here; the 300 s path is exercised for the vendors that seed one (DeepSeek, Gemini,
+        // Kimi, Qwen, Grok) and by `registry::knob_tests::is_reasoning_model_*`.
+        for model in ["claude-haiku-5-5", UNSEEDED] {
+            assert_eq!(
+                config("https://example.invalid/v1", model).timeout_seconds,
+                60,
+                "new({model})"
+            );
+        }
+        let mut explicit = config("https://example.invalid/v1", "claude-haiku-5-5");
+        explicit.timeout_seconds = 45;
+        assert_eq!(explicit.timeout_seconds, 45);
+    }
+
+    #[test]
+    fn anthropic_config_debug_redacts_the_api_key() {
+        let config = config("https://api.example.invalid/v1", "claude-haiku-5-5");
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("test-key"), "{debug}");
+        assert!(debug.contains("<redacted>"), "{debug}");
+        for needle in [
+            "https://api.example.invalid/v1",
+            "timeout_seconds",
+            "max_retries",
+            "max_tokens",
+        ] {
+            assert!(debug.contains(needle), "'{needle}' missing from {debug}");
         }
     }
 }

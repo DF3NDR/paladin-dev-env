@@ -381,7 +381,7 @@ aggregator:
 
 # Optional Configuration:
 
-# Maximum time for the entire Conclave execution (seconds)
+# Per-attempt timeout for each expert and the aggregator (seconds)
 # timeout_seconds: 300
 
 # Number of retry attempts for failed expert executions

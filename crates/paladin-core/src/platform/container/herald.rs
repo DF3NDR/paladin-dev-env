@@ -21,6 +21,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
+use crate::platform::container::allowance::{AllowanceWarning, HaltReason};
+use crate::platform::container::cost::Cost;
+
 // Re-export actual domain types for Herald consumers
 pub use crate::platform::container::battalion::BattalionResult;
 pub use crate::platform::container::execution_result::PaladinResult;
@@ -370,6 +373,22 @@ impl StreamChunkBuilder {
     }
 }
 
+/// Metadata key under which [`ExecutionMetadataBuilder::cost`] records a `Cost`'s currency code
+/// inside [`ExecutionMetadata::metadata`] (D-04) — read back by
+/// [`ExecutionMetadata::cost_currency`] and [`ExecutionMetadata::cost_display`].
+pub const COST_CURRENCY_METADATA_KEY: &str = "cost_currency";
+
+/// The [`ExecutionMetadata::metadata`] key under which the Treasurer's allowance warnings for a
+/// run are recorded (D-18): a JSON array of [`AllowanceWarning`], present only when at least one
+/// warning was won. Read back through [`ExecutionMetadata::allowance_warning_display`].
+pub const ALLOWANCE_WARNING_METADATA_KEY: &str = "treasurer.allowance_warning";
+
+/// The [`ExecutionMetadata::metadata`] key under which the Treasurer's halt reason for a run is
+/// recorded (D-19): the one rendered line of [`HaltReason::herald_line`] as a JSON string, present
+/// only when the run was halted by an allowance. Read back through
+/// [`ExecutionMetadata::halt_reason_display`].
+pub const HALT_REASON_METADATA_KEY: &str = "treasurer.halt_reason";
+
 /// Execution metadata for streaming with complete telemetry
 ///
 /// Tracks comprehensive execution metrics including timing, token usage,
@@ -384,7 +403,8 @@ impl StreamChunkBuilder {
 /// * `duration_ms` - Calculated execution duration in milliseconds
 /// * `model_used` - LLM model identifier (e.g., "gpt-4", "claude-3")
 /// * `token_usage` - Token consumption statistics (prompt, completion, total)
-/// * `cost_estimate` - Reserved for the Treasurer (Milestone 14 / FUT-08); no in-tree producer yet
+/// * `cost_estimate` - produced by the Treasurer (per-call pricing at the `LlmPort` boundary,
+///   D-09); the display-edge float derived from the authoritative `Cost` nano-unit figure (D-03)
 /// * `error_count` - Number of errors encountered during execution
 /// * `metadata` - Extensible HashMap for custom telemetry and provider-specific data
 ///
@@ -443,12 +463,18 @@ impl StreamChunkBuilder {
 ///
 /// ## With Cost Estimation and Error Tracking
 ///
+/// `cost_estimate` is produced by the Treasurer (per-call pricing at the `LlmPort` boundary,
+/// D-09): build a real [`Cost`] and attach it through
+/// [`ExecutionMetadataBuilder::cost`] rather than setting the raw float directly.
+///
 /// ```
+/// use paladin_core::platform::container::cost::{Cost, CurrencyCode};
 /// use paladin_core::platform::container::herald::ExecutionMetadata;
 /// use paladin_core::platform::container::token_usage::TokenUsage;
 /// use chrono::Utc;
 /// use uuid::Uuid;
 ///
+/// let cost = Cost::new(45_000_000, CurrencyCode::new("USD")?);
 /// let metadata = ExecutionMetadata::builder()
 ///     .execution_id(Uuid::new_v4())
 ///     .start_time(Utc::now())
@@ -456,14 +482,14 @@ impl StreamChunkBuilder {
 ///     .duration_ms(2500)
 ///     .model_used("gpt-4".to_string())
 ///     .token_usage(TokenUsage::new(1000, 2000))
-///     .cost_estimate(0.045)  // illustrative value; reserved for the Treasurer (Milestone 14 / FUT-08)
+///     .cost(&cost)
 ///     .error_count(2)        // Encountered 2 retryable errors
 ///     .build()
 ///     .unwrap();
 ///
-/// if let Some(cost) = metadata.total_cost() {
-///     println!("Execution cost: ${:.4}", cost);
-/// }
+/// assert_eq!(metadata.cost_display().as_deref(), Some("0.0450 USD"));
+/// assert_eq!(metadata.cost_currency(), Some("USD"));
+/// # Ok::<(), paladin_core::platform::container::cost::CostError>(())
 /// ```
 ///
 /// ## With Custom Metadata
@@ -501,7 +527,10 @@ pub struct ExecutionMetadata {
     pub model_used: String,
     /// Token usage statistics
     pub token_usage: TokenUsage,
-    /// Reserved for the Treasurer (Milestone 14 / FUT-08); no in-tree producer yet.
+    /// produced by the Treasurer (per-call pricing at the `LlmPort` boundary, D-09): the
+    /// display-edge `f64` derived exactly once from the authoritative `Cost` nano-unit figure
+    /// (D-03, `nanos as f64 / 1e9`). Set through [`ExecutionMetadataBuilder::cost`] rather than
+    /// this raw field directly. `None` when the run's model had no configured price.
     pub cost_estimate: Option<f64>,
     /// Number of errors encountered during execution
     pub error_count: u32,
@@ -527,13 +556,309 @@ impl ExecutionMetadata {
         }
     }
 
-    /// Get the reserved cost estimate
+    /// Get the cost estimate, produced by the Treasurer
     ///
-    /// Returns the `cost_estimate` field as stored. The field is reserved for the
-    /// Treasurer (Milestone 14 / FUT-08); it has no in-tree producer yet, so this
-    /// returns `None` in this tree.
+    /// Returns the `cost_estimate` field as stored: the display-edge `f64` produced by the
+    /// Treasurer (per-call pricing at the `LlmPort` boundary, D-09) through
+    /// [`ExecutionMetadataBuilder::cost`]. `None` when the run's model had no configured price.
     pub fn total_cost(&self) -> Option<f64> {
         self.cost_estimate
+    }
+
+    /// The currency code this execution's cost is denominated in, if a cost was set through
+    /// [`ExecutionMetadataBuilder::cost`] (stored under [`COST_CURRENCY_METADATA_KEY`] in
+    /// [`ExecutionMetadata::metadata`]).
+    pub fn cost_currency(&self) -> Option<&str> {
+        self.metadata
+            .get(COST_CURRENCY_METADATA_KEY)
+            .and_then(|value| value.as_str())
+    }
+
+    /// Render the cost estimate for display (D-04): four decimals followed by the currency code
+    /// when one is known (`"0.0450 USD"`), or the bare four-decimal number when it is not.
+    /// `None` when no cost was ever set.
+    pub fn cost_display(&self) -> Option<String> {
+        let cost = self.cost_estimate?;
+        Some(match self.cost_currency() {
+            Some(code) => format!("{cost:.4} {code}"),
+            None => format!("{cost:.4}"),
+        })
+    }
+
+    /// Record the run's won allowance warnings under [`ALLOWANCE_WARNING_METADATA_KEY`] as a
+    /// JSON array (D-18). Does nothing for an empty slice, so a run without a warning keeps
+    /// byte-identical metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use paladin_core::platform::container::herald::ExecutionMetadata;
+    /// use paladin_core::platform::container::token_usage::TokenUsage;
+    /// use uuid::Uuid;
+    ///
+    /// let mut metadata = ExecutionMetadata::builder()
+    ///     .execution_id(Uuid::new_v4())
+    ///     .start_time(Utc::now())
+    ///     .model_used("gpt-4".to_string())
+    ///     .token_usage(TokenUsage::new(1, 1))
+    ///     .build()?;
+    /// metadata.with_allowance_warnings(&[]);
+    /// assert_eq!(metadata.allowance_warning_display(), None);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn with_allowance_warnings(&mut self, warnings: &[AllowanceWarning]) {
+        if warnings.is_empty() {
+            return;
+        }
+        if let Ok(value) = serde_json::to_value(warnings) {
+            self.metadata
+                .insert(ALLOWANCE_WARNING_METADATA_KEY.to_string(), value);
+        }
+    }
+
+    /// Render the run's allowance warnings for display (D-18): one
+    /// [`AllowanceWarning::herald_line`] per warning, joined with `"; "`. `None` when the key is
+    /// absent, the array is empty or it does not deserialize -- a herald never fails because of
+    /// this line.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_core::platform::container::allowance::{
+    ///     AllowanceLimitKind, AllowanceScopeKind, AllowanceWarning,
+    /// };
+    /// use chrono::Utc;
+    /// use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+    /// use paladin_core::platform::container::herald::ExecutionMetadata;
+    /// use paladin_core::platform::container::token_usage::TokenUsage;
+    /// use uuid::Uuid;
+    ///
+    /// let usd = CurrencyCode::new("USD")?;
+    /// let warning = AllowanceWarning {
+    ///     scope_kind: AllowanceScopeKind::Tenant,
+    ///     limit_kind: AllowanceLimitKind::Lifetime,
+    ///     balance: Cost::new(20_500_000_000, usd.clone()),
+    ///     ceiling: Cost::new(25_000_000_000, usd),
+    ///     window_start: None,
+    ///     window_end: None,
+    ///     warn_at: 80,
+    /// };
+    /// let mut metadata = ExecutionMetadata::builder()
+    ///     .execution_id(Uuid::new_v4())
+    ///     .start_time(Utc::now())
+    ///     .model_used("gpt-4".to_string())
+    ///     .token_usage(TokenUsage::new(1, 1))
+    ///     .build()?;
+    /// metadata.with_allowance_warnings(&[warning]);
+    /// assert_eq!(
+    ///     metadata.allowance_warning_display().as_deref(),
+    ///     Some("\u{26A0} allowance: 82% of 25.0000 USD (tenant, lifetime cap)")
+    /// );
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn allowance_warning_display(&self) -> Option<String> {
+        let value = self.metadata.get(ALLOWANCE_WARNING_METADATA_KEY)?;
+        let warnings: Vec<AllowanceWarning> = serde_json::from_value(value.clone()).ok()?;
+        if warnings.is_empty() {
+            return None;
+        }
+        Some(
+            warnings
+                .iter()
+                .map(AllowanceWarning::herald_line)
+                .collect::<Vec<_>>()
+                .join("; "),
+        )
+    }
+
+    /// Record why the run was halted under [`HALT_REASON_METADATA_KEY`] as the one rendered
+    /// [`HaltReason::herald_line`] (D-19). The stored value is the display line only -- the
+    /// scope kind, the figures and the window end -- so no tenant id, key name or key value can
+    /// reach a herald through this key (D-00g).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use paladin_core::platform::container::allowance::HaltReason;
+    /// use paladin_core::platform::container::herald::ExecutionMetadata;
+    /// use paladin_core::platform::container::token_usage::TokenUsage;
+    /// use uuid::Uuid;
+    ///
+    /// let mut metadata = ExecutionMetadata::builder()
+    ///     .execution_id(Uuid::new_v4())
+    ///     .start_time(Utc::now())
+    ///     .model_used("gpt-4".to_string())
+    ///     .token_usage(TokenUsage::new(1, 1))
+    ///     .build()?;
+    /// assert_eq!(metadata.halt_reason_display(), None);
+    /// metadata.with_halt_reason(&HaltReason::LedgerUnavailable);
+    /// assert!(metadata.halt_reason_display().is_some());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn with_halt_reason(&mut self, reason: &HaltReason) {
+        self.metadata.insert(
+            HALT_REASON_METADATA_KEY.to_string(),
+            serde_json::Value::String(reason.herald_line()),
+        );
+    }
+
+    /// Render the run's halt reason for display (D-19): the line recorded by
+    /// [`ExecutionMetadata::with_halt_reason`]. `None` when the key is absent or its value is not
+    /// a string -- a herald never fails because of this line.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use paladin_core::platform::container::allowance::HaltReason;
+    /// use paladin_core::platform::container::herald::ExecutionMetadata;
+    /// use paladin_core::platform::container::token_usage::TokenUsage;
+    /// use uuid::Uuid;
+    ///
+    /// let mut metadata = ExecutionMetadata::builder()
+    ///     .execution_id(Uuid::new_v4())
+    ///     .start_time(Utc::now())
+    ///     .model_used("gpt-4".to_string())
+    ///     .token_usage(TokenUsage::new(1, 1))
+    ///     .build()?;
+    /// metadata.with_halt_reason(&HaltReason::LedgerUnavailable);
+    /// assert_eq!(
+    ///     metadata.halt_reason_display().as_deref(),
+    ///     Some("\u{26D4} halted: allowance could not be evaluated (ledger unavailable)")
+    /// );
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn halt_reason_display(&self) -> Option<String> {
+        self.metadata
+            .get(HALT_REASON_METADATA_KEY)?
+            .as_str()
+            .map(str::to_owned)
+    }
+
+    /// Build [`ExecutionMetadata`] from a completed run's
+    /// [`TraceEvent::RunFinished`](crate::platform::container::trace::TraceEvent::RunFinished)
+    /// (D-12): the engine-path producer that hands the Treasurer's per-run cost — and every
+    /// other run-level figure a `TraceDispatcher` already accumulated — to
+    /// [`Herald::finalize_stream`]. This is the engine's counterpart to the agent loop's own
+    /// streamed-completion producer (`PaladinExecutionService::stream_execution_metadata`,
+    /// 38-02): a `TraceSink` (`HeraldTraceSink`, 38-08) calls this once per engine dispatch
+    /// (`start`, `resume`, `resume_with`, `fork`), covering that dispatch's own calls.
+    ///
+    /// Returns `None` for any [`TraceRecord`](crate::platform::container::trace::TraceRecord)
+    /// whose event is not [`TraceEvent::RunFinished`](crate::platform::container::trace::TraceEvent::RunFinished) —
+    /// a `HeraldTraceSink` calls this on every record it sees and only acts on `Some`.
+    ///
+    /// `execution_id` is parsed from the record's `run_id` (a UUID string); a fresh
+    /// `Uuid::new_v4()` stands in when there is no run id or it fails to parse (a bare engine
+    /// with no Platform API run wrapping it has no run identity). `end_time` is the record's own
+    /// `at` timestamp; `start_time` is derived by subtracting `duration_ms` (converted to a
+    /// [`chrono::Duration`] with a saturating `u64` -> `i64` conversion, so an implausibly large
+    /// duration never panics). `token_usage` and, when priced, `cost` come straight from the
+    /// event through [`ExecutionMetadataBuilder::cost`] — the single display-edge conversion
+    /// (D-03) — so an unpriced run's `cost_estimate` stays `None`, never a fabricated zero
+    /// (D-00c). `error_count` is `1` for [`RunFinishStatus::Failed`](crate::platform::container::trace::RunFinishStatus::Failed),
+    /// `0` otherwise. The record's `thread_id` and the status's own serialized name are recorded
+    /// under the `thread_id`/`run_status` metadata keys for callers that want them.
+    ///
+    /// Every field the builder requires is set from the event, so `build()` cannot fail here —
+    /// this always returns `Some` for an actual `RunFinished` record.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+    /// use paladin_core::platform::container::herald::ExecutionMetadata;
+    /// use paladin_core::platform::container::run::RunId;
+    /// use paladin_core::platform::container::token_usage::TokenUsage;
+    /// use paladin_core::platform::container::trace::{RunFinishStatus, TraceEvent, TraceRecord};
+    /// use paladin_core::platform::container::waypoint::ThreadId;
+    ///
+    /// let cost = Cost::new(22_500_000, CurrencyCode::new("USD")?);
+    /// let record = TraceRecord {
+    ///     thread_id: ThreadId::new("t1")?,
+    ///     run_id: Some(RunId::new_v7()),
+    ///     seq: 1,
+    ///     at: Utc::now(),
+    ///     event: TraceEvent::RunFinished {
+    ///         status: RunFinishStatus::Completed,
+    ///         total_supersteps: 3,
+    ///         usage: TokenUsage::new(1_000, 2_000),
+    ///         cost: Some(cost),
+    ///         halt_reason: None,
+    ///         duration_ms: 1_500,
+    ///         trace_dropped_total: 0,
+    ///     },
+    /// };
+    ///
+    /// let metadata = ExecutionMetadata::from_run_finished(&record, "gpt-4")
+    ///     .expect("a RunFinished record always produces metadata");
+    /// assert_eq!(metadata.cost_display().as_deref(), Some("0.0225 USD"));
+    /// assert_eq!(metadata.duration_ms, Some(1_500));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn from_run_finished(
+        record: &crate::platform::container::trace::TraceRecord,
+        model_used: impl Into<String>,
+    ) -> Option<ExecutionMetadata> {
+        use crate::platform::container::trace::{RunFinishStatus, TraceEvent};
+
+        let TraceEvent::RunFinished {
+            status,
+            usage,
+            cost,
+            duration_ms,
+            ..
+        } = &record.event
+        else {
+            return None;
+        };
+
+        let execution_id = record
+            .run_id
+            .as_ref()
+            .and_then(|run_id| Uuid::parse_str(run_id.as_str()).ok())
+            .unwrap_or_else(Uuid::new_v4);
+
+        let elapsed =
+            chrono::Duration::milliseconds(i64::try_from(*duration_ms).unwrap_or(i64::MAX));
+        let start_time = record.at - elapsed;
+
+        let error_count = if *status == RunFinishStatus::Failed {
+            1
+        } else {
+            0
+        };
+
+        let run_status = serde_json::to_value(status)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_default();
+
+        let mut builder = ExecutionMetadata::builder()
+            .execution_id(execution_id)
+            .start_time(start_time)
+            .end_time(record.at)
+            .duration_ms(*duration_ms)
+            .model_used(model_used.into())
+            .token_usage(usage.clone())
+            .error_count(error_count)
+            .add_metadata(
+                "thread_id".to_string(),
+                serde_json::Value::String(record.thread_id.as_str().to_string()),
+            )
+            .add_metadata(
+                "run_status".to_string(),
+                serde_json::Value::String(run_status),
+            );
+
+        if let Some(cost) = cost {
+            builder = builder.cost(cost);
+        }
+
+        builder.build().ok()
     }
 }
 
@@ -588,9 +913,49 @@ impl ExecutionMetadataBuilder {
         self
     }
 
-    /// Set the cost estimate (reserved for the Treasurer, Milestone 14 / FUT-08 — no in-tree producer yet)
+    /// Set the raw cost estimate float directly — produced by the Treasurer (per-call pricing at
+    /// the `LlmPort` boundary, D-09); prefer [`ExecutionMetadataBuilder::cost`], which derives
+    /// this value from an authoritative [`Cost`] and also records the currency, over calling
+    /// this method with a hand-computed figure.
     pub fn cost_estimate(mut self, cost_estimate: f64) -> Self {
         self.cost_estimate = Some(cost_estimate);
+        self
+    }
+
+    /// Set the cost from an authoritative [`Cost`] (D-03, D-09): the one and only display-edge
+    /// conversion, `nanos as f64 / 1e9`, and the currency code recorded under
+    /// [`COST_CURRENCY_METADATA_KEY`] in [`ExecutionMetadata::metadata`] so
+    /// [`ExecutionMetadata::cost_currency`] and [`ExecutionMetadata::cost_display`] can read it
+    /// back.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+    /// use paladin_core::platform::container::herald::ExecutionMetadata;
+    /// use paladin_core::platform::container::token_usage::TokenUsage;
+    /// use chrono::Utc;
+    /// use uuid::Uuid;
+    ///
+    /// let cost = Cost::new(45_000_000, CurrencyCode::new("USD")?);
+    /// let metadata = ExecutionMetadata::builder()
+    ///     .execution_id(Uuid::new_v4())
+    ///     .start_time(Utc::now())
+    ///     .model_used("gpt-4".to_string())
+    ///     .token_usage(TokenUsage::new(1_000, 2_000))
+    ///     .cost(&cost)
+    ///     .build()?;
+    ///
+    /// assert_eq!(metadata.cost_display().as_deref(), Some("0.0450 USD"));
+    /// assert_eq!(metadata.cost_currency(), Some("USD"));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn cost(mut self, cost: &Cost) -> Self {
+        self.cost_estimate = Some(cost.nanos() as f64 / 1e9);
+        self.metadata.insert(
+            COST_CURRENCY_METADATA_KEY.to_string(),
+            serde_json::Value::String(cost.currency().to_string()),
+        );
         self
     }
 
@@ -635,6 +1000,123 @@ impl ExecutionMetadataBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample_allowance_warning(
+        balance: i64,
+        scope: crate::platform::container::allowance::AllowanceScopeKind,
+        limit: crate::platform::container::allowance::AllowanceLimitKind,
+    ) -> AllowanceWarning {
+        use chrono::TimeZone;
+        let usd = crate::platform::container::cost::CurrencyCode::new("USD").unwrap();
+        let windowed = limit == crate::platform::container::allowance::AllowanceLimitKind::Window;
+        AllowanceWarning {
+            scope_kind: scope,
+            limit_kind: limit,
+            balance: Cost::new(balance, usd.clone()),
+            ceiling: Cost::new(25_000_000_000, usd),
+            window_start: windowed
+                .then(|| Utc.with_ymd_and_hms(2026, 10, 2, 0, 0, 0).single())
+                .flatten(),
+            window_end: windowed
+                .then(|| Utc.with_ymd_and_hms(2026, 10, 3, 0, 0, 0).single())
+                .flatten(),
+            warn_at: 80,
+        }
+    }
+
+    fn bare_metadata() -> ExecutionMetadata {
+        ExecutionMetadata::builder()
+            .execution_id(Uuid::new_v4())
+            .start_time(Utc::now())
+            .model_used("gpt-4".to_string())
+            .token_usage(crate::platform::container::token_usage::TokenUsage::new(
+                1, 1,
+            ))
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn allowance_warning_display_is_none_without_the_key() {
+        assert_eq!(bare_metadata().allowance_warning_display(), None);
+    }
+
+    #[test]
+    fn with_allowance_warnings_ignores_an_empty_slice() {
+        let mut metadata = bare_metadata();
+        metadata.with_allowance_warnings(&[]);
+        assert!(
+            !metadata
+                .metadata
+                .contains_key(ALLOWANCE_WARNING_METADATA_KEY)
+        );
+    }
+
+    #[test]
+    fn allowance_warning_display_joins_two_lines() {
+        use crate::platform::container::allowance::{AllowanceLimitKind, AllowanceScopeKind};
+        let mut metadata = bare_metadata();
+        metadata.with_allowance_warnings(&[
+            sample_allowance_warning(
+                20_500_000_000,
+                AllowanceScopeKind::ApiKey,
+                AllowanceLimitKind::Window,
+            ),
+            sample_allowance_warning(
+                21_000_000_000,
+                AllowanceScopeKind::Tenant,
+                AllowanceLimitKind::Lifetime,
+            ),
+        ]);
+        let display = metadata.allowance_warning_display().unwrap();
+        assert_eq!(
+            display,
+            "\u{26A0} allowance: 82% of 25.0000 USD (api_key, window resets 2026-10-03T00:00:00Z); \
+             \u{26A0} allowance: 84% of 25.0000 USD (tenant, lifetime cap)"
+        );
+    }
+
+    #[test]
+    fn allowance_warning_display_is_none_for_an_undeserializable_value() {
+        let mut metadata = bare_metadata();
+        metadata.metadata.insert(
+            ALLOWANCE_WARNING_METADATA_KEY.to_string(),
+            serde_json::json!("not an array"),
+        );
+        assert_eq!(metadata.allowance_warning_display(), None);
+        metadata.metadata.insert(
+            ALLOWANCE_WARNING_METADATA_KEY.to_string(),
+            serde_json::json!([]),
+        );
+        assert_eq!(metadata.allowance_warning_display(), None);
+    }
+
+    #[test]
+    fn halt_reason_display_is_none_without_the_key() {
+        assert_eq!(bare_metadata().halt_reason_display(), None);
+    }
+
+    #[test]
+    fn with_halt_reason_records_one_line_under_the_key() {
+        let mut metadata = bare_metadata();
+        metadata.with_halt_reason(
+            &crate::platform::container::allowance::HaltReason::LedgerUnavailable,
+        );
+        assert_eq!(
+            metadata.halt_reason_display().as_deref(),
+            Some("\u{26D4} halted: allowance could not be evaluated (ledger unavailable)")
+        );
+        assert!(metadata.metadata.contains_key(HALT_REASON_METADATA_KEY));
+    }
+
+    #[test]
+    fn halt_reason_display_is_none_for_a_non_string_value() {
+        let mut metadata = bare_metadata();
+        metadata
+            .metadata
+            .insert(HALT_REASON_METADATA_KEY.to_string(), serde_json::json!(7));
+        assert_eq!(metadata.halt_reason_display(), None);
+    }
 
     // Mock Herald implementation for testing
     struct MockHerald;
@@ -787,5 +1269,118 @@ mod tests {
     fn test_herald_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<MockHerald>();
+    }
+
+    mod from_run_finished_tests {
+        use super::*;
+        use crate::platform::container::cost::{Cost, CurrencyCode};
+        use crate::platform::container::run::RunId;
+        use crate::platform::container::trace::{RunFinishStatus, TraceEvent, TraceRecord};
+        use crate::platform::container::waypoint::{NodeId, NodeOutcomeKind, ThreadId};
+
+        fn thread_id() -> ThreadId {
+            ThreadId::new("t-from-run-finished").unwrap()
+        }
+
+        fn run_finished_record(
+            status: RunFinishStatus,
+            usage: TokenUsage,
+            cost: Option<Cost>,
+            duration_ms: u64,
+        ) -> TraceRecord {
+            TraceRecord {
+                thread_id: thread_id(),
+                run_id: Some(RunId::new_v7()),
+                seq: 1,
+                at: Utc::now(),
+                event: TraceEvent::RunFinished {
+                    status,
+                    total_supersteps: 3,
+                    usage,
+                    cost,
+                    duration_ms,
+                    halt_reason: None,
+                    trace_dropped_total: 0,
+                },
+            }
+        }
+
+        #[test]
+        fn from_run_finished_builds_priced_metadata() {
+            let cost = Cost::new(22_500_000, CurrencyCode::new("USD").unwrap());
+            let record = run_finished_record(
+                RunFinishStatus::Completed,
+                TokenUsage::new(1_000, 2_000),
+                Some(cost),
+                1_500,
+            );
+
+            let metadata = ExecutionMetadata::from_run_finished(&record, "gpt-4")
+                .expect("RunFinished record produces metadata");
+
+            let run_uuid = record.run_id.as_ref().unwrap().as_str();
+            assert_eq!(metadata.execution_id.to_string(), run_uuid);
+            assert_eq!(metadata.end_time, Some(record.at));
+            assert_eq!(
+                metadata.start_time,
+                record.at - chrono::Duration::milliseconds(1_500)
+            );
+            assert_eq!(metadata.duration_ms, Some(1_500));
+            assert_eq!(metadata.model_used, "gpt-4");
+            assert_eq!(metadata.cost_estimate, Some(0.0225));
+            assert_eq!(metadata.cost_currency(), Some("USD"));
+            assert_eq!(metadata.error_count, 0);
+        }
+
+        #[test]
+        fn from_run_finished_unpriced_has_no_cost() {
+            let record = run_finished_record(
+                RunFinishStatus::Completed,
+                TokenUsage::new(1_000, 2_000),
+                None,
+                1_000,
+            );
+
+            let metadata = ExecutionMetadata::from_run_finished(&record, "gpt-4")
+                .expect("RunFinished record produces metadata");
+
+            assert_eq!(metadata.cost_estimate, None);
+            assert_eq!(metadata.cost_currency(), None);
+        }
+
+        #[test]
+        fn from_run_finished_ignores_other_events() {
+            let record = TraceRecord {
+                thread_id: thread_id(),
+                run_id: Some(RunId::new_v7()),
+                seq: 1,
+                at: Utc::now(),
+                event: TraceEvent::NodeFinished {
+                    superstep: 1,
+                    node_id: NodeId::new("n1"),
+                    attempt: 1,
+                    outcome: NodeOutcomeKind::Succeeded,
+                    duration_ms: 10,
+                    usage: TokenUsage::default(),
+                    cost: None,
+                    reasoning_requested: None,
+                    reasoning_effective: None,
+                    cache_hit: false,
+                },
+            };
+
+            assert!(ExecutionMetadata::from_run_finished(&record, "gpt-4").is_none());
+        }
+
+        #[test]
+        fn from_run_finished_counts_failure() {
+            let record =
+                run_finished_record(RunFinishStatus::Failed, TokenUsage::default(), None, 500);
+
+            let metadata = ExecutionMetadata::from_run_finished(&record, "gpt-4")
+                .expect("RunFinished record produces metadata");
+
+            assert_eq!(metadata.error_count, 1);
+        }
     }
 }

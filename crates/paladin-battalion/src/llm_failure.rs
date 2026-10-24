@@ -2,14 +2,14 @@
 //! [`PaladinError::LlmFailure`](paladin_core::platform::container::paladin_error::PaladinError::LlmFailure)
 //! conversion (D-02, X-06).
 //!
-//! Before Phase 25 every site that held a real
-//! [`LlmError`](paladin_ports::output::llm_port::LlmError) erased it into
-//! `PaladinError::LlmError(e.to_string())` one line before the engine needed
-//! to know whether the failure was worth retrying. This module replaces those
-//! eight erasures with a single conversion into the structured
+//! Every site that holds a real
+//! [`LlmError`](paladin_ports::output::llm_port::LlmError) and needs to hand a
+//! failure to the engine converts it with `to_paladin_error` into the
+//! structured
 //! [`PaladinError::LlmFailure`](paladin_core::platform::container::paladin_error::PaladinError::LlmFailure)
-//! variant so `transience`, the HTTP `status` and
-//! the `provider` survive the crossing into the core error taxonomy.
+//! variant, so `transience`, the HTTP `status` and the `provider` survive the
+//! crossing into the core error taxonomy. It is the one `LlmError` ->
+//! `PaladinError` conversion; there is no string-only path.
 //!
 //! # Why this lives in `paladin-battalion`
 //!
@@ -24,12 +24,11 @@
 //!
 //! # Invariants
 //!
-//! - **Rendered text is byte-identical to the legacy erasure (X-03).**
+//! - **The rendered text is the source error's own display.**
 //!   `PaladinError::LlmFailure` renders as `LLM error: {message}` and
-//!   `message` is the source `LlmError`'s own `Display`, so the result renders
-//!   exactly what `PaladinError::LlmError(err.to_string())` rendered at the
-//!   same site. No log line, message assertion or downstream string consumer
-//!   changes.
+//!   `message` is the source `LlmError`'s own `Display`, so a log line or
+//!   assertion over the converted failure reads `LLM error: ` followed by the
+//!   source error's text.
 //! - **Every field is read from a typed source (FT-FR-01, T-25-24).**
 //!   `transience` comes from
 //!   [`LlmError::transience`](paladin_ports::output::llm_port::LlmError::transience);
@@ -37,12 +36,13 @@
 //!   `UsageLimitExceeded`'s own fields. Nothing is parsed out of a rendered
 //!   message, and a variant without a status converts with `None`, never a
 //!   sentinel such as `0`.
-//! - **Retryability is unchanged (T-25-25).**
-//!   [`PaladinError::is_retryable`](paladin_core::platform::container::paladin_error::PaladinError::is_retryable)
-//!   answers `true` for `LlmFailure` exactly
-//!   as it did for the legacy variant, so
-//!   `src/infrastructure/resilience/circuit_breaker.rs` is not edited and its
-//!   accounting does not drift.
+//! - **Retry decisions read `transience()`, never the message.** The circuit
+//!   breaker counts a failure toward tripping, and the Conclave retries it,
+//!   only when
+//!   [`PaladinError::transience`](paladin_core::platform::container::paladin_error::PaladinError::transience)
+//!   is `Transient` (D-10, D-14). The converted failure carries the adapter's
+//!   own classification, so a `Permanent` or `Unknown` provider failure is
+//!   neither retried nor counted.
 
 use paladin_core::platform::container::node_error::NodeErrorSource;
 use paladin_core::platform::container::paladin_error::PaladinError;
@@ -50,9 +50,9 @@ use paladin_ports::output::llm_port::LlmError;
 
 /// Convert a real [`LlmError`] into the structured [`PaladinError::LlmFailure`].
 ///
-/// This is the single conversion every first-party site uses in place of the
-/// legacy `PaladinError::LlmError(e.to_string())` erasure. See the module
-/// documentation for the invariants it upholds.
+/// This is the single conversion every first-party site uses to turn a real
+/// `LlmError` into a `PaladinError`. See the module documentation for the
+/// invariants it upholds.
 ///
 /// # Examples
 ///
@@ -70,7 +70,7 @@ use paladin_ports::output::llm_port::LlmError;
 ///
 /// let converted = to_paladin_error(&err);
 ///
-/// // The rendered text is exactly what the legacy erasure rendered.
+/// // The rendered text is `LLM error:` followed by the source error's display.
 /// assert_eq!(converted.to_string(), format!("LLM error: {err}"));
 ///
 /// // ...but transience, status and provider now survive the crossing.
@@ -90,8 +90,7 @@ pub fn to_paladin_error(err: &LlmError) -> PaladinError {
         status,
         provider,
         // The source's own rendering: `LlmFailure` displays as
-        // `LLM error: {message}`, byte-identical to what the legacy
-        // `PaladinError::LlmError(err.to_string())` rendered (X-03).
+        // `LLM error: {message}`.
         message: err.to_string(),
     }
 }
@@ -101,10 +100,10 @@ pub fn to_paladin_error(err: &LlmError) -> PaladinError {
 ///
 /// Only `ProviderError` carries a status, so every other variant converts
 /// with `status: None` -- never a sentinel such as `0`, and never a value
-/// parsed out of the rendered message (T-25-24). `UsageLimitExceeded` names
-/// its provider by value without a status. A fallback chain reports whatever
-/// its last attempt carried, matching how its `transience()` delegates to
-/// `last` (FT-FR-16).
+/// parsed out of the rendered message (T-25-24). `UsageLimitExceeded`,
+/// `Refusal` and `UnsupportedParameter` name their provider by value without a status. A
+/// fallback chain reports whatever its last attempt carried, matching how its `transience()`
+/// delegates to `last` (FT-FR-16).
 ///
 /// `LlmError` is `#[non_exhaustive]` from this crate's point of view (D-04),
 /// so the wildcard arm is compiler-required; a future variant that gains a
@@ -115,6 +114,8 @@ fn typed_origin(err: &LlmError) -> (Option<u16>, Option<String>) {
             provider, status, ..
         } => (Some(*status), Some(provider.clone())),
         LlmError::UsageLimitExceeded { provider, .. } => (None, Some(provider.clone())),
+        LlmError::Refusal { provider, .. } => (None, Some(provider.clone())),
+        LlmError::UnsupportedParameter { provider, .. } => (None, Some(provider.clone())),
         LlmError::AllProvidersFailed { last, .. } => typed_origin(last),
         _ => (None, None),
     }
@@ -133,8 +134,7 @@ fn typed_origin(err: &LlmError) -> (Option<u16>, Option<String>) {
 /// `status`/`provider` are `None` -- never a sentinel, never parsed out of
 /// a message (T-25-24). `message` is the error's own `Display` in both
 /// cases, so the `WaypointStatus::Failed.error` display line built from it
-/// is byte-identical to the legacy `StateNodeError(e.to_string())` path
-/// (X-03). Redaction happened upstream, before the text entered
+/// carries the error's own text. Redaction happened upstream, before the text entered
 /// `LlmFailure` (D-34); this function adds no new unredacted path.
 ///
 /// Replaces plan 25-01's temporary "every failure is
@@ -193,7 +193,6 @@ fn paladin_error_kind(err: &PaladinError) -> &'static str {
     match err {
         PaladinError::ConfigurationError(_) => "ConfigurationError",
         PaladinError::ExecutionError(_) => "ExecutionError",
-        PaladinError::LlmError(_) => "LlmError",
         PaladinError::LlmFailure { .. } => "LlmFailure",
         PaladinError::Timeout(_) => "Timeout",
         PaladinError::StopWordDetected(_) => "StopWordDetected",
@@ -248,7 +247,7 @@ mod tests {
             ),
             (PaladinError::Timeout(30), "Timeout"),
             (PaladinError::CircuitBreakerOpen, "CircuitBreakerOpen"),
-            (PaladinError::LlmError("legacy".to_string()), "LlmError"),
+            (PaladinError::MaxRetriesExceeded(3), "MaxRetriesExceeded"),
         ];
         for (err, expected_kind) in cases {
             match to_node_error_source(&err) {
@@ -280,14 +279,14 @@ mod tests {
             LlmError::NetworkError("connection refused".to_string()),
             LlmError::AuthenticationError("invalid API key".to_string()),
             LlmError::InvalidPrompt("empty prompt".to_string()),
-            LlmError::RateLimitExceeded,
+            LlmError::rate_limited(None),
             LlmError::UsageLimitExceeded {
                 provider: "anthropic".to_string(),
                 regain_hint: Some("2026-10-01 00:00 UTC".to_string()),
             },
             LlmError::ModelNotAvailable("gpt-99".to_string()),
             LlmError::TokenLimitExceeded,
-            LlmError::EmptyCompletion("finish_reason=length, content empty".to_string()),
+            LlmError::empty_completion("finish_reason=length, content empty"),
             LlmError::ProcessingError("unexpected body".to_string()),
             LlmError::Timeout("30s elapsed".to_string()),
             LlmError::ProviderError {
@@ -319,16 +318,15 @@ mod tests {
         }
     }
 
-    /// Test 1 (X-03): the rendered text is byte-identical to the legacy
-    /// erasure `PaladinError::LlmError(e.to_string())`, which renders as
-    /// `LLM error: {e}`. Covers every variant, not a sample.
+    /// Test 1: the rendered text is `LLM error: {e}` for the source error's
+    /// own display. Covers every variant, not a sample.
     #[test]
     fn conversion_preserves_the_rendered_message_exactly() {
         for err in every_variant() {
-            let legacy_rendering = format!("LLM error: {err}");
+            let expected_rendering = format!("LLM error: {err}");
             assert_eq!(
                 to_paladin_error(&err).to_string(),
-                legacy_rendering,
+                expected_rendering,
                 "rendering drifted for {err:?}"
             );
         }
@@ -371,9 +369,11 @@ mod tests {
     fn variants_without_a_status_convert_with_none() {
         let without_status = [
             LlmError::NetworkError("connection refused".to_string()),
-            LlmError::EmptyCompletion("finish_reason=length".to_string()),
+            LlmError::empty_completion("finish_reason=length"),
             LlmError::ProcessingError("unexpected body".to_string()),
         ];
+        // `Refusal` is deliberately absent: it names its provider by value
+        // (see `refusal_carries_its_provider`).
 
         for err in without_status {
             let (_, status, provider, _) = expect_failure(to_paladin_error(&err));
@@ -396,6 +396,38 @@ mod tests {
         assert_eq!(transience, Transience::Permanent);
         assert_eq!(status, None);
         assert_eq!(provider.as_deref(), Some("anthropic"));
+    }
+
+    /// D-09: a `Refusal` names its provider by value and carries no HTTP
+    /// status; it converts as `Permanent`.
+    #[test]
+    fn refusal_carries_its_provider() {
+        let err = LlmError::refusal("anthropic", "m", "d");
+
+        let (transience, status, provider, _) = expect_failure(to_paladin_error(&err));
+
+        assert_eq!(transience, Transience::Permanent);
+        assert_eq!(status, None);
+        assert_eq!(provider.as_deref(), Some("anthropic"));
+    }
+
+    /// D-00f: an `UnsupportedParameter` names its provider by value, carries no HTTP status and
+    /// converts as `Permanent`.
+    #[test]
+    fn unsupported_parameter_carries_its_provider() {
+        let err = LlmError::unsupported_parameter(
+            "reasoning_effort",
+            "high",
+            "deepseek",
+            "deepseek-v4-pro",
+            "no measured effort data",
+        );
+
+        let (transience, status, provider, _) = expect_failure(to_paladin_error(&err));
+
+        assert_eq!(transience, Transience::Permanent);
+        assert_eq!(status, None);
+        assert_eq!(provider.as_deref(), Some("deepseek"));
     }
 
     /// Test 6 (FT-FR-16): a fallback chain's transience is exactly its last
@@ -427,15 +459,30 @@ mod tests {
         assert_eq!(provider, None);
     }
 
-    /// Test 7 (T-25-25): the legacy `is_retryable()` answer for an LLM
-    /// failure was a blanket `true`; the structured variant answers the same,
-    /// so the circuit breaker's accounting does not drift.
+    /// Test 7 (D-10, D-14): the converted failure carries the adapter's own
+    /// classification, so the breaker and the Conclave (which read
+    /// `transience()` alone) see exactly what the adapter decided.
     #[test]
-    fn converted_failure_is_retryable_like_the_legacy_variant() {
-        for err in every_variant() {
-            assert!(
-                to_paladin_error(&err).is_retryable(),
-                "is_retryable() must stay true for {err:?}"
+    fn converted_failure_carries_the_adapter_transience() {
+        let transient = LlmError::ProviderError {
+            provider: "openai".to_string(),
+            status: 503,
+            message: "upstream unavailable".to_string(),
+        };
+        let permanent = LlmError::AuthenticationError("invalid API key".to_string());
+        let unknown = LlmError::ProcessingError("unexpected body".to_string());
+
+        for (err, expected) in [
+            (transient, Transience::Transient),
+            (permanent, Transience::Permanent),
+            (unknown, Transience::Unknown),
+        ] {
+            let converted = to_paladin_error(&err);
+            assert_eq!(converted.transience(), err.transience());
+            assert_eq!(
+                converted.transience(),
+                expected,
+                "classification drifted for {err:?}"
             );
         }
     }

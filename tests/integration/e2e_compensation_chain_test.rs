@@ -42,7 +42,7 @@ use paladin_battalion::engine::{
 };
 use paladin_battalion::error_handler::ErrorHandler;
 use paladin_battalion::llm_failure::to_paladin_error;
-use paladin_core::base::entity::node::Node;
+use paladin_core::base::entity::Entity;
 use paladin_core::platform::container::aegis::{Aegis, ErrorHandlerSpec, RetryPolicy};
 use paladin_core::platform::container::battlefield::{
     Battlefield, BattlefieldSchema, DispatchRule, FieldName, FieldSpec, StateDelta,
@@ -88,7 +88,7 @@ fn make_paladin(name: &str) -> Paladin {
         vision_enabled: false,
         ..Default::default()
     };
-    Node::new(data, Some(name.to_string()))
+    Entity::new(data, Some(name.to_string()))
 }
 
 /// A `PaladinPort` whose every `execute` fails the way a real provider adapter fails on a

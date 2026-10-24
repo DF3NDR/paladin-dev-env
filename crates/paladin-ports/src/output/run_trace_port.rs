@@ -254,6 +254,32 @@ pub trait RunTracePort: Send + Sync {
         thread: &ThreadId,
         before_superstep: u64,
     ) -> Result<u64, RunTraceError>;
+
+    /// The largest `seq` persisted for `thread`, or `0` for a thread with no
+    /// persisted rows.
+    ///
+    /// A run's dispatcher seeds its own sequence from this value, so a second
+    /// run on one thread (a fork, or a drained run that is requeued) numbers
+    /// its records after the first run's instead of colliding with them: the
+    /// table is keyed `(thread_id, seq)`, so a record whose `seq` a prior run
+    /// already used is silently dropped by `append`'s conflict rule (Phase 42
+    /// review WR-6).
+    ///
+    /// The default implementation pages through [`RunTracePort::read`] and is
+    /// correct for every backend but linear in the thread's row count; a
+    /// backend with an index on `(thread_id, seq)` should override it with a
+    /// constant-time maximum.
+    async fn max_seq(&self, thread: &ThreadId) -> Result<u64, RunTraceError> {
+        const PAGE: u32 = 1024;
+        let mut last = 0_u64;
+        loop {
+            let rows = self.read(thread, last, PAGE).await?;
+            match rows.last() {
+                Some(row) => last = row.seq,
+                None => return Ok(last),
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -295,6 +321,63 @@ mod tests {
         assert_eq!(store.read(&thread, 0, 100).await.unwrap(), vec![]);
         assert_eq!(store.prune_thread(&thread, 5).await.unwrap(), 0);
         assert!(store.append(&[]).await.is_ok());
+    }
+
+    /// A store that never overrides `max_seq` still reports the true maximum,
+    /// through the paging default (WR-6).
+    #[tokio::test]
+    async fn default_max_seq_pages_through_read() {
+        use std::sync::Mutex;
+
+        struct Paged(Mutex<Vec<u64>>);
+
+        #[async_trait]
+        impl RunTracePort for Paged {
+            async fn append(&self, _records: &[TraceRecord]) -> Result<(), RunTraceError> {
+                Ok(())
+            }
+
+            async fn read(
+                &self,
+                thread: &ThreadId,
+                after_seq: u64,
+                limit: u32,
+            ) -> Result<Vec<TraceRecord>, RunTraceError> {
+                let seqs = self.0.lock().unwrap();
+                Ok(seqs
+                    .iter()
+                    .filter(|seq| **seq > after_seq)
+                    .take(limit as usize)
+                    .map(|seq| TraceRecord {
+                        thread_id: thread.clone(),
+                        run_id: None,
+                        seq: *seq,
+                        at: chrono::Utc::now(),
+                        event: paladin_core::platform::container::trace::TraceEvent::RunStarted {
+                            run_id: None,
+                            graph_fingerprint: "fp".to_string(),
+                        },
+                    })
+                    .collect())
+            }
+
+            async fn prune_thread(
+                &self,
+                _thread: &ThreadId,
+                _before_superstep: u64,
+            ) -> Result<u64, RunTraceError> {
+                Ok(0)
+            }
+        }
+
+        let thread = ThreadId::new("t1").unwrap();
+        // Spans two pages of 1024 with a gap in the numbering.
+        let store = Paged(Mutex::new((1..=1500).chain(2000..=2003).collect()));
+        assert_eq!(store.max_seq(&thread).await.unwrap(), 2003);
+        let empty = Paged(Mutex::new(Vec::new()));
+        assert_eq!(empty.max_seq(&thread).await.unwrap(), 0);
+        // The mock above has no rows at all.
+        assert_eq!(MockRunTraceStore.max_seq(&thread).await.unwrap(), 0);
     }
 
     #[test]

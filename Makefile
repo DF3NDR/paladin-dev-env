@@ -7,6 +7,17 @@ DOCKER := docker
 DOCKER_COMPOSE := $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
 PROJECT_NAME := paladin
 
+# Nightly used to render the public API baseline (.project/current-exports.txt).
+# Pinned, never floating: the baseline is rustdoc output and rustdoc's rendering
+# drifts between nightlies (2026-09-21: `-> Self` replaced fully qualified
+# return types, 606 lines red with no public item changed). CI pins the same
+# literal in the api-surface job of .github/workflows/ci.yml; without this
+# default, `make api-surface` ran scripts/extract-public-api.sh against the
+# floating local `nightly` and reported that drift as an API change. Move the
+# two literals together with a regenerated baseline (see the script header).
+# Override per invocation: PUBLIC_API_TOOLCHAIN=nightly-YYYY-MM-DD make api-surface
+PUBLIC_API_TOOLCHAIN ?= nightly-2026-09-20
+
 # Docker compose files
 COMPOSE_FILE := docker/docker-compose.yml
 COMPOSE_DEV_FILE := docker/docker-compose.dev.yml
@@ -36,7 +47,7 @@ examples: ## Show common usage examples
 	@echo "  make setup                    # First time setup"
 	@echo "  make dev                      # Start dev environment"
 	@echo "  make watch                    # Watch for changes"
-	@echo "  make test-integration-minio   # Test MinIO integration"
+	@echo "  make test-integration-minio   # Test object-store (RustFS) integration"
 	@echo ""
 	@echo "$(YELLOW)Testing:$(NC)"
 	@echo "  make test-all                 # Run all tests"
@@ -53,7 +64,7 @@ examples: ## Show common usage examples
 	@echo "$(YELLOW)Services Management:$(NC)"
 	@echo "  make services-up              # Start all services"
 	@echo "  make redis-cli                # Connect to Redis"
-	@echo "  make minio-console            # Open MinIO console"
+	@echo "  make minio-console            # Open the RustFS console"
 	@echo "  make health                   # Check service health"
 
 .PHONY: status
@@ -99,7 +110,7 @@ dev: ## Start development environment with hot reload
 	@echo "$(GREEN)✅ Development environment started$(NC)"
 	@echo "Services available at:"
 	@echo "  - Application: http://localhost:8080"
-	@echo "  - MinIO Console: http://localhost:9001"
+	@echo "  - RustFS Console: http://localhost:9001/rustfs/console/index.html"
 	@echo "  - Redis Commander: http://localhost:8081"
 
 .PHONY: dev-logs
@@ -151,8 +162,8 @@ test-integration-redis: ## Run Redis integration tests only
 	@./scripts/run_integration_tests.sh -t "redis" -m local
 
 .PHONY: test-integration-minio
-test-integration-minio: ## Run MinIO integration tests only
-	@echo "$(CYAN)Running MinIO integration tests...$(NC)"
+test-integration-minio: ## Run object-store (RustFS) integration tests only
+	@echo "$(CYAN)Running object-store (RustFS) integration tests...$(NC)"
 	@./scripts/run_integration_tests.sh -t "file_storage" -m local
 
 .PHONY: test-all
@@ -206,6 +217,10 @@ check-migration-allowlist: ## Verify MIGRATION.md §9.2 register is set-equal to
 check-publish-order: ## Verify every versioned workspace dependency (normal, build and dev) of each publishable crate appears earlier in the CRATES publish order (SHIP-06/SC3)
 	@./scripts/check-publish-order.sh
 
+.PHONY: check-dependency-allowlist
+check-dependency-allowlist: ## Verify paladin-core / paladin-ports [dependencies] match ADR-0015's measured sets (D-21)
+	@./scripts/check-dependency-allowlist.sh
+
 .PHONY: check-release-consistency
 # Deliberately NOT part of check-gates: every sibling guard above is a
 # no-argument offline check runnable against the current tree as-is: this
@@ -220,8 +235,21 @@ check-release-consistency: ## Verify a release tag's version matches every publi
 	fi
 	@./scripts/check-release-consistency.sh --tag "$(RELEASE_TAG)"
 
+.PHONY: check-consumer-surface
+# Deliberately NOT part of check-gates: the nine members of check-gates are
+# offline script guards that finish in about a second, while this target
+# compiles the facade crate. `make check` and `make lint` (so `make clean-code`)
+# and CI's clippy, all-targets check and integration-test steps already compile
+# or run the muster; this alias runs it on its own, and CI's `consumer-surface`
+# job (display name "Consumer-Surface Muster") runs it as a named check so a red
+# muster is attributable at a glance (D-10, Phase 50.1). The explicit --test form
+# fails loudly if the consumer's provider features are off, instead of skipping
+# the target silently.
+check-consumer-surface: ## Compile and run the consumer-surface muster (ADOPT-04); not part of check-gates (it builds)
+	@$(CARGO) test --test consumer_surface_muster
+
 .PHONY: check-gates
-check-gates: check-changelogs check-crate-names check-advisory-register check-workflow-suppressions check-workflow-triggers check-codeql-dismissals check-migration-allowlist check-publish-order ## Run all offline release-gate guards
+check-gates: check-changelogs check-crate-names check-advisory-register check-workflow-suppressions check-workflow-triggers check-codeql-dismissals check-migration-allowlist check-publish-order check-dependency-allowlist ## Run all offline release-gate guards
 
 .PHONY: test-shell-guards
 # Loops over every tests/scripts/*_test.sh rather than a hardcoded list, so
@@ -280,6 +308,14 @@ test-llm: ## Run tests for paladin-llm
 	@echo "$(CYAN)Running tests for paladin-llm...$(NC)"
 	@$(CARGO) test -p paladin-llm
 
+# The live-vendor smoke harness is a cargo example, and cargo does not run an example's unit
+# tests by default (its guard test `the_static_model_lists_match_the_adapters` would otherwise
+# never run). Not wired into CI: it is the local gate for editing that harness.
+.PHONY: test-llm-examples
+test-llm-examples: ## Run the unit tests inside paladin-llm's examples (live_vendor_smoke)
+	@echo "$(CYAN)Running paladin-llm example tests...$(NC)"
+	@$(CARGO) test -p paladin-llm --example live_vendor_smoke --features openai,anthropic,deepseek,kimi,qwen,grok,ollama,gemini,openai-compatible
+
 .PHONY: test-memory
 test-memory: ## Run tests for paladin-memory
 	@echo "$(CYAN)Running tests for paladin-memory...$(NC)"
@@ -318,7 +354,7 @@ coverage: ## Measure workspace coverage (mirrors CI's `coverage` job — require
 	@# Delegates to scripts/coverage.sh — shared with CI's `coverage` job so the
 	@# feature list cannot drift. The script auto-detects service endpoints, so this
 	@# works both on the host (localhost:6380/9010) and inside the devcontainer
-	@# (redis:6379 / minio:9000), which the old hardcoded preflight could not.
+	@# (redis:6379 / rustfs:9000), which the old hardcoded preflight could not.
 	@bash scripts/coverage.sh
 
 .PHONY: coverage-html
@@ -385,13 +421,13 @@ openapi: ## Regenerate the committed OpenAPI baseline (crates/paladin-web/openap
 
 .PHONY: api-surface
 api-surface: ## Check the public API surface against the committed baseline
-	@echo "$(CYAN)Checking public API surface...$(NC)"
-	@./scripts/check-api-surface.sh .project/current-exports.txt
+	@echo "$(CYAN)Checking public API surface (toolchain: $(PUBLIC_API_TOOLCHAIN))...$(NC)"
+	@PUBLIC_API_TOOLCHAIN="$(PUBLIC_API_TOOLCHAIN)" ./scripts/check-api-surface.sh .project/current-exports.txt
 
 .PHONY: api-surface-update
 api-surface-update: ## Regenerate the committed public API baseline (.project/current-exports.txt)
-	@echo "$(CYAN)Regenerating public API baseline...$(NC)"
-	@./scripts/extract-public-api.sh .project/current-exports.txt
+	@echo "$(CYAN)Regenerating public API baseline (toolchain: $(PUBLIC_API_TOOLCHAIN))...$(NC)"
+	@PUBLIC_API_TOOLCHAIN="$(PUBLIC_API_TOOLCHAIN)" ./scripts/extract-public-api.sh .project/current-exports.txt
 	@echo "$(YELLOW)Remember to add a CHANGELOG.md entry describing the public surface change.$(NC)"
 
 .PHONY: bless-golden
@@ -506,10 +542,10 @@ redis-cli: ## Connect to Redis CLI
 	@$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) exec redis redis-cli
 
 .PHONY: minio-console
-minio-console: ## Open MinIO console
-	@echo "$(CYAN)Opening MinIO console...$(NC)"
-	@echo "MinIO Console: http://localhost:9001"
-	@echo "Credentials: minioadmin/minioadmin"
+minio-console: ## Open the RustFS console (target name kept for muscle memory)
+	@echo "$(CYAN)Opening RustFS console...$(NC)"
+	@echo "RustFS Console: http://localhost:9001/rustfs/console/index.html"
+	@echo "Credentials: paladin-dev / paladin-dev-secret (RUSTFS_ACCESS_KEY / RUSTFS_SECRET_KEY in .env)"
 
 ##@ Database & Storage
 
@@ -520,10 +556,11 @@ db-reset: ## Reset database
 	@$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) restart paladin-app
 
 .PHONY: storage-reset
-storage-reset: ## Reset MinIO storage
-	@echo "$(CYAN)Resetting MinIO storage...$(NC)"
-	@$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) exec minio rm -rf /data/* || true
-	@$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) restart minio minio-init
+storage-reset: ## Reset RustFS storage
+	@echo "$(CYAN)Resetting RustFS storage...$(NC)"
+	@# No init container: the app recreates its bucket on next start (MinioAdapter::new).
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) exec rustfs sh -c 'rm -rf /data/*' || true
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) restart rustfs
 
 .PHONY: data-reset
 data-reset: db-reset storage-reset ## Reset all data
@@ -675,8 +712,8 @@ health: ## Check service health
 	@echo "$(CYAN)Checking service health...$(NC)"
 	@echo "Redis:"
 	@curl -f http://localhost:6379 2>/dev/null && echo "✅ Redis OK" || echo "❌ Redis DOWN"
-	@echo "MinIO:"
-	@curl -f http://localhost:9000/minio/health/live 2>/dev/null && echo "✅ MinIO OK" || echo "❌ MinIO DOWN"
+	@echo "RustFS:"
+	@curl -f http://localhost:9000/health/ready 2>/dev/null && echo "✅ RustFS OK" || echo "❌ RustFS DOWN"
 	@echo "Application:"
 	@curl -f http://localhost:8080/health 2>/dev/null && echo "✅ App OK" || echo "❌ App DOWN or no health endpoint"
 
@@ -712,7 +749,7 @@ devcontainer-network: ## Create DevContainer network
 .PHONY: devcontainer-services
 devcontainer-services: ## Start DevContainer services
 	@echo "$(CYAN)Starting DevContainer services...$(NC)"
-	@$(DOCKER_COMPOSE) -f .devcontainer/docker-compose.yml up -d redis minio mysql
+	@$(DOCKER_COMPOSE) -f .devcontainer/docker-compose.yml up -d redis rustfs mysql
 	@echo "$(GREEN)✅ Services started$(NC)"
 
 .PHONY: devcontainer-services-down

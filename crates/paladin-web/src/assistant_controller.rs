@@ -929,17 +929,19 @@ mod tests {
     }
 
     fn admin_principal() -> Extension<Principal> {
-        Extension(Principal {
-            id: "admin".to_string(),
-            role: paladin_core::platform::container::user::UserRole::Admin,
-        })
+        Extension(Principal::new(
+            "admin",
+            paladin_core::platform::container::user::UserRole::Admin,
+            paladin_core::platform::container::principal::TenantId::new("test-tenant").unwrap(),
+        ))
     }
 
     fn user_principal() -> Extension<Principal> {
-        Extension(Principal {
-            id: "user".to_string(),
-            role: paladin_core::platform::container::user::UserRole::User,
-        })
+        Extension(Principal::new(
+            "user",
+            paladin_core::platform::container::user::UserRole::User,
+            paladin_core::platform::container::principal::TenantId::new("test-tenant").unwrap(),
+        ))
     }
 
     fn agent_definition_body() -> serde_json::Value {
@@ -1155,7 +1157,7 @@ mod tests {
     async fn mutating_a_code_registered_id_is_409() {
         let (mut state, _repo) = admin_state();
         let registry = Arc::new(AgentRegistry::new());
-        let paladin = Arc::new(paladin_core::base::entity::node::Node::new(
+        let paladin = Arc::new(paladin_core::base::entity::Entity::new(
             paladin_core::platform::container::paladin::PaladinData {
                 system_prompt: "hi".to_string(),
                 name: "CodeAgent".to_string(),

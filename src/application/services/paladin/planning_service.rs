@@ -577,9 +577,11 @@ mod tests {
                 content: self.response.clone(),
                 finish_reason: FinishReason::Stop,
                 usage: TokenUsage::new(10, 20),
+                cost: None,
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: None,
+                reasoning: None,
             })
         }
 

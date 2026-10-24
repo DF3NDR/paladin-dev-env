@@ -15,12 +15,10 @@ use paladin_ports::output::llm_port::{LlmPort, LlmRequest};
 /// (`#[tokio::test]`).
 async fn setup_mock_server() -> (ServerGuard, DeepSeekAdapter) {
     let server = Server::new_async().await;
-    let config = DeepSeekConfig {
-        api_key: "test-api-key".to_string(),
-        base_url: server.url(),
-        model: "deepseek-chat".to_string(),
-        timeout_seconds: 30,
-    };
+    // `DeepSeekConfig` is `#[non_exhaustive]`: build it with `new` and set what differs.
+    let config = DeepSeekConfig::new("test-api-key".to_string(), "deepseek-chat".to_string())
+        .with_base_url(server.url())
+        .with_timeout_seconds(30);
     let adapter = DeepSeekAdapter::new(config).unwrap();
     (server, adapter)
 }
@@ -161,7 +159,7 @@ async fn test_deepseek_rate_limit_429() {
     let error = response.unwrap_err();
     assert!(matches!(
         error,
-        paladin_ports::output::llm_port::LlmError::RateLimitExceeded
+        paladin_ports::output::llm_port::LlmError::RateLimitExceeded { .. }
     ));
 }
 
@@ -177,12 +175,9 @@ async fn test_deepseek_timeout() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
 
-    let config = DeepSeekConfig {
-        api_key: "test-api-key".to_string(),
-        base_url: format!("http://{addr}"),
-        model: "deepseek-chat".to_string(),
-        timeout_seconds: 1,
-    };
+    let config = DeepSeekConfig::new("test-api-key".to_string(), "deepseek-chat".to_string())
+        .with_base_url(format!("http://{addr}"))
+        .with_timeout_seconds(1);
     let adapter = DeepSeekAdapter::new(config).unwrap();
 
     let request = create_test_request("Hello");

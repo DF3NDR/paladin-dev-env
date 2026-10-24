@@ -25,7 +25,8 @@
 use async_trait::async_trait;
 use paladin::application::services::battalion::campaign_service::CampaignExecutionService;
 use paladin::application::services::paladin::error::PaladinError;
-use paladin::core::base::entity::node::Node;
+use paladin::core::base::entity::Entity;
+use paladin::core::platform::container::aegis::{Aegis, TimeoutPolicy};
 use paladin::core::platform::container::battalion::BattalionConfig;
 use paladin::core::platform::container::battalion::campaign::{
     Campaign, CampaignEdge, EdgeCondition,
@@ -33,6 +34,7 @@ use paladin::core::platform::container::battalion::campaign::{
 use paladin::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, StopReason};
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Example mock implementation of PaladinPort
 /// In a real application, this would call actual LLM APIs
@@ -41,14 +43,14 @@ struct ExamplePaladinPort;
 #[async_trait]
 impl PaladinPort for ExamplePaladinPort {
     async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
-        println!("\n🤖 {} executing...", paladin.node.name);
+        println!("\n🤖 {} executing...", paladin.data.name);
         println!("   Input: {}", input);
 
         // Simulate processing
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
         // Generate output based on Paladin role
-        let output = match paladin.node.name.as_str() {
+        let output = match paladin.data.name.as_str() {
             // Quality control workflow
             "QualityChecker" => {
                 if input.contains("high quality") {
@@ -103,7 +105,7 @@ impl PaladinPort for ExamplePaladinPort {
                 format!("Final approval: {} - Fully approved", input)
             }
 
-            _ => format!("{} processed: {}", paladin.node.name, input),
+            _ => format!("{} processed: {}", paladin.data.name, input),
         };
 
         println!("   Output: {}", output);
@@ -150,7 +152,22 @@ fn create_paladin(name: &str, system_prompt: &str) -> Paladin {
         vision_enabled: false,
         ..Default::default()
     };
-    Node::new(data, Some(name.to_string()))
+    Entity::new(data, Some(name.to_string()))
+}
+
+/// Bound each Paladin attempt in the Campaign at `secs` seconds, not the whole graph.
+///
+/// A Campaign has no continue mode: it ignores an `on_error` handler, so a
+/// failing node fails the run. Only the timeout (and, if set, a retry policy)
+/// applies to it.
+fn per_attempt_timeout(secs: u64) -> Aegis {
+    Aegis {
+        timeout: Some(TimeoutPolicy {
+            run_timeout: Some(Duration::from_secs(secs)),
+            idle_timeout: None,
+        }),
+        ..Aegis::default()
+    }
 }
 
 /// Example 1: Quality Control Workflow with Conditional Routing
@@ -165,7 +182,7 @@ async fn quality_control_workflow() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = BattalionConfig::new("quality_control")
         .with_description("Quality control with conditional routing")
-        .with_timeout(30);
+        .with_aegis(per_attempt_timeout(30));
 
     let mut campaign = Campaign::new(config);
 
@@ -215,7 +232,7 @@ async fn data_processing_pipeline() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = BattalionConfig::new("data_pipeline")
         .with_description("Data processing with parallel cleaning")
-        .with_timeout(60);
+        .with_aegis(per_attempt_timeout(60));
 
     let mut campaign = Campaign::new(config);
 
@@ -278,7 +295,7 @@ async fn log_analysis_workflow() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = BattalionConfig::new("log_analysis")
         .with_description("Log analysis with regex-based routing")
-        .with_timeout(30);
+        .with_aegis(per_attempt_timeout(30));
 
     let mut campaign = Campaign::new(config);
 
@@ -326,7 +343,7 @@ async fn approval_chain_workflow() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = BattalionConfig::new("approval_chain")
         .with_description("Sequential approval workflow")
-        .with_timeout(60);
+        .with_aegis(per_attempt_timeout(60));
 
     let mut campaign = Campaign::new(config);
 

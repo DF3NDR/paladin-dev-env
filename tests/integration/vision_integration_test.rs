@@ -68,7 +68,7 @@ async fn test_openai_vision_integration() {
     };
 
     // Create adapter with real API key
-    let config = OpenAIConfig::new(api_key);
+    let config = OpenAIConfig::new(api_key, "gpt-4o-mini".to_string());
     let adapter = OpenAIAdapter::new(config).expect("Should create OpenAI adapter");
 
     // Verify capabilities include vision
@@ -136,12 +136,7 @@ async fn test_anthropic_vision_integration() {
     };
 
     // Create adapter with real API key
-    let config = AnthropicConfig::new(
-        api_key,
-        "https://api.anthropic.com/v1".to_string(),
-        "claude-3-5-sonnet-20241022".to_string(),
-        4096,
-    );
+    let config = AnthropicConfig::new(api_key, "claude-3-5-sonnet-20241022".to_string());
     let adapter = AnthropicAdapter::new(config).expect("Should create Anthropic adapter");
 
     // Verify capabilities include vision
@@ -211,7 +206,7 @@ async fn test_multiple_images_openai() {
         }
     };
 
-    let config = OpenAIConfig::new(api_key);
+    let config = OpenAIConfig::new(api_key, "gpt-4o-mini".to_string());
     let adapter = OpenAIAdapter::new(config).expect("Should create OpenAI adapter");
 
     // Read multiple test images
@@ -279,7 +274,7 @@ async fn test_image_url_openai() {
         }
     };
 
-    let config = OpenAIConfig::new(api_key);
+    let config = OpenAIConfig::new(api_key, "gpt-4o-mini".to_string());
     let adapter = OpenAIAdapter::new(config).expect("Should create OpenAI adapter");
 
     // Create vision request with image URL
@@ -330,7 +325,7 @@ async fn test_high_detail_image_openai() {
         }
     };
 
-    let config = OpenAIConfig::new(api_key);
+    let config = OpenAIConfig::new(api_key, "gpt-4o-mini".to_string());
     let adapter = OpenAIAdapter::new(config).expect("Should create OpenAI adapter");
 
     // Read test image

@@ -1,6 +1,10 @@
 # Migration Guide
 
-This guide covers all breaking changes since v0.1.0 up to the current **v0.10.0** release.
+This guide covers all breaking changes since v0.1.0 up to the **v0.10.0** release. The
+[Upgrading](upgrading.md) page leads with the current **v0.11.0** release.
+
+Upgrading to v0.11.0 from v0.10.1: see [Upgrading](upgrading.md) and `MIGRATION.md` section 10
+([link](https://github.com/DF3NDR/paladin-dev-env/blob/main/MIGRATION.md#10-upgrading-from-v0101-to-v0110)).
 
 ## Upgrading to v0.10.0 (from v0.9.x)
 

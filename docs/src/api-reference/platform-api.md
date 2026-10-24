@@ -71,7 +71,9 @@ repository insert and one queue enqueue, with no engine work on the request path
 p99 ≤ 250ms budget is an architectural property of that fact, not a number to tune).
 
 `GET /v1/runs/{run_id}` returns the full `Run`: `run_id`, `thread_id`, `assistant_id`, `version`,
-`status`, `submitted_at`/`started_at`/`finished_at`, `error` (the engine's error, when `Failed`).
+`status`, `submitted_at`/`started_at`/`finished_at`, `error` (the engine's error, when `Failed`),
+`final_waypoint_id` (the final Waypoint the run reached; `null` until it records one) and
+`halt_reason` (why a run halted on spend; `null` otherwise) -- see [Halted runs](#halted-runs).
 
 `GET /v1/runs?thread_id=&assistant_id=&status=&limit=&cursor=` lists runs
 `(submitted_at DESC, run_id DESC)`, paginated per [Pagination](#pagination); a run's `webhook`
@@ -82,6 +84,16 @@ field, if echoed at all, always redacts `secret` to `"***"`.
 (D-18): a thread suspended awaiting input still has an active run, and admitting a second run onto
 it would race a concurrent execution over the same Waypoint chain. The `409` body names
 `POST /v1/threads/{thread_id}/resume` as the remedy.
+
+**`429 allowance_exhausted`.** A caller whose API-key or tenant allowance is spent is refused
+before anything is persisted -- see [Allowance refusals](#allowance-refusals).
+
+**`422 model_unpriced`.** When the assistant is agent-kind, the caller has an allowance ceiling
+and the agent's model has no `treasurer.pricing` row, the submission is refused before anything is
+persisted, with `code` `model_unpriced`, `details.model` naming the model and no `Retry-After`. An
+agent-kind submission is also refused `429 allowance_exhausted` when the allowance is too small to
+buy a single token of the agent's model. See [Agent-kind runs stop on the
+allowance](#agent-kind-runs-stop-on-the-allowance).
 
 ### Cancelling a run
 
@@ -100,7 +112,82 @@ The engine's own vocabulary and the run's status vocabulary deliberately differ 
 the **Waypoint** halted (`RunOutcome::Halted`), while the **run** is recorded `Cancelled`. A plain
 graceful-shutdown drain (no cancel requested) also produces a `Halted` Waypoint, but the run stays
 `Running` for immediate redelivery rather than moving to `Cancelled` — only an explicit
-`POST .../cancel` produces the `Cancelled` run status.
+`POST .../cancel` produces the `Cancelled` run status. The live stream follows the same split: a
+caller-cancelled run's `done` says `cancelled` (see [Streaming](#streaming) below), and a
+worker drain emits no terminal event at all.
+
+A cancel and a spend halt can meet at the same superstep boundary. A cancel is observed by the
+engine first, so it normally wins, but a cancel written by another instance is read through a
+debounced probe and can miss the boundary where the allowance guard halts the run. A run that
+halts on spend in that window is recorded `halted` with its `halt_reason`, whatever the persisted
+cancel flag says, rather than `cancelled` (ADR-0057). Either way the run has stopped.
+
+### Halted runs
+
+A run whose spend allowance is exhausted while it is in flight halts at its next superstep
+boundary: its `status` is `halted`, its `error` is `null` (a halt is a resume point, not a failure)
+and its last checkpoint is kept. `GET /v1/runs/{run_id}` and every row of `GET /v1/runs` say why
+and where to resume with two fields, both always present (`null` when they do not apply):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `final_waypoint_id` | string or `null` | The final Waypoint the run reached. For a halted run it is the Halted Waypoint -- the fork point to resume from. |
+| `halt_reason` | object or `null` | Why the run halted. `null` for every run that did not halt on spend. |
+
+`halt_reason` is an object tagged by `reason`. For an exhausted allowance it carries the halted
+ceiling's own figures -- the same keys, built by the same function, as the `details` of
+[`429 allowance_exhausted`](#allowance-refusals):
+
+```json
+{
+  "status": "halted",
+  "error": null,
+  "final_waypoint_id": "01926f3e-...",
+  "halt_reason": {
+    "reason": "allowance_exhausted",
+    "scope": "api_key",
+    "kind": "window",
+    "balance": "1.0000 USD",
+    "ceiling": "1.0000 USD",
+    "window_start": "2026-10-06T00:00:00Z",
+    "window_end": "2026-10-07T00:00:00Z"
+  }
+}
+```
+
+`balance` and `ceiling` are display strings rendered at the edge from exact integer nano-units;
+`window_start`/`window_end` are RFC 3339 and `null` for a lifetime ceiling. When the spend ledger
+could not be read at the boundary, or one of the run's own superstep charges could not be written
+to it (so the run's balance can no longer be trusted), the run halts fail-closed and `halt_reason`
+is exactly `{ "reason": "ledger_unavailable" }`. The object never carries another scope's figures, a tenant
+id, or an API key name or value.
+
+The reason is written to the run row before the status flips to `halted`, so a reader never sees
+a `halted` run without its `halt_reason`.
+
+### Resuming a halted run
+
+A halted run is terminal: it never returns to `queued` or `running`, and re-enqueueing its run id
+is not a way to resume it. Resume is a **new run forked from the Halted Waypoint**, which
+re-runs the allowance check at submission:
+
+1. Read the halted run: `GET /v1/runs/{run_id}` answers `status: halted`, the `halt_reason` and
+   the `final_waypoint_id`.
+2. Fork from that Waypoint: `POST /v1/threads/{thread_id}/fork` with
+   `{ "from_waypoint_id": "<final_waypoint_id>" }`, using the run's `thread_id`.
+3. While the allowance is still exhausted the fork is refused `429 allowance_exhausted` with a
+   `Retry-After` header naming the seconds until the window resets. A lifetime cap carries no
+   `Retry-After` (the cap does not reset): raise the cap instead. If the spend ledger cannot be
+   read the fork is refused `500` and nothing runs (fail closed); retry once it reads again.
+4. Once admitted, the fork answers `202 { run_id, thread_id }` and the new run continues from the
+   Halted Waypoint: no superstep the halted run already completed is run again. The new run's
+   own `GET /v1/runs/{run_id}` reports its progress and, if the allowance is exhausted again, its
+   own `halt_reason`. The original run stays `halted`.
+
+A run halted with `halt_reason: { "reason": "ledger_unavailable" }` resumes the same way once the
+ledger reads and accepts writes again. An agent-kind run has no checkpoint (the agent loop writes no Waypoint), so it
+has no Halted Waypoint to fork from and its `final_waypoint_id` is `null`: resume it with a fresh
+`POST /v1/runs`, which re-executes from the start.
 
 ### Streaming
 
@@ -118,7 +205,7 @@ Seven wire event names are frozen for this milestone (D-25); every event also ca
 | `node_finished` | `{ superstep, node_id, outcome }` |
 | `state_delta` | `{ superstep, fields, bytes }` — changed field **names** and a byte-size count only, **never a value** |
 | `parley` | `{ waypoint_id, parleys }` |
-| `done` | `{ status, waypoint_id }` |
+| `done` | `{ status, waypoint_id, halt_reason? }` — `status` is `completed`, `halted`, `cancelled` or `awaiting_input`; `halt_reason` is present only for a run that halted on spend (see below) |
 | `error` | `{ status, message, waypoint_id }` |
 
 If the run is executing on **this** instance, live progress bridges from a `TraceSink` adapter
@@ -133,6 +220,32 @@ may coalesce multiple supersteps into a single observed jump** — it is a "catc
 state" view, not a live progress feed. `done`/`error` are still always eventually delivered on the
 degraded path; only their timing and granularity relative to the live path are unspecified.
 
+**`done` and the halt reason.** For a run that halted on spend, `done` carries `status: "halted"`
+and a `halt_reason` object -- the same object `GET /v1/runs/{run_id}` returns (see
+[Halted runs](#halted-runs)), built by one function. For an exhausted allowance it is
+`{ "reason": "allowance_exhausted", "scope", "kind", "balance", "ceiling", "window_start",
+"window_end" }`; for a ledger that could not be read or written it is exactly
+`{ "reason": "ledger_unavailable" }` and is still a `done`, never an `error` (`error` is reserved
+for a `failed` run). A halt with no spend reason (a caller cancel or a token halt) keeps the
+payload without a `halt_reason` key. The live, degraded and replay paths agree on `status` and
+`halt_reason` for the same run, so a streaming client never needs a follow-up read to learn why a
+run stopped; a replayed stream takes both from the run row once the row is terminal, and
+`waypoint_id` follows each path's own rule (`null` on the live and replay paths, the row's final
+Waypoint id on the degraded path).
+
+**`done` and a caller cancel.** A run a caller cancelled with `POST /v1/runs/{run_id}/cancel`
+streams `done` with `status: "cancelled"` and no `halt_reason` key, equal to the `cancelled` status
+`GET /v1/runs/{run_id}` reports -- whether the cancel reached the instance that is running the run
+(the in-process route) or only the durable flag through another instance (observed at the next
+superstep boundary). It said `halted` before; a client that matched on `halted` to detect a cancel
+must now match `cancelled`. Spend halts are unchanged: `status: "halted"` plus the reason.
+
+**A worker drain is not a finish.** When a worker shuts down mid-run, the run row stays `running`
+and its queue message is redelivered, so no `done` (and no `error`) is emitted for it: a subscriber
+sees the stream end without a terminal event. Reconnect to follow the redelivered run, which
+streams on whichever instance picks it up. A halt that carries a spend reason is a genuine finish
+and is still emitted during shutdown.
+
 A 15-second heartbeat comment line is emitted on **both** paths to defeat idle-proxy timeouts.
 
 ## Threads
@@ -144,7 +257,7 @@ A 15-second heartbeat comment line is emitted on **both** paths to defeat idle-p
 | `GET /v1/threads/{thread_id}/history` | Paginated Chronicle history: `?limit=20&cursor=...` (limit ≤ 100), `{ items, next_cursor }` |
 | `GET /v1/threads/{thread_id}/state` | The thread's latest status, plus outstanding `parleys`/`responses` when suspended |
 | `POST /v1/threads/{thread_id}/resume` | `{ "responses": [{ "parley_id", "value", "responded_by" }] }` → `202 { thread_id, state_url, run_id }` |
-| `POST /v1/threads/{thread_id}/fork` | `{ "from_waypoint_id", "edit"? }` → submits a **new** run on the same thread from an earlier Waypoint, with `edit` applied → `202 { run_id, thread_id }`; `409 thread_busy` while a run is active |
+| `POST /v1/threads/{thread_id}/fork` | `{ "from_waypoint_id", "edit"? }` → submits a **new** run on the same thread from an earlier Waypoint, with `edit` applied → `202 { run_id, thread_id }`; `409 thread_busy` while a run is active; `429 allowance_exhausted` (with `Retry-After`) while the caller's allowance is exhausted -- see [Resuming a halted run](#resuming-a-halted-run) |
 | `DELETE /v1/threads/{thread_id}` | Admin-only; `204`; `409 thread_busy` while a run is active |
 
 A resumed run re-enqueues under the **same `run_id`** (`attempt` incremented, D-23) rather than
@@ -263,6 +376,26 @@ submitting; `run_once` submits exactly once, then recomputes.
 `ScheduleResponse.webhook.secret` always renders `"***"` (or `null` if unset) — the raw secret is
 accepted on write but never echoed back.
 
+**Creator attribution and allowances.** `POST /v1/schedules` records the creating principal's
+tenant id and API key name on the schedule. A run the schedule fires is attributed to that
+creator, so its spend settles under the creator's tenant and key, and each tick is admitted
+against the creator's allowance like a `POST /v1/runs` by that key. A tick whose creator's
+tenant or API-key allowance is exhausted fires **no run**: it is skipped, `skipped_ticks` on the
+schedule is incremented, and nothing is written to the run store or the queue. If the creator's
+key was later removed from the configuration, the schedule stays attributed by the recorded names
+and is gated by the tenant allowance only. The creator is deliberately **not** returned in the
+schedule responses, because `GET /v1/schedules` is not tenant-scoped. `PATCH` never changes it.
+
+**Known gap: schedules created before this release.** A schedule created before creator
+attribution existed has no recorded creator. It keeps firing exactly as before, unattributed and
+not gated by any allowance. To bring it under allowances, re-create it through
+`POST /v1/schedules` (a backfill and a `PATCH` re-assignment are not implemented).
+
+**The role check is not applied at fire time.** A schedule-fired run carries the creator's
+identity (tenant id and key name) but never a role, so it skips the assistant's `allowed_roles`
+check exactly as it did before. A schedule created by an Admin on an assistant whose
+`allowed_roles` excludes Admin therefore still fires.
+
 ## Webhooks
 
 A run's or schedule's `webhook` spec `{ url, secret?, events }` subscribes to lifecycle events
@@ -283,6 +416,23 @@ appears):
   "timestamp": "2026-09-08T12:00:00Z",
   "attempt": 1,
   "parleys": null
+}
+```
+
+A `halted` event whose run halted on spend additionally carries an optional `halt_reason` key,
+equal to the [`halt_reason` object on the run](#halted-runs); no other event carries it, and the
+payloads of every other event are unchanged:
+
+```json
+{
+  "run_id": "...",
+  "thread_id": "...",
+  "assistant": { "assistant_id": "researcher", "version": 3 },
+  "status": "halted",
+  "event": "halted",
+  "timestamp": "2026-10-06T12:00:00Z",
+  "attempt": 1,
+  "halt_reason": { "reason": "ledger_unavailable" }
 }
 ```
 
@@ -347,20 +497,88 @@ milestone. Naming this gap plainly is the point: PRD 06's own functional require
 permits documenting it rather than closing it, and claiming coverage that does not exist would be
 worse than the gap itself.
 
-### Known limitations
+### Operator allowance notices
 
-**A run against a code-registered agent never fires a webhook.** Two assistant kinds resolve
-through this API: a stored `WarGraphDoc` workflow, and a **code-registered agent** (a single
-Paladin registered directly in the process, not backed by a Waypoint-tracked graph). The delivery
-hook documented above — enqueueing a `Pending` webhook delivery on a lifecycle transition — is
-wired only into the workflow path. A run submitted against a code-registered agent completes (or
-fails) with a `webhook` spec attached, but **zero deliveries are ever enqueued for it**, no matter
-which events it subscribed to; the same run's status is still correctly reported by
-`GET /runs/{run_id}` and by the degraded polling path on `GET /runs/{run_id}/stream` (the live
-SSE bus is excluded for this run kind too). If your integration depends on webhook delivery, poll
-the run instead of relying on a callback when its assistant is code-registered. This is a
-recorded, tested limitation, not a silent gap: it is pinned by a named test in the worker's own
-test suite and tracked in the project's broken-windows ledger.
+When the operator configures `treasurer.allowance.webhook` (see the
+[configuration guide](../getting-started/configuration.md#treasurer-allowances)), the Treasurer
+posts one **operator notice** the first time a balance reaches `warn_at` percent of an allowance
+ceiling, before callers start receiving `429 allowance_exhausted`, and a second kind when a run
+is halted because its allowance ran out mid-run. There are two events, `allowance_warning` and
+`allowance_halted`, described below. Both ride the same durable queue
+as the run webhooks above -- the same no-redirect client, SSRF guard (at boot and at send time),
+retry schedule and dead-lettering -- but they are the **operator's**, not the caller's: neither
+appears in `GET /v1/runs/{run_id}/webhook-deliveries` for the run it concerns, and a caller cannot
+subscribe a run or schedule `webhook.events` to `allowance_warning` or `allowance_halted` (that
+answers `400`).
+
+**When each fires.** `allowance_warning` fires once per scope, limit, window and ceiling, at the
+first moment the balance is at or past `warn_at` percent: at admission when the run is admitted
+already past the threshold, or **mid-run**, at the run's first superstep boundary past the
+threshold when it crossed while running. A mid-run warning also appears once on that run's own
+trace stream as an `allowance_warning` event when run traces are enabled, exactly as an
+admission warning does.
+`allowance_halted` fires once per scope, limit, window and ceiling when a run is halted at a
+superstep boundary because that ceiling is exhausted, so twenty runs halting in one window send
+the operator one `allowance_halted`, not twenty. Only a halt at an engine superstep boundary
+sends it: an agent-kind run that halts at dispatch, or on its derived token budget, is recorded
+`halted` and notifies the run's own webhook subscribers, but sends the operator no
+`allowance_halted`. The overshoot bound is one **top-level**
+superstep, including any nested sub-workflow (`Battalion` node) run it contains: a sub-workflow's
+spend is settled only when its hosting superstep ends, so a long sub-workflow can spend past a
+ceiling by its whole length before the run halts. A halt caused by an unreadable ledger,
+or by a superstep charge that could not be written to it (`halt_reason.reason` of
+`ledger_unavailable`), sends the operator **no** notice: there is no trustworthy balance to
+report, and the failure is in the server log at `error`.
+
+**Payload** (exactly these twelve keys; no run input, no API key value and no signing secret ever
+appears):
+
+```json
+{
+  "event": "allowance_warning",
+  "scope": "api_key",
+  "kind": "window",
+  "balance": "0.8000 USD",
+  "ceiling": "1.0000 USD",
+  "window_start": "2026-10-03T00:00:00Z",
+  "window_end": "2026-10-04T00:00:00Z",
+  "warn_at": 80,
+  "run_id": "...",
+  "timestamp": "2026-10-03T09:15:00Z",
+  "tenant_id": "acme",
+  "api_key_id": "ci-runner"
+}
+```
+
+An `allowance_halted` notice carries the **same twelve keys**, with `event` set to
+`allowance_halted`, `run_id` the run that was halted, `balance` and `ceiling` the exhausted
+figures and `warn_at` the ceiling's configured threshold; it has no thirteenth key.
+
+`scope` is `api_key` or `tenant`; `kind` is `window` or `lifetime`; `balance` and `ceiling` are
+display strings; `window_start` and `window_end` are RFC 3339 and `null` for a lifetime ceiling.
+`run_id` is the run whose admission won the notice, or `null` on the HTTP agent routes (no run row
+exists there). `api_key_id` is the API key's configured **name**, never its value, and is `null`
+for a tenant-scope notice. `timestamp` is the ledger store's clock when the notice was recorded.
+
+**Headers and signature.** The request carries `X-Paladin-Event: allowance_warning` (or
+`allowance_halted`) and `X-Paladin-Delivery: <delivery id>`. If a `secret` is configured it is signed exactly like a run
+webhook -- `X-Paladin-Signature: sha256=<hex>`, HMAC-SHA256 over the raw request body bytes -- with
+`treasurer.allowance.webhook.secret` (or `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET`). Verify it over
+the raw bytes you received, as above. Without a secret the body is signed with the empty key.
+
+**Delivery semantics.** At most one notice of each kind is recorded per scope, limit kind, window
+and ceiling (raising a ceiling re-arms it), so at most one delivery is enqueued for each; the
+delivery itself is at-least-once. A replica running an older build cannot parse the
+`allowance_halted` event, so enable this on every replica before relying on it. Omitting `treasurer.allowance.webhook` disables only this leg -- the durable notice
+row, the trace event and the herald allowance line still occur. If the operator notice cannot be
+enqueued the failure is logged and not retried, and the run is unaffected. A private or loopback
+target needs `webhooks.allow_private: true`; the cloud metadata address is always rejected, and
+`paladin-server` refuses to start on a rejected target.
+
+On the HTTP agent routes (`/v1/agents/{id}/execute`, `/execute/stream`, `/jobs`) the durable notice
+row and this operator webhook always fire. The `allowance_warning` trace event is emitted there only
+when an agent-path trace emitter is wired, and the herald allowance line appears only on the
+streamed final chunk (`/execute/stream`).
 
 ## Pagination
 
@@ -394,18 +612,184 @@ Every new route sits behind the same authentication middleware and the same rate
 |---|---|---|
 | **Invocation-shaped** | run submit/cancel/resume/fork | `authorize_invoke` against the target assistant's `allowed_roles` — any authenticated principal the assistant itself permits |
 | **Registry-shaped** | assistant create/publish-version/delete; schedule create/patch/delete; thread delete | `require_admin` — an admin-role credential |
-| **Reads** | every `GET` | authentication only |
+| **Reads** | every `GET` | authentication plus the tenant read scope below -- a principal reads only runs its tenant submitted, unless it is an admin |
 
-**What a `GET` can see today.** Every read route above needs authentication only — there is no
-per-resource ownership check. Any authenticated principal of any role can call `GET /runs` and
-`GET /runs/{run_id}` and see every run in the deployment, not just runs it submitted itself: the
-resolved assistant and thread ids, status, error text, and — via
-`GET /runs/{run_id}/webhook-deliveries` and the run's own `webhook` field — another caller's
-webhook target URL (the signing secret is always redacted, the URL is not). `run_id` values are
-time-ordered UUIDv7s, so walking `GET /runs` or guessing a nearby id is easier than for a random
-identifier. This is the intended model for a **single-tenant or mutually-trusted-principal
-deployment** — it is not a promise that one caller's runs are hidden from another. A
-finer-grained, per-tenant read scope is the tracked remediation, not yet built.
+**Which runs a caller can see (PLAT-07, Phase 40).** Every run records the principal that
+submitted it -- the tenant and the API key's configured name -- and the read routes serve only
+the runs the calling principal may see:
+
+- A **user-role** key sees only runs recorded under **its own tenant**. Two keys mapped to the
+  same tenant see each other's runs; a key of another tenant does not. A user-role key never
+  sees a run with no recorded principal.
+- An **admin-role** key (the deployment-operator role, the same one that gates the registry
+  routes) sees **every run**, including runs with no recorded principal -- schedule-fired runs,
+  runs submitted from the same process, and runs submitted before v0.11. When authentication is
+  disabled, the open-access principal is admin-role, so an open deployment keeps reading every
+  run.
+
+The tenant comes **only** from the key's configured mapping (`http.auth.api_keys[].tenant`, or
+`http.auth.bearer_token.tenant` for bearer principals). No header, query parameter or body
+field can name a tenant; a `tenant_id` query parameter on `GET /runs` is unknown and ignored.
+
+The scope applies the same way everywhere. `GET /runs` lists only visible runs -- the
+`thread_id`/`assistant_id`/`status` filters compose with the scope, so another tenant's
+`thread_id` yields an empty page, and the cursor walk stays gap-free because the filter runs
+inside the store's own query. `GET /runs/{run_id}`, `GET /runs/{run_id}/stream`,
+`GET /runs/{run_id}/webhook-deliveries` and `POST /runs/{run_id}/cancel` all answer the
+**same `404` as a run that does not exist** for a run the caller may not see -- never a `403`,
+never a different message -- so a foreign tenant cannot learn that a run exists or read its
+webhook target URL, and cancel is refused before any role check so it can never mutate another
+tenant's run. `RunResponse.submitted_by` shows the recording tenant and API key name
+(`{ "tenant_id", "api_key_id" }`, or `null` when no principal was recorded); it never carries the
+key value or the role. A client that used to read other principals' runs must use an
+admin-role key.
+
+`/v1/threads/*` reads are **not yet tenant-scoped**: threads carry no tenant, so
+`GET /threads`, `GET /threads/{id}/state` and `GET /threads/{id}/history` remain
+deployment-wide for any authenticated principal. That gap is tracked in the project's
+broken-windows ledger, not implied closed by the run scope above.
+
+### Allowance refusals
+
+When the operator configures a spend allowance (`treasurer.allowance`, see the
+[configuration guide](../getting-started/configuration.md)), a caller whose API key or tenant has
+reached a ceiling is refused with `429 allowance_exhausted` -- before any run, job or queue entry
+is created. Five routes answer it, because each starts LLM spend under the calling principal:
+
+| Route | Refusal behaviour |
+|---|---|
+| `POST /v1/runs` | refused before the run row is written |
+| `POST /v1/threads/{id}/fork` | refused before the fork's run row is written |
+| `POST /v1/agents/{id}/execute` | refused before the agent is invoked |
+| `POST /v1/agents/{id}/execute/stream` | a plain JSON `429` returned before any event stream opens |
+| `POST /v1/agents/{id}/jobs` | refused synchronously: no job id is issued and nothing is spawned |
+
+If the allowance check itself cannot be completed (for example the spend ledger is unreachable),
+the same routes answer `500` and run nothing -- the check fails closed. A request with no
+principal, or a principal with no configured allowance, is never gated.
+
+The body is the standard error envelope with the dedicated code `allowance_exhausted`; its
+`details` carry exactly the refused ceiling's own figures and never the caller's tenant or key:
+
+```json
+{
+  "error": {
+    "code": "allowance_exhausted",
+    "message": "...",
+    "details": {
+      "scope": "api_key",
+      "kind": "window",
+      "balance": "2.5000 USD",
+      "ceiling": "2.5000 USD",
+      "window_start": "2026-10-03T00:00:00Z",
+      "window_end": "2026-10-04T00:00:00Z"
+    }
+  }
+}
+```
+
+An `allowance_halted` notice carries the **same twelve keys**, with `event` set to
+`allowance_halted`, `run_id` the run that was halted, `balance` and `ceiling` the exhausted
+figures and `warn_at` the ceiling's configured threshold; it has no thirteenth key.
+
+`scope` is `api_key` or `tenant`; `kind` is `window` or `lifetime`; `balance` and `ceiling` are
+display strings; `window_start`/`window_end` are RFC 3339 and `null` for a lifetime ceiling.
+
+A `Retry-After` header carries the whole seconds from the **ledger store's clock** (not the web
+server's) to the window's end. It is omitted for a lifetime ceiling, which never reopens.
+
+An `admin`-role key is bound by its allowance exactly like any other key: the role is not part of
+the check. The per-IP rate limiter also answers `429`, but with the different code
+`too_many_requests`, so a client can tell quota from pacing by the body code alone.
+
+### Agent routes stop on the allowance
+
+A caller with an allowance ceiling also has its agent *loop* bounded, not just admitted. On
+`POST /v1/agents/{id}/execute`, `execute/stream` and `jobs`, admission derives a per-run token
+budget from the tightest remaining ceiling at the agent model's dearest `treasurer.pricing`
+price, and the loop ends after the model response that crosses it (the overshoot is at most one
+response; see the [configuration guide](../getting-started/configuration.md#the-derived-token-budget-on-agent-routes)).
+
+**`stop_reason: "allowance_halted"` and `halt_reason`.** A call that ends this way answers `200`
+with `stop_reason: "allowance_halted"` and a `halt_reason` object, with the partial output kept
+and an allowance-halt notice appended (`[budget] Allowance reached — this response is partial; the
+run was halted.`). `ExecuteResponse.halt_reason` is the same object
+`GET /runs/{run_id}` returns for a halted run, `{ "reason": "allowance_exhausted", "scope",
+"kind", "balance", "ceiling", "window_start", "window_end" }`, built by the same function. The
+figures are the binding ceiling's own, with `balance` equal to `ceiling`: a conservative bound,
+because the loop does not know the true balance after the call. The key is absent for every
+other `stop_reason`, so a response that was not halted is byte-identical to before. A run that
+hit the operator's `agent_runtime.token_budget` first reports `stop_reason: "token_budget"` with
+no `halt_reason`.
+
+**Where `halt_reason` appears.**
+
+| Surface | Behaviour |
+|---|---|
+| `POST /v1/agents/{id}/execute` | the `ExecuteResponse` body carries `stop_reason` and `halt_reason` |
+| `POST /v1/agents/{id}/jobs` | the job's `result` is the same `ExecuteResponse` and records both |
+| `POST /v1/agents/{id}/execute/stream`, agent with no streaming backend (buffered fallback) | the `done` event's data is the serialized `ExecuteResponse` and so carries `stop_reason: "allowance_halted"` and `halt_reason` |
+| `POST /v1/agents/{id}/execute/stream`, true stream | one provider call, never cut mid-flight; see below |
+
+**A true stream is admission-only.** A streamed call is a single provider call, so the server
+cannot halt it part-way: it is admitted or refused up front (the `422` and zero-budget `429`
+below still apply) and its overshoot is that whole call. Its terminal `done` stays
+`{ "done": true, "usage": ... }` byte for byte, except that when the final chunk's reported
+`total_tokens` is strictly greater than the derived figure it also carries an informational
+`halt_reason` (the same object). That reports a crossing; it is not a halt the server performed,
+and a stream whose usage did not cross the figure, or reported no usage, is unchanged.
+
+**`422 model_unpriced`.** A principal with a configured ceiling calling an agent whose model has
+no `treasurer.pricing` row is refused before the agent runs, on all three routes, because spend
+that cannot be metered cannot be bounded:
+
+```json
+{
+  "error": {
+    "code": "model_unpriced",
+    "message": "model 'gpt-4' has no treasurer.pricing row, so its spend cannot be metered under an allowance",
+    "details": { "model": "gpt-4" }
+  }
+}
+```
+
+There is no `Retry-After` header: this is a configuration incoherence, not pacing. A derived
+budget of zero tokens is refused `429 allowance_exhausted` with the binding ceiling's figures,
+and a principal with no ceiling is unaffected.
+
+### Agent-kind runs stop on the allowance
+
+A run of an agent-kind assistant is bounded the same way the HTTP agent routes are, with the run
+machinery around it. At `POST /v1/runs` the submission is admitted with the agent's model (the
+resolved assistant's, never one named in the request), so an unpriced model is refused
+[`422 model_unpriced`](#submitting-a-run) and an allowance too small for one token is refused
+`429 allowance_exhausted`, both before any run row is written. Workflow assistants keep the
+model-less admission.
+
+The worker then **re-derives the budget at dispatch** from the ledger, not from anything stored at
+submission, so an allowance spent while the run sat in the queue is honoured. The run ends after
+the model response that crosses the figure and is recorded `halted`, not `completed`:
+
+- `status` is `halted`, `error` is `null` and `halt_reason` is the `allowance_exhausted` object
+  ([Halted runs](#halted-runs)); the partial output is kept on the run, with the allowance-halt
+  notice appended.
+- The SSE `done` event carries `status: "halted"` and the same `halt_reason`, live and on replay,
+  and a subscribed `halted` webhook carries it too.
+- When the run halts because a response crossed the derived figure, the `halt_reason`'s `balance`
+  is the binding `ceiling` itself: the loop cannot know the post-spend balance, so it reports a
+  conservative **upper bound**, not a ledger reading. Do not read it as "the allowance is spent":
+  a fresh `POST /v1/runs` is admitted with whatever remainder the ledger actually shows. A zero or
+  exhausted figure at dispatch carries the balance measured at that moment instead.
+- A zero or exhausted figure at dispatch records the same halt, and an unreadable ledger records
+  `halt_reason: { "reason": "ledger_unavailable" }` (fail closed); in both cases the model is not
+  called.
+- A model that lost its `treasurer.pricing` row between admission and dispatch records `failed`
+  with an error naming the model; the model is not called.
+
+**Agent-kind runs have no checkpoint.** The agent loop writes no Waypoint, so a halted agent-kind
+run has `final_waypoint_id: null` and cannot be forked from a checkpoint. Resume it by submitting a
+fresh `POST /v1/runs`; the new run re-executes from the start. (Engine runs resume from their
+Halted Waypoint as described in [Resuming a halted run](#resuming-a-halted-run).)
 
 ## Configuration
 

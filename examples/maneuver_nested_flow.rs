@@ -7,7 +7,7 @@
 //!
 //! - **Deep Nesting**: Multiple levels of nested flow expressions
 //! - **Complex Patterns**: Mixing sequential and parallel at multiple levels
-//! - **Error Handling**: ContinueOnError strategy for resilient workflows
+//! - **Error Handling**: IgnoreErrors strategy for resilient workflows
 //! - **Output Aggregation**: JSON format for structured results
 //! - **Real-World Workflow**: Multi-stage document review pipeline
 //!
@@ -39,7 +39,7 @@ use paladin::application::services::battalion::flow_visualizer::{
 };
 use paladin::application::services::battalion::maneuver_service::ManeuverExecutionService;
 use paladin::application::services::paladin::error::PaladinError;
-use paladin::core::base::entity::node::Node;
+use paladin::core::base::entity::Entity;
 use paladin::core::platform::container::battalion::maneuver::{
     ErrorStrategy, Maneuver, ManeuverConfig, OutputFormat,
 };
@@ -55,10 +55,10 @@ struct ExamplePaladinPort;
 #[async_trait]
 impl PaladinPort for ExamplePaladinPort {
     async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
-        println!("\n🔍 {} reviewing...", paladin.node.name);
+        println!("\n🔍 {} reviewing...", paladin.data.name);
 
         // Variable processing times for realistic simulation
-        let delay = match paladin.node.name.as_str() {
+        let delay = match paladin.data.name.as_str() {
             "intake" => 50,
             "technical" => 150,
             "code_review" => 200,
@@ -72,7 +72,7 @@ impl PaladinPort for ExamplePaladinPort {
         tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
 
         // Generate role-specific output
-        let output = match paladin.node.name.as_str() {
+        let output = match paladin.data.name.as_str() {
             "intake" => {
                 format!(
                     "✓ Intake Complete\n\
@@ -157,7 +157,7 @@ impl PaladinPort for ExamplePaladinPort {
                     chrono::Utc::now().format("%Y-%m-%d")
                 )
             }
-            _ => format!("{} processed input", paladin.node.name),
+            _ => format!("{} processed input", paladin.data.name),
         };
 
         println!("   ✓ Complete ({}ms)", delay);
@@ -205,7 +205,7 @@ fn create_paladin(name: &str, system_prompt: &str) -> Paladin {
         ..Default::default()
     };
 
-    Node::new(data, Some(name.to_string()))
+    Entity::new(data, Some(name.to_string()))
 }
 
 #[tokio::main]
@@ -266,7 +266,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_timing_metrics(true)
         .with_detailed_observability(true);
 
-    println!("   ✓ Error strategy: ContinueOnError (resilient)");
+    println!("   ✓ Error strategy: IgnoreErrors (resilient)");
     println!("   ✓ Output format: JSON (structured)");
     println!("   ✓ Observability: Detailed");
 

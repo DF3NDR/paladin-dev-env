@@ -272,6 +272,8 @@ use paladin::application::services::battalion::formation_service::FormationExecu
 use paladin::application::services::paladin::paladin_builder::PaladinBuilder;
 use paladin::core::platform::container::battalion::formation::Formation;
 use paladin::core::platform::container::battalion::BattalionConfig;
+use paladin_core::platform::container::aegis::{Aegis, TimeoutPolicy};
+use std::time::Duration;
 
 async fn vision_pipeline_example() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Create vision-enabled Paladins
@@ -297,8 +299,15 @@ async fn vision_pipeline_example() -> Result<(), Box<dyn std::error::Error>> {
         .build()?; // Text-only
 
     // 2. Create Formation
+    // The timeout bounds each Paladin attempt, not the three-stage run as a whole
     let config = BattalionConfig::new("vision_pipeline")
-        .with_timeout(600)
+        .with_aegis(Aegis {
+            timeout: Some(TimeoutPolicy {
+                run_timeout: Some(Duration::from_secs(600)),
+                idle_timeout: None,
+            }),
+            ..Aegis::default()
+        })
         .with_description("Three-stage image analysis");
 
     let formation = Formation::new(

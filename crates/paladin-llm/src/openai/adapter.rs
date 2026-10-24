@@ -4,43 +4,197 @@
 //! Supports GPT-3.5-Turbo, GPT-4, GPT-4o, and other compatible models.
 
 use async_trait::async_trait;
-use chrono::Utc;
 use futures::{Stream, StreamExt};
 use paladin_core::platform::container::content::{ContentItem, ContentType};
 use paladin_core::platform::container::prompt::{PromptItem, PromptRole, PromptType};
 use paladin_ports::output::llm_port::{
-    FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities, ResponseFormat,
-    StreamingResponse, TokenUsage,
+    FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ModelProfile, ParamSupport,
+    ProviderCapabilities, ResponseFormat, StopSupport, StreamingResponse, TokenUsage,
 };
 use rand::Rng;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::pin::Pin;
-use std::time::Duration;
-use uuid::Uuid;
+use std::time::{Duration, SystemTime};
 
-use crate::http_status::map_http_status;
+use crate::backoff::exponential_backoff;
+use crate::http_status::map_http_status_with_hints;
+use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
+use crate::reasoning::{self, SubstitutionLog, WireCaps, mask_effort};
+use crate::redaction::RedactedKey;
+use crate::registry::{
+    DEFAULT_MAX_RETRIES, ModelOverride, ModelRegistry, config_knob_builders, is_http_url, seeded,
+};
+use crate::response_guards::{StreamCompletion, bill, classify_completion};
+use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
+use crate::sse::SseLines;
+use crate::usage_reconcile::{USAGE_UNRECONCILED_METADATA_KEY, UsageLog};
+use paladin_ports::output::llm_port::{ReasoningEffort, ReasoningFallback};
+use paladin_ports::output::model_profile::ResolvedEffort;
+use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
 /// The provider name this adapter reports through [`LlmPort::get_provider_name`]
 /// and stamps on every [`LlmError::ProviderError`] it emits.
 const OPENAI_PROVIDER: &str = "openai";
 
+/// The `max_tokens` [`OpenAIConfig::new`] and [`OpenAIConfig::from_env`] configure: a compiled
+/// default, not a fabricated sampling value (ADR-0061 permits a documented configuration
+/// default). It is the cap OpenAI users have always had, now the documented
+/// [`OpenAIConfig::max_tokens`] knob (D-13). The effective value is checked against the model's
+/// profiled maximum output like any other.
+///
+/// Paladin calls the knob `max_tokens`; the OpenAI wire key is `max_completion_tokens` for every
+/// model (owner decision 2026-10-17, G-50-5b, UAT test 5). Acceptance of that key was measured
+/// for `gpt-5.4-nano` and `gpt-4o-mini` (2026-10-15) and for the 17 further ids seeded on
+/// 2026-10-20 (`registry/seeded.rs`); no other OpenAI id has been measured.
+pub(crate) const OPENAI_DEFAULT_MAX_TOKENS: u32 = 4096;
+
+/// The default model an [`OpenAIConfig`] names when the caller states none:
+/// [`OpenAIConfig::from_env`], and the layered path when neither the model argument nor the
+/// block names one.
+///
+/// `gpt-5.4-nano` is the provider default the Phase 50 plan 50-17 probe chose and the operator
+/// kept (Phase 50 D-08, Phase 50.1 D-17). It is a label for the adapter's default model only:
+/// each request's own `LlmRequest.model` still decides what is sent, and this value changes no
+/// adapter-wide limit (the context window stays [`OpenAIConfig::context_window`] or 128,000).
+pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5.4-nano";
+
+/// The endpoint [`OpenAIConfig::new`], [`OpenAIConfig::from_env`] (when `OPENAI_BASE_URL` is
+/// unset) and the layered path use: the OpenAI API. Replace it with
+/// [`OpenAIConfig::with_base_url`].
+pub const OPENAI_DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
+
+/// The most stop sequences the OpenAI chat-completions API accepts (`stop` is an array with
+/// `maxItems: 4` in the openai-openapi specification). A longer list is omitted and recorded,
+/// never truncated (ADR-0061 (a)).
+const OPENAI_MAX_STOP_SEQUENCES: u32 = 4;
+
+/// The OpenAI error identifier of an account-level quota wall, carried as `error.code` (and, on
+/// some responses, `error.type`).
+///
+/// Verified against <https://platform.openai.com/docs/guides/error-codes> on 2026-10-09 (plan 43-12; evidence:
+/// .planning/phases/43-rate-pacing/43-PROVIDER-HEADER-EVIDENCE.md): the operator confirmed that a
+/// quota/billing 429 carries the code `insufficient_quota`. Were the string ever to change, the
+/// mapping would simply stop firing and the 429 would be paced and bounded by `max_backoff_ms`.
+const INSUFFICIENT_QUOTA: &str = "insufficient_quota";
+
+/// Whether a `429` body identifies an exhausted quota rather than a transient rate limit.
+///
+/// Compares only the short `error.code` / `error.type` identifiers of the parsed JSON; it never
+/// renders or stores any body text, and a body that is not JSON (or has no such field) is simply
+/// "not a quota error".
+fn signals_insufficient_quota(body: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
+        return false;
+    };
+    let Some(error) = value.get("error") else {
+        return false;
+    };
+    ["code", "type"]
+        .iter()
+        .any(|field| error.get(field).and_then(|v| v.as_str()) == Some(INSUFFICIENT_QUOTA))
+}
+
+/// Parse a `429` response's rate-limit headers. Must run BEFORE `response.text()` consumes the
+/// response (research Pitfall 2). Only a 429 is parsed: no other status carries hints, and no
+/// credential header is read.
+fn snapshot_rate_limit_hints(
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+) -> Option<RateLimitHints> {
+    if status != reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return None;
+    }
+    hints_from_headers(RateLimitHeaderFamily::OpenAi, SystemTime::now(), |name| {
+        headers.get(name).and_then(|v| v.to_str().ok())
+    })
+}
+
 /// Configuration for the OpenAI adapter.
-#[derive(Debug, Clone)]
+///
+/// Marked `#[non_exhaustive]` (owner decision, Phase 50 plan 50-08, option-a): build one with
+/// [`OpenAIConfig::new`] or [`OpenAIConfig::from_env`] and set fields or call the `with_*`
+/// builders, so a later field is not another break for callers.
+#[derive(Clone)]
+#[non_exhaustive]
 pub struct OpenAIConfig {
     /// OpenAI API key.
     pub api_key: String,
-    /// Base URL for the API (default: `https://api.openai.com/v1`).
+    /// Base URL for the API ([`OPENAI_DEFAULT_BASE_URL`] unless replaced with
+    /// [`with_base_url`](Self::with_base_url) or `OPENAI_BASE_URL`).
     pub base_url: String,
+    /// The adapter's default model: what [`OpenAIConfig::new`] was given, what
+    /// [`OpenAIConfig::from_env`] sets ([`OPENAI_DEFAULT_MODEL`]), or what
+    /// `LlmProviderFactory::create_from_config` resolved. Each request's own model decides
+    /// what is sent on the wire, and this field changes no adapter-wide limit: the context
+    /// window stays [`context_window`](Self::context_window) or the compiled 128,000.
+    pub model: String,
     /// Optional organisation ID.
     pub organization: Option<String>,
     /// Request timeout in seconds (default: 300).
     pub timeout_seconds: u64,
     /// Maximum retry attempts (default: 3).
     pub max_retries: u32,
+    /// Default output budget (`max_tokens`) sent when a request sets none. [`OpenAIConfig::new`]
+    /// and [`OpenAIConfig::from_env`] set `Some(4096)`, the cap this adapter has always sent;
+    /// `None` sends no output-cap key. The value is checked against the model's profiled
+    /// maximum output exactly as a request's own `max_tokens` is (ADR-0061 (i)): above it, the
+    /// request is refused before any HTTP call.
+    ///
+    /// Paladin names the knob `max_tokens`; on the wire the adapter sends it as
+    /// `max_completion_tokens` for every model (owner decision 2026-10-17, G-50-5b), the key
+    /// `gpt-5.4-nano` requires. Acceptance of that key was measured for `gpt-5.4-nano` and
+    /// `gpt-4o-mini` (2026-10-15) and for the 17 further ids seeded on 2026-10-20; a server
+    /// behind `base_url` that accepts only the old `max_tokens` key belongs on the
+    /// `openai-compatible` preset instead.
+    pub max_tokens: Option<u32>,
+    /// Adapter-wide context window in tokens, the operator's statement for every model. `None`
+    /// (the default) keeps the compiled windows. When set it replaces the adapter's declared
+    /// window, the fallback profile's window and every seeded model's window; a
+    /// `context_window` in [`model_overrides`](Self::model_overrides) still wins for that model.
+    /// Construction fails when it is below a model's maximum output.
+    pub context_window: Option<u32>,
+    /// Per-model overrides (D-06), keyed by exact model id and laid over each model's seeded
+    /// entry field by field. Empty by default. Validated at construction; an invalid override
+    /// fails it with an error naming the provider and the model.
+    pub model_overrides: BTreeMap<String, ModelOverride>,
+    /// The provider-level default reasoning effort (Phase 51, D-00e): sent for a request that
+    /// sets none of its own, resolved per request against that request's own model. A request's
+    /// (or an agent's) own effort always wins. `None` (the default, and the only compiled-in
+    /// value, D-00i) sends nothing. Set it only where every model this provider serves supports
+    /// it, or those requests are refused before any HTTP call naming this setting.
+    /// Set with [`with_reasoning_effort`](Self::with_reasoning_effort).
+    pub reasoning_effort: Option<ReasoningEffort>,
+    /// The provider-level default fallback (Phase 51, D-05) applied when the effort in force is
+    /// not one the request's model accepts; a request's own fallback wins. `None` (the default)
+    /// means refuse. Set with [`with_reasoning_fallback`](Self::with_reasoning_fallback).
+    pub reasoning_fallback: Option<ReasoningFallback>,
 }
+
+/// Prints every field except the API key, which is shown as `<redacted>` (D-00a): the key is a
+/// public `String`, so a derived `Debug` would put it into any log line or panic message that
+/// formats the config.
+impl std::fmt::Debug for OpenAIConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenAIConfig")
+            .field("api_key", &RedactedKey(&self.api_key))
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field("organization", &self.organization)
+            .field("timeout_seconds", &self.timeout_seconds)
+            .field("max_retries", &self.max_retries)
+            .field("max_tokens", &self.max_tokens)
+            .field("context_window", &self.context_window)
+            .field("model_overrides", &self.model_overrides)
+            .field("reasoning_effort", &self.reasoning_effort)
+            .field("reasoning_fallback", &self.reasoning_fallback)
+            .finish()
+    }
+}
+
+config_knob_builders!(OpenAIConfig, organization);
 
 impl OpenAIConfig {
     /// Load configuration from environment variables.
@@ -53,12 +207,15 @@ impl OpenAIConfig {
     /// - `OPENAI_ORGANIZATION`
     /// - `OPENAI_TIMEOUT_SECONDS` (default: 300)
     /// - `OPENAI_MAX_RETRIES` (default: 3)
+    ///
+    /// [`model`](Self::model) is the compiled default, [`OPENAI_DEFAULT_MODEL`]; no variable
+    /// names it.
     pub fn from_env() -> Result<Self, String> {
         let api_key = env::var("OPENAI_API_KEY")
             .map_err(|_| "OPENAI_API_KEY environment variable not set")?;
 
         let base_url =
-            env::var("OPENAI_BASE_URL").unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+            env::var("OPENAI_BASE_URL").unwrap_or_else(|_| OPENAI_DEFAULT_BASE_URL.to_string());
 
         let organization = env::var("OPENAI_ORGANIZATION").ok();
 
@@ -75,20 +232,54 @@ impl OpenAIConfig {
         Ok(Self {
             api_key,
             base_url,
+            model: OPENAI_DEFAULT_MODEL.to_string(),
             organization,
             timeout_seconds,
             max_retries,
+            max_tokens: Some(OPENAI_DEFAULT_MAX_TOKENS),
+            context_window: None,
+            model_overrides: BTreeMap::new(),
+            reasoning_effort: None,
+            reasoning_fallback: None,
         })
     }
 
-    /// Create a configuration with the given API key and sensible defaults.
-    pub fn new(api_key: String) -> Self {
+    /// Create a configuration from an OpenAI API key and the adapter's default model.
+    ///
+    /// `api_key` is the OpenAI key, never a URL: the endpoint is [`OPENAI_DEFAULT_BASE_URL`]
+    /// (replace it with [`with_base_url`](Self::with_base_url)). `model` is the adapter's
+    /// default model, stored in [`model`](Self::model); each request's own model still decides
+    /// what is sent, and the value changes no adapter-wide limit. The timeout is 300 s,
+    /// `max_tokens` is `Some(4096)` and the retry budget is the shared default; set any of them
+    /// with the `with_*` builders.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_llm::openai::adapter::{
+    ///     OPENAI_DEFAULT_BASE_URL, OPENAI_DEFAULT_MODEL, OpenAIConfig,
+    /// };
+    ///
+    /// let config = OpenAIConfig::new("sk-example".to_string(), OPENAI_DEFAULT_MODEL.to_string())
+    ///     .with_timeout_seconds(60);
+    /// assert_eq!(config.model, OPENAI_DEFAULT_MODEL);
+    /// assert_eq!(config.base_url, OPENAI_DEFAULT_BASE_URL);
+    /// assert_eq!(config.timeout_seconds, 60);
+    /// assert_eq!(config.max_tokens, Some(4096));
+    /// ```
+    pub fn new(api_key: String, model: String) -> Self {
         Self {
             api_key,
-            base_url: "https://api.openai.com/v1".to_string(),
+            base_url: OPENAI_DEFAULT_BASE_URL.to_string(),
+            model,
             organization: None,
             timeout_seconds: 300,
-            max_retries: 3,
+            max_retries: DEFAULT_MAX_RETRIES,
+            max_tokens: Some(OPENAI_DEFAULT_MAX_TOKENS),
+            context_window: None,
+            model_overrides: BTreeMap::new(),
+            reasoning_effort: None,
+            reasoning_fallback: None,
         }
     }
 
@@ -100,8 +291,11 @@ impl OpenAIConfig {
         if self.base_url.is_empty() {
             return Err("Base URL cannot be empty".to_string());
         }
-        if !self.base_url.starts_with("http") {
-            return Err("Base URL must start with http or https".to_string());
+        if !is_http_url(&self.base_url) {
+            return Err("Base URL must start with http:// or https://".to_string());
+        }
+        if self.model.is_empty() {
+            return Err("Model name cannot be empty".to_string());
         }
         Ok(())
     }
@@ -117,10 +311,24 @@ struct OpenAIRequest {
     messages: Vec<OpenAIMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// The output-token cap. Paladin calls it `max_tokens` (the field, [`OpenAIConfig::max_tokens`]
+    /// and `PromptParameters::max_tokens` keep that name); on the wire it is
+    /// `max_completion_tokens` for every OpenAI model, because `gpt-5.4-nano` rejects
+    /// `max_tokens` with HTTP 400 `unsupported_parameter` (owner decision 2026-10-17, G-50-5b,
+    /// option (a)). Acceptance of the new key was measured for `gpt-5.4-nano` and `gpt-4o-mini`
+    /// (2026-10-15) and for the 17 further ids seeded on 2026-10-20; there is deliberately no
+    /// per-model switch.
+    #[serde(
+        rename = "max_completion_tokens",
+        skip_serializing_if = "Option::is_none"
+    )]
     max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     top_p: Option<f32>,
+    /// The caller's stop sequences, in declared order with duplicates kept, when the model's
+    /// profile admits their count (ADR-0061 (a), D-11a). Absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stop: Option<Vec<String>>,
     stream: bool,
     /// `LlmRequest.response_format` on the wire (RT-FR-17, D-28). Omitted
     /// entirely when the caller sets no hint, keeping the body byte
@@ -133,6 +341,60 @@ struct OpenAIRequest {
     /// a pre-0.10 request (X-03).
     #[serde(skip_serializing_if = "Option::is_none")]
     stream_options: Option<OpenAIStreamOptions>,
+    /// `LlmRequest.reasoning` as a listed level (`minimal` ... `xhigh`), or `none` for `Off`, on
+    /// the wire as the top-level `reasoning_effort` (Phase 51, D-00f). Omitted entirely when no
+    /// effort is set and for `Auto` (the vendor's own default needs no field), keeping an unset
+    /// request's body byte-identical (D-00i). Placed last so the existing field order is
+    /// untouched.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<&'static str>,
+}
+
+/// What OpenAI Chat Completions' request body can carry of a profile's effort data (Phase 51,
+/// D-00f): a listed level and `off` (spelled `none`) through `reasoning_effort`, and `auto` as the
+/// absence of the field. It has no field for a reasoning-token budget, so a budget is masked out
+/// of the profile this adapter reports and is never sent.
+///
+/// Confirmed against the dated probe (plan 51-12, D-04; owner decision of 2026-10-22 at plan
+/// 51-11's checkpoint): `51-EFFORT-PROBE.md`'s verdict table marks OpenAI's `top_level_effort`
+/// confirmed (the invalid value drew 400 on 17 of 17 models, so the field is parsed; the highest
+/// accepted level reports more reasoning tokens than the lowest on 14 of 17). The documented
+/// capabilities therefore stand; they are not `WireCaps::NONE`.
+const OPENAI_REASONING_WIRE: WireCaps = WireCaps {
+    levels: true,
+    off: true,
+    auto: true,
+    budget: false,
+};
+
+/// Turn an admitted effort into OpenAI's single `reasoning_effort` value.
+///
+/// A level is its own spelling, an on-wire `Off` is `none`, and `Auto` is no field at all (the
+/// vendor's default depth). An effort this wire cannot carry is refused; profile masking and
+/// `admit` already stop those, so this is the last line of defence and can never put an
+/// unrequested value on the wire.
+///
+/// # Errors
+///
+/// [`LlmError::UnsupportedParameter`] for an effort with no wire form here (a budget).
+fn map_reasoning(model: &str, resolved: &ResolvedEffort) -> Result<Option<&'static str>, LlmError> {
+    if !resolved.on_wire {
+        return Ok(None);
+    }
+    if let Some(level) = reasoning::level_spelling(resolved.effective) {
+        return Ok(Some(level));
+    }
+    match resolved.effective {
+        ReasoningEffort::Off => Ok(Some("none")),
+        ReasoningEffort::Auto => Ok(None),
+        other => Err(LlmError::unsupported_parameter(
+            "reasoning_effort",
+            other.to_string(),
+            OPENAI_PROVIDER,
+            model,
+            "this adapter has no wire form for that effort",
+        )),
+    }
 }
 
 /// `OpenAIRequest.stream_options`'s only shape this adapter sends (D-15).
@@ -186,10 +448,30 @@ fn to_openai_response_format(format: &ResponseFormat) -> OpenAIResponseFormat {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+/// A message on the REQUEST path: always a role and a plain string.
+#[derive(Debug, Serialize)]
 struct OpenAIMessage {
     role: String,
     content: String,
+}
+
+/// The assistant message on the RESPONSE path.
+///
+/// Distinct from [`OpenAIMessage`] because the two shapes differ: a response `content` may be
+/// `null` or absent (a refusal carries `content: null` and a `refusal` string, and a tool call
+/// carries no text), where a request `content` is always a string. Sharing one type made a
+/// refusal a parse failure (D-09).
+#[derive(Debug, Deserialize)]
+struct OpenAIResponseMessage {
+    #[allow(dead_code)]
+    #[serde(default)]
+    role: Option<String>,
+    /// `null`, absent and `""` all mean "no text".
+    #[serde(default)]
+    content: Option<String>,
+    /// The vendor's dedicated refusal text; `null` and absent mean the model did not refuse.
+    #[serde(default)]
+    refusal: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -205,7 +487,7 @@ struct OpenAIResponse {
 struct OpenAIChoice {
     #[allow(dead_code)]
     index: u32,
-    message: OpenAIMessage,
+    message: OpenAIResponseMessage,
     finish_reason: Option<String>,
 }
 
@@ -213,12 +495,14 @@ struct OpenAIChoice {
 struct OpenAIUsage {
     prompt_tokens: u32,
     completion_tokens: u32,
-    // Deliberately unread: `TokenUsage::new` recomputes `total_tokens` as
-    // `prompt_tokens + completion_tokens` (D-02), so the provider's own
-    // reported total is discarded rather than trusted. Kept on the struct so
-    // the deserializer still matches the full wire shape for debugging.
-    #[allow(dead_code)]
-    total_tokens: u32,
+    /// OpenAI's own reported total (G-50-5a). Parsed and handed to the
+    /// reconciliation ([`crate::usage_reconcile`]), never copied:
+    /// `TokenUsage::new` derives `total_tokens` as `prompt_tokens +
+    /// completion_tokens` (D-02), and a disagreement is recorded under
+    /// [`USAGE_UNRECONCILED_METADATA_KEY`]. `None` when the key is absent --
+    /// a usage object without it still parses, and nothing is fabricated.
+    #[serde(default)]
+    total_tokens: Option<u32>,
     /// `prompt_tokens_details.cached_tokens` (D-20). Absent on a response
     /// that reports no cache split -- `None` in that case (D-03), never a
     /// fabricated `Some(0)`.
@@ -270,6 +554,9 @@ struct OpenAIStreamDelta {
     #[allow(dead_code)]
     role: Option<String>,
     content: Option<String>,
+    /// A fragment of the vendor's refusal text (D-09); `null` and absent mean none.
+    #[serde(default)]
+    refusal: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -280,6 +567,67 @@ struct OpenAIStreamDelta {
 pub struct OpenAIAdapter {
     pub(crate) config: OpenAIConfig,
     pub(crate) client: Client,
+    /// Resolves the request model to the profile that decides what reaches the wire (ADR-0061).
+    model_registry: ModelRegistry,
+    /// Which (model, parameter) omissions this instance has already warned about.
+    omissions: OmissionLog,
+    /// Which (model, adjustment) `response_format` changes this instance has already warned
+    /// about.
+    format_log: FormatLog,
+    /// Which (model, check) usage findings this instance has already warned about (G-50-5a).
+    usage_log: UsageLog,
+    /// Which (model, requested, effective) effort substitutions this instance has already warned
+    /// about (Phase 51, D-06).
+    substitutions: SubstitutionLog,
+}
+
+/// What this adapter's request builder carries today, stated once so [`OpenAIAdapter::new`]'s
+/// adapter-wide fallback profile and [`LlmPort::get_capabilities`] cannot drift apart.
+fn declared_capabilities(context_window: Option<u32>) -> ProviderCapabilities {
+    ProviderCapabilities {
+        supports_streaming: true,
+        // `LlmRequest` carries no field through which a tool definition could
+        // travel, and this adapter neither sends `tools` nor parses `tool_calls`
+        // out of a response. The flag describes what this adapter does, not what
+        // the vendor's API offers (WEB-03, D-14). This adapter's `generate()` also
+        // hard-codes the absent function call in the response it builds, so the
+        // function-calling flag describes what this adapter does rather than what
+        // the vendor's API offers (WEB-03, D-12).
+        supports_tool_calling: false,
+        supports_function_calling: false,
+        supports_vision: true,
+        // The operator's adapter-wide window (PARITY-03) replaces the compiled 128,000.
+        max_context_tokens: context_window.or(Some(128000)),
+        supports_embeddings: true,
+        supports_system_messages: true,
+        temperature_range: Some((0.0, 1.0)),
+    }
+}
+
+/// The adapter-wide fallback profile, derived from what this adapter's request builder sends
+/// (ADR-0061, D-05): a field it sends maps to `Range`, a field it never sends maps to `NotSent`.
+///
+/// - `temperature`: `Range` over the declared `temperature_range`; `top_p`: `Range(0.0, 1.0)`.
+/// - penalties: `NotSent` -- [`OpenAIRequest`] has no penalty field.
+/// - `stop`: `Supported { max: Some(4) }` (the openai-openapi `maxItems: 4`).
+/// - `json_object` and `json_schema`: both true -- this adapter sends both formats.
+fn fallback_profile(context_window: Option<u32>) -> ModelProfile {
+    let caps = declared_capabilities(context_window);
+    let (low, high) = caps.temperature_range.unwrap_or((0.0, 1.0));
+    let mut profile = ModelProfile::new()
+        .with_temperature(ParamSupport::Range(low, high))
+        .with_top_p(ParamSupport::Range(0.0, 1.0))
+        .with_frequency_penalty(ParamSupport::NotSent)
+        .with_presence_penalty(ParamSupport::NotSent)
+        .with_stop_sequences(StopSupport::Supported {
+            max: Some(OPENAI_MAX_STOP_SEQUENCES),
+        })
+        .with_json_object(true)
+        .with_json_schema(true);
+    if let Some(window) = caps.max_context_tokens {
+        profile = profile.with_context_window(window);
+    }
+    profile
 }
 
 impl OpenAIAdapter {
@@ -299,18 +647,166 @@ impl OpenAIAdapter {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
-        Ok(Self { config, client })
+        // PARITY-03: the operator's adapter-wide window, then the per-model overrides, are laid
+        // over the seeded table; either one failing construction names the provider and model.
+        let model_registry = ModelRegistry::new(
+            OPENAI_PROVIDER,
+            seeded::OPENAI,
+            fallback_profile(config.context_window),
+        )
+        .with_context_window(config.context_window)
+        .and_then(|registry| registry.with_overrides(config.model_overrides.clone()))
+        .map_err(|e| format!("Invalid OpenAI configuration: {e}"))?;
+        Ok(Self {
+            config,
+            client,
+            // The dated OpenAI table (`seeded::OPENAI`, probed 2026-10-15 and 2026-10-20): each
+            // measured model resolves to its own entry, every other model to the adapter-wide
+            // fallback.
+            model_registry,
+            omissions: OmissionLog::new(),
+            format_log: FormatLog::new(),
+            usage_log: UsageLog::new(),
+            substitutions: SubstitutionLog::new(),
+        })
     }
 
-    /// Map a non-2xx OpenAI response to [`LlmError`].
+    /// The request model's profile as this adapter's wire can honour it: the effort data has
+    /// whatever OpenAI's body cannot carry removed ([`OPENAI_REASONING_WIRE`]), so a caller
+    /// reading [`LlmPort::model_profile`] judges exactly what `build_request` will send.
+    fn wire_profile(&self, model: &str) -> ModelProfile {
+        let mut profile = self.model_registry.profile(model);
+        profile.effort = mask_effort(std::mem::take(&mut profile.effort), OPENAI_REASONING_WIRE);
+        profile
+    }
+
+    /// Build the outgoing request body for `request`, plus the notes the buffered path records
+    /// on its response.
+    ///
+    /// What reaches the wire is decided by the request model's [`ModelProfile`] (ADR-0061, D-01):
+    /// [`sampling::apply`] sends `temperature`, `top_p` and `stop` only when the caller set them
+    /// **and** the profile admits them, so an unset parameter is absent from the body -- this
+    /// adapter no longer invents a `temperature` of 0.7 or a `top_p` of 1.0 -- and a set but
+    /// inadmissible one is omitted and recorded, never clamped or swapped. `max_tokens` keeps
+    /// the configured [`OpenAIConfig::max_tokens`] (4096 from `new`/`from_env`, the cap this
+    /// adapter has always sent) and the effective value is checked against the
+    /// profile's maximum output before anything is sent. It reaches the wire as
+    /// `max_completion_tokens` for every model (owner decision 2026-10-17, G-50-5b; measured
+    /// accepted on `gpt-5.4-nano` and `gpt-4o-mini` on 2026-10-15 and on the 17 further seeded
+    /// ids on 2026-10-20). The `response_format` follows the profile through
+    /// [`sampling::apply_response_format`].
+    ///
+    /// Shared by [`LlmPort::generate`] and [`LlmPort::generate_stream`], so the two paths cannot
+    /// drift.
+    fn build_request(
+        &self,
+        request: &LlmRequest,
+        stream: bool,
+    ) -> Result<(OpenAIRequest, RequestNotes), LlmError> {
+        let messages = self.convert_to_messages(&request.prompt, &request.attachments)?;
+        let params = &request.prompt.entity.data.parameters;
+        let profile = self.wire_profile(&request.model);
+
+        // The caller's value, else the configured default (`Some(4096)` from `new`/`from_env`);
+        // `None` sends no output-cap key. Either is held to the model's maximum output. The wire
+        // name is `max_completion_tokens` (the `OpenAIRequest` field's serde rename).
+        let max_tokens = params.max_tokens.or(self.config.max_tokens);
+        sampling::check_max_tokens(OPENAI_PROVIDER, &request.model, &profile, max_tokens)?;
+
+        // Phase 51 (D-00f): an explicit effort is sent exactly or refused here, before any HTTP
+        // call and before any retry loop -- never routed through the omit-and-log path below.
+        // The request's own effort and fallback win; otherwise the provider-level default applies
+        // (D-00e), judged here against this request's own model.
+        let in_force = reasoning::in_force(
+            OPENAI_PROVIDER,
+            request.reasoning,
+            request.reasoning_fallback,
+            self.config.reasoning_effort,
+            self.config.reasoning_fallback,
+        );
+        let resolved = reasoning::admit(
+            OPENAI_PROVIDER,
+            &request.model,
+            &profile,
+            in_force.effort,
+            in_force.fallback,
+            max_tokens,
+            in_force.source_key.as_deref(),
+            &self.substitutions,
+        )?;
+        let reasoning_effort = match &resolved {
+            Some(resolved) => map_reasoning(&request.model, resolved)?,
+            None => None,
+        };
+
+        let applied = sampling::apply(&profile, params);
+        let params_omitted = self
+            .omissions
+            .record(OPENAI_PROVIDER, &request.model, &applied);
+
+        let (effective_format, adjustment) =
+            sampling::apply_response_format(&profile, request.response_format.as_ref());
+        let format_adjusted = self
+            .format_log
+            .record(OPENAI_PROVIDER, &request.model, adjustment);
+
+        let unprofiled_model = self
+            .model_registry
+            .note_unprofiled(&request.model)
+            .then(|| request.model.clone());
+
+        let body = OpenAIRequest {
+            model: request.model.clone(),
+            messages,
+            temperature: applied.temperature,
+            max_tokens,
+            top_p: applied.top_p,
+            stop: applied.stop,
+            stream,
+            response_format: effective_format.as_ref().map(to_openai_response_format),
+            stream_options: stream.then_some(OpenAIStreamOptions {
+                include_usage: true,
+            }),
+            reasoning_effort,
+        };
+        let notes = RequestNotes {
+            params_omitted,
+            format_adjusted,
+            unprofiled_model,
+            reasoning_requested: resolved.map(|r| r.requested.to_string()),
+            reasoning_effective: resolved.map(|r| r.effective.to_string()),
+        };
+        Ok((body, notes))
+    }
+
+    /// Map a non-2xx OpenAI response to [`LlmError`] with no rate-limit headers.
+    ///
+    /// A thin wrapper over [`Self::map_error_with_hints`], kept so the status-mapping unit
+    /// tests read the same as before PACE-01. Production paths call the hints variant.
+    #[cfg(test)]
+    fn map_error(&self, status: u16, body: &str) -> LlmError {
+        self.map_error_with_hints(status, body, None)
+    }
+
+    /// Map a non-2xx OpenAI response to [`LlmError`], carrying the parsed rate-limit headers
+    /// of a `429` (PACE-01).
     ///
     /// `300..=399` is named explicitly (mirroring
     /// `CompatEngine::map_error`/`GeminiAdapter::map_error`) because this
     /// client's redirect policy is `none` (see [`Self::new`]), so a `3xx`
     /// response is never followed — it arrives here as an ordinary
-    /// non-success status instead. Everything else is the crate-wide
-    /// [`map_http_status`] (Phase 25 D-03, FT-FR-01).
-    fn map_error(&self, status: u16, body: &str) -> LlmError {
+    /// non-success status instead.
+    ///
+    /// A `429` whose body names `insufficient_quota` is an account-level quota wall, not a
+    /// rate limit (research Pitfall 6): it maps to the permanent
+    /// [`LlmError::UsageLimitExceeded`] so it is neither retried nor paced. Everything else is
+    /// the crate-wide [`map_http_status_with_hints`] (Phase 25 D-03, FT-FR-01).
+    fn map_error_with_hints(
+        &self,
+        status: u16,
+        body: &str,
+        hints: Option<RateLimitHints>,
+    ) -> LlmError {
         match status {
             300..=399 => LlmError::ProviderError {
                 provider: OPENAI_PROVIDER.to_string(),
@@ -324,7 +820,17 @@ impl OpenAIAdapter {
                     crate::redaction::diagnostic_excerpt(body, &self.config.api_key)
                 ),
             },
-            _ => map_http_status(OPENAI_PROVIDER, status, body, &self.config.api_key),
+            429 if signals_insufficient_quota(body) => LlmError::UsageLimitExceeded {
+                provider: OPENAI_PROVIDER.to_string(),
+                regain_hint: None,
+            },
+            _ => map_http_status_with_hints(
+                OPENAI_PROVIDER,
+                status,
+                body,
+                &self.config.api_key,
+                hints,
+            ),
         }
     }
 
@@ -360,7 +866,7 @@ impl OpenAIAdapter {
             PromptType::User(user_prompt) => {
                 messages.push(OpenAIMessage {
                     role: "user".to_string(),
-                    content: user_prompt.context.clone().unwrap_or_default(),
+                    content: crate::turn::user_turn_text(user_prompt),
                 });
             }
             PromptType::Assistant(assistant_prompt) => {
@@ -431,12 +937,18 @@ impl OpenAIAdapter {
         }
     }
 
-    fn convert_finish_reason(&self, reason: Option<String>) -> FinishReason {
-        match reason.as_deref() {
+    /// Map OpenAI's finish-reason string to [`FinishReason`], for the buffered and the streaming
+    /// path alike so the two cannot drift.
+    ///
+    /// `tool_calls` (what the current API sends when the model wants a tool) and the legacy
+    /// `function_call` both map to [`FinishReason::FunctionCall`] (RESEARCH Pitfall 6); an
+    /// unrecognised string stays [`FinishReason::Error`], never silently `Stop`.
+    fn convert_finish_reason(reason: Option<&str>) -> FinishReason {
+        match reason {
             Some("stop") => FinishReason::Stop,
             Some("length") => FinishReason::Length,
             Some("content_filter") => FinishReason::ContentFilter,
-            Some("function_call") => FinishReason::FunctionCall,
+            Some("function_call") | Some("tool_calls") => FinishReason::FunctionCall,
             Some(other) => FinishReason::Error(format!("Unknown: {}", other)),
             None => FinishReason::Stop,
         }
@@ -448,7 +960,17 @@ impl OpenAIAdapter {
     /// a fabricated `Some(0)`). Shared by both the non-streaming
     /// usage-construction site and the streaming terminal-chunk usage, so
     /// the two paths cannot drift.
-    fn map_usage(usage: OpenAIUsage) -> TokenUsage {
+    ///
+    /// Returns the mapped usage together with OpenAI's own `total_tokens`
+    /// (when reported), which the caller reconciles rather than copies (D-02,
+    /// G-50-5a).
+    ///
+    /// Reasoning is read inside `completion_tokens`, OpenAI's documented
+    /// contract. Not live-measured: the 2026-10-18 probe
+    /// (`50-USAGE-PROBE.md`, plan 50-24) got no reasoning count above 0 from
+    /// gpt-5.4-nano or gpt-4o-mini (`indeterminate`), though both vendor
+    /// totals agreed with prompt + completion (26 + 4 = 30, 27 + 1 = 28).
+    fn map_usage(usage: OpenAIUsage) -> (TokenUsage, Option<u32>) {
         let mut mapped = TokenUsage::new(usage.prompt_tokens, usage.completion_tokens);
         if let Some(cached) = usage
             .prompt_tokens_details
@@ -462,9 +984,17 @@ impl OpenAIAdapter {
         {
             mapped = mapped.with_reasoning(reasoning);
         }
-        mapped
+        (mapped, usage.total_tokens)
     }
 
+    /// Send `request`, retrying transient failures with jittered exponential back-off.
+    ///
+    /// Network, timeout and 5xx failures are retried up to `max_retries` times. An
+    /// authentication failure, a rate limit ([`LlmError::RateLimitExceeded`]) and a spend cap
+    /// ([`LlmError::UsageLimitExceeded`]) are NOT: they return on the first attempt, with no
+    /// sleep and no second request (D-02, PACE-02). Retrying a 429 inside this loop would
+    /// multiply the attempts `RetryPolicy` and `FallbackLlmAdapter` count above the adapter;
+    /// the Cadence decorator paces the next call instead.
     async fn make_request_with_retries(
         &self,
         request: &OpenAIRequest,
@@ -477,15 +1007,24 @@ impl OpenAIAdapter {
                 Err(e) => {
                     last_error = Some(e.clone());
 
-                    if matches!(e, LlmError::AuthenticationError(_)) {
+                    // Surfaced on the first attempt, with no sleep and no further request
+                    // (D-02, PACE-02): a rate limit or a spend cap cannot be cured by
+                    // re-asking within seconds, and retrying it here would multiply the
+                    // attempts `RetryPolicy` and `FallbackLlmAdapter` count above this
+                    // adapter. The Cadence decorator paces the NEXT call instead.
+                    if matches!(
+                        e,
+                        LlmError::AuthenticationError(_)
+                            | LlmError::RateLimitExceeded { .. }
+                            | LlmError::UsageLimitExceeded { .. }
+                    ) {
                         return Err(e);
                     }
 
                     if attempt < self.config.max_retries {
                         let base_delay = Duration::from_secs(1);
-                        let exponential_delay = base_delay * 2_u32.pow(attempt);
                         let max_delay = Duration::from_secs(10);
-                        let delay = exponential_delay.min(max_delay);
+                        let delay = exponential_backoff(base_delay, attempt, max_delay);
 
                         let jitter_ms = {
                             let mut rng = rand::thread_rng();
@@ -526,6 +1065,8 @@ impl OpenAIAdapter {
             .map_err(|e| LlmError::NetworkError(format!("Request failed: {}", e)))?;
 
         let status = response.status();
+        // Snapshot the 429 headers BEFORE `.text()` consumes the response (research Pitfall 2).
+        let hints = snapshot_rate_limit_hints(status, response.headers());
         let response_text = response
             .text()
             .await
@@ -535,7 +1076,7 @@ impl OpenAIAdapter {
             // Shared status-to-variant mapping for every adapter (D-03,
             // FT-FR-01), with a `300..=399` pre-check (CR-02) since this
             // client refuses to follow redirects.
-            return Err(self.map_error(status.as_u16(), &response_text));
+            return Err(self.map_error_with_hints(status.as_u16(), &response_text, hints));
         }
 
         serde_json::from_str::<OpenAIResponse>(&response_text)
@@ -545,6 +1086,7 @@ impl OpenAIAdapter {
     async fn make_streaming_request(
         &self,
         request: &OpenAIRequest,
+        stream_metadata: HashMap<String, String>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamingResponse, LlmError>> + Send>>, LlmError>
     {
         let url = format!("{}/chat/completions", self.config.base_url);
@@ -567,10 +1109,13 @@ impl OpenAIAdapter {
 
         if !response.status().is_success() {
             let status = response.status();
+            // Same header snapshot as the generate path, taken before the body read consumes
+            // the response (research Pitfall 2).
+            let hints = snapshot_rate_limit_hints(status, response.headers());
             let error_text = response.text().await.unwrap_or_default();
             // Same shared mapping as the generate path, so a status yields
             // the same typed variant whether or not the call streams.
-            return Err(self.map_error(status.as_u16(), &error_text));
+            return Err(self.map_error_with_hints(status.as_u16(), &error_text, hints));
         }
 
         // `flat_map` rather than `map`: a single network chunk can carry more
@@ -589,66 +1134,118 @@ impl OpenAIAdapter {
         // terminal chunk.
         let mut held_finish_reason: Option<FinishReason> = None;
         let mut held_usage: Option<TokenUsage> = None;
+        // The vendor's own total from the held usage frame, reconciled at the terminal chunk
+        // (G-50-5a). A clone shares this instance's usage log.
+        let mut held_vendor_total: Option<u32> = None;
+        let usage_log = self.usage_log.clone();
 
-        let stream = response.bytes_stream().flat_map(move |chunk_result| {
-            let items: Vec<Result<StreamingResponse, LlmError>> = match chunk_result {
-                Ok(bytes) => {
-                    let text = String::from_utf8_lossy(&bytes).into_owned();
-                    let mut items = Vec::new();
+        // D-09 / D-11a on the streaming path: the terminal chunk is decided by the same
+        // `classify_completion` the buffered path uses, over what the stream accumulated.
+        let provider = self.get_provider_name();
+        let model = request.model.clone();
+        let api_key = self.config.api_key.clone();
+        let mut completion = StreamCompletion::default();
 
-                    for line in text.lines() {
-                        let Some(data) = line.strip_prefix("data: ") else {
-                            continue;
-                        };
+        // A network read can end inside a `data:` line (or inside a multi-byte character), so the
+        // bytes are reassembled into whole lines before any line is parsed (CR-02).
+        let mut sse = SseLines::default();
+        let stream = response
+            .bytes_stream()
+            .map(Some)
+            .chain(futures::stream::iter([None]))
+            .flat_map(move |chunk_option| {
+                // `None` is the end of the body: it releases a final line that had no newline.
+                let chunk_result = match chunk_option {
+                    Some(read) => read.map(|bytes| sse.push(&bytes)),
+                    None => Ok(sse.finish()),
+                };
+                let items: Vec<Result<StreamingResponse, LlmError>> = match chunk_result {
+                    Ok(lines) => {
+                        let mut items = Vec::new();
 
-                        if data.trim() == "[DONE]" {
-                            let mut terminal = StreamingResponse::terminal(
-                                held_finish_reason.take().unwrap_or(FinishReason::Stop),
-                            );
-                            if let Some(usage) = held_usage.take() {
-                                terminal = terminal.with_usage(usage);
-                            }
-                            items.push(Ok(terminal));
-                            continue;
-                        }
+                        for line in &lines {
+                            let Some(data) = line.strip_prefix("data: ") else {
+                                continue;
+                            };
 
-                        match serde_json::from_str::<OpenAIStreamChunk>(data) {
-                            Ok(chunk) => {
-                                if let Some(usage) = chunk.usage {
-                                    held_usage = Some(Self::map_usage(usage));
-                                }
-                                if let Some(choice) = chunk.choices.first() {
-                                    if let Some(reason) = &choice.finish_reason {
-                                        held_finish_reason = Some(match reason.as_str() {
-                                            "stop" => FinishReason::Stop,
-                                            "length" => FinishReason::Length,
-                                            "content_filter" => FinishReason::ContentFilter,
-                                            "function_call" => FinishReason::FunctionCall,
-                                            other => {
-                                                FinishReason::Error(format!("Unknown: {}", other))
+                            if data.trim() == "[DONE]" {
+                                let finish_reason =
+                                    held_finish_reason.take().unwrap_or(FinishReason::Stop);
+                                match completion.finish(provider, &model, &finish_reason, &api_key)
+                                {
+                                    Ok(()) => {
+                                        let mut terminal =
+                                            StreamingResponse::terminal(finish_reason);
+                                        if let Some(usage) = held_usage.take() {
+                                            // G-50-5a: only the `Ok` terminal chunk carries a
+                                            // finding; an `Err` terminal carries no metadata.
+                                            if let Some(value) = usage_log.record(
+                                                provider,
+                                                &model,
+                                                &usage,
+                                                held_vendor_total.take(),
+                                            ) {
+                                                terminal = terminal.with_metadata(
+                                                    USAGE_UNRECONCILED_METADATA_KEY,
+                                                    value,
+                                                );
                                             }
-                                        });
+                                            terminal = terminal.with_usage(usage);
+                                        }
+                                        for (key, value) in &stream_metadata {
+                                            terminal = terminal
+                                                .with_metadata(key.as_str(), value.as_str());
+                                        }
+                                        items.push(Ok(terminal));
                                     }
-                                    let delta = choice.delta.content.clone().unwrap_or_default();
-                                    items.push(Ok(StreamingResponse::delta(delta)));
+                                    // A refusal or an empty answer replaces the terminal chunk;
+                                    // deltas already yielded stay yielded. G-50-5a: the error
+                                    // carries the usage frame's bill on the request model,
+                                    // `None` when the stream reported none.
+                                    Err(error) => {
+                                        items.push(Err(bill(error, &model, held_usage.take())))
+                                    }
+                                }
+                                continue;
+                            }
+
+                            match serde_json::from_str::<OpenAIStreamChunk>(data) {
+                                Ok(chunk) => {
+                                    if let Some(usage) = chunk.usage {
+                                        let (mapped, vendor_total) = Self::map_usage(usage);
+                                        held_usage = Some(mapped);
+                                        held_vendor_total = vendor_total;
+                                    }
+                                    if let Some(choice) = chunk.choices.first() {
+                                        if let Some(reason) = &choice.finish_reason {
+                                            held_finish_reason =
+                                                Some(Self::convert_finish_reason(Some(reason)));
+                                        }
+                                        let delta =
+                                            choice.delta.content.clone().unwrap_or_default();
+                                        completion.observe_content(&delta);
+                                        if let Some(refusal) = &choice.delta.refusal {
+                                            completion.observe_refusal(refusal);
+                                        }
+                                        items.push(Ok(StreamingResponse::delta(delta)));
+                                    }
+                                }
+                                Err(e) => {
+                                    items.push(Err(LlmError::ProcessingError(format!(
+                                        "Failed to parse stream chunk: {}",
+                                        e
+                                    ))));
                                 }
                             }
-                            Err(e) => {
-                                items.push(Err(LlmError::ProcessingError(format!(
-                                    "Failed to parse stream chunk: {}",
-                                    e
-                                ))));
-                            }
                         }
+
+                        items
                     }
+                    Err(e) => vec![Err(LlmError::NetworkError(format!("Stream error: {}", e)))],
+                };
 
-                    items
-                }
-                Err(e) => vec![Err(LlmError::NetworkError(format!("Stream error: {}", e)))],
-            };
-
-            futures::stream::iter(items)
-        });
+                futures::stream::iter(items)
+            });
 
         Ok(Box::pin(stream))
     }
@@ -657,101 +1254,81 @@ impl OpenAIAdapter {
 #[async_trait]
 impl LlmPort for OpenAIAdapter {
     async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
-        let messages = self.convert_to_messages(&request.prompt, &request.attachments)?;
-
-        let temperature = request
-            .prompt
-            .node
-            .node
-            .parameters
-            .temperature
-            .unwrap_or(0.7);
-        let max_tokens = request
-            .prompt
-            .node
-            .node
-            .parameters
-            .max_tokens
-            .unwrap_or(4096);
-
-        let openai_request = OpenAIRequest {
-            model: request.model.clone(),
-            messages,
-            temperature: Some(temperature),
-            max_tokens: Some(max_tokens),
-            top_p: Some(1.0),
-            stream: false,
-            response_format: request
-                .response_format
-                .as_ref()
-                .map(to_openai_response_format),
-            stream_options: None,
-        };
+        let (openai_request, notes) = self.build_request(&request, false)?;
 
         let response = self.make_request_with_retries(&openai_request).await?;
 
-        if response.choices.is_empty() {
-            return Err(LlmError::ProcessingError(
-                "No choices in response".to_string(),
+        // G-50-5a: usage is mapped BEFORE the no-choices check and the guard, so a call OpenAI
+        // billed but that is classified as empty or refused carries the same folded, reconciled
+        // usage a success would have, on the served model (else the request model, A3-50-26).
+        let (usage, vendor_total) = Self::map_usage(response.usage);
+        let billed_model = if response.model.is_empty() {
+            request.model.as_str()
+        } else {
+            response.model.as_str()
+        };
+
+        // WR-04: a body with no choices is an `EmptyCompletion` carrying the bill, as on the
+        // compat engine and Gemini -- not a `ProcessingError`, which dropped the usage and
+        // read as `Transience::Unknown` to the retry loop (a billed request re-sent).
+        let Some(choice) = response.choices.first() else {
+            return Err(bill(
+                LlmError::empty_completion("Response contained no choices".to_string()),
+                billed_model,
+                Some(usage),
             ));
+        };
+        let finish_reason = Self::convert_finish_reason(choice.finish_reason.as_deref());
+        let content = choice.message.content.clone().unwrap_or_default();
+
+        // One rule for refusal, content filter, function call and empty text on any finish
+        // reason -- OpenAI included (PARITY-05, D-09/D-11a). It used to return `Ok("")`.
+        classify_completion(
+            self.get_provider_name(),
+            &request.model,
+            &content,
+            &finish_reason,
+            choice.message.refusal.as_deref(),
+            &self.config.api_key,
+        )
+        .map_err(|err| bill(err, billed_model, Some(usage.clone())))?;
+        // G-50-5a: OpenAI's own total is the check on the mapping -- a disagreement is warned
+        // once and recorded, never written over the mapped total (D-02).
+        let unreconciled = self.usage_log.record(
+            self.get_provider_name(),
+            &request.model,
+            &usage,
+            vendor_total,
+        );
+
+        let mut llm_response =
+            LlmResponse::new(request.id, response.model, content, finish_reason, usage);
+        llm_response.metadata = notes.into_metadata();
+        if let Some(value) = unreconciled {
+            llm_response
+                .metadata
+                .insert(USAGE_UNRECONCILED_METADATA_KEY.to_string(), value);
         }
-
-        let choice = &response.choices[0];
-        let finish_reason = self.convert_finish_reason(choice.finish_reason.clone());
-        let content = choice.message.content.clone();
-        let usage = Self::map_usage(response.usage);
-
-        Ok(LlmResponse {
-            id: Uuid::new_v4(),
-            request_id: request.id,
-            model: response.model,
-            content,
-            finish_reason,
-            usage,
-            created_at: Utc::now(),
-            metadata: HashMap::new(),
-            function_call: None,
-        })
+        Ok(llm_response)
     }
 
+    /// Streams the completion. A stream that ends refused or with no text ends with
+    /// `Err(LlmError::Refusal)` / `Err(LlmError::EmptyCompletion)` in place of the terminal
+    /// chunk, and that error item carries the usage frame's figures as its billed usage
+    /// ([`LlmError::billed_usage`], G-50-5a) on the request model, or `None` when the stream
+    /// reported no usage. Deltas already yielded stay yielded.
     async fn generate_stream(
         &self,
         request: LlmRequest,
     ) -> Result<Box<dyn Stream<Item = Result<StreamingResponse, LlmError>> + Send>, LlmError> {
-        let messages = self.convert_to_messages(&request.prompt, &request.attachments)?;
+        // ADR-0061 (h), owner reading R-1 (option-b): the omissions, format changes and
+        // unprofiled model `build_request` `warn!`s about are also stamped on the stream's
+        // terminal chunk (only that chunk), as the buffered path stamps `LlmResponse.metadata`.
+        let (openai_request, notes) = self.build_request(&request, true)?;
 
-        let temperature = request
-            .prompt
-            .node
-            .node
-            .parameters
-            .temperature
-            .unwrap_or(0.7);
-        let max_tokens = request
-            .prompt
-            .node
-            .node
-            .parameters
-            .max_tokens
-            .unwrap_or(4096);
-
-        let openai_request = OpenAIRequest {
-            model: request.model.clone(),
-            messages,
-            temperature: Some(temperature),
-            max_tokens: Some(max_tokens),
-            top_p: Some(1.0),
-            stream: true,
-            response_format: request
-                .response_format
-                .as_ref()
-                .map(to_openai_response_format),
-            stream_options: Some(OpenAIStreamOptions {
-                include_usage: true,
-            }),
-        };
-
-        let stream = self.make_streaming_request(&openai_request).await?;
+        let stream = self
+            .make_streaming_request(&openai_request, notes.into_metadata())
+            .await?;
         Ok(Box::new(stream))
     }
 
@@ -779,8 +1356,9 @@ impl LlmPort for OpenAIAdapter {
 
         if !response.status().is_success() {
             let status = response.status();
+            let hints = snapshot_rate_limit_hints(status, response.headers());
             let error_text = response.text().await.unwrap_or_default();
-            return Err(self.map_error(status.as_u16(), &error_text));
+            return Err(self.map_error_with_hints(status.as_u16(), &error_text, hints));
         }
 
         let response_text = response
@@ -806,23 +1384,31 @@ impl LlmPort for OpenAIAdapter {
     }
 
     fn get_capabilities(&self) -> ProviderCapabilities {
-        ProviderCapabilities {
-            supports_streaming: true,
-            // `LlmRequest` carries no field through which a tool definition could
-            // travel, and this adapter neither sends `tools` nor parses `tool_calls`
-            // out of a response. The flag describes what this adapter does, not what
-            // the vendor's API offers (WEB-03, D-14). This adapter's `generate()` also
-            // hard-codes the absent function call in the response it builds, so the
-            // function-calling flag describes what this adapter does rather than what
-            // the vendor's API offers (WEB-03, D-12).
-            supports_tool_calling: false,
-            supports_function_calling: false,
-            supports_vision: true,
-            max_context_tokens: Some(128000),
-            supports_embeddings: true,
-            supports_system_messages: true,
-            temperature_range: Some((0.0, 1.0)),
-        }
+        declared_capabilities(self.config.context_window)
+    }
+
+    fn model_profile(&self, model: &str) -> Option<ModelProfile> {
+        Some(self.wire_profile(model))
+    }
+
+    /// The pre-judging twin of the send-time `in_force` + `admit` in `build_request`:
+    /// same precedence over this adapter's `reasoning_effort` / `reasoning_fallback`, same
+    /// `wire_profile`, same verdict (D-09).
+    fn check_reasoning(
+        &self,
+        model: &str,
+        effort: Option<ReasoningEffort>,
+        fallback: Option<ReasoningFallback>,
+    ) -> Result<(), LlmError> {
+        reasoning::check(
+            OPENAI_PROVIDER,
+            model,
+            || self.wire_profile(model),
+            effort,
+            fallback,
+            self.config.reasoning_effort,
+            self.config.reasoning_fallback,
+        )
     }
 }
 
@@ -830,9 +1416,43 @@ impl LlmPort for OpenAIAdapter {
 mod tests {
     use super::*;
 
+    /// WR-03: the documented `with_base_url` guarantee is an `http://` or `https://` URL. A value
+    /// that merely starts with `http` (`httpx://x`, a scheme-less `http-gateway...`) must fail
+    /// construction like any other non-HTTP value.
+    #[test]
+    fn a_builder_set_non_http_base_url_fails_openai_construction() {
+        for bad in [
+            "ftp://x",
+            "",
+            "api.example.com/v1",
+            "httpx://x",
+            "http-gateway.internal/v1",
+            "httpfoo:",
+        ] {
+            let config =
+                OpenAIConfig::new("k".to_string(), "gpt-5.4-nano".to_string()).with_base_url(bad);
+            assert!(
+                config.validate().is_err(),
+                "base URL {bad:?} must fail validation"
+            );
+            assert!(
+                OpenAIAdapter::new(config).is_err(),
+                "base URL {bad:?} must fail adapter construction"
+            );
+        }
+        for good in ["http://localhost:1", "https://gateway.example/v1"] {
+            let config =
+                OpenAIConfig::new("k".to_string(), "gpt-5.4-nano".to_string()).with_base_url(good);
+            assert!(
+                config.validate().is_ok(),
+                "base URL {good:?} must pass validation"
+            );
+        }
+    }
+
     #[test]
     fn test_config_creation() {
-        let config = OpenAIConfig::new("test-key".to_string());
+        let config = OpenAIConfig::new("test-key".to_string(), OPENAI_DEFAULT_MODEL.to_string());
         assert_eq!(config.api_key, "test-key");
         assert_eq!(config.base_url, "https://api.openai.com/v1");
         assert_eq!(config.timeout_seconds, 300);
@@ -841,7 +1461,8 @@ mod tests {
 
     #[test]
     fn test_config_validation() {
-        let valid_config = OpenAIConfig::new("test-key".to_string());
+        let valid_config =
+            OpenAIConfig::new("test-key".to_string(), OPENAI_DEFAULT_MODEL.to_string());
         assert!(valid_config.validate().is_ok());
 
         let invalid_config = OpenAIConfig {
@@ -850,27 +1471,89 @@ mod tests {
             organization: None,
             timeout_seconds: 300,
             max_retries: 3,
+            max_tokens: Some(4096),
+            context_window: None,
+            model: OPENAI_DEFAULT_MODEL.to_string(),
+            model_overrides: BTreeMap::new(),
+            reasoning_effort: None,
+            reasoning_fallback: None,
         };
         assert!(invalid_config.validate().is_err());
     }
 
     #[test]
+    fn openai_config_debug_prints_the_model_and_redacts_the_key() {
+        let config = OpenAIConfig::new(
+            "sk-secret-key-123".to_string(),
+            OPENAI_DEFAULT_MODEL.to_string(),
+        );
+        let printed = format!("{config:?}");
+        assert!(printed.contains(OPENAI_DEFAULT_MODEL), "{printed}");
+        assert!(printed.contains("<redacted>"), "{printed}");
+        assert!(!printed.contains("sk-secret-key-123"), "{printed}");
+    }
+
+    #[test]
+    fn openai_config_validate_rejects_an_empty_model() {
+        let mut config =
+            OpenAIConfig::new("test-key".to_string(), OPENAI_DEFAULT_MODEL.to_string());
+        config.model = String::new();
+        let error = config.validate().unwrap_err();
+        assert!(error.contains("Model"), "{error}");
+    }
+
+    #[test]
+    fn openai_config_model_changes_no_adapter_wide_limit() {
+        // D-06 as locked (plan 50.1-02 checkpoint, `proceed-as-locked`): `model` is a stored
+        // default-model label. It must not move the adapter-wide window.
+        let small = OpenAIConfig::new("test-key".to_string(), "gpt-4o-mini".to_string());
+        let nano = OpenAIConfig::new("test-key".to_string(), "gpt-5.4-nano".to_string());
+        let small = OpenAIAdapter::new(small).unwrap().get_capabilities();
+        let nano = OpenAIAdapter::new(nano).unwrap().get_capabilities();
+        assert_eq!(small.max_context_tokens, Some(128_000));
+        assert_eq!(small.max_context_tokens, nano.max_context_tokens);
+    }
+
+    #[test]
+    fn openai_config_with_organization_sets_the_field() {
+        let config = OpenAIConfig::new("test-key".to_string(), OPENAI_DEFAULT_MODEL.to_string())
+            .with_organization("org-x");
+        assert_eq!(config.organization, Some("org-x".to_string()));
+        assert_eq!(
+            OpenAIConfig::new("k".to_string(), OPENAI_DEFAULT_MODEL.to_string()).organization,
+            None
+        );
+    }
+
+    #[test]
+    fn openai_config_new_takes_key_and_model_and_defaults_the_endpoint() {
+        let config = OpenAIConfig::new("test-key".to_string(), "gpt-4o-mini".to_string());
+        assert_eq!(config.api_key, "test-key");
+        assert_eq!(config.model, "gpt-4o-mini");
+        assert_eq!(config.base_url, OPENAI_DEFAULT_BASE_URL);
+        assert_eq!(config.timeout_seconds, 300);
+        assert_eq!(config.max_tokens, Some(4096));
+        assert_eq!(OPENAI_DEFAULT_MODEL, "gpt-5.4-nano");
+        assert_eq!(OPENAI_DEFAULT_BASE_URL, "https://api.openai.com/v1");
+    }
+
+    #[test]
     fn test_adapter_creation() {
-        let config = OpenAIConfig::new("test-key".to_string());
+        let config = OpenAIConfig::new("test-key".to_string(), OPENAI_DEFAULT_MODEL.to_string());
         let adapter = OpenAIAdapter::new(config);
         assert!(adapter.is_ok());
     }
 
     #[test]
     fn test_get_provider_name() {
-        let config = OpenAIConfig::new("test-key".to_string());
+        let config = OpenAIConfig::new("test-key".to_string(), OPENAI_DEFAULT_MODEL.to_string());
         let adapter = OpenAIAdapter::new(config).unwrap();
         assert_eq!(adapter.get_provider_name(), "openai");
     }
 
     #[test]
     fn test_get_capabilities() {
-        let config = OpenAIConfig::new("test-key".to_string());
+        let config = OpenAIConfig::new("test-key".to_string(), OPENAI_DEFAULT_MODEL.to_string());
         let adapter = OpenAIAdapter::new(config).unwrap();
         let caps = adapter.get_capabilities();
         assert!(caps.supports_streaming);
@@ -886,9 +1569,36 @@ mod tests {
         assert_eq!(caps.temperature_range, Some((0.0, 1.0)));
     }
 
+    /// OpenAI has no adapter-level default model (the model arrives per request), so the
+    /// operator-identified current model from the 2026-10-15 probe, `gpt-5.4-nano`, is the one
+    /// checked here. `max_context_tokens` stays the adapter-wide 128,000 for the same reason:
+    /// no default model's window exists to follow.
+    #[test]
+    fn openai_default_model_is_seeded() {
+        let adapter = OpenAIAdapter::new(OpenAIConfig::new(
+            "test-key".to_string(),
+            OPENAI_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
+        for (model, window) in [("gpt-5.4-nano", 400_000), ("gpt-4o-mini", 128_000)] {
+            let (profile, origin) = adapter.model_registry.resolve(model);
+            assert_eq!(
+                origin,
+                crate::registry::ProfileOrigin::Seeded {
+                    verified_on: "2026-10-15"
+                },
+                "{model}"
+            );
+            assert_eq!(profile.context_window, Some(window), "{model}");
+        }
+        let (_, origin) = adapter.model_registry.resolve("gpt-4o");
+        assert_eq!(origin, crate::registry::ProfileOrigin::AdapterDefault);
+    }
+
     #[test]
     fn test_config_with_organization() {
-        let mut config = OpenAIConfig::new("test-key".to_string());
+        let mut config =
+            OpenAIConfig::new("test-key".to_string(), OPENAI_DEFAULT_MODEL.to_string());
         config.organization = Some("org-123".to_string());
         assert_eq!(config.organization, Some("org-123".to_string()));
     }
@@ -901,6 +1611,12 @@ mod tests {
             organization: None,
             timeout_seconds: 300,
             max_retries: 3,
+            max_tokens: Some(4096),
+            context_window: None,
+            model: OPENAI_DEFAULT_MODEL.to_string(),
+            model_overrides: BTreeMap::new(),
+            reasoning_effort: None,
+            reasoning_fallback: None,
         };
         assert!(config.validate().is_err());
     }
@@ -909,7 +1625,7 @@ mod tests {
 
     #[test]
     fn map_error_maps_a_redirect_status_to_an_actionable_provider_error() {
-        let config = OpenAIConfig::new("test-key".to_string());
+        let config = OpenAIConfig::new("test-key".to_string(), OPENAI_DEFAULT_MODEL.to_string());
         let adapter = OpenAIAdapter::new(config).unwrap();
 
         for expected in [301u16, 302, 307] {
@@ -947,6 +1663,12 @@ mod tests {
                 organization: None,
                 timeout_seconds: 5,
                 max_retries: 0,
+                max_tokens: Some(4096),
+                context_window: None,
+                model: OPENAI_DEFAULT_MODEL.to_string(),
+                model_overrides: BTreeMap::new(),
+                reasoning_effort: None,
+                reasoning_fallback: None,
             })
             .expect("test config must build a valid adapter")
         }
@@ -1014,12 +1736,54 @@ mod tests {
                 let ok = matches!(
                     (expect, &err),
                     ("AuthenticationError", LlmError::AuthenticationError(_))
-                        | ("RateLimitExceeded", LlmError::RateLimitExceeded)
+                        | ("RateLimitExceeded", LlmError::RateLimitExceeded { .. })
                         | ("InvalidPrompt", LlmError::InvalidPrompt(_))
                         | ("TokenLimitExceeded", LlmError::TokenLimitExceeded)
                 );
                 assert!(ok, "status {status}: expected {expect}, got {err:?}");
             }
+        }
+
+        /// D-02, PACE-02: with `max_retries: 3` a 429 is surfaced on the FIRST attempt -- the
+        /// mock is hit exactly once and no back-off sleep is spent.
+        #[tokio::test]
+        async fn openai_429_is_surfaced_on_the_first_attempt() {
+            let mut server = Server::new_async().await;
+            let mock = server
+                .mock("POST", "/chat/completions")
+                .with_status(429)
+                .with_body(r#"{"error":{"message":"slow down"}}"#)
+                .expect(1)
+                .create_async()
+                .await;
+            let adapter = OpenAIAdapter::new(OpenAIConfig {
+                api_key: "test-key".to_string(),
+                base_url: server.url(),
+                organization: None,
+                timeout_seconds: 5,
+                max_retries: 3,
+                max_tokens: Some(4096),
+                context_window: None,
+                model: OPENAI_DEFAULT_MODEL.to_string(),
+                model_overrides: BTreeMap::new(),
+                reasoning_effort: None,
+                reasoning_fallback: None,
+            })
+            .expect("test config must build a valid adapter");
+
+            let started = std::time::Instant::now();
+            let result = adapter.generate(build_request(false)).await;
+
+            assert!(
+                matches!(result, Err(LlmError::RateLimitExceeded { .. })),
+                "expected RateLimitExceeded, got {result:?}"
+            );
+            assert!(
+                started.elapsed() < Duration::from_millis(900),
+                "a surfaced 429 must not sleep through the retry back-off ({:?})",
+                started.elapsed()
+            );
+            mock.assert_async().await;
         }
 
         #[tokio::test]
@@ -1090,6 +1854,301 @@ mod tests {
         }
     }
 
+    // ── Phase 43 (PACE-01, D-02, Pitfall 6): 429 headers and quota-class bodies ──
+
+    mod rate_limit_wiring {
+        use super::*;
+        use mockito::Server;
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+        use paladin_ports::output::rate_limit_hints::{RateLimitDimensionKind, RetryDelaySource};
+
+        /// `max_retries: 3` on purpose: a 429 mock with `.expect(1)` then proves the adapter's
+        /// own loop never re-asks, and the back-off would make a regression visibly slow.
+        fn adapter_at(base_url: &str) -> OpenAIAdapter {
+            OpenAIAdapter::new(OpenAIConfig {
+                api_key: "test-key".to_string(),
+                base_url: base_url.to_string(),
+                organization: None,
+                timeout_seconds: 5,
+                max_retries: 3,
+                max_tokens: Some(4096),
+                context_window: None,
+                model: OPENAI_DEFAULT_MODEL.to_string(),
+                model_overrides: BTreeMap::new(),
+                reasoning_effort: None,
+                reasoning_fallback: None,
+            })
+            .expect("test config must build a valid adapter")
+        }
+
+        fn build_request(stream: bool) -> LlmRequest {
+            LlmRequest::new(
+                "gpt-4o",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))
+                .expect("a user prompt must build"),
+            )
+            .with_stream(stream)
+        }
+
+        const SECS: fn(u64) -> Duration = Duration::from_secs;
+
+        fn with_ratelimit_headers(mock: mockito::Mock, retry_after: Option<&str>) -> mockito::Mock {
+            let mock = mock
+                .with_header("x-ratelimit-limit-requests", "60")
+                .with_header("x-ratelimit-remaining-requests", "0")
+                .with_header("x-ratelimit-reset-requests", "6m0s")
+                .with_header("x-ratelimit-limit-tokens", "150000")
+                .with_header("x-ratelimit-remaining-tokens", "149984")
+                .with_header("x-ratelimit-reset-tokens", "1s");
+            match retry_after {
+                Some(v) => mock.with_header("Retry-After", v),
+                None => mock,
+            }
+        }
+
+        fn assert_dimensions(err: &LlmError) {
+            let hints = err.rate_limit_hints().expect("the 429 headers were parsed");
+            let requests = hints.dimension(RateLimitDimensionKind::Requests);
+            assert_eq!(requests.limit(), Some(60));
+            assert_eq!(requests.remaining(), Some(0));
+            assert_eq!(requests.reset_after(), Some(SECS(360)));
+            let tokens = hints.dimension(RateLimitDimensionKind::Tokens);
+            assert_eq!(tokens.limit(), Some(150_000));
+            assert_eq!(tokens.remaining(), Some(149_984));
+            assert_eq!(tokens.reset_after(), Some(SECS(1)));
+        }
+
+        #[tokio::test]
+        async fn openai_429_carries_retry_after_and_ratelimit_dimensions() {
+            let mut server = Server::new_async().await;
+            let mock = with_ratelimit_headers(
+                server
+                    .mock("POST", "/chat/completions")
+                    .with_status(429)
+                    .with_body(r#"{"error":{"message":"Rate limit reached","code":"rate_limit_exceeded"}}"#),
+                Some("7"),
+            )
+            .expect(1)
+            .create_async()
+            .await;
+
+            let err = adapter_at(&server.url())
+                .generate(build_request(false))
+                .await
+                .expect_err("a 429 is an error");
+
+            assert!(matches!(err, LlmError::RateLimitExceeded { .. }), "{err:?}");
+            assert_eq!(err.retry_after(), Some(SECS(7)));
+            assert_eq!(
+                err.rate_limit_hints()
+                    .and_then(|h| h.explicit_retry_after()),
+                Some((SECS(7), RetryDelaySource::RetryAfter))
+            );
+            assert_dimensions(&err);
+            // The raw header strings never reach a rendered error (T-43-10): only the parsed
+            // numbers do, so the Go-duration text `6m0s` must not appear anywhere.
+            for rendered in [format!("{err}"), format!("{err:?}")] {
+                assert!(!rendered.contains("6m0s"), "{rendered}");
+            }
+            mock.assert_async().await;
+        }
+
+        #[tokio::test]
+        async fn openai_429_without_retry_after_falls_back_to_the_exhausted_reset() {
+            let mut server = Server::new_async().await;
+            let mock = with_ratelimit_headers(
+                server
+                    .mock("POST", "/chat/completions")
+                    .with_status(429)
+                    .with_body(r#"{"error":{"message":"Rate limit reached"}}"#),
+                None,
+            )
+            .expect(1)
+            .create_async()
+            .await;
+
+            let err = adapter_at(&server.url())
+                .generate(build_request(false))
+                .await
+                .expect_err("a 429 is an error");
+
+            // 6m0s on the exhausted requests dimension, tagged as derived from a reset.
+            assert_eq!(err.retry_after(), Some(SECS(360)));
+            let hints = err.rate_limit_hints().expect("hints");
+            assert_eq!(hints.explicit_retry_after(), None);
+            assert_eq!(
+                hints.effective_retry_after(),
+                Some((SECS(360), RetryDelaySource::ResetHeader))
+            );
+            mock.assert_async().await;
+        }
+
+        #[tokio::test]
+        async fn openai_429_with_no_rate_limit_header_carries_no_hints() {
+            let mut server = Server::new_async().await;
+            let mock = server
+                .mock("POST", "/chat/completions")
+                .with_status(429)
+                .with_body(r#"{"error":{"message":"slow down"}}"#)
+                .expect(1)
+                .create_async()
+                .await;
+
+            let err = adapter_at(&server.url())
+                .generate(build_request(false))
+                .await
+                .expect_err("a 429 is an error");
+
+            assert!(matches!(err, LlmError::RateLimitExceeded { .. }), "{err:?}");
+            assert_eq!(err.retry_after(), None);
+            assert!(err.rate_limit_hints().is_none());
+            mock.assert_async().await;
+        }
+
+        #[tokio::test]
+        async fn openai_stream_429_carries_the_same_hints() {
+            let mut server = Server::new_async().await;
+            let mock = with_ratelimit_headers(
+                server
+                    .mock("POST", "/chat/completions")
+                    .with_status(429)
+                    .with_body(r#"{"error":{"message":"Rate limit reached"}}"#),
+                Some("7"),
+            )
+            .expect(1)
+            .create_async()
+            .await;
+
+            let result = adapter_at(&server.url())
+                .generate_stream(build_request(true))
+                .await;
+            let err = match result {
+                Err(err) => err,
+                Ok(_) => panic!("expected Err(RateLimitExceeded), got Ok(<stream>)"),
+            };
+
+            assert!(matches!(err, LlmError::RateLimitExceeded { .. }), "{err:?}");
+            assert_eq!(err.retry_after(), Some(SECS(7)));
+            assert_dimensions(&err);
+            mock.assert_async().await;
+        }
+
+        #[tokio::test]
+        async fn openai_insufficient_quota_429_maps_to_usage_limit_exceeded_once() {
+            // Both spellings OpenAI uses for the same condition: the `code` and the `type`.
+            for body in [
+                r#"{"error":{"message":"You exceeded your current quota","type":"insufficient_quota","code":"insufficient_quota"}}"#,
+                r#"{"error":{"message":"You exceeded your current quota","type":"insufficient_quota"}}"#,
+                r#"{"error":{"message":"You exceeded your current quota","code":"insufficient_quota"}}"#,
+            ] {
+                let mut server = Server::new_async().await;
+                // A Retry-After on a quota error must not turn it into a paced rate limit.
+                let mock = server
+                    .mock("POST", "/chat/completions")
+                    .with_status(429)
+                    .with_header("Retry-After", "7")
+                    .with_body(body)
+                    .expect(1)
+                    .create_async()
+                    .await;
+
+                let err = adapter_at(&server.url())
+                    .generate(build_request(false))
+                    .await
+                    .expect_err("a quota 429 is an error");
+
+                match &err {
+                    LlmError::UsageLimitExceeded {
+                        provider,
+                        regain_hint,
+                    } => {
+                        assert_eq!(provider, "openai");
+                        assert_eq!(*regain_hint, None);
+                    }
+                    other => panic!("expected UsageLimitExceeded for {body}, got {other:?}"),
+                }
+                assert!(err.retry_after().is_none());
+                mock.assert_async().await;
+            }
+        }
+
+        #[tokio::test]
+        async fn openai_stream_insufficient_quota_429_maps_to_usage_limit_exceeded() {
+            let mut server = Server::new_async().await;
+            let mock = server
+                .mock("POST", "/chat/completions")
+                .with_status(429)
+                .with_body(r#"{"error":{"type":"insufficient_quota","code":"insufficient_quota"}}"#)
+                .expect(1)
+                .create_async()
+                .await;
+
+            let result = adapter_at(&server.url())
+                .generate_stream(build_request(true))
+                .await;
+            assert!(
+                matches!(&result, Err(LlmError::UsageLimitExceeded { .. })),
+                "expected UsageLimitExceeded, got {:?}",
+                result.as_ref().err()
+            );
+            mock.assert_async().await;
+        }
+
+        #[tokio::test]
+        async fn openai_ordinary_rate_limit_codes_are_not_mistaken_for_a_quota() {
+            for body in [
+                r#"{"error":{"code":"rate_limit_exceeded","type":"requests"}}"#,
+                r#"{"error":{"message":"mentions insufficient_quota in prose only"}}"#,
+                "not json at all",
+                "",
+                r#"{"error":"insufficient_quota"}"#,
+            ] {
+                let mut server = Server::new_async().await;
+                let mock = server
+                    .mock("POST", "/chat/completions")
+                    .with_status(429)
+                    .with_body(body)
+                    .expect(1)
+                    .create_async()
+                    .await;
+                let err = adapter_at(&server.url())
+                    .generate(build_request(false))
+                    .await
+                    .expect_err("a 429 is an error");
+                assert!(
+                    matches!(err, LlmError::RateLimitExceeded { .. }),
+                    "body {body:?}: {err:?}"
+                );
+                mock.assert_async().await;
+            }
+        }
+
+        #[tokio::test]
+        async fn openai_non_429_errors_ignore_rate_limit_headers() {
+            let mut server = Server::new_async().await;
+            let mock = with_ratelimit_headers(
+                server
+                    .mock("POST", "/chat/completions")
+                    .with_status(401)
+                    .with_body(r#"{"error":"invalid key"}"#),
+                Some("7"),
+            )
+            .expect(1)
+            .create_async()
+            .await;
+            let err = adapter_at(&server.url())
+                .generate(build_request(false))
+                .await
+                .expect_err("a 401 is an error");
+            assert!(matches!(err, LlmError::AuthenticationError(_)), "{err:?}");
+            assert!(err.rate_limit_hints().is_none());
+            mock.assert_async().await;
+        }
+    }
+
     // ── Phase 26 (RT-05, D-28): response_format reaches the wire ──────────
 
     mod response_format_wiring {
@@ -1107,6 +2166,12 @@ mod tests {
                 organization: None,
                 timeout_seconds: 5,
                 max_retries: 0,
+                max_tokens: Some(4096),
+                context_window: None,
+                model: OPENAI_DEFAULT_MODEL.to_string(),
+                model_overrides: BTreeMap::new(),
+                reasoning_effort: None,
+                reasoning_fallback: None,
             })
             .expect("test config must build a valid adapter")
         }
@@ -1221,11 +2286,115 @@ mod tests {
                     "model",
                     "messages",
                     "temperature",
-                    "max_tokens",
+                    "max_completion_tokens",
                     "top_p",
                     "stream"
                 ])
             );
+        }
+    }
+
+    // ── Phase 50 (PARITY-08, handoff B-4): the user turn carries the query ─
+
+    mod user_turn_wiring {
+        use super::*;
+        use mockito::Server;
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+        use serde_json::Value;
+        use std::sync::{Arc, Mutex};
+
+        fn adapter_at(base_url: &str) -> OpenAIAdapter {
+            OpenAIAdapter::new(OpenAIConfig {
+                api_key: "test-key".to_string(),
+                base_url: base_url.to_string(),
+                organization: None,
+                timeout_seconds: 5,
+                max_retries: 0,
+                max_tokens: Some(4096),
+                context_window: None,
+                model: OPENAI_DEFAULT_MODEL.to_string(),
+                model_overrides: BTreeMap::new(),
+                reasoning_effort: None,
+                reasoning_fallback: None,
+            })
+            .expect("test config must build a valid adapter")
+        }
+
+        /// A request whose prompt is a `UserPrompt` with the given query and context.
+        fn user_request(query: &str, context: Option<&str>) -> LlmRequest {
+            LlmRequest::new(
+                "gpt-4o",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: query.to_string(),
+                    context: context.map(str::to_string),
+                }))
+                .expect("a user prompt must build"),
+            )
+        }
+
+        /// Sends `request` to a mock endpoint and returns the content of the last user message
+        /// in the captured request body.
+        async fn user_content_on_the_wire(request: LlmRequest) -> String {
+            let mut server = Server::new_async().await;
+            let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let captured_clone = Arc::clone(&captured);
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body_from_request(move |req| {
+                    let body_text = req.utf8_lossy_body().unwrap_or_default().into_owned();
+                    *captured_clone.lock().unwrap() = Some(body_text);
+                    serde_json::json!({
+                        "id": "cmpl-1",
+                        "model": "gpt-4o",
+                        "choices": [{
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "ok"},
+                            "finish_reason": "stop"
+                        }],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+                    })
+                    .to_string()
+                    .into_bytes()
+                })
+                .create_async()
+                .await;
+
+            let result = adapter_at(&server.url()).generate(request).await;
+            assert!(
+                result.is_ok(),
+                "mock returned a well-formed response: {result:?}"
+            );
+
+            let body_text = captured
+                .lock()
+                .unwrap()
+                .take()
+                .expect("mock must have been called");
+            let body: Value = serde_json::from_str(&body_text).expect("body must be JSON");
+            body["messages"]
+                .as_array()
+                .and_then(|messages| {
+                    messages
+                        .iter()
+                        .rev()
+                        .find(|m| m["role"] == "user")
+                        .and_then(|m| m["content"].as_str().map(str::to_string))
+                })
+                .expect("the body must carry a user message with string content")
+        }
+
+        /// B-4: the execution service builds `UserPrompt { query, context: None }`; the adapter
+        /// used to read only `context`, so the user message went out empty.
+        #[tokio::test]
+        async fn openai_user_turn_carries_query_on_the_execution_service_path() {
+            let content = user_content_on_the_wire(user_request("What is 2+2?", None)).await;
+            assert_eq!(content, "What is 2+2?");
+
+            let content =
+                user_content_on_the_wire(user_request("What is 2+2?", Some("Extra context.")))
+                    .await;
+            assert_eq!(content, "What is 2+2?\n\nExtra context.");
         }
     }
 
@@ -1247,6 +2416,12 @@ mod tests {
                 organization: None,
                 timeout_seconds: 5,
                 max_retries: 0,
+                max_tokens: Some(4096),
+                context_window: None,
+                model: OPENAI_DEFAULT_MODEL.to_string(),
+                model_overrides: BTreeMap::new(),
+                reasoning_effort: None,
+                reasoning_fallback: None,
             })
             .expect("test config must build a valid adapter")
         }
@@ -1454,6 +2629,982 @@ mod tests {
         }
     }
 
+    // ── Phase 50 (PARITY-02, ADR-0061, D-01): the per-model parameter policy ──
+
+    mod parameter_policy {
+        use super::*;
+        use crate::registry::{ModelOverride, ModelRegistry, UNPROFILED_MODEL_METADATA_KEY};
+        use crate::sampling::{PARAMS_OMITTED_METADATA_KEY, RESPONSE_FORMAT_ADJUSTED_METADATA_KEY};
+        use mockito::Server;
+        use paladin_core::platform::container::prompt::{
+            PromptItem, PromptParameters, PromptType, UserPrompt,
+        };
+        use serde_json::{Value, json};
+        use std::collections::{BTreeMap, HashMap};
+        use std::sync::{Arc, Mutex};
+
+        fn adapter_at(base_url: &str) -> OpenAIAdapter {
+            OpenAIAdapter::new(OpenAIConfig {
+                api_key: "test-key".to_string(),
+                base_url: base_url.to_string(),
+                organization: None,
+                timeout_seconds: 5,
+                max_retries: 0,
+                max_tokens: Some(4096),
+                context_window: None,
+                model: OPENAI_DEFAULT_MODEL.to_string(),
+                model_overrides: BTreeMap::new(),
+                reasoning_effort: None,
+                reasoning_fallback: None,
+            })
+            .expect("test config must build a valid adapter")
+        }
+
+        /// A request whose prompt carries exactly `parameters` -- unlike
+        /// `PromptParameters::default()`, nothing here is pre-set.
+        fn request_with(parameters: PromptParameters) -> LlmRequest {
+            let mut request = LlmRequest::new(
+                "gpt-4o",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))
+                .expect("a user prompt must build"),
+            );
+            request.prompt.entity.data.parameters = parameters;
+            request
+        }
+
+        fn unset() -> PromptParameters {
+            PromptParameters {
+                max_tokens: None,
+                temperature: None,
+                top_p: None,
+                frequency_penalty: None,
+                presence_penalty: None,
+                stop_sequences: None,
+            }
+        }
+
+        fn completion_json() -> Vec<u8> {
+            json!({
+                "id": "cmpl-1",
+                "model": "gpt-4o",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop"
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            })
+            .to_string()
+            .into_bytes()
+        }
+
+        /// Runs `generate()` against a mock endpoint, returning the outgoing JSON body and the
+        /// response metadata.
+        async fn generate_on(
+            adapter_for: impl FnOnce(&str) -> OpenAIAdapter,
+            request: LlmRequest,
+        ) -> (Value, HashMap<String, String>) {
+            let mut server = Server::new_async().await;
+            let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let slot = Arc::clone(&captured);
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    completion_json()
+                })
+                .create_async()
+                .await;
+
+            let response = adapter_for(&server.url())
+                .generate(request)
+                .await
+                .expect("the mock answers a well-formed completion");
+            let body = captured
+                .lock()
+                .unwrap()
+                .take()
+                .expect("the mock must have been called once");
+            (
+                serde_json::from_str(&body).expect("the body must be JSON"),
+                response.metadata,
+            )
+        }
+
+        async fn generate_capture(request: LlmRequest) -> (Value, HashMap<String, String>) {
+            generate_on(adapter_at, request).await
+        }
+
+        /// Runs `generate_stream()` against a mock endpoint and returns the outgoing JSON body.
+        async fn stream_capture(request: LlmRequest) -> Value {
+            let mut server = Server::new_async().await;
+            let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let slot = Arc::clone(&captured);
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    b"data: [DONE]\n\n".to_vec()
+                })
+                .create_async()
+                .await;
+
+            let stream = adapter_at(&server.url())
+                .generate_stream(request)
+                .await
+                .expect("the stream must open");
+            let mut stream = Box::into_pin(stream);
+            while stream.next().await.is_some() {}
+
+            let body = captured
+                .lock()
+                .unwrap()
+                .take()
+                .expect("the mock must have been called once");
+            serde_json::from_str(&body).expect("the body must be JSON")
+        }
+
+        #[tokio::test]
+        async fn openai_unset_sampling_values_are_absent() {
+            let (body, metadata) = generate_capture(request_with(unset())).await;
+            let obj = body.as_object().expect("body must be a JSON object");
+
+            assert!(
+                !obj.contains_key("temperature"),
+                "no fabricated temperature: {obj:?}"
+            );
+            assert!(!obj.contains_key("top_p"), "no fabricated top_p: {obj:?}");
+            assert!(
+                !obj.contains_key("stop"),
+                "no stop when none was set: {obj:?}"
+            );
+            assert_eq!(
+                body["max_completion_tokens"], 4096,
+                "the output cap keeps its documented compiled default"
+            );
+            assert!(
+                !obj.contains_key("max_tokens"),
+                "the old wire key is never sent: {obj:?}"
+            );
+            assert!(
+                !metadata.contains_key(PARAMS_OMITTED_METADATA_KEY),
+                "an unset parameter is not an omission: {metadata:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn openai_sends_what_the_caller_set_and_the_profile_admits() {
+            let mut parameters = unset();
+            parameters.temperature = Some(0.5);
+            parameters.top_p = Some(0.9);
+            parameters.max_tokens = Some(777);
+            let (body, metadata) = generate_capture(request_with(parameters)).await;
+
+            assert_eq!(body["temperature"], 0.5);
+            assert!((body["top_p"].as_f64().unwrap() - 0.9).abs() < 1e-6);
+            assert_eq!(
+                body["max_completion_tokens"], 777,
+                "the caller's max_tokens wins"
+            );
+            assert!(body.get("max_tokens").is_none(), "{body}");
+            assert!(!metadata.contains_key(PARAMS_OMITTED_METADATA_KEY));
+        }
+
+        #[tokio::test]
+        async fn openai_out_of_range_temperature_is_omitted_and_recorded() {
+            let mut parameters = unset();
+            parameters.temperature = Some(1.5);
+            let (body, metadata) = generate_capture(request_with(parameters)).await;
+
+            assert!(
+                body.get("temperature").is_none(),
+                "an out-of-range temperature is omitted, never clamped: {body}"
+            );
+            assert_eq!(
+                metadata
+                    .get(PARAMS_OMITTED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("temperature")
+            );
+        }
+
+        #[tokio::test]
+        async fn openai_penalties_are_never_sent_and_are_recorded() {
+            // `PromptParameters::default()` carries penalties of 0.0; this adapter has no
+            // penalty field, so the fallback profile states them `NotSent` and the omission is
+            // visible rather than silent.
+            let (body, metadata) =
+                generate_capture(request_with(PromptParameters::default())).await;
+
+            assert!(body.get("frequency_penalty").is_none(), "{body}");
+            assert!(body.get("presence_penalty").is_none(), "{body}");
+            assert_eq!(
+                metadata
+                    .get(PARAMS_OMITTED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("frequency_penalty,presence_penalty")
+            );
+        }
+
+        #[tokio::test]
+        async fn openai_stop_sequences_keep_declared_order() {
+            let mut parameters = unset();
+            // A duplicate, deliberately: order and duplicates are the caller's.
+            parameters.stop_sequences = Some(vec![
+                "b".to_string(),
+                "a".to_string(),
+                "b".to_string(),
+                "c".to_string(),
+            ]);
+            let (body, metadata) = generate_capture(request_with(parameters)).await;
+
+            assert_eq!(body["stop"], json!(["b", "a", "b", "c"]));
+            assert!(!metadata.contains_key(PARAMS_OMITTED_METADATA_KEY));
+        }
+
+        #[tokio::test]
+        async fn openai_stop_sequences_past_the_maximum_are_omitted_not_truncated() {
+            let mut parameters = unset();
+            parameters.stop_sequences = Some(
+                ["a", "b", "c", "d", "e"]
+                    .iter()
+                    .map(|s| (*s).to_string())
+                    .collect(),
+            );
+            let (body, metadata) = generate_capture(request_with(parameters)).await;
+
+            assert!(
+                body.get("stop").is_none(),
+                "five sequences exceed the maximum of four and are omitted whole: {body}"
+            );
+            assert_eq!(
+                metadata
+                    .get(PARAMS_OMITTED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("stop")
+            );
+        }
+
+        #[tokio::test]
+        async fn openai_stream_follows_the_profile() {
+            let mut parameters = unset();
+            parameters.temperature = Some(1.5);
+            parameters.top_p = Some(0.9);
+            parameters.stop_sequences = Some(vec!["END".to_string(), "STOP".to_string()]);
+            let body = stream_capture(request_with(parameters)).await;
+
+            assert!(
+                body.get("temperature").is_none(),
+                "the streaming body omits an inadmissible temperature: {body}"
+            );
+            assert!((body["top_p"].as_f64().unwrap() - 0.9).abs() < 1e-6);
+            assert_eq!(body["stop"], json!(["END", "STOP"]));
+            assert_eq!(body["max_completion_tokens"], 4096);
+            assert!(body.get("max_tokens").is_none(), "{body}");
+            assert_eq!(body["stream"], true);
+
+            let mut over = unset();
+            over.stop_sequences = Some((0..5).map(|n| n.to_string()).collect());
+            let body = stream_capture(request_with(over)).await;
+            assert!(
+                body.get("stop").is_none(),
+                "a streamed over-long stop list is omitted whole: {body}"
+            );
+        }
+
+        /// Phase 50, owner reading R-1 (option-b): a streamed call stamps the visibility keys
+        /// the buffered path would, on the terminal chunk only.
+        #[tokio::test]
+        async fn openai_stream_terminal_chunk_carries_metadata() {
+            let mut server = Server::new_async().await;
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body(
+                    "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"},\"finish_reason\":null}]}\n\n\
+                     data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\"},\"finish_reason\":\"stop\"}]}\n\n\
+                     data: [DONE]\n\n",
+                )
+                .create_async()
+                .await;
+
+            let mut parameters = unset();
+            parameters.temperature = Some(1.5); // above the profile's (0.0, 1.0)
+            let stream = adapter_at(&server.url())
+                .generate_stream(request_with(parameters))
+                .await
+                .expect("the stream must open");
+            let mut stream = Box::into_pin(stream);
+            let mut chunks = Vec::new();
+            while let Some(item) = stream.next().await {
+                chunks.push(item.expect("every scripted item is Ok"));
+            }
+
+            let terminal = chunks.last().expect("a terminal chunk");
+            assert!(terminal.finish_reason.is_some());
+            assert_eq!(
+                terminal
+                    .metadata
+                    .get(PARAMS_OMITTED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("temperature")
+            );
+            assert_eq!(
+                terminal
+                    .metadata
+                    .get(UNPROFILED_MODEL_METADATA_KEY)
+                    .map(String::as_str),
+                Some("gpt-4o")
+            );
+            for content in &chunks[..chunks.len() - 1] {
+                assert!(content.metadata.is_empty(), "content chunk: {content:?}");
+            }
+        }
+
+        #[tokio::test]
+        async fn openai_unprofiled_model_is_stamped() {
+            let (_, metadata) = generate_capture(request_with(unset())).await;
+            assert_eq!(
+                metadata
+                    .get(UNPROFILED_MODEL_METADATA_KEY)
+                    .map(String::as_str),
+                Some("gpt-4o"),
+                "no seeded entry exists yet, so the model runs on the adapter-wide fallback"
+            );
+        }
+
+        #[test]
+        fn openai_model_profile_is_always_some_and_matches_what_the_wire_sends() {
+            let adapter = adapter_at("http://localhost:1");
+            let profile = adapter
+                .model_profile("any-model")
+                .expect("openai profiles every model");
+            assert_eq!(profile.temperature, ParamSupport::Range(0.0, 1.0));
+            assert_eq!(profile.top_p, ParamSupport::Range(0.0, 1.0));
+            assert_eq!(profile.frequency_penalty, ParamSupport::NotSent);
+            assert_eq!(profile.presence_penalty, ParamSupport::NotSent);
+            assert_eq!(
+                profile.stop_sequences,
+                StopSupport::Supported { max: Some(4) }
+            );
+            assert_eq!(profile.context_window, Some(128_000));
+            assert!(profile.json_object && profile.json_schema);
+        }
+
+        #[tokio::test]
+        async fn openai_json_schema_still_reaches_the_wire_as_json_schema() {
+            let request = request_with(unset()).with_response_format(ResponseFormat::JsonSchema {
+                name: "answer".to_string(),
+                schema: json!({"type": "object"}),
+                strict: true,
+            });
+            let (body, metadata) = generate_capture(request).await;
+
+            assert_eq!(body["response_format"]["type"], "json_schema");
+            assert!(
+                !metadata.contains_key(RESPONSE_FORMAT_ADJUSTED_METADATA_KEY),
+                "nothing changed on the wire, so nothing is recorded: {metadata:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn openai_max_tokens_default_is_checked_against_the_profile() {
+            let mut server = Server::new_async().await;
+            let mock = server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body(completion_json())
+                .expect(0)
+                .create_async()
+                .await;
+
+            let mut adapter = adapter_at(&server.url());
+            let over = ModelOverride {
+                max_output_tokens: Some(1000),
+                ..ModelOverride::default()
+            };
+            adapter.model_registry =
+                ModelRegistry::new(OPENAI_PROVIDER, &[], fallback_profile(None))
+                    .with_overrides(BTreeMap::from([("gpt-4o".to_string(), over)]))
+                    .expect("a plain max_output_tokens override is valid");
+
+            // No max_tokens on the request: the 4096 default is what would be sent, and the
+            // profile says the model produces at most 1000.
+            let err = adapter
+                .generate(request_with(unset()))
+                .await
+                .expect_err("4096 is above the profiled maximum of 1000");
+            match err {
+                LlmError::InvalidPrompt(message) => {
+                    assert!(message.contains("openai"), "{message}");
+                    assert!(message.contains("gpt-4o"), "{message}");
+                    assert!(message.contains("max_tokens"), "{message}");
+                }
+                other => panic!("expected InvalidPrompt, got {other:?}"),
+            }
+            mock.assert_async().await;
+
+            // The streaming path refuses it too.
+            let streamed = adapter.generate_stream(request_with(unset())).await;
+            assert!(matches!(streamed, Err(LlmError::InvalidPrompt(_))));
+        }
+    }
+
+    // ── Phase 51 (REASON-02, REASON-03, D-00f): an explicit effort reaches the wire or is refused ──
+
+    mod reasoning_effort {
+        use super::*;
+        use crate::reasoning::{
+            REASONING_EFFECTIVE_METADATA_KEY, REASONING_REQUESTED_METADATA_KEY,
+        };
+        use crate::registry::ModelOverride;
+        use mockito::Server;
+        use paladin_core::platform::container::prompt::UserPrompt;
+        use paladin_core::platform::container::transience::Transience;
+        use paladin_ports::output::llm_port::ReasoningEffort::{
+            Auto, High, Low, Max, Medium, Minimal, Off, XHigh,
+        };
+        use paladin_ports::output::llm_port::{ReasoningEffort, ReasoningFallback};
+        use paladin_ports::output::model_profile::{BudgetBounds, EffortLevels, EffortSupport};
+        use serde_json::json;
+        use std::sync::{Arc, Mutex};
+
+        const ASTRA: &str = "gpt-6-astra";
+
+        fn request_for(model: &str) -> LlmRequest {
+            LlmRequest::new(
+                model,
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))
+                .expect("a user prompt must build"),
+            )
+        }
+
+        fn ok_body() -> Vec<u8> {
+            json!({
+                "id": "cmpl-1",
+                "model": ASTRA,
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop"
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            })
+            .to_string()
+            .into_bytes()
+        }
+
+        /// Five levels, `auto`, and `off` exactly as `off` says.
+        fn astra(off: bool) -> EffortSupport {
+            EffortSupport::Supported(
+                EffortLevels::new([Minimal, Low, Medium, High, XHigh])
+                    .with_auto(true)
+                    .with_off(off),
+            )
+        }
+
+        fn adapter_over(base_url: &str, effort: EffortSupport) -> OpenAIAdapter {
+            let over = ModelOverride {
+                effort: Some(effort),
+                ..ModelOverride::default()
+            };
+            let config =
+                OpenAIConfig::new("test-key".to_string(), OPENAI_DEFAULT_MODEL.to_string())
+                    .with_base_url(base_url)
+                    .with_model_overrides(BTreeMap::from([(ASTRA.to_string(), over)]));
+            OpenAIAdapter::new(config).expect("a valid override builds")
+        }
+
+        /// D-09: `check_reasoning` answers with this adapter's own `llm.openai.reasoning_*`
+        /// defaults, and agrees with what `generate` does for the same effort.
+        #[tokio::test]
+        async fn openai_check_reasoning_consults_the_provider_defaults() {
+            const PROBE: &str = "probe-model";
+            let mut server = Server::new_async().await;
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body(ok_body())
+                .expect_at_least(0)
+                .create_async()
+                .await;
+            let over = ModelOverride {
+                effort: Some(EffortSupport::Supported(EffortLevels::new([Low, High]))),
+                ..ModelOverride::default()
+            };
+            let adapter = |effort: Option<ReasoningEffort>, fallback: Option<ReasoningFallback>| {
+                let mut config =
+                    OpenAIConfig::new("test-key".to_string(), OPENAI_DEFAULT_MODEL.to_string())
+                        .with_base_url(server.url())
+                        .with_model_overrides(BTreeMap::from([(PROBE.to_string(), over.clone())]));
+                if let Some(effort) = effort {
+                    config = config.with_reasoning_effort(effort);
+                }
+                if let Some(fallback) = fallback {
+                    config = config.with_reasoning_fallback(fallback);
+                }
+                OpenAIAdapter::new(config).expect("a valid override builds")
+            };
+
+            // A provider fallback substitutes an agent effort the model lacks.
+            let substituting = adapter(None, Some(ReasoningFallback::NearestLower));
+            assert!(
+                substituting
+                    .check_reasoning(PROBE, Some(Medium), None)
+                    .is_ok()
+            );
+            assert!(
+                substituting
+                    .generate(request_for(PROBE).with_reasoning(Medium))
+                    .await
+                    .is_ok()
+            );
+
+            // A provider default effort the model lacks is refused for a caller who sets none.
+            let defaulted = adapter(Some(Medium), None);
+            let LlmError::UnsupportedParameter {
+                reason: checked, ..
+            } = defaulted.check_reasoning(PROBE, None, None).unwrap_err()
+            else {
+                panic!("expected UnsupportedParameter");
+            };
+            let LlmError::UnsupportedParameter {
+                reason: sent,
+                param,
+                ..
+            } = defaulted.generate(request_for(PROBE)).await.unwrap_err()
+            else {
+                panic!("expected UnsupportedParameter");
+            };
+            assert_eq!(param, "reasoning_effort");
+            assert_eq!(checked, sent);
+            assert!(
+                checked.ends_with("(set by `llm.openai.reasoning_effort`)"),
+                "{checked}"
+            );
+
+            // A listed request effort is served under either default.
+            for port in [&substituting, &defaulted] {
+                assert!(port.check_reasoning(PROBE, Some(High), None).is_ok());
+                assert!(
+                    port.generate(request_for(PROBE).with_reasoning(High))
+                        .await
+                        .is_ok()
+                );
+            }
+
+            // Nothing in force anywhere: nothing judged.
+            assert!(
+                adapter(None, None)
+                    .check_reasoning(PROBE, None, None)
+                    .is_ok()
+            );
+        }
+
+        /// Send `request` through an adapter over a fresh mock; returns the raw request body
+        /// (`None` when no HTTP call was made) and the result.
+        async fn send_raw(
+            effort: EffortSupport,
+            request: LlmRequest,
+        ) -> (Option<String>, Result<LlmResponse, LlmError>) {
+            let mut server = Server::new_async().await;
+            let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let slot = Arc::clone(&captured);
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    ok_body()
+                })
+                .create_async()
+                .await;
+            let result = adapter_over(&server.url(), effort).generate(request).await;
+            let body = captured.lock().unwrap().take();
+            (body, result)
+        }
+
+        fn json_of(body: Option<String>) -> serde_json::Value {
+            serde_json::from_str(&body.expect("a request reached the wire")).unwrap()
+        }
+
+        /// The transcript date every probed OpenAI model carries (run 1).
+        const PROBED_ON: &str = "2026-10-22";
+
+        /// `(model, levels, off, auto)` as `51-EFFORT-PROBE.md` evidences them (run 1): levels
+        /// accepted through the top-level `reasoning_effort`; `off` = `none` accepted (200, 0
+        /// reasoning tokens); `auto` = the default call reported more than 0 reasoning tokens.
+        #[allow(clippy::type_complexity)]
+        fn transcript() -> Vec<(&'static str, Vec<ReasoningEffort>, bool, bool)> {
+            let lmhx = vec![Low, Medium, High, XHigh];
+            let mlmh = vec![Minimal, Low, Medium, High];
+            vec![
+                ("gpt-5.4-nano", lmhx.clone(), true, false),
+                ("gpt-6.1-sol", lmhx.clone(), false, true),
+                ("gpt-6-sol", lmhx.clone(), true, true),
+                ("gpt-6-luna", lmhx.clone(), true, true),
+                ("gpt-6-astra", lmhx.clone(), false, true),
+                ("gpt-5.6-sol", lmhx.clone(), true, false),
+                ("gpt-5.6-luna", lmhx.clone(), true, true),
+                ("gpt-5.6-terra", lmhx.clone(), true, true),
+                ("gpt-5.5", lmhx.clone(), true, true),
+                ("gpt-5.4", lmhx.clone(), true, false),
+                ("gpt-5.4-mini", lmhx.clone(), true, false),
+                ("gpt-5.2", lmhx.clone(), true, false),
+                // xhigh and max drew 400 on gpt-5.1.
+                ("gpt-5.1", vec![Low, Medium, High], true, false),
+                ("gpt-5", mlmh.clone(), false, true),
+                ("gpt-5-mini", mlmh.clone(), false, false),
+                ("gpt-5-nano", mlmh, false, true),
+                // o3 accepted low, medium, high and xhigh; `none` drew 400; default 0 tokens.
+                ("o3", lmhx, false, false),
+            ]
+        }
+
+        fn expected(levels: &[ReasoningEffort], off: bool, auto: bool) -> EffortSupport {
+            EffortSupport::Supported(
+                EffortLevels::new(levels.iter().copied())
+                    .with_off(off)
+                    .with_auto(auto),
+            )
+        }
+
+        fn seeded_adapter(base_url: &str) -> OpenAIAdapter {
+            let config =
+                OpenAIConfig::new("test-key".to_string(), OPENAI_DEFAULT_MODEL.to_string())
+                    .with_base_url(base_url);
+            OpenAIAdapter::new(config).expect("a plain config builds")
+        }
+
+        /// Send `request` through an adapter with no override at all (the seeded rows only).
+        async fn send_seeded(
+            request: LlmRequest,
+        ) -> (Option<String>, Result<LlmResponse, LlmError>) {
+            let mut server = Server::new_async().await;
+            let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let slot = Arc::clone(&captured);
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    ok_body()
+                })
+                .create_async()
+                .await;
+            let result = seeded_adapter(&server.url()).generate(request).await;
+            let body = captured.lock().unwrap().take();
+            (body, result)
+        }
+
+        #[test]
+        fn openai_effort_seed_matches_the_transcript() {
+            let adapter = seeded_adapter("https://example.invalid/v1");
+            for (model, levels, off, auto) in transcript() {
+                let profile = adapter
+                    .model_profile(model)
+                    .unwrap_or_else(|| panic!("{model}: no profile"));
+                assert_eq!(profile.effort, expected(&levels, off, auto), "{model}");
+                assert_eq!(
+                    profile.effort_verified_on.as_deref(),
+                    Some(PROBED_ON),
+                    "{model}"
+                );
+            }
+            // Not probed (the planner excluded them): D-02, the owner's answer "unmeasured".
+            for model in ["gpt-4o-mini", "chat-latest"] {
+                let profile = adapter.model_profile(model).unwrap();
+                assert_eq!(profile.effort, EffortSupport::Unmeasured, "{model}");
+                assert_eq!(profile.effort_verified_on, None, "{model}");
+            }
+        }
+
+        #[tokio::test]
+        async fn each_evidenced_level_sends_that_reasoning_effort_spelling() {
+            for (model, levels, ..) in transcript() {
+                for level in levels {
+                    let (body, result) =
+                        send_seeded(request_for(model).with_reasoning(level)).await;
+                    result.unwrap_or_else(|e| panic!("{model}/{level}: {e}"));
+                    let body = json_of(body);
+                    assert_eq!(body["reasoning_effort"], level.to_string(), "{model}");
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn off_sends_none_only_where_none_was_accepted() {
+            for (model, _, off, _) in transcript() {
+                let (body, result) = send_seeded(request_for(model).with_reasoning(Off)).await;
+                if off {
+                    result.unwrap_or_else(|e| panic!("{model}: {e}"));
+                    assert_eq!(json_of(body)["reasoning_effort"], "none", "{model}");
+                } else {
+                    assert!(
+                        body.is_none(),
+                        "{model}: a rejected `none` reached the wire"
+                    );
+                    assert!(
+                        matches!(result, Err(LlmError::UnsupportedParameter { .. })),
+                        "{model}: {result:?}"
+                    );
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn auto_is_seeded_only_where_the_default_call_reasoned() {
+            for (model, _, _, auto) in transcript() {
+                let (body, result) = send_seeded(request_for(model).with_reasoning(Auto)).await;
+                if auto {
+                    let response = result.unwrap_or_else(|e| panic!("{model}: {e}"));
+                    assert!(json_of(body).get("reasoning_effort").is_none(), "{model}");
+                    assert_eq!(response.metadata[REASONING_EFFECTIVE_METADATA_KEY], "auto");
+                } else {
+                    assert!(body.is_none(), "{model}");
+                    assert!(
+                        matches!(result, Err(LlmError::UnsupportedParameter { .. })),
+                        "{model}: {result:?}"
+                    );
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn a_level_the_probe_rejected_and_every_budget_refuse_before_http() {
+            for (model, levels, ..) in transcript() {
+                let mut refused: Vec<ReasoningEffort> = ReasoningEffort::LEVELS
+                    .into_iter()
+                    .filter(|level| !levels.contains(level))
+                    .collect();
+                refused.push(ReasoningEffort::Budget(2048));
+                for effort in refused {
+                    let (body, result) =
+                        send_seeded(request_for(model).with_reasoning(effort)).await;
+                    assert!(body.is_none(), "{model}/{effort}: reached the wire");
+                    assert!(
+                        matches!(result, Err(LlmError::UnsupportedParameter { .. })),
+                        "{model}/{effort}: {result:?}"
+                    );
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn an_unprobed_seeded_model_refuses_an_explicit_effort() {
+            for model in ["gpt-4o-mini", "chat-latest"] {
+                let (body, result) = send_seeded(request_for(model).with_reasoning(High)).await;
+                assert!(body.is_none(), "{model}");
+                assert!(
+                    matches!(result, Err(LlmError::UnsupportedParameter { .. })),
+                    "{model}: {result:?}"
+                );
+            }
+        }
+
+        #[tokio::test]
+        async fn a_listed_level_adds_exactly_the_top_level_effort_field() {
+            let (unset, _) = send_raw(astra(false), request_for(ASTRA)).await;
+            let (set, result) =
+                send_raw(astra(false), request_for(ASTRA).with_reasoning(High)).await;
+            let metadata = result.expect("a listed level is accepted").metadata;
+
+            let unset = unset.unwrap();
+            let prefix = unset.strip_suffix('}').expect("a JSON object");
+            assert_eq!(
+                set.unwrap(),
+                format!("{prefix},\"reasoning_effort\":\"high\"}}")
+            );
+            assert_eq!(metadata[REASONING_REQUESTED_METADATA_KEY], "high");
+            assert_eq!(metadata[REASONING_EFFECTIVE_METADATA_KEY], "high");
+        }
+
+        #[tokio::test]
+        async fn an_unset_effort_sends_no_field_and_stamps_nothing() {
+            let (body, result) = send_raw(astra(true), request_for(ASTRA)).await;
+            let metadata = result.expect("accepted").metadata;
+            assert!(!body.unwrap().contains("reasoning_effort"));
+            assert!(!metadata.contains_key(REASONING_REQUESTED_METADATA_KEY));
+            assert!(!metadata.contains_key(REASONING_EFFECTIVE_METADATA_KEY));
+        }
+
+        #[tokio::test]
+        async fn off_is_refused_before_http_when_the_model_cannot_turn_reasoning_off() {
+            let (body, result) =
+                send_raw(astra(false), request_for(ASTRA).with_reasoning(Off)).await;
+            assert!(body.is_none(), "no HTTP call: {body:?}");
+            let error = result.expect_err("off is not offered");
+            assert_eq!(error.transience(), Transience::Permanent);
+            assert!(matches!(error, LlmError::UnsupportedParameter { .. }));
+        }
+
+        #[tokio::test]
+        async fn off_sends_none_when_the_model_can_turn_reasoning_off() {
+            let (body, result) =
+                send_raw(astra(true), request_for(ASTRA).with_reasoning(Off)).await;
+            let metadata = result.expect("accepted").metadata;
+            assert_eq!(json_of(body)["reasoning_effort"], "none");
+            assert_eq!(metadata[REASONING_REQUESTED_METADATA_KEY], "off");
+            assert_eq!(metadata[REASONING_EFFECTIVE_METADATA_KEY], "off");
+        }
+
+        #[tokio::test]
+        async fn auto_sends_no_field_but_is_stamped() {
+            let (body, result) =
+                send_raw(astra(false), request_for(ASTRA).with_reasoning(Auto)).await;
+            let metadata = result.expect("accepted").metadata;
+            assert!(json_of(body).get("reasoning_effort").is_none());
+            assert_eq!(metadata[REASONING_REQUESTED_METADATA_KEY], "auto");
+            assert_eq!(metadata[REASONING_EFFECTIVE_METADATA_KEY], "auto");
+        }
+
+        #[tokio::test]
+        async fn a_substituting_fallback_sends_the_nearest_level_and_records_both() {
+            let (body, result) = send_raw(
+                astra(false),
+                request_for(ASTRA)
+                    .with_reasoning(Max)
+                    .with_reasoning_fallback(ReasoningFallback::NearestLower),
+            )
+            .await;
+            let metadata = result.expect("substituted").metadata;
+            assert_eq!(json_of(body)["reasoning_effort"], "xhigh");
+            assert_eq!(metadata[REASONING_REQUESTED_METADATA_KEY], "max");
+            assert_eq!(metadata[REASONING_EFFECTIVE_METADATA_KEY], "xhigh");
+        }
+
+        #[tokio::test]
+        async fn a_missing_level_without_a_fallback_and_a_budget_are_refused_before_http() {
+            let with_budget = EffortSupport::Supported(
+                EffortLevels::new([High]).with_budget(BudgetBounds::new(1, 4096)),
+            );
+            let (body, result) = send_raw(
+                with_budget,
+                request_for(ASTRA).with_reasoning(
+                    paladin_ports::output::llm_port::ReasoningEffort::Budget(1000),
+                ),
+            )
+            .await;
+            assert!(body.is_none());
+            assert!(matches!(result, Err(LlmError::UnsupportedParameter { .. })));
+
+            let (body, result) =
+                send_raw(astra(false), request_for(ASTRA).with_reasoning(Max)).await;
+            assert!(body.is_none());
+            assert!(matches!(result, Err(LlmError::UnsupportedParameter { .. })));
+        }
+
+        #[tokio::test]
+        async fn an_unmeasured_model_names_the_override_key() {
+            let (body, result) =
+                send_raw(astra(false), request_for("gpt-other").with_reasoning(High)).await;
+            assert!(body.is_none());
+            match result {
+                Err(LlmError::UnsupportedParameter { reason, .. }) => {
+                    assert!(
+                        reason.contains("llm.openai.models.gpt-other.effort"),
+                        "{reason}"
+                    );
+                }
+                other => panic!("expected UnsupportedParameter, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn the_reported_profile_offers_no_budget() {
+            let with_budget = EffortSupport::Supported(
+                EffortLevels::new([High]).with_budget(BudgetBounds::new(1, 4096)),
+            );
+            let adapter = adapter_over("http://localhost:1", with_budget);
+            let EffortSupport::Supported(levels) = adapter.model_profile(ASTRA).unwrap().effort
+            else {
+                panic!("a level-carrying wire keeps the override Supported");
+            };
+            assert_eq!(levels.budget, None);
+        }
+
+        async fn stream_body_and_chunks(
+            request: LlmRequest,
+        ) -> (Option<String>, Result<Vec<StreamingResponse>, LlmError>) {
+            let mut server = Server::new_async().await;
+            let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let slot = Arc::clone(&captured);
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    concat!(
+                        "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"},\"finish_reason\":null}]}\n\n",
+                        "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\"},\"finish_reason\":\"stop\"}]}\n\n",
+                        "data: [DONE]\n\n",
+                    )
+                    .as_bytes()
+                    .to_vec()
+                })
+                .create_async()
+                .await;
+            let adapter = adapter_over(&server.url(), astra(false));
+            let outcome = match adapter.generate_stream(request).await {
+                Err(error) => Err(error),
+                Ok(stream) => {
+                    let mut stream = Box::into_pin(stream);
+                    let mut chunks = Vec::new();
+                    while let Some(item) = stream.next().await {
+                        chunks.push(item.expect("every scripted item is Ok"));
+                    }
+                    Ok(chunks)
+                }
+            };
+            let body = captured.lock().unwrap().take();
+            (body, outcome)
+        }
+
+        #[tokio::test]
+        async fn the_stream_sends_the_same_field_and_stamps_only_the_terminal_chunk() {
+            let (body, chunks) =
+                stream_body_and_chunks(request_for(ASTRA).with_reasoning(High)).await;
+            let body = json_of(body);
+            assert_eq!(body["reasoning_effort"], "high");
+            assert_eq!(body["stream"], true);
+
+            let chunks = chunks.expect("the stream opens");
+            let (terminal, earlier) = chunks.split_last().expect("a terminal chunk");
+            assert_eq!(terminal.metadata[REASONING_REQUESTED_METADATA_KEY], "high");
+            assert_eq!(terminal.metadata[REASONING_EFFECTIVE_METADATA_KEY], "high");
+            for chunk in earlier {
+                assert!(chunk.metadata.is_empty(), "earlier chunk: {chunk:?}");
+            }
+        }
+
+        #[tokio::test]
+        async fn a_refused_effort_fails_the_stream_before_any_http_call() {
+            let (body, outcome) =
+                stream_body_and_chunks(request_for(ASTRA).with_reasoning(Max)).await;
+            assert!(body.is_none());
+            assert!(matches!(
+                outcome,
+                Err(LlmError::UnsupportedParameter { .. })
+            ));
+        }
+    }
+
     // ── Shared conformance suite (D-19, plan 31-04) ──
     //
     // Nested in its own module (rather than inline in `mod tests`) so every generated test's
@@ -1469,7 +3620,26 @@ mod tests {
         struct OpenAiFixture;
 
         impl crate::conformance::ConformanceFixture for OpenAiFixture {
+            /// The top-level `reasoning_effort`.
+            fn effort_wire_value(body: &serde_json::Value) -> Option<String> {
+                crate::conformance::chat_effort_wire_value(body)
+            }
+
             const WIRE: crate::conformance::Wire = crate::conformance::Wire::OpenAiChat;
+
+            // OpenAI has no adapter-level default model (the model arrives per request), so the
+            // capability cases measure the adapter-wide declaration the way it applies to an
+            // unseeded id: `gpt-4o` resolves to the adapter-wide fallback profile, whose window is
+            // the declared 128,000 `get_capabilities` returns. (A seeded id such as `gpt-5.4-nano`
+            // legitimately differs from the adapter-wide figure, see
+            // `openai_default_model_is_seeded`.)
+            fn default_model() -> &'static str {
+                "gpt-4o"
+            }
+
+            fn provider_name() -> &'static str {
+                "openai"
+            }
 
             fn adapter(base_url: &str) -> Arc<dyn LlmPort> {
                 Arc::new(
@@ -1479,6 +3649,12 @@ mod tests {
                         organization: None,
                         timeout_seconds: 5,
                         max_retries: 0,
+                        max_tokens: Some(4096),
+                        context_window: None,
+                        model: OPENAI_DEFAULT_MODEL.to_string(),
+                        model_overrides: BTreeMap::new(),
+                        reasoning_effort: None,
+                        reasoning_fallback: None,
                     })
                     .expect("test config must build a valid adapter"),
                 )
@@ -1521,5 +3697,747 @@ mod tests {
         }
 
         crate::llm_conformance_suite!(OpenAiFixture);
+    }
+
+    /// PARITY-05: refusal, empty output and `tool_calls` on the buffered and streaming paths,
+    /// all decided by the shared `classify_completion` (D-09, D-11a).
+    mod response_guard_wiring {
+        use super::*;
+        use futures::StreamExt;
+        use mockito::Server;
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+        use serde_json::{Value, json};
+
+        fn adapter_at(base_url: &str) -> OpenAIAdapter {
+            OpenAIAdapter::new(OpenAIConfig {
+                api_key: "test-key".to_string(),
+                base_url: base_url.to_string(),
+                organization: None,
+                timeout_seconds: 5,
+                max_retries: 0,
+                max_tokens: Some(4096),
+                context_window: None,
+                model: OPENAI_DEFAULT_MODEL.to_string(),
+                model_overrides: BTreeMap::new(),
+                reasoning_effort: None,
+                reasoning_fallback: None,
+            })
+            .expect("test config must build a valid adapter")
+        }
+
+        fn build_request() -> LlmRequest {
+            LlmRequest::new(
+                "gpt-4o",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))
+                .unwrap(),
+            )
+        }
+
+        fn body(message: Value, finish_reason: &str) -> String {
+            json!({
+                "id": "cmpl-1",
+                "model": "gpt-4o",
+                "choices": [{"index": 0, "message": message, "finish_reason": finish_reason}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            })
+            .to_string()
+        }
+
+        async fn generate_from(body: String) -> Result<LlmResponse, LlmError> {
+            let mut server = Server::new_async().await;
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body(body)
+                .create_async()
+                .await;
+            adapter_at(&server.url()).generate(build_request()).await
+        }
+
+        async fn stream_from(sse: &str) -> Vec<Result<StreamingResponse, LlmError>> {
+            let mut server = Server::new_async().await;
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body(sse)
+                .create_async()
+                .await;
+            let stream = adapter_at(&server.url())
+                .generate_stream(build_request())
+                .await
+                .unwrap();
+            let mut stream = Box::into_pin(stream);
+            let mut items = Vec::new();
+            while let Some(item) = stream.next().await {
+                items.push(item);
+            }
+            items
+        }
+
+        #[tokio::test]
+        async fn openai_refusal_is_typed_not_a_parse_failure() {
+            let result = generate_from(body(
+                json!({"role": "assistant", "content": null, "refusal": "I can't help with that."}),
+                "stop",
+            ))
+            .await;
+            match result {
+                Err(LlmError::Refusal {
+                    provider,
+                    model,
+                    detail,
+                    ..
+                }) => {
+                    assert_eq!(provider, "openai");
+                    assert_eq!(model, "gpt-4o");
+                    assert_eq!(detail, "I can't help with that.");
+                }
+                other => panic!("expected Refusal, got {other:?}"),
+            }
+        }
+
+        #[tokio::test]
+        async fn openai_refusal_detail_is_redacted_before_bounding() {
+            let long = format!("{} test-key {}", "a".repeat(500), "b".repeat(100));
+            let result = generate_from(body(
+                json!({"role": "assistant", "content": null, "refusal": long}),
+                "stop",
+            ))
+            .await;
+            match result {
+                Err(LlmError::Refusal { detail, .. }) => {
+                    assert!(!detail.contains("test-key"), "{detail}");
+                    assert!(detail.contains("truncated"), "{detail}");
+                }
+                other => panic!("expected Refusal, got {other:?}"),
+            }
+        }
+
+        #[tokio::test]
+        async fn openai_empty_stop_completion_is_empty_completion() {
+            for content in [json!(""), json!("   "), json!(null)] {
+                let result = generate_from(body(
+                    json!({"role": "assistant", "content": content}),
+                    "stop",
+                ))
+                .await;
+                assert!(
+                    matches!(result, Err(LlmError::EmptyCompletion { .. })),
+                    "got {result:?}"
+                );
+            }
+        }
+
+        /// WR-04: a no-choices body OpenAI billed is an `EmptyCompletion` carrying the bill
+        /// on the served model (as the compat engine and Gemini do), not a `ProcessingError`
+        /// that drops the usage and reads as `Transience::Unknown` to the retry loop.
+        #[tokio::test]
+        async fn openai_no_choices_body_is_a_billed_empty_completion() {
+            let err = generate_from(
+                json!({
+                    "id": "cmpl-1",
+                    "model": "gpt-4o-served-test",
+                    "choices": [],
+                    "usage": {"prompt_tokens": 40, "completion_tokens": 0, "total_tokens": 40}
+                })
+                .to_string(),
+            )
+            .await
+            .expect_err("a body with no choices is an error");
+            let LlmError::EmptyCompletion { detail, .. } = &err else {
+                panic!("expected EmptyCompletion, got {err:?}");
+            };
+            assert!(detail.contains("no choices"), "{detail}");
+            let billed = err
+                .billed_usage()
+                .expect("a billed no-choices body carries its usage");
+            assert_eq!(billed.model, "gpt-4o-served-test");
+            assert_eq!(billed.usage.total_tokens, 40);
+            assert_eq!(billed.cost, None, "pricing is the decorator's job");
+        }
+
+        #[tokio::test]
+        async fn openai_content_filter_with_empty_text_stays_ok() {
+            let response = generate_from(body(
+                json!({"role": "assistant", "content": ""}),
+                "content_filter",
+            ))
+            .await
+            .expect("a content filter is a finish reason, not an error");
+            assert!(matches!(
+                response.finish_reason,
+                FinishReason::ContentFilter
+            ));
+        }
+
+        #[tokio::test]
+        async fn openai_tool_calls_finish_maps_to_function_call() {
+            let response = generate_from(body(
+                json!({"role": "assistant", "content": null}),
+                "tool_calls",
+            ))
+            .await
+            .expect("a tool-call finish carries no text legitimately");
+            assert!(matches!(response.finish_reason, FinishReason::FunctionCall));
+        }
+
+        #[test]
+        fn openai_unknown_finish_reason_stays_an_error_finish() {
+            assert!(matches!(
+                OpenAIAdapter::convert_finish_reason(Some("mystery")),
+                FinishReason::Error(_)
+            ));
+        }
+
+        #[tokio::test]
+        async fn openai_stream_refusal_is_the_last_item() {
+            let sse = concat!(
+                "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"refusal\":\"I can't \"},\"finish_reason\":null}]}\n\n",
+                "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"refusal\":\"help.\"},\"finish_reason\":\"stop\"}]}\n\n",
+                "data: [DONE]\n\n",
+            );
+            let items = stream_from(sse).await;
+            match items.last().unwrap() {
+                Err(LlmError::Refusal {
+                    provider,
+                    model,
+                    detail,
+                    ..
+                }) => {
+                    assert_eq!(provider, "openai");
+                    assert_eq!(model, "gpt-4o");
+                    assert_eq!(detail, "I can't help.");
+                }
+                other => panic!("expected Refusal as the last item, got {other:?}"),
+            }
+        }
+
+        /// D-11a on the streaming path ("OpenAI included").
+        #[tokio::test]
+        async fn openai_empty_stream_is_empty_completion() {
+            let sse = concat!(
+                "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":null}]}\n\n",
+                "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"  \"},\"finish_reason\":\"stop\"}]}\n\n",
+                "data: [DONE]\n\n",
+            );
+            let items = stream_from(sse).await;
+            let (last, yielded) = items.split_last().unwrap();
+            assert!(
+                matches!(last, Err(LlmError::EmptyCompletion { .. })),
+                "got {last:?}"
+            );
+            assert!(yielded.iter().all(|item| item.is_ok()));
+            assert!(
+                items
+                    .iter()
+                    .all(|item| !matches!(item, Ok(chunk) if chunk.finish_reason.is_some())),
+                "no Ok terminal chunk is emitted"
+            );
+        }
+
+        #[tokio::test]
+        async fn openai_stream_with_text_is_unchanged() {
+            let sse = concat!(
+                "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"},\"finish_reason\":\"stop\"}]}\n\n",
+                "data: [DONE]\n\n",
+            );
+            let items = stream_from(sse).await;
+            let chunks: Vec<StreamingResponse> =
+                items.into_iter().map(|item| item.unwrap()).collect();
+            assert_eq!(chunks[0].delta, "Hi");
+            assert!(matches!(
+                chunks.last().unwrap().finish_reason,
+                Some(FinishReason::Stop)
+            ));
+        }
+
+        #[tokio::test]
+        async fn openai_content_filter_stream_with_no_text_stays_ok() {
+            let sse = concat!(
+                "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"content_filter\"}]}\n\n",
+                "data: [DONE]\n\n",
+            );
+            let items = stream_from(sse).await;
+            let terminal = items.last().unwrap().as_ref().expect("no error item");
+            assert!(matches!(
+                terminal.finish_reason,
+                Some(FinishReason::ContentFilter)
+            ));
+        }
+    }
+
+    // ── Phase 50 (G-50-5b, owner option (a)): the output cap's wire name ──
+
+    /// The OpenAI adapter sends its output cap as `max_completion_tokens` for every model
+    /// (owner decision 2026-10-17, UAT test 5). `gpt-5.4-nano` -- the first seeded model --
+    /// rejects `max_tokens` with HTTP 400 `unsupported_parameter` (probe 11), and accepts the
+    /// new key (probe 12, `50-SEED-PROBE.md`).
+    /// Plan 50-23 (G-50-5a): OpenAI's own `total_tokens` is read and reconciled against the
+    /// mapped `prompt + completion` on both paths, never copied (D-02).
+    mod usage_reconciliation {
+        use super::*;
+        use crate::usage_reconcile::USAGE_UNRECONCILED_METADATA_KEY;
+        use futures::StreamExt;
+        use mockito::Server;
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+        use serde_json::{Value, json};
+
+        fn adapter_at(base_url: &str) -> OpenAIAdapter {
+            OpenAIAdapter::new(OpenAIConfig {
+                api_key: "test-key".to_string(),
+                base_url: base_url.to_string(),
+                organization: None,
+                timeout_seconds: 5,
+                max_retries: 0,
+                max_tokens: Some(4096),
+                context_window: None,
+                model: OPENAI_DEFAULT_MODEL.to_string(),
+                model_overrides: BTreeMap::new(),
+                reasoning_effort: None,
+                reasoning_fallback: None,
+            })
+            .expect("test config must build a valid adapter")
+        }
+
+        fn build_request() -> LlmRequest {
+            LlmRequest::new(
+                "gpt-4o",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))
+                .expect("a user prompt must build"),
+            )
+        }
+
+        async fn generate_with_usage(usage: Value) -> LlmResponse {
+            let mut server = Server::new_async().await;
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body(
+                    json!({
+                        "id": "cmpl-1",
+                        "model": "gpt-4o",
+                        "choices": [{
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "ok"},
+                            "finish_reason": "stop"
+                        }],
+                        "usage": usage
+                    })
+                    .to_string(),
+                )
+                .create_async()
+                .await;
+            adapter_at(&server.url())
+                .generate(build_request())
+                .await
+                .expect("a well-formed body must parse")
+        }
+
+        /// G-50-5a (plan 50-24): the live-measured gpt-5.4-nano usage object
+        /// (`50-USAGE-PROBE.md`, 2026-10-18: prompt 26 with 0 cached, completion 4, reasoning
+        /// 0, total 30) maps as reported and reconciles with OpenAI's own total.
+        #[tokio::test]
+        async fn openai_measured_usage_reconciles() {
+            let response = generate_with_usage(json!({
+                "prompt_tokens": 26,
+                "completion_tokens": 4,
+                "total_tokens": 30,
+                "prompt_tokens_details": {"cached_tokens": 0},
+                "completion_tokens_details": {"reasoning_tokens": 0}
+            }))
+            .await;
+            let usage = &response.usage;
+            assert_eq!(usage.prompt_tokens, 26);
+            assert_eq!(usage.cache_read_tokens, Some(0));
+            assert_eq!(usage.completion_tokens, 4);
+            assert_eq!(usage.reasoning_tokens, Some(0));
+            assert_eq!(usage.total_tokens, 30);
+            assert!(
+                !response
+                    .metadata
+                    .contains_key(USAGE_UNRECONCILED_METADATA_KEY),
+                "{:?}",
+                response.metadata
+            );
+        }
+
+        #[tokio::test]
+        async fn openai_agreeing_total_records_no_finding() {
+            let response = generate_with_usage(
+                json!({"prompt_tokens": 800, "completion_tokens": 900, "total_tokens": 1700}),
+            )
+            .await;
+            assert_eq!(response.usage.total_tokens, 1700);
+            assert!(
+                !response
+                    .metadata
+                    .contains_key(USAGE_UNRECONCILED_METADATA_KEY)
+            );
+        }
+
+        #[tokio::test]
+        async fn openai_disagreeing_total_is_recorded_and_not_copied() {
+            let response = generate_with_usage(
+                json!({"prompt_tokens": 800, "completion_tokens": 900, "total_tokens": 1707}),
+            )
+            .await;
+            assert_eq!(response.usage, TokenUsage::new(800, 900));
+            assert_eq!(
+                response
+                    .metadata
+                    .get(USAGE_UNRECONCILED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("total:vendor=1707,mapped=1700")
+            );
+        }
+
+        #[tokio::test]
+        async fn openai_usage_without_a_total_parses_with_no_finding() {
+            let response =
+                generate_with_usage(json!({"prompt_tokens": 800, "completion_tokens": 900})).await;
+            assert_eq!(response.usage, TokenUsage::new(800, 900));
+            assert!(
+                !response
+                    .metadata
+                    .contains_key(USAGE_UNRECONCILED_METADATA_KEY)
+            );
+        }
+
+        #[tokio::test]
+        async fn openai_stream_terminal_records_a_disagreeing_total() {
+            let sse = concat!(
+                "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"},\"finish_reason\":\"stop\"}]}\n\n",
+                "data: {\"id\":\"1\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":3,\"total_tokens\":15}}\n\n",
+                "data: [DONE]\n\n",
+            );
+            let mut server = Server::new_async().await;
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body(sse)
+                .create_async()
+                .await;
+            let stream = adapter_at(&server.url())
+                .generate_stream(build_request())
+                .await
+                .unwrap();
+            let mut stream = Box::into_pin(stream);
+            let mut chunks = Vec::new();
+            while let Some(item) = stream.next().await {
+                chunks.push(item.expect("every item must be Ok"));
+            }
+
+            let (terminal, earlier) = chunks.split_last().expect("a terminal chunk");
+            assert_eq!(terminal.usage, Some(TokenUsage::new(5, 3)));
+            assert_eq!(
+                terminal
+                    .metadata
+                    .get(USAGE_UNRECONCILED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("total:vendor=15,mapped=8")
+            );
+            assert!(
+                earlier
+                    .iter()
+                    .all(|chunk| !chunk.metadata.contains_key(USAGE_UNRECONCILED_METADATA_KEY))
+            );
+        }
+    }
+
+    mod max_completion_tokens_wiring {
+        use super::*;
+        use crate::test_support::{mock_completion, server};
+        use futures::StreamExt;
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+        use serde_json::{Value, json};
+        use std::sync::{Arc, Mutex};
+
+        /// A default `PromptItem` for the seeded OpenAI model: nothing about the parameters is
+        /// overridden, so the `PromptParameters` default (1000) is the caller's value.
+        fn nano_request() -> LlmRequest {
+            LlmRequest::new(
+                "gpt-5.4-nano",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))
+                .expect("a user prompt must build"),
+            )
+        }
+
+        fn config_at(base_url: &str) -> OpenAIConfig {
+            let mut config =
+                OpenAIConfig::new("test-key".to_string(), OPENAI_DEFAULT_MODEL.to_string());
+            config.base_url = base_url.to_string();
+            config
+        }
+
+        #[tokio::test]
+        async fn openai_gpt_5_4_nano_bodies_carry_max_completion_tokens() {
+            let mut mock_server = server().await;
+            let captured = mock_completion(&mut mock_server).await;
+            let adapter = OpenAIAdapter::new(config_at(&mock_server.url())).unwrap();
+
+            adapter.generate(nano_request()).await.unwrap();
+            let body = captured
+                .lock()
+                .unwrap()
+                .take()
+                .expect("the mock endpoint received a request");
+            assert_eq!(body["model"], "gpt-5.4-nano");
+            assert_eq!(body["max_completion_tokens"], 1000, "{body}");
+            assert!(body.get("max_tokens").is_none(), "{body}");
+
+            // The streamed body goes through the same `build_request` constructor.
+            let mut mock_server = server().await;
+            let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let slot = Arc::clone(&captured);
+            mock_server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    b"data: [DONE]\n\n".to_vec()
+                })
+                .create_async()
+                .await;
+            let adapter = OpenAIAdapter::new(config_at(&mock_server.url())).unwrap();
+            let stream = adapter.generate_stream(nano_request()).await.unwrap();
+            let mut stream = Box::into_pin(stream);
+            while stream.next().await.is_some() {}
+            let text = captured
+                .lock()
+                .unwrap()
+                .take()
+                .expect("the mock endpoint received a streamed request");
+            let body: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(body["stream"], true, "{body}");
+            assert_eq!(body["max_completion_tokens"], 1000, "{body}");
+            assert!(body.get("max_tokens").is_none(), "{body}");
+
+            // And so does a structured (json_schema) body.
+            let mut mock_server = server().await;
+            let captured = mock_completion(&mut mock_server).await;
+            let adapter = OpenAIAdapter::new(config_at(&mock_server.url())).unwrap();
+            let request = nano_request().with_response_format(ResponseFormat::JsonSchema {
+                name: "answer".to_string(),
+                schema: json!({"type": "object"}),
+                strict: true,
+            });
+            adapter.generate(request).await.unwrap();
+            let body = captured
+                .lock()
+                .unwrap()
+                .take()
+                .expect("the mock endpoint received a structured request");
+            assert_eq!(body["response_format"]["type"], "json_schema", "{body}");
+            assert_eq!(body["max_completion_tokens"], 1000, "{body}");
+            assert!(body.get("max_tokens").is_none(), "{body}");
+        }
+    }
+}
+
+/// The PARITY-03 knobs on `OpenAIConfig` (plan 50-08, D-12): each one is read by the adapter.
+#[cfg(test)]
+mod knob_tests {
+    use super::*;
+    use crate::test_support::{
+        attempts_against_a_failing_endpoint, mock_completion, send_with_max_tokens, server,
+    };
+    use crate::window::effective_capabilities;
+
+    const UNSEEDED: &str = "gpt-unseeded-test-model";
+
+    fn config(base_url: &str) -> OpenAIConfig {
+        let mut config =
+            OpenAIConfig::new("test-key".to_string(), OPENAI_DEFAULT_MODEL.to_string());
+        config.base_url = base_url.to_string();
+        config
+    }
+
+    fn window_override(window: u32) -> ModelOverride {
+        ModelOverride {
+            context_window: Some(window),
+            ..ModelOverride::default()
+        }
+    }
+
+    fn error_of(config: OpenAIConfig) -> String {
+        match OpenAIAdapter::new(config) {
+            Err(error) => error,
+            Ok(_) => panic!("construction must fail"),
+        }
+    }
+
+    #[test]
+    fn openai_config_keeps_the_4096_output_cap_by_default() {
+        let config = OpenAIConfig::new("test-key".to_string(), OPENAI_DEFAULT_MODEL.to_string());
+        assert_eq!(config.max_tokens, Some(4096));
+        assert_eq!(config.max_retries, 3);
+        assert_eq!(config.timeout_seconds, 300);
+        assert_eq!(config.context_window, None);
+        assert!(config.model_overrides.is_empty());
+    }
+
+    #[tokio::test]
+    async fn openai_max_tokens_default_reaches_the_wire() {
+        let mut server = server().await;
+        let captured = mock_completion(&mut server).await;
+        let url = server.url();
+
+        // The default `new()` gives: 4096 when the request sets none.
+        let adapter = OpenAIAdapter::new(config(&url)).unwrap();
+        let body = send_with_max_tokens(&adapter, &captured, UNSEEDED, None)
+            .await
+            .unwrap();
+        assert_eq!(body["max_completion_tokens"], 4096, "{body}");
+        assert!(body.get("max_tokens").is_none(), "{body}");
+        // A request's own value wins.
+        let body = send_with_max_tokens(&adapter, &captured, UNSEEDED, Some(512))
+            .await
+            .unwrap();
+        assert_eq!(body["max_completion_tokens"], 512, "{body}");
+        assert!(body.get("max_tokens").is_none(), "{body}");
+
+        // The builder replaces the default ...
+        let adapter = OpenAIAdapter::new(config(&url).with_max_tokens(2048)).unwrap();
+        let body = send_with_max_tokens(&adapter, &captured, UNSEEDED, None)
+            .await
+            .unwrap();
+        assert_eq!(body["max_completion_tokens"], 2048, "{body}");
+        assert!(body.get("max_tokens").is_none(), "{body}");
+
+        // ... and `None` sends neither output-cap key at all.
+        let mut unbounded = config(&url);
+        unbounded.max_tokens = None;
+        let adapter = OpenAIAdapter::new(unbounded).unwrap();
+        let body = send_with_max_tokens(&adapter, &captured, UNSEEDED, None)
+            .await
+            .unwrap();
+        assert!(body.get("max_completion_tokens").is_none(), "{body}");
+        assert!(body.get("max_tokens").is_none(), "{body}");
+    }
+
+    #[tokio::test]
+    async fn openai_max_retries_is_read_by_the_adapter() {
+        // The loop retries up to `max_retries` times after the first attempt.
+        for retries in [0_u32, 1] {
+            let server = server().await;
+            let adapter =
+                OpenAIAdapter::new(config(&server.url()).with_max_retries(retries)).unwrap();
+            attempts_against_a_failing_endpoint(server, &adapter, UNSEEDED, retries as usize + 1)
+                .await;
+        }
+    }
+
+    #[test]
+    fn openai_context_window_override_is_declared() {
+        let adapter =
+            OpenAIAdapter::new(config("https://example.invalid/v1").with_context_window(500_000))
+                .unwrap();
+        assert_eq!(adapter.get_capabilities().max_context_tokens, Some(500_000));
+        assert_eq!(
+            adapter.model_profile(UNSEEDED).unwrap().context_window,
+            Some(500_000)
+        );
+    }
+
+    #[test]
+    fn context_window_override_beats_a_seeded_window_on_openai() {
+        let base = || config("https://example.invalid/v1");
+        let seeded = OpenAIAdapter::new(base()).unwrap();
+        assert_eq!(
+            seeded.model_profile("gpt-5.4-nano").unwrap().context_window,
+            Some(400_000)
+        );
+
+        // The operator's adapter-wide statement beats the compiled seeded fact ...
+        let adapter = OpenAIAdapter::new(base().with_context_window(500_000)).unwrap();
+        assert_eq!(
+            adapter
+                .model_profile("gpt-5.4-nano")
+                .unwrap()
+                .context_window,
+            Some(500_000)
+        );
+        assert_eq!(
+            effective_capabilities(&adapter, "gpt-5.4-nano").max_context_tokens,
+            Some(500_000)
+        );
+
+        // ... and a per-model override beats both.
+        let adapter = OpenAIAdapter::new(base().with_context_window(500_000).with_model_overrides(
+            BTreeMap::from([("gpt-5.4-nano".to_string(), window_override(900_000))]),
+        ))
+        .unwrap();
+        assert_eq!(
+            adapter
+                .model_profile("gpt-5.4-nano")
+                .unwrap()
+                .context_window,
+            Some(900_000)
+        );
+
+        // A window below the seeded maximum output is refused, never clamped.
+        let message = error_of(base().with_context_window(100_000));
+        for needle in ["openai", "gpt-5.4-nano", "100000", "128000"] {
+            assert!(
+                message.contains(needle),
+                "'{needle}' missing from: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn openai_invalid_override_fails_construction_naming_provider_and_model() {
+        let with_override = |over: ModelOverride| {
+            config("https://example.invalid/v1")
+                .with_model_overrides(BTreeMap::from([(UNSEEDED.to_string(), over)]))
+        };
+        let adapter = OpenAIAdapter::new(with_override(window_override(900_000))).unwrap();
+        assert_eq!(
+            adapter.model_profile(UNSEEDED).unwrap().context_window,
+            Some(900_000)
+        );
+
+        let invalid = [
+            window_override(0),
+            ModelOverride {
+                context_window: Some(1_000),
+                max_output_tokens: Some(2_000_000),
+                ..ModelOverride::default()
+            },
+        ];
+        for over in invalid {
+            let message = error_of(with_override(over));
+            assert!(
+                message.contains("openai") && message.contains(UNSEEDED),
+                "the error must name the provider and the model: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn openai_config_debug_redacts_the_api_key() {
+        let config = config("https://api.example.invalid/v1");
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("test-key"), "{debug}");
+        assert!(debug.contains("<redacted>"), "{debug}");
+        for needle in [
+            "https://api.example.invalid/v1",
+            "timeout_seconds",
+            "max_retries",
+            "max_tokens",
+        ] {
+            assert!(debug.contains(needle), "'{needle}' missing from {debug}");
+        }
     }
 }

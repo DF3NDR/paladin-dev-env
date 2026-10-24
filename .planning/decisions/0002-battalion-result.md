@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted
+Superseded
+
+Superseded by ADR-0059 on 2026-10-09 (Phase 44): `node_errors` now carries the structured `node_error::NodeError`; every other field of the set recorded here is unchanged; the rest of this record is history.
 
 **Date:** 2026-07-31
 

@@ -143,6 +143,8 @@
 //!             content: "Response from local LLM".to_string(),
 //!             finish_reason: FinishReason::Stop,
 //!             usage: TokenUsage::new(10, 20),
+//!             cost: None,
+//!             reasoning: None,
 //!             created_at: Utc::now(),
 //!             metadata: HashMap::new(),
 //!             function_call: None,
@@ -222,12 +224,108 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::time::Duration;
 use thiserror::Error;
 use uuid::Uuid;
 
 use paladin_core::platform::container::content::ContentItem;
+use paladin_core::platform::container::cost::Cost;
 use paladin_core::platform::container::prompt::PromptItem;
 use paladin_core::platform::container::transience::Transience;
+
+use crate::output::rate_limit_hints::RateLimitHints;
+
+/// Re-exported so `paladin_ports::output::llm_port::ModelProfile` resolves (ADR-0061).
+pub use super::model_profile::{
+    BudgetBounds, EffortLevels, EffortRefusal, EffortSupport, ModelProfile, ParamSupport,
+    ResolvedEffort, SamplingParam, StopSupport,
+};
+
+/// Re-exported so a port caller names the effort vocabulary beside the request that carries it.
+/// The types live in the domain core so `PaladinData` can hold them (Phase 51, REASON-01).
+pub use paladin_core::platform::container::reasoning::{ReasoningEffort, ReasoningFallback};
+
+/// The usage of a call the vendor answered and billed even though the call
+/// failed (G-50-5a): a reasoning model that spent its whole budget thinking and
+/// returned no text ([`LlmError::EmptyCompletion`]), or a refusal the vendor
+/// still charged for ([`LlmError::Refusal`]).
+///
+/// `model` is the vendor-reported served model when the response named one,
+/// else the request model. `usage` is the adapter's mapped [`TokenUsage`],
+/// under the same inclusive contract as a successful response's. `cost` is set
+/// only by a pricing decorator (`paladin_llm::pricing::PricingLlmAdapter`);
+/// an adapter leaves it `None`. Holds numbers, a model id and a [`Cost`] only:
+/// no response text and no credential.
+///
+/// Marked `#[non_exhaustive]`: build it with [`BilledUsage::new`] and
+/// [`BilledUsage::with_cost`].
+///
+/// # Examples
+///
+/// ```rust
+/// use paladin_core::platform::container::cost::{Cost, CostError, CurrencyCode};
+/// use paladin_ports::output::llm_port::{BilledUsage, TokenUsage};
+///
+/// let billed = BilledUsage::new("deepseek-flash", TokenUsage::new(1_000, 62_000));
+/// assert_eq!(billed.usage.total_tokens, 63_000);
+/// assert!(billed.cost.is_none());
+///
+/// let priced = billed.with_cost(Cost::new(4_200, CurrencyCode::new("USD")?));
+/// assert_eq!(priced.cost.map(|cost| cost.nanos()), Some(4_200));
+/// # Ok::<(), CostError>(())
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct BilledUsage {
+    /// The model the vendor billed: the served model when the response named
+    /// one, else the request model.
+    pub model: String,
+    /// The billed usage, mapped under [`TokenUsage`]'s inclusive contract.
+    pub usage: TokenUsage,
+    /// The priced cost, set only by a pricing decorator; `None` when unpriced.
+    pub cost: Option<Cost>,
+}
+
+impl BilledUsage {
+    /// A bill for `usage` on `model`, not yet priced (`cost` is `None`).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::{BilledUsage, TokenUsage};
+    ///
+    /// let billed = BilledUsage::new("gpt-x", TokenUsage::new(3, 2));
+    /// assert_eq!(billed.model, "gpt-x");
+    /// assert!(billed.cost.is_none());
+    /// ```
+    pub fn new(model: impl Into<String>, usage: TokenUsage) -> Self {
+        Self {
+            model: model.into(),
+            usage,
+            cost: None,
+        }
+    }
+
+    /// The same bill, priced at `cost`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_core::platform::container::cost::{Cost, CostError, CurrencyCode};
+    /// use paladin_ports::output::llm_port::{BilledUsage, TokenUsage};
+    ///
+    /// let usd = CurrencyCode::new("USD")?;
+    /// let priced = BilledUsage::new("gpt-x", TokenUsage::new(3, 2))
+    ///     .with_cost(Cost::new(10, usd.clone()));
+    /// assert_eq!(priced.cost, Some(Cost::new(10, usd)));
+    /// # Ok::<(), CostError>(())
+    /// ```
+    #[must_use]
+    pub fn with_cost(mut self, cost: Cost) -> Self {
+        self.cost = Some(cost);
+        self
+    }
+}
 
 /// Errors that can occur during LLM operations
 ///
@@ -238,7 +336,7 @@ use paladin_core::platform::container::transience::Transience;
 ///
 /// ### Retryable Errors
 /// - [`LlmError::NetworkError`] - Retry with exponential backoff
-/// - [`LlmError::RateLimitExceeded`] - Retry after delay (check `Retry-After` header)
+/// - [`LlmError::RateLimitExceeded`] - Retry after delay (read [`LlmError::retry_after`])
 /// - [`LlmError::Timeout`] - Retry with potentially longer timeout
 ///
 /// ### Configuration Errors (Non-Retryable)
@@ -260,7 +358,7 @@ use paladin_core::platform::container::transience::Transience;
 ///             // Retryable - implement backoff
 ///             true
 ///         }
-///         LlmError::RateLimitExceeded => {
+///         LlmError::RateLimitExceeded { .. } => {
 ///             // Retryable after delay
 ///             true
 ///         }
@@ -320,24 +418,42 @@ pub enum LlmError {
 
     /// Rate limit exceeded (too many requests in time window)
     ///
-    /// **Recovery**: Wait and retry. Check `Retry-After` header if available.
+    /// **Recovery**: Wait and retry. The provider's own delay, when it gave one, is
+    /// [`LlmError::retry_after`]; the full parsed header snapshot is
+    /// [`LlmError::rate_limit_hints`].
+    ///
+    /// Marked `#[non_exhaustive]` so a field can be added later without a break: build it
+    /// with [`LlmError::rate_limited`] or [`LlmError::rate_limited_with_hints`], and match it
+    /// with `RateLimitExceeded { .. }`. Its `Display` text is unchanged (`Rate limit exceeded`)
+    /// and it is still [`Transience::Transient`].
     ///
     /// # Examples
     ///
     /// ```rust
     /// use paladin_ports::output::llm_port::LlmError;
-    /// use std::thread;
     /// use std::time::Duration;
     ///
-    /// fn handle_rate_limit(error: LlmError) {
-    ///     if matches!(error, LlmError::RateLimitExceeded) {
-    ///         // Wait before retry (implement exponential backoff in production)
-    ///         println!("Rate limited, waiting before retry");
+    /// fn handle_rate_limit(error: &LlmError) -> Option<Duration> {
+    ///     if matches!(error, LlmError::RateLimitExceeded { .. }) {
+    ///         // Never wait less than the provider asked for.
+    ///         return error.retry_after();
     ///     }
+    ///     None
     /// }
+    ///
+    /// let error = LlmError::rate_limited(Some(Duration::from_secs(7)));
+    /// assert_eq!(handle_rate_limit(&error), Some(Duration::from_secs(7)));
+    /// assert_eq!(error.to_string(), "Rate limit exceeded");
     /// ```
     #[error("Rate limit exceeded")]
-    RateLimitExceeded,
+    #[non_exhaustive]
+    RateLimitExceeded {
+        /// The effective delay before the next attempt, as the provider stated it. `None`
+        /// when the provider gave nothing parseable -- a delay is never guessed.
+        retry_after: Option<Duration>,
+        /// The full parsed rate-limit snapshot, when the adapter had response headers.
+        hints: Option<Box<RateLimitHints>>,
+    },
 
     /// The provider reports the account has reached its configured API usage
     /// limit for the billing period — a hard quota/balance ceiling, not a
@@ -398,6 +514,111 @@ pub enum LlmError {
         regain_hint: Option<String>,
     },
 
+    /// The model declined to answer: a policy decision by the model itself,
+    /// reported by the vendor through a dedicated refusal field (D-09).
+    ///
+    /// A refusal is not a [`FinishReason::ContentFilter`] finish (that is an
+    /// `Ok` response the caller inspects), not an empty answer
+    /// ([`LlmError::EmptyCompletion`]) and not a generic processing failure.
+    /// It is its own type so a consumer deciding whether to try another
+    /// provider can tell a policy refusal apart from a fault.
+    ///
+    /// `detail` is the vendor's refusal text, already redacted and then
+    /// bounded by the adapter that built this error (credentials removed
+    /// first, so a key can never be sliced across the truncation boundary).
+    /// It is display text: never parse it into a value anything schedules
+    /// against.
+    ///
+    /// **Recovery**: Do not retry the same request against the same provider;
+    /// it reproduces the same refusal. A caller may deliberately try another
+    /// provider or model. `FallbackLlmAdapter` stops on a refusal by default.
+    ///
+    /// A refused call the vendor still billed carries that bill in `billed`
+    /// (G-50-5a); read it with [`LlmError::billed_usage`]. Marked
+    /// `#[non_exhaustive]`: build it with [`LlmError::refusal`] (plus
+    /// [`LlmError::with_billed_usage`]) and match it with `Refusal { .. }`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_core::platform::container::transience::Transience;
+    /// use paladin_ports::output::llm_port::LlmError;
+    ///
+    /// let error = LlmError::refusal("anthropic", "claude-sonnet-4", "I can't help with that.");
+    /// let rendered = error.to_string();
+    /// assert!(rendered.contains("anthropic"));
+    /// assert!(rendered.contains("claude-sonnet-4"));
+    /// assert!(rendered.contains("I can't help with that."));
+    /// assert_eq!(error.transience(), Transience::Permanent);
+    /// assert!(matches!(&error, LlmError::Refusal { model, .. } if model == "claude-sonnet-4"));
+    /// assert!(error.billed_usage().is_none());
+    /// ```
+    #[error("Refused by provider '{provider}' (model '{model}'): {detail}")]
+    #[non_exhaustive]
+    Refusal {
+        /// The provider whose model refused (e.g. `"anthropic"`, `"openai"`).
+        provider: String,
+        /// The model that refused, as named on the request.
+        model: String,
+        /// The vendor's refusal text, redacted then bounded. Display-only.
+        detail: String,
+        /// The usage the vendor billed for the refused call, when it reported
+        /// any. `None` when it reported none, never a fabricated zero.
+        billed: Option<Box<BilledUsage>>,
+    },
+
+    /// A request parameter the target model cannot honour was refused **before any HTTP call**
+    /// (REASON-02, D-00f). Today the parameter is a reasoning effort: the model is unmeasured, has
+    /// no reasoning, lacks that level, or the vendor would silently run it as another level.
+    ///
+    /// The text names the parameter, the value, the provider, the model and the reason, and
+    /// nothing else: no prompt text, no request body and no credential ever reaches it. It is
+    /// [`Transience::Permanent`]: the identical request is refused identically, so loops and
+    /// fallback chains do not retry it.
+    ///
+    /// **Recovery**: choose a level the model offers, pick a substituting
+    /// [`ReasoningFallback`], or state the model's support in the
+    /// `llm.<provider>.models.<model-id>.effort` override.
+    ///
+    /// Marked `#[non_exhaustive]`: build it with [`LlmError::unsupported_parameter`] and match
+    /// it with `UnsupportedParameter { .. }` (naming fields followed by `..`).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_core::platform::container::transience::Transience;
+    /// use paladin_ports::output::llm_port::LlmError;
+    ///
+    /// let error = LlmError::unsupported_parameter(
+    ///     "reasoning_effort",
+    ///     "high",
+    ///     "deepseek",
+    ///     "deepseek-v4-pro",
+    ///     "no measured effort data",
+    /// );
+    /// let rendered = error.to_string();
+    /// assert!(rendered.contains("reasoning_effort"));
+    /// assert!(rendered.contains("deepseek-v4-pro"));
+    /// assert_eq!(error.transience(), Transience::Permanent);
+    /// assert!(matches!(&error, LlmError::UnsupportedParameter { provider, .. } if provider == "deepseek"));
+    /// ```
+    #[error(
+        "Unsupported parameter '{param}' = '{value}' for provider '{provider}' (model '{model}'): {reason}"
+    )]
+    #[non_exhaustive]
+    UnsupportedParameter {
+        /// The request parameter that was refused (for example `"reasoning_effort"`).
+        param: String,
+        /// The value that was refused, in the words a caller wrote it (for example `"high"`).
+        value: String,
+        /// The provider whose model cannot honour it.
+        provider: String,
+        /// The model that cannot honour it, as named on the request.
+        model: String,
+        /// Why it was refused, in plain English. Names how to fix it; carries no request content.
+        reason: String,
+    },
+
     /// Requested model not available or not supported by provider
     ///
     /// **Recovery**: Use `get_available_models()` to find alternatives
@@ -410,33 +631,55 @@ pub enum LlmError {
     #[error("Token limit exceeded")]
     TokenLimitExceeded,
 
-    /// Completion was truncated before any content was produced: the provider
-    /// reported `finish_reason=length` while `content` was empty or whitespace-only.
+    /// The provider returned no usable text: `content` was empty or
+    /// whitespace-only on a finish that is neither a refusal, a content
+    /// filter nor a function call (D-11a).
     ///
-    /// This is the signature of a reasoning model (e.g. DeepSeek's `-flash`/`-pro`
-    /// variants) whose hidden `reasoning_content` consumed the entire `max_tokens`
-    /// budget, leaving no tokens for the visible answer. It is distinct from
-    /// [`LlmError::TokenLimitExceeded`], whose recovery (reduce prompt size) is the
-    /// opposite of what this condition needs.
+    /// The payload names the finish reason and carries the advice that fits
+    /// it. For `finish_reason=length` this is the signature of a reasoning
+    /// model (e.g. DeepSeek's `-flash`/`-pro` variants) whose hidden
+    /// reasoning consumed the entire `max_tokens` budget, so the advice is a
+    /// larger `max_tokens`. For `finish_reason=stop` the model simply
+    /// returned no text and a larger budget would not help. It is distinct
+    /// from [`LlmError::TokenLimitExceeded`], whose recovery (reduce prompt
+    /// size) is the opposite of what a truncation needs.
     ///
-    /// **Recovery**: Retry with a larger `max_tokens` budget to give the model
-    /// headroom for both reasoning and the visible completion. Do not retry with
-    /// an identical request — it will reproduce the same truncation.
+    /// **Recovery**: Read the payload. For a `length` truncation, retry with a
+    /// larger `max_tokens` budget; do not retry an identical request, it will
+    /// reproduce the same truncation. For a `stop` with no text, rephrase the
+    /// request or try another model.
+    ///
+    /// The vendor usually bills such a call (a `length` truncation bills the
+    /// whole budget). That bill rides in `billed` (G-50-5a); read it with
+    /// [`LlmError::billed_usage`]. Marked `#[non_exhaustive]`: build it with
+    /// [`LlmError::empty_completion`] (plus [`LlmError::with_billed_usage`])
+    /// and match it with `EmptyCompletion { .. }` or
+    /// `EmptyCompletion { detail, .. }`.
     ///
     /// # Examples
     ///
     /// ```rust
     /// use paladin_ports::output::llm_port::LlmError;
     ///
-    /// let error = LlmError::EmptyCompletion(
-    ///     "finish_reason=length, content empty (reasoning consumed max_tokens budget)".to_string()
+    /// let error = LlmError::empty_completion(
+    ///     "finish_reason=length, content empty (reasoning consumed max_tokens budget); \
+    ///      retry with a larger max_tokens budget",
     /// );
+    /// assert!(error.to_string().starts_with("Empty completion:"));
     /// assert!(error.to_string().contains("max_tokens"));
+    /// if let LlmError::EmptyCompletion { detail, .. } = &error {
+    ///     assert!(detail.starts_with("finish_reason=length"));
+    /// }
     /// ```
-    #[error(
-        "Empty completion: {0} — retry with a larger max_tokens budget (reasoning likely consumed the whole budget)"
-    )]
-    EmptyCompletion(String),
+    #[error("Empty completion: {detail}")]
+    #[non_exhaustive]
+    EmptyCompletion {
+        /// The finish reason and the advice that fits it. Display-only.
+        detail: String,
+        /// The usage the vendor billed for the empty call, when it reported
+        /// any. `None` when it reported none, never a fabricated zero.
+        billed: Option<Box<BilledUsage>>,
+    },
 
     /// General processing error during LLM interaction
     ///
@@ -491,6 +734,289 @@ pub enum LlmError {
 }
 
 impl LlmError {
+    /// Build a [`LlmError::RateLimitExceeded`] from an optional provider retry delay.
+    ///
+    /// Pass `None` when the provider gave no delay; nothing is guessed.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::LlmError;
+    /// use std::time::Duration;
+    ///
+    /// assert_eq!(LlmError::rate_limited(None).retry_after(), None);
+    /// assert_eq!(
+    ///     LlmError::rate_limited(Some(Duration::from_secs(3))).retry_after(),
+    ///     Some(Duration::from_secs(3))
+    /// );
+    /// ```
+    pub fn rate_limited(retry_after: Option<Duration>) -> Self {
+        LlmError::RateLimitExceeded {
+            retry_after,
+            hints: None,
+        }
+    }
+
+    /// Build a [`LlmError::EmptyCompletion`]: the provider answered but returned no usable
+    /// text. `detail` names the finish reason and carries the advice that fits it.
+    ///
+    /// This is the supported way to build the variant (it is `#[non_exhaustive]`). The value
+    /// carries no bill; attach the vendor's billed usage with [`LlmError::with_billed_usage`].
+    /// Match it with `EmptyCompletion { .. }`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_core::platform::container::transience::Transience;
+    /// use paladin_ports::output::llm_port::LlmError;
+    ///
+    /// let error = LlmError::empty_completion("finish_reason=stop, the model returned no text");
+    /// assert!(matches!(error, LlmError::EmptyCompletion { .. }));
+    /// assert_eq!(
+    ///     error.to_string(),
+    ///     "Empty completion: finish_reason=stop, the model returned no text"
+    /// );
+    /// assert_eq!(error.transience(), Transience::Permanent);
+    /// ```
+    pub fn empty_completion(detail: impl Into<String>) -> Self {
+        LlmError::EmptyCompletion {
+            detail: detail.into(),
+            billed: None,
+        }
+    }
+
+    /// Build a [`LlmError::Refusal`]: `model` at `provider` declined to answer. `detail` is
+    /// the vendor's refusal text, already redacted and then bounded by the caller.
+    ///
+    /// This is the supported way to build the variant (it is `#[non_exhaustive]`). The value
+    /// carries no bill; attach the vendor's billed usage with [`LlmError::with_billed_usage`].
+    /// Match it with `Refusal { .. }` (naming fields followed by `..`).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_core::platform::container::transience::Transience;
+    /// use paladin_ports::output::llm_port::LlmError;
+    ///
+    /// let error = LlmError::refusal("anthropic", "claude-sonnet-4", "I can't help with that.");
+    /// assert!(matches!(
+    ///     &error,
+    ///     LlmError::Refusal { provider, .. } if provider == "anthropic"
+    /// ));
+    /// assert_eq!(
+    ///     error.to_string(),
+    ///     "Refused by provider 'anthropic' (model 'claude-sonnet-4'): I can't help with that."
+    /// );
+    /// assert_eq!(error.transience(), Transience::Permanent);
+    /// ```
+    pub fn refusal(
+        provider: impl Into<String>,
+        model: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
+        LlmError::Refusal {
+            provider: provider.into(),
+            model: model.into(),
+            detail: detail.into(),
+            billed: None,
+        }
+    }
+
+    /// Build a [`LlmError::UnsupportedParameter`]: `model` at `provider` cannot honour `param`
+    /// set to `value`, for the stated `reason`.
+    ///
+    /// This is the supported way to build the variant (it is `#[non_exhaustive]`). It takes
+    /// only these five strings, so no request content and no credential can reach the error.
+    /// Match it with `UnsupportedParameter { .. }`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::LlmError;
+    ///
+    /// let error = LlmError::unsupported_parameter(
+    ///     "reasoning_effort",
+    ///     "xhigh",
+    ///     "openai",
+    ///     "gpt-x",
+    ///     "the model does not offer that effort level",
+    /// );
+    /// assert_eq!(
+    ///     error.to_string(),
+    ///     "Unsupported parameter 'reasoning_effort' = 'xhigh' for provider 'openai' \
+    ///      (model 'gpt-x'): the model does not offer that effort level"
+    /// );
+    /// assert!(error.billed_usage().is_none());
+    /// ```
+    pub fn unsupported_parameter(
+        param: impl Into<String>,
+        value: impl Into<String>,
+        provider: impl Into<String>,
+        model: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        LlmError::UnsupportedParameter {
+            param: param.into(),
+            value: value.into(),
+            provider: provider.into(),
+            model: model.into(),
+            reason: reason.into(),
+        }
+    }
+
+    /// Attach the usage the vendor billed for a call that still failed (G-50-5a).
+    ///
+    /// Only [`LlmError::EmptyCompletion`] and [`LlmError::Refusal`] carry a bill: they are the
+    /// outcomes of a response the vendor returned and charged for. On
+    /// [`LlmError::AllProvidersFailed`] the bill goes to its last error. Every other variant
+    /// (transport, status, rate-limit errors, which never carry a billed body) is returned
+    /// unchanged. An existing bill is replaced.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::{BilledUsage, LlmError, TokenUsage};
+    ///
+    /// let billed = BilledUsage::new("deepseek-flash", TokenUsage::new(1_000, 62_000));
+    /// let error = LlmError::empty_completion("finish_reason=length").with_billed_usage(billed);
+    /// assert_eq!(
+    ///     error.billed_usage().map(|bill| bill.usage.total_tokens),
+    ///     Some(63_000)
+    /// );
+    ///
+    /// // A transport error never carries a bill.
+    /// let network = LlmError::NetworkError("reset".to_string())
+    ///     .with_billed_usage(BilledUsage::new("m", TokenUsage::new(1, 1)));
+    /// assert!(network.billed_usage().is_none());
+    /// ```
+    #[must_use]
+    pub fn with_billed_usage(self, billed: BilledUsage) -> Self {
+        match self {
+            LlmError::EmptyCompletion { detail, .. } => LlmError::EmptyCompletion {
+                detail,
+                billed: Some(Box::new(billed)),
+            },
+            LlmError::Refusal {
+                provider,
+                model,
+                detail,
+                ..
+            } => LlmError::Refusal {
+                provider,
+                model,
+                detail,
+                billed: Some(Box::new(billed)),
+            },
+            LlmError::AllProvidersFailed { attempts, last } => LlmError::AllProvidersFailed {
+                attempts,
+                last: Box::new(last.with_billed_usage(billed)),
+            },
+            other => other,
+        }
+    }
+
+    /// The usage the vendor billed for this failed call, if it reported any (G-50-5a).
+    ///
+    /// `Some` only on an [`LlmError::EmptyCompletion`] or [`LlmError::Refusal`] that an adapter
+    /// billed; like [`retry_after`](LlmError::retry_after) this looks through
+    /// [`LlmError::AllProvidersFailed`] to its last error. `None` means no usage was reported,
+    /// never a zero bill.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::{BilledUsage, LlmError, TokenUsage};
+    ///
+    /// let refusal = LlmError::refusal("openai", "gpt-x", "I can't help with that.");
+    /// assert!(refusal.billed_usage().is_none());
+    ///
+    /// let billed = refusal.with_billed_usage(BilledUsage::new("gpt-x", TokenUsage::new(12, 3)));
+    /// let bill = billed.billed_usage();
+    /// assert_eq!(bill.map(|bill| bill.model.as_str()), Some("gpt-x"));
+    /// assert_eq!(bill.and_then(|bill| bill.cost.as_ref()), None);
+    /// ```
+    pub fn billed_usage(&self) -> Option<&BilledUsage> {
+        match self {
+            LlmError::EmptyCompletion { billed, .. } | LlmError::Refusal { billed, .. } => {
+                billed.as_deref()
+            }
+            LlmError::AllProvidersFailed { last, .. } => last.billed_usage(),
+            _ => None,
+        }
+    }
+
+    /// Build a [`LlmError::RateLimitExceeded`] from a parsed header snapshot. The error's
+    /// [`retry_after`](LlmError::retry_after) is the snapshot's
+    /// [`effective_retry_after`](RateLimitHints::effective_retry_after); a snapshot that
+    /// recorded nothing is not stored.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::LlmError;
+    /// use paladin_ports::output::rate_limit_hints::{RateLimitHints, RetryDelaySource};
+    /// use std::time::Duration;
+    ///
+    /// let hints = RateLimitHints::default()
+    ///     .with_retry_after(Duration::from_secs(5), RetryDelaySource::RetryAfter);
+    /// let error = LlmError::rate_limited_with_hints(hints);
+    /// assert_eq!(error.retry_after(), Some(Duration::from_secs(5)));
+    /// assert!(error.rate_limit_hints().is_some());
+    /// ```
+    pub fn rate_limited_with_hints(hints: RateLimitHints) -> Self {
+        let retry_after = hints.effective_retry_after().map(|(delay, _)| delay);
+        LlmError::RateLimitExceeded {
+            retry_after,
+            hints: (!hints.is_empty()).then(|| Box::new(hints)),
+        }
+    }
+
+    /// The provider's retry delay carried by a rate-limit error, if any.
+    ///
+    /// For [`LlmError::AllProvidersFailed`] this is the delay of its last error, mirroring how
+    /// [`transience`](LlmError::transience) delegates; every other variant reports `None`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::LlmError;
+    /// use std::time::Duration;
+    ///
+    /// let chain = LlmError::AllProvidersFailed {
+    ///     attempts: vec![("openai".to_string(), "rate limited".to_string())],
+    ///     last: Box::new(LlmError::rate_limited(Some(Duration::from_secs(9)))),
+    /// };
+    /// assert_eq!(chain.retry_after(), Some(Duration::from_secs(9)));
+    /// assert_eq!(LlmError::TokenLimitExceeded.retry_after(), None);
+    /// ```
+    pub fn retry_after(&self) -> Option<Duration> {
+        match self {
+            LlmError::RateLimitExceeded { retry_after, .. } => *retry_after,
+            LlmError::AllProvidersFailed { last, .. } => last.retry_after(),
+            _ => None,
+        }
+    }
+
+    /// The parsed rate-limit snapshot carried by a rate-limit error, if the adapter had one.
+    ///
+    /// Like [`retry_after`](LlmError::retry_after) this looks through
+    /// [`LlmError::AllProvidersFailed`] to its last error.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::LlmError;
+    ///
+    /// assert!(LlmError::rate_limited(None).rate_limit_hints().is_none());
+    /// ```
+    pub fn rate_limit_hints(&self) -> Option<&RateLimitHints> {
+        match self {
+            LlmError::RateLimitExceeded { hints, .. } => hints.as_deref(),
+            LlmError::AllProvidersFailed { last, .. } => last.rate_limit_hints(),
+            _ => None,
+        }
+    }
+
     /// Classify whether this error is worth retrying (Doc 04 FT-FR-01, D-05).
     ///
     /// Every arm reads a typed field or a variant identity only -- never a
@@ -506,7 +1032,7 @@ impl LlmError {
             // rate limit all describe conditions that clear with time.
             LlmError::NetworkError(_) => Transience::Transient,
             LlmError::Timeout(_) => Transience::Transient,
-            LlmError::RateLimitExceeded => Transience::Transient,
+            LlmError::RateLimitExceeded { .. } => Transience::Transient,
 
             // Obviously permanent: retrying the exact same request
             // reproduces the exact same failure. Each of these is matched on
@@ -517,7 +1043,10 @@ impl LlmError {
             LlmError::UsageLimitExceeded { .. } => Transience::Permanent,
             LlmError::ModelNotAvailable(_) => Transience::Permanent,
             LlmError::TokenLimitExceeded => Transience::Permanent,
-            LlmError::EmptyCompletion(_) => Transience::Permanent,
+            LlmError::EmptyCompletion { .. } => Transience::Permanent,
+            LlmError::Refusal { .. } => Transience::Permanent,
+            // Refused before any HTTP call: the identical request is refused identically.
+            LlmError::UnsupportedParameter { .. } => Transience::Permanent,
 
             // Unresolvable from a bare string: no typed field distinguishes
             // a transient cause from a permanent one.
@@ -664,6 +1193,23 @@ pub struct LlmRequest {
     /// deserializes.
     #[serde(default)]
     pub response_format: Option<ResponseFormat>,
+    /// The reasoning effort to ask the model for (see [`ReasoningEffort`]).
+    ///
+    /// `None` by default and then **nothing** about reasoning is sent: the vendor's own default
+    /// stays in force and the request body is unchanged. [`ReasoningEffort::Auto`] is a set
+    /// value, not the same as `None`. Precedence when several layers state one: this request,
+    /// then the agent, then the provider config, then the vendor default. A model that cannot
+    /// honour the effort refuses the request with [`LlmError::UnsupportedParameter`] before any
+    /// HTTP call. Absent from a serialised request when `None`, so an unset request serialises
+    /// exactly as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<ReasoningEffort>,
+    /// What to do when the model lacks the exact level in [`reasoning`](Self::reasoning).
+    ///
+    /// `None` means the layer below decides, ending at [`ReasoningFallback::Refuse`]. Absent from
+    /// a serialised request when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_fallback: Option<ReasoningFallback>,
 }
 
 impl LlmRequest {
@@ -671,8 +1217,8 @@ impl LlmRequest {
     /// `model` and `prompt`.
     ///
     /// Produces a fresh [`Uuid`] (different on every call), no attachments,
-    /// `stream: false`, empty `metadata`, and `response_format: None`. Use the
-    /// chainable `with_*` methods to override any default.
+    /// `stream: false`, empty `metadata`, `response_format: None`, and no reasoning effort or
+    /// fallback (`None`). Use the chainable `with_*` methods to override any default.
     ///
     /// # Examples
     ///
@@ -691,6 +1237,8 @@ impl LlmRequest {
     /// assert!(!request.stream);
     /// assert!(request.metadata.is_empty());
     /// assert!(request.response_format.is_none());
+    /// assert!(request.reasoning.is_none());
+    /// assert!(request.reasoning_fallback.is_none());
     /// ```
     pub fn new(model: impl Into<String>, prompt: PromptItem) -> Self {
         Self {
@@ -701,6 +1249,8 @@ impl LlmRequest {
             stream: false,
             metadata: HashMap::new(),
             response_format: None,
+            reasoning: None,
+            reasoning_fallback: None,
         }
     }
 
@@ -793,6 +1343,59 @@ impl LlmRequest {
         self.response_format = Some(response_format);
         self
     }
+
+    /// Ask the model for a reasoning effort. **This sets the effort the request asks for.**
+    /// It is not [`LlmResponse::with_reasoning`], which records the reasoning *text* a vendor
+    /// returned, nor [`TokenUsage::with_reasoning`], which records the reasoning-token *count*.
+    ///
+    /// Left unset, nothing is sent and the vendor default applies. A model that cannot honour
+    /// the effort refuses the request with [`LlmError::UnsupportedParameter`] before any HTTP
+    /// call.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::{LlmRequest, ReasoningEffort};
+    /// use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+    ///
+    /// let prompt = PromptItem::new(PromptType::User(UserPrompt {
+    ///     query: "Prove it".to_string(),
+    ///     context: None,
+    /// })).unwrap();
+    /// let request = LlmRequest::new("gpt-4", prompt).with_reasoning(ReasoningEffort::High);
+    ///
+    /// assert_eq!(request.reasoning, Some(ReasoningEffort::High));
+    /// ```
+    #[must_use]
+    pub fn with_reasoning(mut self, effort: ReasoningEffort) -> Self {
+        self.reasoning = Some(effort);
+        self
+    }
+
+    /// Choose what to do when the model lacks the exact level asked for with
+    /// [`with_reasoning`](Self::with_reasoning). Left unset, the request is refused
+    /// ([`ReasoningFallback::Refuse`]).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::{LlmRequest, ReasoningFallback};
+    /// use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+    ///
+    /// let prompt = PromptItem::new(PromptType::User(UserPrompt {
+    ///     query: "Prove it".to_string(),
+    ///     context: None,
+    /// })).unwrap();
+    /// let request = LlmRequest::new("gpt-4", prompt)
+    ///     .with_reasoning_fallback(ReasoningFallback::NearestLower);
+    ///
+    /// assert_eq!(request.reasoning_fallback, Some(ReasoningFallback::NearestLower));
+    /// ```
+    #[must_use]
+    pub fn with_reasoning_fallback(mut self, fallback: ReasoningFallback) -> Self {
+        self.reasoning_fallback = Some(fallback);
+        self
+    }
 }
 
 /// Response structure for LLM generation operations
@@ -851,9 +1454,13 @@ impl LlmRequest {
 /// println!("  Completion: {}", response.usage.completion_tokens);
 /// println!("  Total: {}", response.usage.total_tokens);
 ///
-/// // Calculate approximate cost (example: $0.03 per 1K tokens)
-/// let cost = (response.usage.total_tokens as f64 / 1000.0) * 0.03;
-/// println!("Estimated cost: ${:.4}", cost);
+/// // Cost is computed by a pricing decorator (`paladin_llm::pricing::PricingLlmAdapter`,
+/// // D-09) from `response.model` and `response.usage` -- never re-derived here from a bare
+/// // total token count with a floating-point multiplier (D-00e, D-02).
+/// match &response.cost {
+///     Some(cost) => println!("Cost: {} nanos {}", cost.nanos(), cost.currency()),
+///     None => println!("Cost: unpriced (no pricing configured for this model)"),
+/// }
 /// # }
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -870,6 +1477,26 @@ pub struct LlmResponse {
     pub finish_reason: FinishReason,
     /// Token usage statistics
     pub usage: TokenUsage,
+    /// Cost of this call, computed by a pricing decorator
+    /// (`paladin_llm::pricing::PricingLlmAdapter`, D-09) from this response's own `model` and
+    /// `usage`. `None` when no pricing decorator is installed, or when the model has no
+    /// configured price row -- never a fabricated zero (D-00c). Absent from serialized JSON
+    /// when `None`, so a `LlmResponse` document persisted before this field existed
+    /// deserializes with `cost == None`, byte-identical to what it deserialized to before
+    /// (the `served_by` precedent, D-25).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<Cost>,
+    /// The vendor's reasoning (thinking) text for this response, when it returned one (D-11).
+    ///
+    /// `None` when the model returned no reasoning text, and never `Some("")`: empty or
+    /// whitespace-only text is stored as `None` by [`LlmResponse::with_reasoning`]. It is a typed
+    /// field on purpose -- reasoning text is never carried through `metadata` or any other
+    /// untyped channel, so consumers and the Phase 51 reasoning surface can rely on this shape.
+    /// Absent from serialized JSON when `None`, so a `LlmResponse` document persisted before this
+    /// field existed deserializes with `reasoning == None`, and a response without reasoning
+    /// serializes byte-identically to before (the `cost` precedent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
     /// When this response was created (UTC)
     pub created_at: DateTime<Utc>,
     /// Additional provider-specific information
@@ -888,6 +1515,102 @@ pub struct LlmResponse {
     /// different seam — what is unreachable through a shipped provider is the LLM-initiated
     /// entry into it.
     pub function_call: Option<FunctionCall>,
+}
+
+impl LlmResponse {
+    /// Construct a response from the five fields every adapter knows: the originating request,
+    /// the served model, the generated text, why generation stopped, and the token usage.
+    ///
+    /// The remaining fields take their neutral values: a fresh `id`, `cost: None` (a pricing
+    /// decorator fills it), `created_at: Utc::now()`, empty `metadata` and `function_call: None`.
+    /// Because `LlmResponse` is constructible, adding a field to it breaks every caller that
+    /// writes a full struct literal; a caller that goes through this constructor is insulated
+    /// from the next field (MIGRATION DR-6) and can chain a `with_*` method for the one it sets.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::{FinishReason, LlmResponse, TokenUsage};
+    /// use uuid::Uuid;
+    ///
+    /// let response = LlmResponse::new(
+    ///     Uuid::new_v4(),
+    ///     "gpt-4o-mini",
+    ///     "Hello!",
+    ///     FinishReason::Stop,
+    ///     TokenUsage::new(3, 2),
+    /// );
+    /// assert_eq!(response.content, "Hello!");
+    /// assert!(response.cost.is_none());
+    /// assert!(response.metadata.is_empty());
+    /// assert!(response.function_call.is_none());
+    /// ```
+    pub fn new(
+        request_id: Uuid,
+        model: impl Into<String>,
+        content: impl Into<String>,
+        finish_reason: FinishReason,
+        usage: TokenUsage,
+    ) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            request_id,
+            model: model.into(),
+            content: content.into(),
+            finish_reason,
+            usage,
+            cost: None,
+            reasoning: None,
+            created_at: Utc::now(),
+            metadata: HashMap::new(),
+            function_call: None,
+        }
+    }
+
+    /// Chainable: attach the vendor's reasoning (thinking) text to this response (D-11).
+    ///
+    /// Text that is empty after trimming is stored as `None`, so a vendor's empty reasoning
+    /// field never becomes `Some("")`.
+    ///
+    /// This records the reasoning *text* a vendor returned. It does not ask for any effort: to
+    /// set the effort a request asks for, use [`LlmRequest::with_reasoning`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::{FinishReason, LlmResponse, TokenUsage};
+    /// use uuid::Uuid;
+    ///
+    /// let response = LlmResponse::new(
+    ///     Uuid::new_v4(),
+    ///     "deepseek-reasoner",
+    ///     "42",
+    ///     FinishReason::Stop,
+    ///     TokenUsage::new(5, 9),
+    /// )
+    /// .with_reasoning("Six times seven is forty-two.");
+    /// assert_eq!(response.reasoning.as_deref(), Some("Six times seven is forty-two."));
+    ///
+    /// let blank = LlmResponse::new(
+    ///     Uuid::new_v4(),
+    ///     "deepseek-reasoner",
+    ///     "42",
+    ///     FinishReason::Stop,
+    ///     TokenUsage::new(5, 9),
+    /// )
+    /// .with_reasoning("   ");
+    /// assert!(blank.reasoning.is_none());
+    /// ```
+    #[must_use]
+    pub fn with_reasoning(mut self, text: impl Into<String>) -> Self {
+        let text = text.into();
+        self.reasoning = if text.trim().is_empty() {
+            None
+        } else {
+            Some(text)
+        };
+        self
+    }
 }
 
 /// Function call request from the LLM
@@ -1064,6 +1787,38 @@ pub struct StreamingResponse {
     /// never a locally-computed estimate.
     #[serde(default)]
     pub usage: Option<TokenUsage>,
+    /// Cost of this call, set by a pricing decorator (`PricingLlmAdapter` in
+    /// `paladin-llm`, D-09) on the terminal chunk only, from that chunk's own
+    /// `usage`. `None` on every other chunk, for a model with no configured
+    /// price row, and when the terminal chunk reported no usage at all
+    /// (D-00c -- never a fabricated zero).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<Cost>,
+    /// Reasoning (thinking) text the vendor streamed on this chunk (D-11).
+    ///
+    /// `None` on every chunk that carried no reasoning text, and never `Some("")`: an empty or
+    /// whitespace-only fragment is stored as `None` by [`StreamingResponse::with_reasoning`].
+    /// Callers concatenate the `Some` values in wire order to rebuild the full reasoning text,
+    /// exactly as they concatenate `delta` for the answer. It is a typed field on purpose --
+    /// reasoning text is never carried through an untyped metadata channel (ADR-0061's sibling
+    /// decision D-11). Absent from serialized JSON when `None`, so a chunk persisted before this
+    /// field existed deserializes with `reasoning == None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
+    /// The `paladin.*` visibility keys this call stamped, on the **terminal chunk only**
+    /// (Phase 50, ADR-0061 (h), owner reading R-1).
+    ///
+    /// The same keys the buffered path puts in [`LlmResponse::metadata`]
+    /// (`paladin.params_omitted`, `paladin.unprofiled_model`,
+    /// `paladin.response_format_adjusted`; `paladin.served_by` and `paladin.served_model` on a
+    /// fallback chain's served stream), so a streamed call is as visible as a buffered one
+    /// without log scraping. Empty on every content chunk, on a terminal chunk of a call that
+    /// adjusted nothing, and never carried by an `Err` terminal item. Values are provider
+    /// names, model ids and parameter names only -- never request content or credentials.
+    /// Absent from serialized JSON when empty, so a chunk persisted before this field existed
+    /// deserializes with an empty map. Set it through [`StreamingResponse::with_metadata`].
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub metadata: HashMap<String, String>,
 }
 
 impl StreamingResponse {
@@ -1086,6 +1841,9 @@ impl StreamingResponse {
             delta: text.into(),
             finish_reason: None,
             usage: None,
+            cost: None,
+            reasoning: None,
+            metadata: HashMap::new(),
         }
     }
 
@@ -1109,6 +1867,9 @@ impl StreamingResponse {
             delta: String::new(),
             finish_reason: Some(finish_reason),
             usage: None,
+            cost: None,
+            reasoning: None,
+            metadata: HashMap::new(),
         }
     }
 
@@ -1125,6 +1886,78 @@ impl StreamingResponse {
     /// ```
     pub fn with_usage(mut self, usage: TokenUsage) -> Self {
         self.usage = Some(usage);
+        self
+    }
+
+    /// Chainable: attach a priced cost to this chunk (D-09/D-10), set by a pricing decorator on
+    /// the terminal chunk only.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+    /// use paladin_ports::output::llm_port::{FinishReason, StreamingResponse, TokenUsage};
+    ///
+    /// let cost = Cost::new(22_500_000, CurrencyCode::new("USD").unwrap());
+    /// let chunk = StreamingResponse::terminal(FinishReason::Stop)
+    ///     .with_usage(TokenUsage::new(1_000, 2_000))
+    ///     .with_cost(cost.clone());
+    /// assert_eq!(chunk.cost, Some(cost));
+    /// ```
+    pub fn with_cost(mut self, cost: Cost) -> Self {
+        self.cost = Some(cost);
+        self
+    }
+
+    /// Chainable: attach the reasoning text the vendor streamed on this chunk (D-11).
+    ///
+    /// Text that is empty after trimming is stored as `None`, so a vendor's empty reasoning
+    /// field never becomes `Some("")`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::StreamingResponse;
+    ///
+    /// let chunk = StreamingResponse::delta("").with_reasoning("thinking...");
+    /// assert_eq!(chunk.reasoning.as_deref(), Some("thinking..."));
+    ///
+    /// let blank = StreamingResponse::delta("").with_reasoning("  ");
+    /// assert!(blank.reasoning.is_none());
+    /// ```
+    #[must_use]
+    pub fn with_reasoning(mut self, text: impl Into<String>) -> Self {
+        let text = text.into();
+        self.reasoning = if text.trim().is_empty() {
+            None
+        } else {
+            Some(text)
+        };
+        self
+    }
+
+    /// Chainable: attach one `paladin.*` visibility entry to this chunk (Phase 50, ADR-0061
+    /// (h)). Adapters call it on the terminal chunk only; a later entry for the same key
+    /// replaces the earlier one.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::{FinishReason, StreamingResponse};
+    ///
+    /// let chunk = StreamingResponse::terminal(FinishReason::Stop)
+    ///     .with_metadata("paladin.params_omitted", "temperature");
+    /// assert_eq!(
+    ///     chunk.metadata.get("paladin.params_omitted").map(String::as_str),
+    ///     Some("temperature")
+    /// );
+    ///
+    /// // A content chunk carries none.
+    /// assert!(StreamingResponse::delta("Hello").metadata.is_empty());
+    /// ```
+    #[must_use]
+    pub fn with_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.metadata.insert(key.into(), value.into());
         self
     }
 }
@@ -1314,7 +2147,7 @@ pub trait LlmPort: Send + Sync {
     /// - [`LlmError::NetworkError`] - Connection failure (retryable)
     /// - [`LlmError::AuthenticationError`] - Invalid credentials (fix configuration)
     /// - [`LlmError::InvalidPrompt`] - Malformed prompt (fix request)
-    /// - [`LlmError::RateLimitExceeded`] - Too many requests (retry with backoff)
+    /// - [`LlmError::RateLimitExceeded`] - Too many requests (wait [`LlmError::retry_after`], then retry)
     /// - [`LlmError::ModelNotAvailable`] - Model not supported (use different model)
     /// - [`LlmError::TokenLimitExceeded`] - Prompt too long (reduce size)
     /// - [`LlmError::ProcessingError`] - Provider-side error (may be retryable)
@@ -1364,11 +2197,12 @@ pub trait LlmPort: Send + Sync {
     ///
     ///     match llm.generate(request).await {
     ///         Ok(response) => Ok(response.content),
-    ///         Err(LlmError::RateLimitExceeded) => {
-    ///             // Implement retry with backoff
-    ///             tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+    ///         Err(error @ LlmError::RateLimitExceeded { .. }) => {
+    ///             // Wait at least as long as the provider asked, then retry.
+    ///             let delay = error.retry_after().unwrap_or(tokio::time::Duration::from_secs(5));
+    ///             tokio::time::sleep(delay).await;
     ///             // Retry logic here
-    ///             Err(LlmError::RateLimitExceeded)
+    ///             Err(error)
     ///         }
     ///         Err(e) => Err(e),
     ///     }
@@ -1668,7 +2502,132 @@ pub trait LlmPort: Send + Sync {
     /// - Update capabilities as provider APIs evolve
     /// - Consider making this async if capabilities require API check
     fn get_capabilities(&self) -> ProviderCapabilities;
+
+    /// Per-model parameter support and limits (ADR-0061, amending ADR-0004).
+    ///
+    /// Parameter support varies per model, not per adapter, so this reports what one `model`
+    /// accepts. The adapter-wide [`get_capabilities`](Self::get_capabilities) is unchanged.
+    ///
+    /// # Returns
+    ///
+    /// - `Some(profile)` -- the model's parameter support and limits. An explicit sampling
+    ///   parameter the profile does not admit is refused at build time, by name; an auto-selected
+    ///   one is omitted from the wire with a `warn!` and a `paladin.params_omitted` metadata
+    ///   entry.
+    /// - `None` -- no profile (the default). The builder falls back to
+    ///   [`ProviderCapabilities::temperature_range`], exactly as before this method existed.
+    ///
+    /// # Decorators
+    ///
+    /// A decorator that wraps another `LlmPort` **must forward** this method to its inner port.
+    /// Keeping the default `None` silently disables the policy for everything behind it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_ports::output::llm_port::{ModelProfile, ParamSupport};
+    ///
+    /// // What an implementor returns for a model that accepts only `temperature = 1.0`.
+    /// let profile = Some(ModelProfile::new().with_temperature(ParamSupport::Fixed(1.0)));
+    /// assert!(profile.is_some_and(|p| p.temperature.admits(1.0)));
+    /// ```
+    fn model_profile(&self, _model: &str) -> Option<ModelProfile> {
+        None
+    }
+
+    /// Judge, before any call, whether a reasoning `effort` (with its `fallback`) would be served
+    /// for `model` (Phase 51, D-09).
+    ///
+    /// This is the verdict a build-time or chain-level gate asks for. The `effort` and `fallback`
+    /// are the values a request or an agent carries; the port resolves them against **its own**
+    /// provider-level defaults (`llm.<provider>.reasoning_effort` / `reasoning_fallback`) exactly
+    /// as [`generate`](Self::generate) would -- a request-level value first, field by field -- and
+    /// admits the result against the model's profile. `Ok(())` means `generate` would not refuse
+    /// the effort; no network call is made and nothing is logged or recorded.
+    ///
+    /// The one rule not judged is the per-request check that a reasoning budget stays below
+    /// `max_tokens`: it needs the request's own cap, which a gate that has not built the request
+    /// does not know. The adapter stays the authority for that rule at send time.
+    ///
+    /// # Default
+    ///
+    /// The default knows no provider-level defaults, so it judges `effort` and `fallback` alone:
+    /// `effort: None` is `Ok(())` without reading the profile; otherwise the effort is admitted
+    /// against [`model_profile`](Self::model_profile) with `fallback` (`Refuse` when `None`). A
+    /// port with no profile refuses an explicit effort (nothing was measured, D-03). A third-party
+    /// port therefore behaves as it did before this method existed.
+    ///
+    /// # Decorators
+    ///
+    /// A decorator that wraps another `LlmPort` **must forward** this method to its inner port.
+    /// Keeping the default silently drops the wrapped adapter's provider-level defaults from every
+    /// pre-judging gate: a configured `reasoning_fallback` would again be refused at build time
+    /// with a hint to set what is already set.
+    ///
+    /// # Errors
+    ///
+    /// [`LlmError::UnsupportedParameter`] with `param == "reasoning_effort"`, carrying the same
+    /// reason text `generate` would carry. It is `Permanent`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_ports::output::llm_port::{LlmError, LlmPort, ReasoningEffort};
+    ///
+    /// /// Whether `port` would serve a `high` effort on `model`.
+    /// fn serves_high(port: &dyn LlmPort, model: &str) -> Result<bool, LlmError> {
+    ///     match port.check_reasoning(model, Some(ReasoningEffort::High), None) {
+    ///         Ok(()) => Ok(true),
+    ///         Err(LlmError::UnsupportedParameter { .. }) => Ok(false),
+    ///         Err(other) => Err(other),
+    ///     }
+    /// }
+    /// # let _ = serves_high;
+    /// ```
+    fn check_reasoning(
+        &self,
+        model: &str,
+        effort: Option<ReasoningEffort>,
+        fallback: Option<ReasoningFallback>,
+    ) -> Result<(), LlmError> {
+        let Some(effort) = effort else {
+            return Ok(());
+        };
+        let fallback = fallback.unwrap_or_default();
+        let refuse = |reason: String| {
+            LlmError::unsupported_parameter(
+                "reasoning_effort",
+                effort.to_string(),
+                self.get_provider_name(),
+                model,
+                reason,
+            )
+        };
+        let Some(profile) = self.model_profile(model) else {
+            return Err(refuse(
+                "it reports no model profile, so an explicit reasoning effort cannot be checked"
+                    .to_string(),
+            ));
+        };
+        profile
+            .effort
+            .resolve(effort, fallback)
+            .map(|_| ())
+            .map_err(|refusal| {
+                let mut reason = refusal.to_string();
+                if fallback == ReasoningFallback::Refuse
+                    && matches!(refusal, EffortRefusal::LevelUnsupported)
+                {
+                    reason.push_str(REASONING_FALLBACK_HINT);
+                }
+                refuse(reason)
+            })
+    }
 }
+
+/// The hint appended to a refusal when the fallback in force is `Refuse` and the model simply
+/// lacks the level: the one way out. Kept in step with `paladin_llm::reasoning::FALLBACK_HINT`.
+const REASONING_FALLBACK_HINT: &str = "; set a reasoning_fallback to substitute the nearest level";
 
 #[cfg(test)]
 mod tests {
@@ -1691,6 +2650,124 @@ mod tests {
         assert!(!request.stream);
         assert!(request.metadata.is_empty());
         assert!(request.response_format.is_none());
+        assert!(request.reasoning.is_none());
+        assert!(request.reasoning_fallback.is_none());
+    }
+
+    fn user_prompt(query: &str) -> PromptItem {
+        PromptItem::new(PromptType::User(UserPrompt {
+            query: query.to_string(),
+            context: None,
+        }))
+        .unwrap()
+    }
+
+    /// D-00e: an unset request serialises with neither effort key, so its JSON is unchanged.
+    #[test]
+    fn unset_reasoning_is_absent_from_the_serialised_request() {
+        let request = LlmRequest::new("gpt-4", user_prompt("hi"));
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(!json.contains("reasoning"), "{json}");
+        let back: LlmRequest = serde_json::from_str(&json).unwrap();
+        assert!(back.reasoning.is_none() && back.reasoning_fallback.is_none());
+    }
+
+    /// D-00e: a set effort and fallback survive a serde round trip and are set by the builders.
+    #[test]
+    fn with_reasoning_and_fallback_set_and_round_trip() {
+        let request = LlmRequest::new("gpt-4", user_prompt("hi"))
+            .with_reasoning(ReasoningEffort::High)
+            .with_reasoning_fallback(ReasoningFallback::NearestHigher);
+        assert_eq!(request.reasoning, Some(ReasoningEffort::High));
+        assert_eq!(
+            request.reasoning_fallback,
+            Some(ReasoningFallback::NearestHigher)
+        );
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("\"reasoning\":\"high\""), "{json}");
+        assert!(
+            json.contains("\"reasoning_fallback\":\"nearest_higher\""),
+            "{json}"
+        );
+        let back: LlmRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.reasoning, Some(ReasoningEffort::High));
+    }
+
+    /// REASON-01: `Auto` is a set value, never treated as unset.
+    #[test]
+    fn auto_is_serialised_as_a_set_value() {
+        let request =
+            LlmRequest::new("gpt-4", user_prompt("hi")).with_reasoning(ReasoningEffort::Auto);
+        assert!(
+            serde_json::to_string(&request)
+                .unwrap()
+                .contains("\"reasoning\":\"auto\"")
+        );
+    }
+
+    /// D-00f / REASON-02: the refusal names the parameter, value, provider, model and reason, is
+    /// Permanent, carries no bill, and never renders request content (T-51-03).
+    #[test]
+    fn unsupported_parameter_names_its_five_fields_and_nothing_else() {
+        let error = LlmError::unsupported_parameter(
+            "reasoning_effort",
+            "high",
+            "deepseek",
+            "deepseek-v4-pro",
+            "no measured effort data",
+        );
+        let rendered = error.to_string();
+        for needle in [
+            "reasoning_effort",
+            "high",
+            "deepseek",
+            "deepseek-v4-pro",
+            "no measured effort data",
+        ] {
+            assert!(
+                rendered.contains(needle),
+                "{needle} missing from {rendered}"
+            );
+        }
+        assert_eq!(error.transience(), Transience::Permanent);
+        assert!(error.billed_usage().is_none());
+
+        // Building a request carrying a planted prompt never leaks it into the error: the
+        // constructor takes five strings and nothing else.
+        let request = LlmRequest::new("deepseek-v4-pro", user_prompt("PLANTED-SECRET-PROMPT"))
+            .with_reasoning(ReasoningEffort::High);
+        let refused = LlmError::unsupported_parameter(
+            "reasoning_effort",
+            request.reasoning.map(|e| e.to_string()).unwrap_or_default(),
+            "deepseek",
+            request.model.clone(),
+            "no measured effort data",
+        );
+        assert!(!refused.to_string().contains("PLANTED-SECRET-PROMPT"));
+        assert!(!format!("{refused:?}").contains("PLANTED-SECRET-PROMPT"));
+    }
+
+    /// The shape-proof pattern survives future fields: name the fields, then `..`.
+    #[test]
+    fn unsupported_parameter_matches_with_a_rest_pattern() {
+        let error = LlmError::unsupported_parameter("p", "v", "prov", "mod", "why");
+        match &error {
+            LlmError::UnsupportedParameter {
+                param,
+                value,
+                provider,
+                model,
+                reason,
+                ..
+            } => {
+                assert_eq!(
+                    (param.as_str(), value.as_str(), provider.as_str()),
+                    ("p", "v", "prov")
+                );
+                assert_eq!((model.as_str(), reason.as_str()), ("mod", "why"));
+            }
+            other => panic!("expected UnsupportedParameter, got {other:?}"),
+        }
     }
 
     /// D-28: two `new` calls with identical arguments produce different ids.
@@ -1773,6 +2850,448 @@ mod tests {
         let json = serde_json::to_value(&json_schema).unwrap();
         let round_tripped: ResponseFormat = serde_json::from_value(json).unwrap();
         assert_eq!(json_schema, round_tripped);
+    }
+
+    /// A minimal implementor that does not override `model_profile`.
+    struct NoProfilePort;
+
+    #[async_trait]
+    impl LlmPort for NoProfilePort {
+        async fn generate(&self, _request: LlmRequest) -> Result<LlmResponse, LlmError> {
+            Err(LlmError::ProcessingError("unused".to_string()))
+        }
+
+        async fn generate_stream(
+            &self,
+            _request: LlmRequest,
+        ) -> Result<
+            Box<dyn futures::Stream<Item = Result<StreamingResponse, LlmError>> + Send>,
+            LlmError,
+        > {
+            Err(LlmError::ProcessingError("unused".to_string()))
+        }
+
+        async fn validate_model(&self, _model: &str) -> Result<bool, LlmError> {
+            Ok(true)
+        }
+
+        async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
+            Ok(Vec::new())
+        }
+
+        fn get_provider_name(&self) -> &'static str {
+            "no-profile"
+        }
+
+        fn get_capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities::default()
+        }
+    }
+
+    /// ADR-0061 / D-03: an adapter that does not override `model_profile` reports no profile, so
+    /// the builder stays on `temperature_range` exactly as before; every existing implementor
+    /// compiles unchanged.
+    #[test]
+    fn model_profile_defaults_to_none() {
+        assert!(NoProfilePort.model_profile("any-model").is_none());
+        assert!(NoProfilePort.model_profile("").is_none());
+    }
+
+    /// A port that reports one profile for every model and keeps the default `check_reasoning`.
+    struct ProfiledPort(ModelProfile);
+
+    #[async_trait]
+    impl LlmPort for ProfiledPort {
+        async fn generate(&self, _request: LlmRequest) -> Result<LlmResponse, LlmError> {
+            Err(LlmError::ProcessingError("unused".to_string()))
+        }
+
+        async fn generate_stream(
+            &self,
+            _request: LlmRequest,
+        ) -> Result<
+            Box<dyn futures::Stream<Item = Result<StreamingResponse, LlmError>> + Send>,
+            LlmError,
+        > {
+            Err(LlmError::ProcessingError("unused".to_string()))
+        }
+
+        async fn validate_model(&self, _model: &str) -> Result<bool, LlmError> {
+            Ok(true)
+        }
+
+        async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
+            Ok(Vec::new())
+        }
+
+        fn get_provider_name(&self) -> &'static str {
+            "profiled"
+        }
+
+        fn get_capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities::default()
+        }
+
+        fn model_profile(&self, _model: &str) -> Option<ModelProfile> {
+            Some(self.0.clone())
+        }
+    }
+
+    /// D-09: the default `check_reasoning` is the builder's pre-gap rule -- the profile and the
+    /// given fallback, no provider defaults.
+    #[test]
+    fn check_reasoning_default_judges_the_profile_alone() {
+        let port = ProfiledPort(ModelProfile::new().with_effort(EffortSupport::Supported(
+            EffortLevels::new([ReasoningEffort::Low, ReasoningEffort::High]),
+        )));
+
+        let error = port
+            .check_reasoning("m", Some(ReasoningEffort::Medium), None)
+            .unwrap_err();
+        let LlmError::UnsupportedParameter {
+            param,
+            value,
+            provider,
+            model,
+            reason,
+            ..
+        } = &error
+        else {
+            panic!("expected UnsupportedParameter, got {error:?}");
+        };
+        assert_eq!(param, "reasoning_effort");
+        assert_eq!(value, "medium");
+        assert_eq!(provider, "profiled");
+        assert_eq!(model, "m");
+        assert!(
+            reason.contains("does not offer that effort level"),
+            "{reason}"
+        );
+        assert!(
+            reason.ends_with("; set a reasoning_fallback to substitute the nearest level"),
+            "{reason}"
+        );
+
+        // An explicit Refuse still gets the hint; a substituting fallback is admitted.
+        assert!(
+            port.check_reasoning(
+                "m",
+                Some(ReasoningEffort::Medium),
+                Some(ReasoningFallback::Refuse)
+            )
+            .is_err()
+        );
+        assert!(
+            port.check_reasoning(
+                "m",
+                Some(ReasoningEffort::Medium),
+                Some(ReasoningFallback::NearestLower)
+            )
+            .is_ok()
+        );
+        // A listed level is admitted; no effort is admitted without judging.
+        assert!(
+            port.check_reasoning("m", Some(ReasoningEffort::High), None)
+                .is_ok()
+        );
+        assert!(port.check_reasoning("m", None, None).is_ok());
+
+        // A refusal that is not "the level is missing" carries no fallback hint.
+        let off = port
+            .check_reasoning("m", Some(ReasoningEffort::Off), None)
+            .unwrap_err();
+        assert!(
+            !off.to_string().contains("set a reasoning_fallback"),
+            "{off}"
+        );
+    }
+
+    /// D-03: with no profile an explicit effort cannot be checked and is refused; no effort is
+    /// still fine.
+    #[test]
+    fn check_reasoning_default_refuses_an_explicit_effort_without_a_profile() {
+        let error = NoProfilePort
+            .check_reasoning("m", Some(ReasoningEffort::High), None)
+            .unwrap_err();
+        let LlmError::UnsupportedParameter { reason, .. } = &error else {
+            panic!("expected UnsupportedParameter, got {error:?}");
+        };
+        assert_eq!(
+            reason,
+            "it reports no model profile, so an explicit reasoning effort cannot be checked"
+        );
+        assert!(NoProfilePort.check_reasoning("m", None, None).is_ok());
+        assert!(
+            NoProfilePort
+                .check_reasoning("m", None, Some(ReasoningFallback::NearestLower))
+                .is_ok()
+        );
+    }
+
+    fn sample_llm_response() -> LlmResponse {
+        LlmResponse {
+            id: Uuid::new_v4(),
+            request_id: Uuid::new_v4(),
+            model: "gpt-4".to_string(),
+            content: "hello".to_string(),
+            finish_reason: FinishReason::Stop,
+            usage: TokenUsage::new(1, 2),
+            cost: None,
+            reasoning: None,
+            created_at: Utc::now(),
+            metadata: HashMap::new(),
+            function_call: None,
+        }
+    }
+
+    /// D-10/D-00c: a `LlmResponse` JSON document persisted before `cost` existed (no `cost`
+    /// key at all) deserializes with `cost == None` (`#[serde(default)]`), and a `cost: None`
+    /// response serializes with no `cost` key at all (`skip_serializing_if`) -- so legacy
+    /// documents stay byte-identical.
+    #[test]
+    fn llm_response_without_cost_key_deserializes_to_none() {
+        let response = sample_llm_response();
+        assert!(response.cost.is_none());
+
+        let json = serde_json::to_value(&response).unwrap();
+        assert!(
+            !json.as_object().unwrap().contains_key("cost"),
+            "a None cost must be absent from serialized JSON, not present as null"
+        );
+
+        let deserialized: LlmResponse = serde_json::from_value(json).unwrap();
+        assert!(deserialized.cost.is_none());
+    }
+
+    /// D-11: the streaming delta carries typed reasoning text, chainable like `with_usage`.
+    #[test]
+    fn streaming_with_reasoning_stores_the_text() {
+        let chunk = StreamingResponse::delta("").with_reasoning("thinking...");
+        assert_eq!(chunk.reasoning.as_deref(), Some("thinking..."));
+        assert!(chunk.delta.is_empty());
+    }
+
+    /// Edge PARITY-05/empty (carrier half): an empty or whitespace-only reasoning fragment is
+    /// `None`, never `Some("")`.
+    #[test]
+    fn streaming_with_reasoning_ignores_empty_text() {
+        assert!(
+            StreamingResponse::delta("x")
+                .with_reasoning("")
+                .reasoning
+                .is_none()
+        );
+        assert!(
+            StreamingResponse::delta("x")
+                .with_reasoning("  \n\t ")
+                .reasoning
+                .is_none()
+        );
+    }
+
+    /// The constructors leave `reasoning` unset.
+    #[test]
+    fn streaming_constructors_have_no_reasoning() {
+        assert!(StreamingResponse::delta("a").reasoning.is_none());
+        assert!(
+            StreamingResponse::terminal(FinishReason::Stop)
+                .reasoning
+                .is_none()
+        );
+    }
+
+    /// Runtime State Inventory: a `StreamingResponse` JSON document without a `reasoning` key
+    /// deserializes with `None`, and a `None` is skipped on serialize.
+    #[test]
+    fn streaming_without_reasoning_key_deserializes_to_none() {
+        let chunk = StreamingResponse::delta("hi");
+        let json = serde_json::to_value(&chunk).unwrap();
+        assert!(
+            !json.as_object().unwrap().contains_key("reasoning"),
+            "a None reasoning must be absent from serialized JSON, not present as null"
+        );
+        let back: StreamingResponse = serde_json::from_value(json).unwrap();
+        assert!(back.reasoning.is_none());
+
+        let with = StreamingResponse::delta("").with_reasoning("because");
+        let json = serde_json::to_value(&with).unwrap();
+        assert_eq!(json["reasoning"], "because");
+        let back: StreamingResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(back.reasoning.as_deref(), Some("because"));
+    }
+
+    /// Phase 50, owner reading R-1 (option-b): the streaming terminal chunk carries the
+    /// `paladin.*` visibility keys, attached with the chainable `with_metadata`.
+    #[test]
+    fn streaming_with_metadata_stores_the_entries() {
+        let chunk = StreamingResponse::terminal(FinishReason::Stop)
+            .with_metadata("paladin.params_omitted", "temperature")
+            .with_metadata("paladin.unprofiled_model", "m1");
+        assert_eq!(chunk.metadata.len(), 2);
+        assert_eq!(
+            chunk
+                .metadata
+                .get("paladin.params_omitted")
+                .map(String::as_str),
+            Some("temperature")
+        );
+        assert_eq!(
+            chunk
+                .metadata
+                .get("paladin.unprofiled_model")
+                .map(String::as_str),
+            Some("m1")
+        );
+    }
+
+    /// A later entry for the same key replaces the earlier one.
+    #[test]
+    fn streaming_with_metadata_replaces_a_repeated_key() {
+        let chunk = StreamingResponse::terminal(FinishReason::Stop)
+            .with_metadata("paladin.served_model", "a")
+            .with_metadata("paladin.served_model", "b");
+        assert_eq!(chunk.metadata.len(), 1);
+        assert_eq!(
+            chunk
+                .metadata
+                .get("paladin.served_model")
+                .map(String::as_str),
+            Some("b")
+        );
+    }
+
+    /// The constructors leave `metadata` empty (content chunks carry none).
+    #[test]
+    fn streaming_constructors_have_empty_metadata() {
+        assert!(StreamingResponse::delta("a").metadata.is_empty());
+        assert!(
+            StreamingResponse::terminal(FinishReason::Stop)
+                .metadata
+                .is_empty()
+        );
+    }
+
+    /// An empty `metadata` map is absent from serialized JSON (byte-identical to before the
+    /// field existed), a document without the key deserializes to an empty map, and a
+    /// populated map round-trips.
+    #[test]
+    fn streaming_without_metadata_key_deserializes_to_empty() {
+        let chunk = StreamingResponse::delta("hi");
+        let json = serde_json::to_value(&chunk).unwrap();
+        assert!(
+            !json.as_object().unwrap().contains_key("metadata"),
+            "an empty metadata map must be absent from serialized JSON"
+        );
+        let back: StreamingResponse = serde_json::from_value(json).unwrap();
+        assert!(back.metadata.is_empty());
+
+        let with = StreamingResponse::terminal(FinishReason::Stop)
+            .with_metadata("paladin.params_omitted", "stop");
+        let json = serde_json::to_value(&with).unwrap();
+        assert_eq!(json["metadata"]["paladin.params_omitted"], "stop");
+        let back: StreamingResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            back.metadata
+                .get("paladin.params_omitted")
+                .map(String::as_str),
+            Some("stop")
+        );
+    }
+
+    /// RESEARCH Open Question 1: `LlmResponse::new` sets the five given fields and defaults the
+    /// rest (fresh id, no cost, empty metadata, no function call).
+    #[test]
+    fn llm_response_new_sets_the_given_fields_and_defaults_the_rest() {
+        let request_id = Uuid::new_v4();
+        let before = Utc::now();
+        let a = LlmResponse::new(
+            request_id,
+            "m",
+            "c",
+            FinishReason::Stop,
+            TokenUsage::new(1, 2),
+        );
+        let b = LlmResponse::new(
+            request_id,
+            "m",
+            "c",
+            FinishReason::Stop,
+            TokenUsage::new(1, 2),
+        );
+        assert_eq!(a.request_id, request_id);
+        assert_eq!(a.model, "m");
+        assert_eq!(a.content, "c");
+        assert!(matches!(a.finish_reason, FinishReason::Stop));
+        assert_eq!(a.usage, TokenUsage::new(1, 2));
+        assert!(a.cost.is_none());
+        assert!(a.metadata.is_empty());
+        assert!(a.function_call.is_none());
+        assert!(a.created_at >= before);
+        assert_ne!(a.id, b.id, "each response gets a fresh id");
+    }
+
+    /// Runtime State Inventory (D-11): a `LlmResponse` JSON document persisted before
+    /// `reasoning` existed (no `reasoning` key at all) deserializes with `reasoning == None`
+    /// (`#[serde(default)]`), and a `reasoning: None` response serializes with no `reasoning` key
+    /// (`skip_serializing_if`) -- so legacy documents stay byte-identical (the `cost` precedent).
+    #[test]
+    fn llm_response_without_reasoning_key_deserializes_to_none() {
+        let response = sample_llm_response();
+        assert!(response.reasoning.is_none());
+
+        let json = serde_json::to_value(&response).unwrap();
+        assert!(
+            !json.as_object().unwrap().contains_key("reasoning"),
+            "a None reasoning must be absent from serialized JSON, not present as null"
+        );
+
+        let deserialized: LlmResponse = serde_json::from_value(json).unwrap();
+        assert!(deserialized.reasoning.is_none());
+    }
+
+    /// A response that carries reasoning text round-trips through JSON.
+    #[test]
+    fn llm_response_reasoning_round_trips_through_json() {
+        let response = sample_llm_response().with_reasoning("step one, step two");
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["reasoning"], "step one, step two");
+        let back: LlmResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(back.reasoning.as_deref(), Some("step one, step two"));
+    }
+
+    /// Edge PARITY-05/empty (carrier half): `with_reasoning` stores `None` for text that is empty
+    /// after trimming, so a vendor's empty reasoning field never becomes `Some("")`.
+    #[test]
+    fn with_reasoning_ignores_empty_text() {
+        assert!(sample_llm_response().with_reasoning("").reasoning.is_none());
+        assert!(
+            sample_llm_response()
+                .with_reasoning(" \n\t ")
+                .reasoning
+                .is_none()
+        );
+        assert_eq!(
+            sample_llm_response()
+                .with_reasoning("kept as given ")
+                .reasoning
+                .as_deref(),
+            Some("kept as given ")
+        );
+    }
+
+    /// `LlmResponse::new` leaves `reasoning` unset and puts nothing in `metadata` (D-11: no
+    /// untyped channel).
+    #[test]
+    fn llm_response_new_has_no_reasoning() {
+        let response = LlmResponse::new(
+            Uuid::new_v4(),
+            "m",
+            "c",
+            FinishReason::Stop,
+            TokenUsage::new(1, 2),
+        );
+        assert!(response.reasoning.is_none());
+        assert!(!response.metadata.contains_key("reasoning_content"));
     }
 
     /// D-28: compile-time guard for the prohibition -- `ProviderCapabilities`
@@ -1888,7 +3407,11 @@ mod tests {
         let cases: Vec<(LlmError, Transience)> = vec![
             (LlmError::NetworkError("x".into()), Transient),
             (LlmError::Timeout("x".into()), Transient),
-            (LlmError::RateLimitExceeded, Transient),
+            (LlmError::rate_limited(None), Transient),
+            (
+                LlmError::rate_limited(Some(Duration::from_secs(7))),
+                Transient,
+            ),
             (LlmError::AuthenticationError("x".into()), Permanent),
             (LlmError::InvalidPrompt("x".into()), Permanent),
             (
@@ -1900,7 +3423,22 @@ mod tests {
             ),
             (LlmError::ModelNotAvailable("x".into()), Permanent),
             (LlmError::TokenLimitExceeded, Permanent),
-            (LlmError::EmptyCompletion("x".into()), Permanent),
+            (LlmError::empty_completion("x"), Permanent),
+            (LlmError::refusal("anthropic", "m", "d"), Permanent),
+            (
+                LlmError::unsupported_parameter("reasoning_effort", "high", "p", "m", "r"),
+                Permanent,
+            ),
+            (
+                LlmError::empty_completion("x")
+                    .with_billed_usage(BilledUsage::new("m", TokenUsage::new(1, 1))),
+                Permanent,
+            ),
+            (
+                LlmError::refusal("anthropic", "m", "d")
+                    .with_billed_usage(BilledUsage::new("m", TokenUsage::new(1, 1))),
+                Permanent,
+            ),
             (LlmError::ProcessingError("x".into()), Unknown),
         ];
         for (err, expected) in cases {
@@ -1911,6 +3449,149 @@ mod tests {
                 err.transience()
             );
         }
+    }
+
+    /// D-09: a refusal's `Display` names the provider, the model and the
+    /// (already redacted and bounded) detail.
+    #[test]
+    fn refusal_display_names_provider_model_and_detail() {
+        let err = LlmError::refusal("openai", "gpt-x", "I can't help with that.");
+        let rendered = err.to_string();
+        assert!(rendered.contains("openai"), "{rendered}");
+        assert!(rendered.contains("gpt-x"), "{rendered}");
+        assert!(rendered.contains("I can't help with that."), "{rendered}");
+        assert_eq!(err.transience(), Transience::Permanent);
+    }
+
+    /// G-50-5a (plan 50-25): the two constructors build exactly today's
+    /// values -- same `Display`, same `Permanent` transience -- and the
+    /// values match the shape-proof patterns (`EmptyCompletion { .. }`,
+    /// `Refusal { .., .. }`) that survive plan 50-26's struct variants.
+    #[test]
+    fn llm_error_constructors_build_todays_values() {
+        let empty = LlmError::empty_completion("x");
+        assert_eq!(empty.to_string(), "Empty completion: x");
+        assert!(matches!(empty, LlmError::EmptyCompletion { .. }));
+        assert_eq!(empty.transience(), Transience::Permanent);
+
+        let refusal = LlmError::refusal("p", "m", "d");
+        assert_eq!(
+            refusal.to_string(),
+            "Refused by provider 'p' (model 'm'): d"
+        );
+        match &refusal {
+            LlmError::Refusal {
+                provider,
+                model,
+                detail,
+                ..
+            } => {
+                assert_eq!(provider, "p");
+                assert_eq!(model, "m");
+                assert_eq!(detail, "d");
+            }
+            other => panic!("expected a Refusal, got {other:?}"),
+        }
+        assert_eq!(refusal.transience(), Transience::Permanent);
+    }
+
+    /// G-50-5a (plan 50-26): `BilledUsage::new(..).with_cost(..)` round-trips
+    /// its model, usage and cost; `new` leaves the cost unset.
+    #[test]
+    fn billed_usage_new_and_with_cost_round_trip() {
+        use paladin_core::platform::container::cost::CurrencyCode;
+
+        let usage = TokenUsage::new(1_000, 62_000);
+        let unpriced = BilledUsage::new("deepseek-flash", usage.clone());
+        assert_eq!(unpriced.model, "deepseek-flash");
+        assert_eq!(unpriced.usage, usage);
+        assert_eq!(unpriced.cost, None);
+
+        let usd = CurrencyCode::new("USD").expect("USD is a valid currency code");
+        let cost = Cost::new(4_200, usd);
+        let priced = unpriced.with_cost(cost.clone());
+        assert_eq!(priced.cost, Some(cost));
+        assert_eq!(priced.usage.total_tokens, 63_000);
+    }
+
+    /// G-50-5a: `with_billed_usage` attaches the bill to both billable
+    /// variants, and `billed_usage()` reads it back; the `Display` text and
+    /// `Permanent` transience are unchanged by the bill.
+    #[test]
+    fn with_billed_usage_sets_the_bill_on_empty_completion_and_refusal() {
+        let bill = BilledUsage::new("m", TokenUsage::new(3, 2));
+
+        let empty = LlmError::empty_completion("x").with_billed_usage(bill.clone());
+        assert_eq!(empty.billed_usage(), Some(&bill));
+        assert_eq!(empty.to_string(), "Empty completion: x");
+        assert_eq!(empty.transience(), Transience::Permanent);
+        assert!(matches!(empty, LlmError::EmptyCompletion { .. }));
+
+        let refusal = LlmError::refusal("p", "m", "d").with_billed_usage(bill.clone());
+        assert_eq!(refusal.billed_usage(), Some(&bill));
+        assert_eq!(
+            refusal.to_string(),
+            "Refused by provider 'p' (model 'm'): d"
+        );
+        assert_eq!(refusal.transience(), Transience::Permanent);
+
+        // Unbilled values carry no bill: never a fabricated zero (D-00c).
+        assert_eq!(LlmError::empty_completion("x").billed_usage(), None);
+        assert_eq!(LlmError::refusal("p", "m", "d").billed_usage(), None);
+    }
+
+    /// G-50-5a: a fallback chain's bill is its last error's bill, in both
+    /// directions (`with_billed_usage` reaches `last`, `billed_usage` reads it).
+    #[test]
+    fn billed_usage_looks_through_all_providers_failed_to_its_last_error() {
+        let bill = BilledUsage::new("m", TokenUsage::new(10, 0));
+        for last in [
+            LlmError::empty_completion("x"),
+            LlmError::refusal("p", "m", "d"),
+        ] {
+            let chain = LlmError::AllProvidersFailed {
+                attempts: vec![("p".into(), "boom".into())],
+                last: Box::new(last),
+            };
+            assert_eq!(chain.billed_usage(), None);
+            let chain = chain.with_billed_usage(bill.clone());
+            assert_eq!(chain.billed_usage(), Some(&bill));
+            match &chain {
+                LlmError::AllProvidersFailed { last, .. } => {
+                    assert_eq!(last.billed_usage(), Some(&bill));
+                }
+                other => panic!("expected AllProvidersFailed, got {other:?}"),
+            }
+        }
+    }
+
+    /// G-50-5a (A2-50-26): only the two billable variants carry a bill; any
+    /// other variant has none and `with_billed_usage` returns it unchanged.
+    #[test]
+    fn with_billed_usage_leaves_other_variants_unchanged() {
+        let bill = BilledUsage::new("m", TokenUsage::new(1, 1));
+        let limited = LlmError::rate_limited(Some(Duration::from_secs(7)));
+        assert_eq!(limited.billed_usage(), None);
+        let limited = limited.with_billed_usage(bill.clone());
+        assert_eq!(limited.billed_usage(), None);
+        assert_eq!(limited.retry_after(), Some(Duration::from_secs(7)));
+        assert!(matches!(limited, LlmError::RateLimitExceeded { .. }));
+
+        let network = LlmError::NetworkError("reset".into()).with_billed_usage(bill);
+        assert_eq!(network.billed_usage(), None);
+        assert_eq!(network.to_string(), "Network error: reset");
+    }
+
+    /// D-11a: `EmptyCompletion`'s `Display` no longer appends max-tokens
+    /// advice for every finish reason; the payload carries its own advice.
+    #[test]
+    fn empty_completion_display_has_no_fixed_max_tokens_suffix() {
+        let stop = LlmError::empty_completion("finish_reason=stop, the model returned no text");
+        assert_eq!(
+            stop.to_string(),
+            "Empty completion: finish_reason=stop, the model returned no text"
+        );
+        assert!(!stop.to_string().contains("max_tokens"));
     }
 
     /// `ProviderError`'s boundary statuses classify by value only: 408, 429
@@ -1970,5 +3651,86 @@ mod tests {
             last: Box::new(LlmError::AuthenticationError("bad key".into())),
         };
         assert_eq!(permanent.transience(), Transience::Permanent);
+    }
+
+    // --- PACE-01: typed retry delay on the 429 ---------------------------------
+
+    #[test]
+    fn rate_limited_none_has_no_delay_and_no_hints() {
+        let err = LlmError::rate_limited(None);
+        assert_eq!(err.retry_after(), None);
+        assert!(err.rate_limit_hints().is_none());
+    }
+
+    #[test]
+    fn rate_limited_some_carries_the_delay() {
+        let err = LlmError::rate_limited(Some(Duration::from_secs(7)));
+        assert_eq!(err.retry_after(), Some(Duration::from_secs(7)));
+        assert!(err.rate_limit_hints().is_none());
+    }
+
+    #[test]
+    fn display_is_byte_identical() {
+        assert_eq!(
+            LlmError::rate_limited(Some(Duration::from_secs(7))).to_string(),
+            "Rate limit exceeded"
+        );
+        assert_eq!(
+            LlmError::rate_limited(None).to_string(),
+            "Rate limit exceeded"
+        );
+    }
+
+    #[test]
+    fn rate_limited_is_transient_with_or_without_a_delay() {
+        assert_eq!(
+            LlmError::rate_limited(None).transience(),
+            Transience::Transient
+        );
+        assert_eq!(
+            LlmError::rate_limited(Some(Duration::from_secs(1))).transience(),
+            Transience::Transient
+        );
+    }
+
+    #[test]
+    fn all_providers_failed_delegates_retry_after_to_its_last_error() {
+        let wrapped = LlmError::AllProvidersFailed {
+            attempts: vec![("openai".into(), "429".into())],
+            last: Box::new(LlmError::rate_limited(Some(Duration::from_secs(9)))),
+        };
+        assert_eq!(wrapped.retry_after(), Some(Duration::from_secs(9)));
+
+        let other = LlmError::AllProvidersFailed {
+            attempts: vec![("openai".into(), "boom".into())],
+            last: Box::new(LlmError::NetworkError("reset".into())),
+        };
+        assert_eq!(other.retry_after(), None);
+        assert_eq!(LlmError::NetworkError("x".into()).retry_after(), None);
+    }
+
+    #[test]
+    fn rate_limited_with_hints_sets_retry_after_from_effective_retry_after() {
+        use crate::output::rate_limit_hints::{
+            RateLimitDimension, RateLimitDimensionKind, RateLimitHints, RetryDelaySource,
+        };
+
+        let explicit = RateLimitHints::default()
+            .with_retry_after(Duration::from_secs(4), RetryDelaySource::RetryAfter);
+        let err = LlmError::rate_limited_with_hints(explicit.clone());
+        assert_eq!(err.retry_after(), Some(Duration::from_secs(4)));
+        assert_eq!(err.rate_limit_hints(), Some(&explicit));
+
+        let derived = RateLimitHints::default().with_dimension(
+            RateLimitDimensionKind::Requests,
+            RateLimitDimension::new(None, Some(0), Some(Duration::from_secs(12))),
+        );
+        let err = LlmError::rate_limited_with_hints(derived);
+        assert_eq!(err.retry_after(), Some(Duration::from_secs(12)));
+
+        // Hints that name nothing usable give no delay, and an empty parse is not stored.
+        let empty = LlmError::rate_limited_with_hints(RateLimitHints::default());
+        assert_eq!(empty.retry_after(), None);
+        assert!(empty.rate_limit_hints().is_none());
     }
 }

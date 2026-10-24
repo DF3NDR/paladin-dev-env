@@ -6,17 +6,19 @@
 
 use chrono::Utc;
 use log::{debug, info, warn};
-use rand::Rng;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::time::{sleep, timeout};
 
+use paladin_core::platform::container::aegis::Aegis;
 use paladin_core::platform::container::battalion::conclave::{
     Conclave, ConclaveError, ConclaveResult, ConclaveStatus, ObservabilityLevel,
 };
 use paladin_core::platform::container::paladin_error::PaladinError;
+use paladin_core::platform::container::transience::Transience;
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult};
+
+use crate::aegis_attempt;
+use crate::engine::retry::{backoff_delay, wait_backoff};
 
 /// Service for executing Conclave patterns
 ///
@@ -73,8 +75,14 @@ impl ConclaveExecutionService {
     /// # Errors
     ///
     /// * `ConclaveError::AllExpertsFailed` - All experts failed after retries
-    /// * `ConclaveError::AggregatorFailed` - Aggregator failed to synthesize
-    /// * `ConclaveError::Timeout` - Execution exceeded timeout
+    /// * `ConclaveError::AggregatorFailed` - Aggregator failed to synthesize (including an
+    ///   aggregator attempt that exceeded its bound)
+    /// * `ConclaveError::ConfigurationError` - The Conclave's `battalion_config.aegis` is invalid
+    ///   (checked before any expert runs)
+    ///
+    /// Each expert and aggregator attempt is bounded by `battalion_config.aegis.timeout`; there
+    /// is no whole-Conclave clock. A timed-out expert attempt is a transient failure and is
+    /// retried within `retry_attempts`.
     ///
     /// # Example
     ///
@@ -93,7 +101,13 @@ impl ConclaveExecutionService {
         input: &str,
     ) -> Result<ConclaveResult, ConclaveError> {
         let start_time = Utc::now();
-        let timeout_duration = Duration::from_secs(conclave.config.timeout_seconds);
+
+        // Reject an invalid policy before any expert runs.
+        conclave
+            .config
+            .battalion_config
+            .validate_aegis()
+            .map_err(|e| ConclaveError::ConfigurationError(e.to_string()))?;
 
         info!(
             "Starting Conclave execution: '{}' with {} experts",
@@ -101,11 +115,8 @@ impl ConclaveExecutionService {
             conclave.expert_count()
         );
 
-        // Execute with timeout
-        let result = timeout(timeout_duration, self.execute_internal(conclave, input)).await;
-
-        match result {
-            Ok(Ok(conclave_result)) => {
+        match self.execute_internal(conclave, input).await {
+            Ok(conclave_result) => {
                 let duration = (Utc::now() - start_time).num_milliseconds() as u64;
                 info!(
                     "Conclave '{}' completed in {}ms with status: {:?}",
@@ -115,22 +126,14 @@ impl ConclaveExecutionService {
                 );
                 Ok(conclave_result)
             }
-            Ok(Err(e)) => {
+            Err(e) => {
                 warn!("Conclave '{}' failed: {}", conclave.name(), e);
                 Err(e)
-            }
-            Err(_) => {
-                warn!(
-                    "Conclave '{}' timed out after {}s",
-                    conclave.name(),
-                    conclave.config.timeout_seconds
-                );
-                Err(ConclaveError::Timeout(conclave.config.timeout_seconds))
             }
         }
     }
 
-    /// Internal execution logic without timeout wrapper
+    /// Internal execution logic (experts, then the aggregator)
     async fn execute_internal(
         &self,
         conclave: &Conclave,
@@ -211,13 +214,14 @@ impl ConclaveExecutionService {
         let mut expert_tasks = Vec::new();
 
         for expert in &conclave.experts {
-            let expert_name = expert.node.name.clone();
+            let expert_name = expert.data.name.clone();
             let expert_name_for_task = expert_name.clone();
             let expert_clone = expert.clone();
             let input_clone = input.to_string();
             let paladin_port = Arc::clone(&self.paladin_port);
             let retry_attempts = conclave.config.retry_attempts;
             let observability = conclave.config.observability_level;
+            let aegis = conclave.config.battalion_config.aegis.clone();
 
             let task: tokio::task::JoinHandle<Result<(PaladinResult, u64, u32), PaladinError>> =
                 tokio::spawn(async move {
@@ -228,6 +232,7 @@ impl ConclaveExecutionService {
                         &input_clone,
                         retry_attempts,
                         observability,
+                        aegis,
                     )
                     .await
                 });
@@ -265,7 +270,17 @@ impl ConclaveExecutionService {
 
     /// Execute a single expert with retry logic
     ///
-    /// Implements exponential backoff with jitter for transient errors.
+    /// Each attempt is one [`aegis_attempt::attempt_once`] call, bounded by
+    /// `aegis.timeout` (per attempt). A failed attempt is retried while
+    /// `retries < max_retries` and [`Self::is_retryable_error`] allows it, after
+    /// waiting `engine::retry::backoff_delay` for the next attempt.
+    ///
+    /// `max_retries` (the Conclave's `retry_attempts`) is the retry *count*
+    /// (D-04); `aegis.retry` contributes only the backoff shape, falling back
+    /// to `RetryPolicy::default()` when it is `None`. The predicate stays
+    /// Transient-only whatever `policy.retry_on` says (D-10). The input is
+    /// re-sent unchanged on every attempt, and the returned retry count is the
+    /// number of retries actually performed.
     async fn execute_expert_with_retry(
         paladin_port: Arc<dyn PaladinPort>,
         expert: &paladin_core::platform::container::paladin::Paladin,
@@ -273,14 +288,19 @@ impl ConclaveExecutionService {
         input: &str,
         max_retries: u32,
         observability: ObservabilityLevel,
+        aegis: Aegis,
     ) -> Result<(PaladinResult, u64, u32), PaladinError> {
         let start_time = Utc::now();
-        let mut retries = 0;
+        let bound = aegis_attempt::attempt_bound(aegis.timeout.as_ref());
+        let policy = aegis.retry.clone().unwrap_or_default();
+        let mut retries: u32 = 0;
 
         loop {
             let attempt_start = Utc::now();
 
-            match paladin_port.execute(expert, input).await {
+            match aegis_attempt::attempt_once(&paladin_port, expert, input, bound, retries + 1)
+                .await
+            {
                 Ok(result) => {
                     let execution_time = (Utc::now() - start_time).num_milliseconds() as u64;
 
@@ -295,7 +315,8 @@ impl ConclaveExecutionService {
 
                     return Ok((result, execution_time, retries));
                 }
-                Err(e) => {
+                Err(failure) => {
+                    let e = failure.error;
                     if retries >= max_retries {
                         warn!(
                             "Expert '{}' failed after {} attempts: {}",
@@ -317,8 +338,8 @@ impl ConclaveExecutionService {
 
                     retries += 1;
 
-                    // Calculate backoff delay
-                    let delay = Self::calculate_retry_delay(retries - 1);
+                    // The one backoff implementation in the crate (D-12).
+                    let delay = backoff_delay(&policy, retries + 1);
 
                     if matches!(
                         observability,
@@ -330,69 +351,24 @@ impl ConclaveExecutionService {
                         );
                     }
 
-                    sleep(delay).await;
+                    // No cancellation token here: a Conclave run is not cancellable.
+                    wait_backoff(delay, &None).await;
                 }
             }
         }
     }
 
-    /// Check if an error is retryable
+    /// Check if an error is retryable.
     ///
-    /// Transient errors (network, timeout, rate limit) should be retried.
-    /// Permanent errors (invalid API key, invalid config) should not.
+    /// An expert failure is retried if and only if
+    /// [`PaladinError::transience`] classifies it as [`Transience::Transient`]
+    /// (D-10, D-11). This is parity with the engine's default `TransientOnly`
+    /// retry predicate: [`Transience::Unknown`] is **not** retried, and a
+    /// [`Transience::Permanent`] failure never is. The `transience()` table is
+    /// the only classification source -- the failure's message text is never
+    /// read, so a provider-controlled string cannot steer the decision.
     fn is_retryable_error(error: &PaladinError) -> bool {
-        match error {
-            // Retryable errors
-            PaladinError::Timeout(_) => true,
-            PaladinError::LlmError(msg) => {
-                // Check for rate limit indicators
-                let msg_lower = msg.to_lowercase();
-                msg_lower.contains("rate limit")
-                    || msg_lower.contains("timeout")
-                    || msg_lower.contains("network")
-                    || msg_lower.contains("connection")
-                    || msg_lower.contains("503")
-                    || msg_lower.contains("429")
-            }
-            // Non-retryable errors
-            PaladinError::ConfigurationError(_) => false,
-            PaladinError::ExecutionError(_) => false,
-            PaladinError::StopWordDetected(_) => false,
-            PaladinError::CircuitBreakerOpen => false,
-            PaladinError::MaxRetriesExceeded(_) => false,
-            PaladinError::GarrisonError(_) => false,
-            PaladinError::GarrisonRequired => false,
-            PaladinError::ArsenalError(_) => false,
-            // FT-01 (25-02 Task 1 landed the variant; D-02): classify by the carried
-            // transience instead of message sniffing.
-            PaladinError::LlmFailure { .. } => matches!(
-                error.transience(),
-                paladin_core::platform::container::transience::Transience::Transient
-            ),
-            // X-10.2 (D-04): `PaladinError` is `#[non_exhaustive]`; a future
-            // variant is classified by its own `transience()` rather than a
-            // silently-wrong `true`/`false` guess, mirroring the `LlmFailure`
-            // arm immediately above.
-            _ => matches!(
-                error.transience(),
-                paladin_core::platform::container::transience::Transience::Transient
-            ),
-        }
-    }
-
-    /// Calculate retry delay with exponential backoff and jitter
-    ///
-    /// Implements: delay = (2^attempt) seconds with ±20% jitter
-    fn calculate_retry_delay(attempt: u32) -> Duration {
-        let base_delay_secs = 2u64.pow(attempt); // 1s, 2s, 4s, 8s, 16s
-        let base_delay_secs = base_delay_secs.min(16); // Cap at 16 seconds
-
-        // Add jitter: ±20% random variance
-        let mut rng = rand::thread_rng();
-        let jitter_factor = rng.gen_range(0.8..=1.2);
-        let delay_with_jitter = (base_delay_secs as f64 * jitter_factor) as u64;
-
-        Duration::from_secs(delay_with_jitter)
+        error.transience() == Transience::Transient
     }
 
     /// Format expert outputs for aggregator consumption
@@ -469,13 +445,23 @@ impl ConclaveExecutionService {
     ) -> Result<PaladinResult, PaladinError> {
         debug!(
             "Executing aggregator '{}' with {} chars of context",
-            conclave.aggregator.node.name,
+            conclave.aggregator.data.name,
             formatted_context.len()
         );
 
-        self.paladin_port
-            .execute(&conclave.aggregator, formatted_context)
-            .await
+        // One attempt, bounded like an expert attempt; a timeout surfaces as
+        // `PaladinError::Timeout` and the caller maps it to `AggregatorFailed`.
+        let bound =
+            aegis_attempt::attempt_bound(conclave.config.battalion_config.aegis.timeout.as_ref());
+        aegis_attempt::attempt_once(
+            &self.paladin_port,
+            &conclave.aggregator,
+            formatted_context,
+            bound,
+            1,
+        )
+        .await
+        .map_err(|failure| failure.error)
     }
 
     /// Log execution summary based on observability level
@@ -527,13 +513,20 @@ impl ConclaveExecutionService {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use paladin_core::base::entity::node::Node;
+    use paladin_core::base::entity::Entity;
+    use paladin_core::platform::container::aegis::{
+        ErrorHandlerSpec, RetryPolicy as AegisRetryPolicy, TimeoutPolicy,
+    };
     use paladin_core::platform::container::battalion::BattalionConfig;
     use paladin_core::platform::container::battalion::TokenUsage;
     use paladin_core::platform::container::battalion::conclave::ConclaveConfig;
+    use paladin_core::platform::container::battlefield::FieldName;
     use paladin_core::platform::container::paladin::{MaxLoops, PaladinData, PaladinStatus};
+    use paladin_core::platform::container::waypoint::NodeId;
     use paladin_ports::output::paladin_port::StopReason;
+    use std::collections::VecDeque;
     use std::sync::Mutex;
+    use std::time::Duration;
 
     // Mock PaladinPort for testing
     struct MockPaladinPort {
@@ -570,7 +563,7 @@ mod tests {
             let mut count = self.call_count.lock().unwrap();
             *count += 1;
 
-            let expert_name = &paladin.node.name;
+            let expert_name = &paladin.data.name;
 
             // Check if this expert should fail
             if let Some(fail_count) = self.fail_attempts.lock().unwrap().get_mut(expert_name)
@@ -621,14 +614,12 @@ mod tests {
             ..Default::default()
         };
 
-        Node::new(data, Some(name.to_string()))
+        Entity::new(data, Some(name.to_string()))
     }
 
     fn create_test_conclave() -> Conclave {
         let battalion_config = BattalionConfig::new("test_conclave");
-        let config = ConclaveConfig::new("TestConclave", battalion_config)
-            .with_timeout(60)
-            .with_retry_attempts(2);
+        let config = ConclaveConfig::new("TestConclave", battalion_config).with_retry_attempts(2);
 
         let experts = vec![
             create_test_paladin("Expert1"),
@@ -660,7 +651,7 @@ mod tests {
         assert_eq!(call_count, 4); // 3 experts + 1 aggregator
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn test_partial_success_with_one_expert_failure() {
         let mock_port = Arc::new(MockPaladinPort::new().with_failures("Expert2", 10));
         let service = ConclaveExecutionService::new(mock_port);
@@ -676,7 +667,7 @@ mod tests {
         assert!(result.is_completed());
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn test_retry_logic_with_transient_failures() {
         let mock_port = Arc::new(MockPaladinPort::new().with_failures("Expert1", 1));
         let service = ConclaveExecutionService::new(mock_port.clone());
@@ -695,7 +686,7 @@ mod tests {
         assert_eq!(result.retry_counts.get("Expert3"), Some(&0));
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn test_all_experts_fail() {
         let mock_port = Arc::new(
             MockPaladinPort::new()
@@ -715,36 +706,83 @@ mod tests {
         }
     }
 
+    /// D-10/D-11: the Conclave retries a failure if and only if
+    /// `transience()` says `Transient`. One row per behaviour, including the
+    /// variants whose answer changed against the v0.10 per-variant match.
     #[test]
-    fn test_retry_delay_calculation() {
-        let delay0 = ConclaveExecutionService::calculate_retry_delay(0);
-        assert!(delay0.as_secs() <= 3); // 1s with +20% jitter = max ~1.2s (allow buffer)
+    fn conclave_retry_predicate_is_transient_only() {
+        use crate::llm_failure::to_paladin_error;
+        use paladin_core::platform::container::arsenal::ArsenalError;
+        use paladin_core::platform::container::garrison_error::GarrisonError;
+        use paladin_ports::output::llm_port::LlmError;
 
-        let delay1 = ConclaveExecutionService::calculate_retry_delay(1);
-        assert!(delay1.as_secs() >= 1 && delay1.as_secs() <= 4); // 2s ± 20% with jitter
-
-        let delay2 = ConclaveExecutionService::calculate_retry_delay(2);
-        assert!(delay2.as_secs() >= 3 && delay2.as_secs() <= 6); // 4s ± 20% with jitter
+        let cases: Vec<(PaladinError, bool)> = vec![
+            (PaladinError::Timeout(10), true),
+            (
+                to_paladin_error(&LlmError::ProviderError {
+                    provider: "openai".to_string(),
+                    status: 503,
+                    message: "upstream unavailable".to_string(),
+                }),
+                true,
+            ),
+            (
+                to_paladin_error(&LlmError::AuthenticationError(
+                    "invalid API key".to_string(),
+                )),
+                false,
+            ),
+            (
+                to_paladin_error(&LlmError::ProcessingError("opaque".to_string())),
+                false,
+            ),
+            (PaladinError::ExecutionError("boom".to_string()), false),
+            (
+                PaladinError::ConfigurationError("Invalid config".to_string()),
+                false,
+            ),
+            (PaladinError::StopWordDetected("STOP".to_string()), false),
+            // New retries versus v0.10 (recorded as MIGRATION.md 10.1 rows).
+            (PaladinError::CircuitBreakerOpen, true),
+            (
+                PaladinError::GarrisonError(GarrisonError::StorageError("db".to_string())),
+                true,
+            ),
+            (PaladinError::ArsenalError(ArsenalError::Timeout(5)), true),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(
+                ConclaveExecutionService::is_retryable_error(&error),
+                expected,
+                "retry decision for {error:?}"
+            );
+        }
     }
 
+    /// Edge LEGACY-03/encoding: the predicate never reads message text.
     #[test]
-    fn test_is_retryable_error() {
-        assert!(ConclaveExecutionService::is_retryable_error(
-            &PaladinError::Timeout(10)
-        ));
-        assert!(ConclaveExecutionService::is_retryable_error(
-            &PaladinError::LlmError("Rate limit exceeded".to_string())
-        ));
-        assert!(ConclaveExecutionService::is_retryable_error(
-            &PaladinError::LlmError("503 Service Unavailable".to_string())
-        ));
+    fn conclave_retry_predicate_ignores_message_text() {
+        let permanent_but_retryish = PaladinError::LlmFailure {
+            transience: Transience::Permanent,
+            status: None,
+            provider: Some("openai".to_string()),
+            message: "429 rate limit timeout 503 network connection".to_string(),
+        };
+        assert!(
+            !ConclaveExecutionService::is_retryable_error(&permanent_but_retryish),
+            "a Permanent failure is not retried whatever its message says: {permanent_but_retryish:?}"
+        );
 
-        assert!(!ConclaveExecutionService::is_retryable_error(
-            &PaladinError::ConfigurationError("Invalid config".to_string())
-        ));
-        assert!(!ConclaveExecutionService::is_retryable_error(
-            &PaladinError::StopWordDetected("STOP".to_string())
-        ));
+        let transient_empty = PaladinError::LlmFailure {
+            transience: Transience::Transient,
+            status: None,
+            provider: None,
+            message: String::new(),
+        };
+        assert!(
+            ConclaveExecutionService::is_retryable_error(&transient_empty),
+            "a Transient failure is retried even with an empty message: {transient_empty:?}"
+        );
     }
 
     /// Plan 25-06 Test 3 (D-02): the Conclave retry predicate classifies a
@@ -754,7 +792,6 @@ mod tests {
     #[test]
     fn conclave_execution_service_surfaces_structured_llm_failure() {
         use crate::llm_failure::to_paladin_error;
-        use paladin_core::platform::container::transience::Transience;
         use paladin_ports::output::llm_port::LlmError;
 
         // Transient by typed status: retried.
@@ -773,7 +810,7 @@ mod tests {
         ));
         assert!(ConclaveExecutionService::is_retryable_error(&transient));
 
-        // A 500 carries no substring the legacy sniff recognised; the typed
+        // A 500 carries no message text a sniffer would recognise; the typed
         // status classifies it Transient by value (FT-FR-01).
         let server_fault = to_paladin_error(&LlmError::ProviderError {
             provider: "openai".to_string(),
@@ -800,8 +837,8 @@ mod tests {
         let unknown = to_paladin_error(&LlmError::ProcessingError("opaque".to_string()));
         assert!(!ConclaveExecutionService::is_retryable_error(&unknown));
 
-        // Rendered text is byte-identical to the legacy erasure (X-03).
-        let fixed = LlmError::RateLimitExceeded;
+        // Rendered text is `LLM error: {e}` (the source error's own display).
+        let fixed = LlmError::rate_limited(None);
         assert_eq!(
             to_paladin_error(&fixed).to_string(),
             format!("LLM error: {fixed}")
@@ -855,5 +892,308 @@ mod tests {
 
         assert!(truncated.len() < output.len());
         assert!(truncated.ends_with("[truncated]"));
+    }
+
+    // ---- Aegis runner / engine backoff tests (44-07, D-12) -----------------------------
+
+    /// One scripted call for a named Paladin: wait `delay`, then answer `result`.
+    struct Step {
+        delay: Duration,
+        result: Result<(), PaladinError>,
+    }
+
+    fn fail(error: PaladinError) -> Step {
+        Step {
+            delay: Duration::ZERO,
+            result: Err(error),
+        }
+    }
+
+    fn slow_ok(delay: Duration) -> Step {
+        Step {
+            delay,
+            result: Ok(()),
+        }
+    }
+
+    fn transient() -> PaladinError {
+        PaladinError::LlmFailure {
+            transience: Transience::Transient,
+            status: Some(503),
+            provider: None,
+            message: "unavailable".to_string(),
+        }
+    }
+
+    /// A port that plays back a per-Paladin script and records every call as
+    /// `(paladin name, input, instant)`. A Paladin whose script is exhausted
+    /// succeeds immediately.
+    struct ScriptedPort {
+        scripts: Mutex<HashMap<String, VecDeque<Step>>>,
+        calls: Mutex<Vec<(String, String, tokio::time::Instant)>>,
+    }
+
+    impl ScriptedPort {
+        fn new(scripts: Vec<(&str, Vec<Step>)>) -> Arc<Self> {
+            Arc::new(Self {
+                scripts: Mutex::new(
+                    scripts
+                        .into_iter()
+                        .map(|(name, steps)| (name.to_string(), steps.into()))
+                        .collect(),
+                ),
+                calls: Mutex::new(Vec::new()),
+            })
+        }
+
+        fn calls_for(&self, name: &str) -> Vec<(String, tokio::time::Instant)> {
+            self.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(n, _, _)| n == name)
+                .map(|(_, input, at)| (input.clone(), *at))
+                .collect()
+        }
+
+        fn total_calls(&self) -> usize {
+            self.calls.lock().unwrap().len()
+        }
+    }
+
+    #[async_trait]
+    impl PaladinPort for ScriptedPort {
+        async fn execute(
+            &self,
+            paladin: &paladin_core::platform::container::paladin::Paladin,
+            input: &str,
+        ) -> Result<PaladinResult, PaladinError> {
+            let name = paladin.data.name.clone();
+            self.calls.lock().unwrap().push((
+                name.clone(),
+                input.to_string(),
+                tokio::time::Instant::now(),
+            ));
+            let step = self
+                .scripts
+                .lock()
+                .unwrap()
+                .get_mut(&name)
+                .and_then(|script| script.pop_front());
+            let step = step.unwrap_or_else(|| slow_ok(Duration::ZERO));
+            tokio::time::sleep(step.delay).await;
+            step.result.map(|()| PaladinResult {
+                output: format!("Analysis from {}", name),
+                usage: TokenUsage::new(10, 0),
+                execution_time_ms: 1,
+                loop_count: 1,
+                stop_reason: StopReason::Completed,
+                ..Default::default()
+            })
+        }
+
+        async fn execute_stream(
+            &self,
+            _paladin: &paladin_core::platform::container::paladin::Paladin,
+            _input: &str,
+        ) -> Result<paladin_ports::output::paladin_port::PaladinStream, PaladinError> {
+            unimplemented!("Stream not needed for tests")
+        }
+
+        fn validate(
+            &self,
+            _paladin: &paladin_core::platform::container::paladin::Paladin,
+        ) -> Result<(), PaladinError> {
+            Ok(())
+        }
+    }
+
+    /// A two-expert Conclave (`Expert1`, `Expert2`, aggregator `Aggregator`).
+    fn conclave_with(aegis: Aegis, retry_attempts: u32) -> Conclave {
+        let battalion_config = BattalionConfig::new("aegis_conclave").with_aegis(aegis);
+        let config = ConclaveConfig::new("AegisConclave", battalion_config)
+            .with_retry_attempts(retry_attempts);
+        Conclave::new(
+            vec![
+                create_test_paladin("Expert1"),
+                create_test_paladin("Expert2"),
+            ],
+            create_test_paladin("Aggregator"),
+            config,
+        )
+        .unwrap()
+    }
+
+    fn run_timeout_aegis(run_timeout: Duration) -> Aegis {
+        Aegis {
+            timeout: Some(TimeoutPolicy {
+                run_timeout: Some(run_timeout),
+                idle_timeout: None,
+            }),
+            ..Aegis::default()
+        }
+    }
+
+    /// D-12: waits follow `engine::retry::backoff_delay` -- initial 1 s, factor 2.
+    #[tokio::test(start_paused = true)]
+    async fn conclave_backoff_follows_engine_sequence() {
+        let port = ScriptedPort::new(vec![(
+            "Expert1",
+            vec![fail(transient()), fail(transient())],
+        )]);
+        let aegis = Aegis {
+            retry: Some(AegisRetryPolicy {
+                max_attempts: 3,
+                initial_interval: Duration::from_secs(1),
+                backoff_factor: 2.0,
+                jitter: false,
+                ..AegisRetryPolicy::default()
+            }),
+            ..Aegis::default()
+        };
+        let conclave = conclave_with(aegis, 2);
+        let service = ConclaveExecutionService::new(port.clone());
+
+        let started = tokio::time::Instant::now();
+        let result = service.execute(&conclave, "task").await.unwrap();
+
+        assert_eq!(result.retry_counts.get("Expert1"), Some(&2));
+        assert_eq!(result.retry_counts.get("Expert2"), Some(&0));
+        // 1 s before attempt 2 plus 2 s before attempt 3.
+        assert_eq!(started.elapsed(), Duration::from_secs(3));
+        let at: Vec<_> = port
+            .calls_for("Expert1")
+            .into_iter()
+            .map(|(_, t)| t)
+            .collect();
+        assert_eq!(at[1] - at[0], Duration::from_secs(1));
+        assert_eq!(at[2] - at[1], Duration::from_secs(2));
+    }
+
+    /// Open Question 2: a timed-out expert attempt is transient and is retried.
+    #[tokio::test(start_paused = true)]
+    async fn conclave_expert_attempt_times_out_and_retries() {
+        let port = ScriptedPort::new(vec![(
+            "Expert1",
+            vec![slow_ok(Duration::from_secs(2)), slow_ok(Duration::ZERO)],
+        )]);
+        let conclave = conclave_with(run_timeout_aegis(Duration::from_secs(1)), 1);
+        let service = ConclaveExecutionService::new(port.clone());
+
+        let result = service.execute(&conclave, "task").await.unwrap();
+
+        assert_eq!(result.status, ConclaveStatus::Success);
+        assert_eq!(result.retry_counts.get("Expert1"), Some(&1));
+        assert_eq!(port.calls_for("Expert1").len(), 2);
+    }
+
+    /// Open Question 2: a timed-out aggregator attempt ends the run as `AggregatorFailed`.
+    #[tokio::test(start_paused = true)]
+    async fn conclave_aggregator_timeout_is_aggregator_failed() {
+        let port = ScriptedPort::new(vec![("Aggregator", vec![slow_ok(Duration::from_secs(2))])]);
+        let conclave = conclave_with(run_timeout_aegis(Duration::from_secs(1)), 1);
+        let service = ConclaveExecutionService::new(port.clone());
+
+        match service.execute(&conclave, "task").await {
+            Err(ConclaveError::AggregatorFailed(msg)) => {
+                assert!(msg.contains("Timeout"), "{msg}");
+            }
+            other => panic!("Expected AggregatorFailed, got {:?}", other.map(|_| ())),
+        }
+        // The aggregator runs once: aggregator failures are not retried.
+        assert_eq!(port.calls_for("Aggregator").len(), 1);
+    }
+
+    /// Edge LEGACY-03/empty: `retry_attempts = 0` runs a Transient-failing expert once.
+    #[tokio::test(start_paused = true)]
+    async fn conclave_zero_retry_attempts_runs_once() {
+        let port = ScriptedPort::new(vec![(
+            "Expert1",
+            vec![fail(transient()), fail(transient()), fail(transient())],
+        )]);
+        let conclave = conclave_with(Aegis::default(), 0);
+        let service = ConclaveExecutionService::new(port.clone());
+
+        let result = service.execute(&conclave, "task").await.unwrap();
+
+        assert_eq!(port.calls_for("Expert1").len(), 1);
+        assert_eq!(result.status, ConclaveStatus::PartialSuccess);
+        assert!(!result.expert_outputs.contains_key("Expert1"));
+    }
+
+    /// Edge LEGACY-03/empty: with `aegis.retry = None` the waits follow
+    /// `RetryPolicy::default()` (500 ms, factor 2, jitter adding up to one base delay).
+    #[tokio::test(start_paused = true)]
+    async fn conclave_without_aegis_retry_uses_default_backoff_shape() {
+        let port = ScriptedPort::new(vec![(
+            "Expert1",
+            vec![fail(transient()), fail(transient())],
+        )]);
+        let conclave = conclave_with(Aegis::default(), 2);
+        let service = ConclaveExecutionService::new(port.clone());
+
+        let result = service.execute(&conclave, "task").await.unwrap();
+        assert_eq!(result.retry_counts.get("Expert1"), Some(&2));
+
+        let at: Vec<_> = port
+            .calls_for("Expert1")
+            .into_iter()
+            .map(|(_, t)| t)
+            .collect();
+        assert_eq!(at.len(), 3);
+        let first = at[1] - at[0];
+        let second = at[2] - at[1];
+        assert!(
+            first >= Duration::from_millis(500) && first < Duration::from_secs(1),
+            "wait before attempt 2 was {first:?}"
+        );
+        assert!(
+            second >= Duration::from_secs(1) && second < Duration::from_secs(2),
+            "wait before attempt 3 was {second:?}"
+        );
+    }
+
+    /// Edge LEGACY-03/idempotency: every retry re-sends the identical input and the
+    /// recorded retry count is attempts - 1.
+    #[tokio::test(start_paused = true)]
+    async fn conclave_retry_resends_identical_input() {
+        let port = ScriptedPort::new(vec![(
+            "Expert1",
+            vec![fail(transient()), fail(transient())],
+        )]);
+        let conclave = conclave_with(Aegis::default(), 2);
+        let service = ConclaveExecutionService::new(port.clone());
+
+        let result = service.execute(&conclave, "the exact task").await.unwrap();
+
+        let calls = port.calls_for("Expert1");
+        assert_eq!(calls.len(), 3);
+        assert!(calls.iter().all(|(input, _)| input == "the exact task"));
+        assert_eq!(
+            result.retry_counts.get("Expert1"),
+            Some(&((calls.len() - 1) as u32))
+        );
+    }
+
+    /// T-44-20: an invalid policy is rejected before any expert runs.
+    #[tokio::test(start_paused = true)]
+    async fn conclave_rejects_invalid_aegis_before_any_expert_runs() {
+        let port = ScriptedPort::new(vec![]);
+        let mut conclave = conclave_with(Aegis::default(), 2);
+        // `Conclave::new` already validates, so break the policy afterwards.
+        conclave.config.battalion_config.aegis = Aegis {
+            on_error: Some(ErrorHandlerSpec::Route {
+                to: NodeId::new("cancel"),
+                error_field: FieldName::new("failure").expect("valid field name"),
+            }),
+            ..Aegis::default()
+        };
+        let service = ConclaveExecutionService::new(port.clone());
+
+        match service.execute(&conclave, "task").await {
+            Err(ConclaveError::ConfigurationError(msg)) => assert!(msg.contains("Route"), "{msg}"),
+            other => panic!("Expected ConfigurationError, got {:?}", other.map(|_| ())),
+        }
+        assert_eq!(port.total_calls(), 0);
     }
 }

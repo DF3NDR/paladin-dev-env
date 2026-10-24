@@ -417,32 +417,38 @@ async fn call_llm_with_breaker(prompt: &str) -> Result<Response, PaladinError> {
 ### Retry Logic
 
 There is no `backoff` crate dependency in this workspace. Retry/backoff is a first-party
-policy — `RetryPolicy` (`crates/paladin-core/src/platform/container/battalion/mod.rs`) plus
-the helper functions in `crates/paladin-battalion/src/retry.rs`:
+policy — the Aegis `RetryPolicy` (`crates/paladin-core/src/platform/container/aegis.rs`) plus the
+engine's `backoff_delay` and `wait_backoff` helpers in
+`crates/paladin-battalion/src/engine/retry.rs`:
 
 ```rust,ignore
-// Implement exponential backoff using the shipped RetryPolicy
-use paladin_battalion::retry::{calculate_retry_delay, should_retry};
-use paladin_core::platform::container::battalion::RetryPolicy;
+// Implement exponential backoff using the shipped Aegis RetryPolicy
+use paladin_battalion::engine::retry::{backoff_delay, wait_backoff};
+use paladin_core::platform::container::aegis::RetryPolicy;
+use paladin_core::platform::container::paladin_error::PaladinError;
+use paladin_core::platform::container::transience::Transience;
+use std::time::Duration;
 
 let policy = RetryPolicy {
-    max_attempts: 3,
-    base_delay: Duration::from_millis(100),
-    max_delay: Duration::from_secs(10),
-    exponential_backoff: true,
-    jitter: true,
+    max_attempts: 3, // TOTAL attempts, including the first
+    initial_interval: Duration::from_millis(100),
+    max_interval: Duration::from_secs(10),
+    ..RetryPolicy::default() // factor 2.0, jitter on, retry_on TransientOnly
 };
 
-async fn call_with_retry<F, T>(policy: &RetryPolicy, f: F) -> Result<T, PaladinError>
+async fn call_with_retry<F, Fut, T>(policy: &RetryPolicy, f: F) -> Result<T, PaladinError>
 where
-    F: Fn() -> Result<T, PaladinError>,
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Result<T, PaladinError>>,
 {
-    let mut attempt = 0;
+    let mut attempt = 1;
     loop {
-        match f() {
+        match f().await {
             Ok(v) => return Ok(v),
-            Err(e) if should_retry(policy, attempt) => {
-                tokio::time::sleep(calculate_retry_delay(policy, attempt)).await;
+            // Retry only Transient failures while attempts remain.
+            Err(e) if e.transience() == Transience::Transient && attempt < policy.max_attempts => {
+                // The delay before the *next* attempt: attempt 2 waits `initial_interval`.
+                wait_backoff(backoff_delay(policy, attempt + 1), &None).await;
                 attempt += 1;
             }
             Err(e) => return Err(e),
@@ -450,6 +456,9 @@ where
     }
 }
 ```
+
+Battalion patterns get this behaviour from `BattalionConfig.aegis.retry` (set with `with_aegis`)
+without hand-written loops; see the [Orchestration guide](../user-guides/orchestration.md#configuration-reference).
 
 ## Monitoring
 

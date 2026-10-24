@@ -754,7 +754,7 @@ last among feature work; the v0.10 → v0.11 migration guide must carry Phase 48
 
   4. Each of the three v2 debt lines (oversized service files, clone/lock contention,
      dependency-allowlist drift) is fixed or carries a written waiver.
-**Plans**: 13 plans in 6 waves
+**Plans**: 14 plans in 6 waves
 
 Plans:
 **Wave 1**
@@ -782,7 +782,8 @@ Plans:
 **Wave 5** *(blocked on Wave 4 completion)*
 
 - [ ] 46-11-PLAN.md — section 10 freeze: cross-references, web3sec G-1..G-7, opening, 10.7, 10.8 operator checklist (wave 5)
-- [ ] 46-12-PLAN.md — live `§9.x` citations of v0.11 rows retargeted to section 10 outside `MIGRATION.md` (wave 5)
+- [ ] 46-12-PLAN.md — live `§9.x` citations of v0.11 rows retargeted to section 10 in the CHANGELOG `[Unreleased]` sections and the TOML comment blocks (wave 5)
+- [ ] 46-14-PLAN.md — live `§9.x` citations of v0.11 rows retargeted to section 10 in rustdoc and code comments, the consumer-surface muster header and the Switching-providers page (wave 5)
 
 **Wave 6** *(blocked on Wave 5 completion)*
 

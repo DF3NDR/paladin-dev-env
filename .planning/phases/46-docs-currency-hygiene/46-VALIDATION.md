@@ -30,6 +30,7 @@ created: 2026-10-24
 ## Sampling Rate
 
 - **After every task commit:** the task's own `<automated>` verify (every task has one; no task relies on a later task's check), plus `cargo fmt --check` and `cargo clippy --offline -p <crate> --all-targets -- -D warnings` when a `.rs` file changed, and `make lint-shell` when a script changed
+- **Diff invariants** (history byte-identical, comment-only, no value line changed) compare a plan base -- the parent of the plan's first `(46-NN):` commit, or `HEAD` before it exists -- with the working tree, never `HEAD` or `HEAD~1`, so each holds both before and after its commit (plans 46-09, 46-12, 46-13, 46-14)
 - **After every plan wave:** the quick run command; after waves 2-3 (code) also `make clean-code`, `make api-surface`, `make check-consumer-surface`
 - **Before `/gsd-verify-work`:** the full suite command green (plan 46-13 `<verification>`), then CI `coverage` (82 %, ADR-0006), `semver`, `docs` (mdBook + linkcheck) and `consumer-surface` green
 - **Max feedback latency:** ~3 min for a single-crate test; seconds for docs and ledger tasks
@@ -60,18 +61,21 @@ created: 2026-10-24
 | 46-08-01 | 08 | 2 | CURR-23 | T-46-14, T-46-15, T-46-16 | removed keys refused naming key only; unknown keys load | unit (tdd) | `cargo test --offline -p paladin-ai-core --lib battalion && cargo test --offline --test legacy_removal_guard && make api-surface` | ❌ W0 (tests written red first) | ⬜ pending |
 | 46-08-02 | 08 | 2 | CURR-23 | T-46-14 | nested refusal; CLI YAML key still loads | unit + CLI unit | `cargo test --offline -p paladin-ai --features cli --lib cli_conclave_yaml_timeout_seconds_still_loads` + core battalion tests | ❌ W0 (tests written red first) | ⬜ pending |
 | 46-09-01 | 09 | 3 | CURR-23 | T-46-17 | an ignored Maneuver policy is warned once | unit (tdd) | `cargo test --offline -p paladin-battalion --lib maneuver_ignored_aegis_policies` | ❌ W0 (test written red first) | ⬜ pending |
-| 46-09-02 | 09 | 3 | CURR-23 | T-46-18 | no semver allow line changed | gates | `make check-migration-allowlist && make doc-check && cargo test --offline --test legacy_removal_guard` | ✅ | ⬜ pending |
+| 46-09-02 | 09 | 3 | CURR-23 | T-46-18 | no semver allow line changed | plan-base diff + gates | Task 2 verify (plan-base diff: no `= "allow"` line changed) + `make check-migration-allowlist && make doc-check && cargo test --offline --test legacy_removal_guard` | ✅ | ⬜ pending |
 | 46-10-01 | 10 | 4 | CURR-23 | T-46-19, T-46-20 | a 10.2 register row is read by the semver gate | shell harness + gate | `bash tests/scripts/check-migration-allowlist_test.sh && make check-migration-allowlist && make test-shell-guards` | ❌ W0 (new harness cases) | ⬜ pending |
 | 46-10-02 | 10 | 4 | CURR-23 | T-46-21 | move is verbatim | diff vs `v0.10.1` tag + gate | part-9 `diff` against `git show v0.10.1:MIGRATION.md` + `make check-migration-allowlist` | ✅ | ⬜ pending |
 | 46-11-01 | 11 | 5 | CURR-23 | T-46-20 | N/A | grep + diff + gate | Task 1 verify | ✅ | ⬜ pending |
 | 46-11-02 | 11 | 5 | CURR-23 | T-46-22, T-46-23 | both timeout outcomes stated | grep + gate + guards | Task 2 verify | ✅ | ⬜ pending |
 | 46-11-03 | 11 | 5 | CURR-23 | T-46-20 | N/A | grep + gates + guards | Task 3 verify | ✅ | ⬜ pending |
-| 46-12-01 | 12 | 5 | CURR-23 | T-46-24 | history untouched | count + diff | Task 1 verify (≥ 30 section-10 citations; older sections byte-identical) | ✅ | ⬜ pending |
-| 46-12-02 | 12 | 5 | CURR-23 | T-46-25 | no allowlist value changed | diff filter + gates | Task 2 verify | ✅ | ⬜ pending |
-| 46-12-03 | 12 | 5 | CURR-23 | T-46-24 | comment-only `.rs` changes | diff filter + build + guards | Task 3 verify (`cargo check --workspace --all-targets --all-features`, `make doc-check`, muster) | ✅ | ⬜ pending |
+| 46-12-01 | 12 | 5 | CURR-23 | T-46-24 | history untouched | count + plan-base diff | Task 1 verify (≥ 30 section-10 citations; `[0.10.1]` onward byte-identical to the plan base) | ✅ | ⬜ pending |
+| 46-12-02 | 12 | 5 | CURR-23 | T-46-24 | history untouched | count + plan-base diff | Task 2 verify (five crate changelogs' released sections byte-identical to the plan base; ≥ 15 section-10 citations; `make check-changelogs`) | ✅ | ⬜ pending |
+| 46-12-03 | 12 | 5 | CURR-23 | T-46-25 | no allowlist or manifest value changed | plan-base diff filter + gates | Task 3 verify (TOML value-line filter empty; `cargo metadata`; `make check-migration-allowlist`, `make check-gates`) | ✅ | ⬜ pending |
 | 46-13-01 | 13 | 6 | CURR-23 | T-46-26 | page indexes, does not duplicate | grep + doc gate + guards | Task 1 verify | ✅ | ⬜ pending |
 | 46-13-02 | 13 | 6 | CURR-23 | T-46-27 | vendor fact dated and attributed | grep + doc gate + guards | Task 2 verify | ✅ | ⬜ pending |
 | 46-13-03 | 13 | 6 | CURR-24 | T-46-28 | 05-21 item stays open | grep | Task 3 verify (+ eight VALIDATION files not `draft`) | ✅ | ⬜ pending |
+| 46-14-01 | 14 | 5 | CURR-23 | T-46-29, T-46-30 | muster rule and DR-19 retargeted; comment-only `.rs` | grep + plan-base diff filter + muster | Task 1 verify (`make check-consumer-surface`, `make check-doc-config`, entity and vocabulary guards) | ✅ | ⬜ pending |
+| 46-14-02 | 14 | 5 | CURR-23 | T-46-30 | comment-only `.rs` changes | plan-base diff filter + build + guard | Task 2 verify (`cargo check -p paladin-ai-core -p paladin-ports`, legacy guard, `make doc-check`) | ✅ | ⬜ pending |
+| 46-14-03 | 14 | 5 | CURR-23 | T-46-29, T-46-30 | comment-only `.rs` changes; v0.10 citations kept | plan-base diff filter + build + guards | Task 3 verify (`cargo check --workspace --all-targets --all-features`, `make doc-check`, muster, `make api-surface`, three guards) | ✅ | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -101,7 +105,7 @@ created: 2026-10-24
 
 ## Validation Sign-Off
 
-- [x] All tasks have `<automated>` verify or Wave 0 dependencies (32 tasks, each with its own command)
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies (35 tasks, each with its own command)
 - [x] Sampling continuity: no 3 consecutive tasks without automated verify
 - [x] Wave 0 covers all MISSING references (five in-phase test files, each written red first)
 - [x] No watch-mode flags

@@ -990,14 +990,14 @@ Deliberate omissions, so a later reader does not mistake them for oversights.
 ### Tech debt tracked as v2
 
 - **Decomposing the three oversized service files** (2,757 / 2,294 / 1,840 lines) — real debt, no
-  ingested requirement demands it.
+  ingested requirement demands it. *2026-10-24, Phase 46: waived -- WINDOWS row 80.*
 
 - **Clone/lock-contention work** — the 383 `.clone()` calls and nine orchestrator locks flagged in
-  `codebase/CONCERNS.md`. Blocked on Phase 3 producing benchmark evidence first.
+  `codebase/CONCERNS.md`. Blocked on Phase 3 producing benchmark evidence first. *2026-10-24, Phase 46: waived -- WINDOWS row 81.*
 
 - **The `paladin-core` / `paladin-ports` dependency allowlists** — declared 6 and 7, shipping 14 and
   10. The architectural invariant holds; this is document-versus-code drift needing ARCH-03(b) to
-  choose a direction.
+  choose a direction. *2026-10-24, Phase 46: fixed -- ADR-0015 re-measured at 14 / 12 and pinned by `scripts/check-dependency-allowlist.sh`; WINDOWS row 82.*
 
 ## Roadmap Extension Protocol
 

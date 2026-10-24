@@ -1,10 +1,10 @@
 ---
 schema_version: 1
 open_count: 13
-waived_count: 37
-fixed_count: 29
-total_count: 79
-last_updated: 2026-10-20T16:26:47.433Z
+waived_count: 39
+fixed_count: 30
+total_count: 82
+last_updated: 2026-10-24T13:47:20.422Z
 ---
 
 # Broken Windows Ledger
@@ -94,6 +94,9 @@ last_updated: 2026-10-20T16:26:47.433Z
 | 77 | 50 | deviation | crates/paladin-llm/src/grok/adapter.rs |  | G-50-5a remainder (c): Grok's vendor-computed cost_in_usd_ticks and num_sources_used are not parsed or compared with the Treasurer price; owner-accepted deferral, 2026-10-17, kept open; plan 50-22's probe (live_vendor_smoke --usage, 50-USAGE-PROBE.md) recorded the cross-check data; closing condition: parse both fields on the Grok wire and compare cost_in_usd_ticks with the Treasurer price under the ADR-0061 visibility rule, with fixture tests | open |  | 2026-10-19T00:23:33.273Z |  |
 | 78 | 50 | deviation | crates/paladin-ports/src/output/spend_scope.rs |  | 50-REVIEW WR-03 (G-50-5a remainder (b)): a hopped-past fallback bill reached ATTEMPT_SPEND only when its whole model call returned, so a Battalion attempt dropped by its deadline or idle bound while a later hop was in flight was not charged for the earlier hop's billed refusal; commit 0cdbc302 documented it as a limit; closing condition: the bill is priced and counted into the attempt scope at its hop, proven by paused-clock drop tests (plan 50-32). | fixed |  | 2026-10-19T13:00:16.400Z | 2026-10-19T15:50:15.480Z |
 | 79 | 50.1 | deviation | .planning/phases/50.1-consumer-surface-readiness/50.1-SEED-PROBE.md |  | 50.1-07: probe was run by Claude at operator direction in the devcontainer (plan assumed an operator-machine run); grok-4.7 and 7 default-rejected candidates are not measured end to end and must not be seeded | open |  | 2026-10-20T16:26:47.433Z |  |
+| 80 | 46 | todo | crates/paladin-battalion/src/engine/superstep.rs |  | Deferred debt line (ROADMAP tech-debt list): oversized service files. Measured 2026-10-24 with wc -l: engine/superstep.rs 16,018 raw / ~5,363 production (first #[cfg(test)] mod at line 5364); engine/mod.rs 14,324 / ~3,251 (test module from line 3258 plus three cfg(test) import lines); paladin_execution_service.rs 10,858 / ~4,419 (ten cfg(test) modules, first at line 4382). The audit's 2,757 / 2,294 / 1,840 figures were for since-reshaped files. | waived | Waived at Phase 46 (D-18): decomposition is a multi-phase refactor with no requirement behind it and no consumer-visible effect; deferred as a candidate phase for the next milestone's roadmap. Figures are measured, raw and production-only, so the debt is not overstated. | 2026-10-24T13:47:00.421Z | 2026-10-24T13:47:07.513Z |
+| 81 | 46 | todo | benches/engine_benchmarks.rs |  | Deferred debt line: clone/lock-contention work (383 .clone() calls and nine orchestrator locks at ingest), previously blocked on benchmark evidence. | waived | Waived at Phase 46 (D-19): the benchmark blocker is gone -- benches/engine_benchmarks.rs (bench_waypoint_save, bench_superstep_cost, bench_superstep_cost_sink_variants) and benches/config_benchmarks.rs exist and run. No benchmark attributes a regression to cloning or lock wait; this is not proof that no contention exists. The one standing overhead, the accepted tracing cost in WINDOWS rows 35/61 (+19.36% log_sink / +16.19% composite against a 120.00us untraced baseline, row 61), sits in the dispatcher/sink path, the first place a clone, channel or lock cost would show and the first place to look. Re-open when a bench regression is attributed to cloning or lock wait. | 2026-10-24T13:47:11.673Z | 2026-10-24T13:47:17.245Z |
+| 82 | 46 | deviation | .planning/decisions/0015-core-ports-dependency-allowlist.md |  | Deferred debt line: paladin-core / paladin-ports dependency allowlists (declared 6 / 7, shipping 14 / 10 at ingest). Fixed: ADR-0015 rebaselined to the measured sets with the purity invariant; Phase 46 (D-20/D-21) re-measured 14 / 12 (log added to paladin-ports, ADR-0015 amendment 2026-10-24) and pinned them with scripts/check-dependency-allowlist.sh in make check-gates and CI's cargo-deny job. | fixed |  | 2026-10-24T13:47:17.331Z | 2026-10-24T13:47:20.422Z |
 
 ````json
 [
@@ -1044,6 +1047,42 @@ last_updated: 2026-10-20T16:26:47.433Z
     "reason": "",
     "recorded_at": "2026-10-20T16:26:47.433Z",
     "resolved_at": null
+  },
+  {
+    "id": 80,
+    "kind": "todo",
+    "phase": "46",
+    "file": "crates/paladin-battalion/src/engine/superstep.rs",
+    "line": null,
+    "description": "Deferred debt line (ROADMAP tech-debt list): oversized service files. Measured 2026-10-24 with wc -l: engine/superstep.rs 16,018 raw / ~5,363 production (first #[cfg(test)] mod at line 5364); engine/mod.rs 14,324 / ~3,251 (test module from line 3258 plus three cfg(test) import lines); paladin_execution_service.rs 10,858 / ~4,419 (ten cfg(test) modules, first at line 4382). The audit's 2,757 / 2,294 / 1,840 figures were for since-reshaped files.",
+    "status": "waived",
+    "reason": "Waived at Phase 46 (D-18): decomposition is a multi-phase refactor with no requirement behind it and no consumer-visible effect; deferred as a candidate phase for the next milestone's roadmap. Figures are measured, raw and production-only, so the debt is not overstated.",
+    "recorded_at": "2026-10-24T13:47:00.421Z",
+    "resolved_at": "2026-10-24T13:47:07.513Z"
+  },
+  {
+    "id": 81,
+    "kind": "todo",
+    "phase": "46",
+    "file": "benches/engine_benchmarks.rs",
+    "line": null,
+    "description": "Deferred debt line: clone/lock-contention work (383 .clone() calls and nine orchestrator locks at ingest), previously blocked on benchmark evidence.",
+    "status": "waived",
+    "reason": "Waived at Phase 46 (D-19): the benchmark blocker is gone -- benches/engine_benchmarks.rs (bench_waypoint_save, bench_superstep_cost, bench_superstep_cost_sink_variants) and benches/config_benchmarks.rs exist and run. No benchmark attributes a regression to cloning or lock wait; this is not proof that no contention exists. The one standing overhead, the accepted tracing cost in WINDOWS rows 35/61 (+19.36% log_sink / +16.19% composite against a 120.00us untraced baseline, row 61), sits in the dispatcher/sink path, the first place a clone, channel or lock cost would show and the first place to look. Re-open when a bench regression is attributed to cloning or lock wait.",
+    "recorded_at": "2026-10-24T13:47:11.673Z",
+    "resolved_at": "2026-10-24T13:47:17.245Z"
+  },
+  {
+    "id": 82,
+    "kind": "deviation",
+    "phase": "46",
+    "file": ".planning/decisions/0015-core-ports-dependency-allowlist.md",
+    "line": null,
+    "description": "Deferred debt line: paladin-core / paladin-ports dependency allowlists (declared 6 / 7, shipping 14 / 10 at ingest). Fixed: ADR-0015 rebaselined to the measured sets with the purity invariant; Phase 46 (D-20/D-21) re-measured 14 / 12 (log added to paladin-ports, ADR-0015 amendment 2026-10-24) and pinned them with scripts/check-dependency-allowlist.sh in make check-gates and CI's cargo-deny job.",
+    "status": "fixed",
+    "reason": "",
+    "recorded_at": "2026-10-24T13:47:17.331Z",
+    "resolved_at": "2026-10-24T13:47:20.422Z"
   }
 ]
 ````

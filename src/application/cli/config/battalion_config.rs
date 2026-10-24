@@ -464,4 +464,29 @@ mod tests {
             Err(CliError::ValidationError { .. })
         ));
     }
+
+    #[test]
+    fn cli_conclave_yaml_timeout_seconds_still_loads() {
+        // The CLI's own conclave schema is separate from the core `ConclaveConfig` and keeps its
+        // `timeout_seconds` key: `per_attempt_timeout` maps it onto `aegis.timeout` (D-23 refuses
+        // the removed key on the core types only).
+        let yaml = "\
+type: conclave
+name: panel
+experts:
+  - file: expert1.yaml
+  - file: expert2.yaml
+aggregator:
+  file: aggregator.yaml
+timeout_seconds: 120
+";
+        let config: BattalionYamlConfig =
+            serde_yaml::from_str(yaml).expect("the CLI conclave YAML still loads");
+        let BattalionYamlConfig::Conclave(ref conclave) = config else {
+            panic!("expected a conclave config");
+        };
+        assert_eq!(conclave.timeout_seconds, Some(120));
+        assert_eq!(conclave.experts.len(), 2);
+        assert!(config.validate().is_ok());
+    }
 }

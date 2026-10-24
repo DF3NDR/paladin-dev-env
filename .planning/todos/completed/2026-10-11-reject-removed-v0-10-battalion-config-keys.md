@@ -1,3 +1,4 @@
+completed: 2026-10-24
 ---
 created: 2026-10-11T18:00:00Z
 title: Reject removed v0.10 Battalion and Conclave config keys with an error naming the key
@@ -60,3 +61,5 @@ Agrees with B, with three implementation constraints:
 - Re-run `cargo test --test legacy_removal_guard` and `make check-gates`. The new error strings name
   removed items, so they may need the guard's allowed-context treatment.
 - Could be a `/gsd-quick` task or folded into Phase 46 or 47.
+
+Resolved by Phase 46 plan 46-08 (option B): the removed keys are refused at load via a private wire struct in `battalion/legacy_keys.rs`; see ADR-0059's 2026-10-24 amendment and MIGRATION.md M-B-06.

@@ -96,7 +96,16 @@ pub enum ObservabilityLevel {
 /// assert_eq!(config.retry_attempts, 3);
 /// assert!(config.battalion_config.validate_aegis().is_ok());
 /// ```
+///
+/// # Removed v0.10 key
+///
+/// A stored document that still carries the v0.10 whole-run timeout key is refused at
+/// load: deserialization fails with an error that names the key, its replacement
+/// (`battalion_config.aegis.timeout.run_timeout`) and `MIGRATION.md` row `M-B-06`, and
+/// never echoes the value. A removed key nested inside `battalion_config` is refused
+/// through [`BattalionConfig`] the same way. Unrelated unknown keys are still ignored.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "super::legacy_keys::ConclaveConfigWire")]
 pub struct ConclaveConfig {
     /// Name of the Conclave
     pub name: String,

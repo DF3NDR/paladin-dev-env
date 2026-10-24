@@ -26,6 +26,7 @@ use serde::Deserialize;
 use serde::de::{Deserializer, IgnoredAny};
 
 use super::BattalionConfig;
+use super::conclave::{ConclaveConfig, ObservabilityLevel};
 use crate::platform::container::aegis::Aegis;
 
 /// A key removed in v0.11.0 together with the setting that replaces it.
@@ -71,12 +72,12 @@ fn render_keys(keys: &[RemovedKey]) -> String {
 /// Each candidate is `(present, key, replacement)`.
 fn refuse_removed(
     config: &'static str,
-    candidates: [(bool, &'static str, &'static str); 3],
+    candidates: &[(bool, &'static str, &'static str)],
 ) -> Result<(), RemovedConfigKeys> {
     let keys: Vec<RemovedKey> = candidates
-        .into_iter()
+        .iter()
         .filter(|(is_present, ..)| *is_present)
-        .map(|(_, key, replacement)| (key, replacement))
+        .map(|&(_, key, replacement)| (key, replacement))
         .collect();
     if keys.is_empty() {
         Ok(())
@@ -107,7 +108,7 @@ impl TryFrom<BattalionConfigWire> for BattalionConfig {
     fn try_from(wire: BattalionConfigWire) -> Result<Self, Self::Error> {
         refuse_removed(
             "BattalionConfig",
-            [
+            &[
                 (
                     wire.timeout_seconds.is_some(),
                     "timeout_seconds",
@@ -130,9 +131,51 @@ impl TryFrom<BattalionConfigWire> for BattalionConfig {
     }
 }
 
+/// Wire form of [`ConclaveConfig`]: its seven fields plus the removed `timeout_seconds` key.
+///
+/// `battalion_config` is a [`BattalionConfig`], so a removed key nested inside it is refused
+/// by that type's own conversion.
+#[derive(Deserialize)]
+pub(super) struct ConclaveConfigWire {
+    name: String,
+    battalion_config: BattalionConfig,
+    retry_attempts: u32,
+    synthesis_prompt: Option<String>,
+    include_expert_names: bool,
+    max_expert_output_tokens: Option<usize>,
+    observability_level: ObservabilityLevel,
+    #[serde(default, deserialize_with = "present")]
+    timeout_seconds: Option<()>,
+}
+
+impl TryFrom<ConclaveConfigWire> for ConclaveConfig {
+    type Error = RemovedConfigKeys;
+
+    fn try_from(wire: ConclaveConfigWire) -> Result<Self, Self::Error> {
+        refuse_removed(
+            "ConclaveConfig",
+            &[(
+                wire.timeout_seconds.is_some(),
+                "timeout_seconds",
+                "battalion_config.aegis.timeout.run_timeout",
+            )],
+        )?;
+        Ok(Self {
+            name: wire.name,
+            battalion_config: wire.battalion_config,
+            retry_attempts: wire.retry_attempts,
+            synthesis_prompt: wire.synthesis_prompt,
+            include_expert_names: wire.include_expert_names,
+            max_expert_output_tokens: wire.max_expert_output_tokens,
+            observability_level: wire.observability_level,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::BattalionConfig;
+    use super::super::conclave::ConclaveConfig;
     use serde_json::json;
 
     fn refusal(document: serde_json::Value) -> String {
@@ -244,5 +287,74 @@ mod tests {
         let back: BattalionConfig = serde_json::from_value(value).expect("round trip");
         assert_eq!(back.name, "a");
         assert_eq!(back.aegis, Default::default());
+    }
+
+    fn conclave_value() -> serde_json::Value {
+        serde_json::to_value(ConclaveConfig::new("c", BattalionConfig::new("b")))
+            .expect("serialize")
+    }
+
+    fn conclave_refusal(document: serde_json::Value) -> String {
+        serde_json::from_value::<ConclaveConfig>(document)
+            .expect_err("a removed key must be refused")
+            .to_string()
+    }
+
+    #[test]
+    fn conclave_timeout_key_is_refused_naming_its_replacement_and_row() {
+        let mut document = conclave_value();
+        document["timeout_seconds"] = json!(300);
+        let message = conclave_refusal(document);
+        assert!(message.contains("timeout_seconds"), "{message}");
+        assert!(
+            message.contains("battalion_config.aegis.timeout.run_timeout"),
+            "{message}"
+        );
+        assert!(message.contains("M-B-06"), "{message}");
+    }
+
+    #[test]
+    fn conclave_timeout_key_with_a_null_value_is_refused_without_echoing_values() {
+        let mut document = conclave_value();
+        document["timeout_seconds"] = json!(null);
+        assert!(conclave_refusal(document).contains("timeout_seconds"));
+        let mut document = conclave_value();
+        document["timeout_seconds"] = json!("sk-planted-value");
+        assert!(!conclave_refusal(document).contains("sk-planted-value"));
+    }
+
+    #[test]
+    fn conclave_with_a_removed_key_in_its_nested_battalion_config_is_refused() {
+        let mut document = conclave_value();
+        document["battalion_config"]["retry_policy"] = json!({"max_attempts": 3});
+        let message = conclave_refusal(document);
+        assert!(message.contains("retry_policy"), "{message}");
+        assert!(message.contains("aegis.retry"), "{message}");
+        assert!(message.contains("M-B-06"), "{message}");
+    }
+
+    #[test]
+    fn conclave_round_trips_and_ignores_an_unrelated_unknown_key() {
+        let value = conclave_value();
+        let back: ConclaveConfig = serde_json::from_value(value.clone()).expect("round trip");
+        assert_eq!(serde_json::to_value(&back).expect("serialize"), value);
+        let mut with_novel = value;
+        with_novel["novel"] = json!(1);
+        let loaded: ConclaveConfig =
+            serde_json::from_value(with_novel).expect("an unknown key is not a removed key");
+        assert_eq!(loaded.name, "c");
+    }
+
+    #[test]
+    fn conclave_serialized_form_carries_no_removed_key() {
+        let value = conclave_value();
+        let object = value.as_object().expect("object");
+        assert!(!object.contains_key("timeout_seconds"));
+        assert!(
+            !object["battalion_config"]
+                .as_object()
+                .expect("object")
+                .contains_key("timeout_seconds")
+        );
     }
 }

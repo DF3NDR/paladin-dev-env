@@ -176,11 +176,16 @@ impl PhalanxExecutionService {
     /// [`BattalionError::Cancelled`], and a Paladin waiting in retry backoff
     /// stops retrying.
     ///
-    /// Only waiting and backing-off Paladins stop. An attempt already in
-    /// flight when the token fires runs to its end and keeps its concurrency
-    /// permit until then. The `FirstSuccess` aggregation does not read
-    /// `max_concurrency` at all (it builds no semaphore); that is pre-existing
-    /// behaviour, so a limit set alongside `FirstSuccess` is not applied.
+    /// What survives the token firing depends on the aggregation strategy.
+    /// Under `CollectAll` and `Majority` each Paladin runs in a spawned task,
+    /// so an attempt already in flight runs to its end and keeps its
+    /// concurrency permit until then; only waiting and backing-off Paladins
+    /// stop. Under `FirstSuccess` the attempts are plain futures driven by the
+    /// call itself, so when the token fires they are dropped with the call (at
+    /// their next await point) and nothing runs to its end. The `FirstSuccess`
+    /// aggregation does not read `max_concurrency` at all (it builds no
+    /// semaphore); that is pre-existing behaviour, so a limit set alongside
+    /// `FirstSuccess` is not applied.
     pub async fn execute_with_cancellation(
         &self,
         phalanx: &Phalanx,

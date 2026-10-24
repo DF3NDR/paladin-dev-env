@@ -98,7 +98,9 @@ impl std::fmt::Debug for StrategySelection {
 ///   whole-run clock; `aegis.retry` counts total attempts). The Commander adds no bound of its
 ///   own: ChainOfCommand and Grove do not read `aegis`, and a Maneuver reads only
 ///   `aegis.timeout.run_timeout`, as one whole-flow clock (a set `aegis.on_error` or
-///   `aegis.retry` is ignored, with a one-time warning per execution)
+///   `aegis.retry` is ignored, with a one-time warning per execution; an explicit
+///   `CommanderBuilder::maneuver_config` replaces the aegis-derived config, timeout included,
+///   and reads no `aegis` at all, so it draws no warning)
 /// - **Error Handling**: fail fast by default; `aegis.on_error = Absorb` lets a Formation continue
 ///   past a failed Paladin
 /// - **Telemetry**: Comprehensive execution metadata including timing and success/failure counts
@@ -269,6 +271,13 @@ pub struct Commander {
     /// [`CommanderBuilder::strategy_selection`]. Defaults to
     /// [`StrategySelection::Heuristic`].
     strategy_selection: StrategySelection,
+
+    /// `true` when `CommanderBuilder::build` materialised `maneuver_config` from the
+    /// aegis-derived Maneuver config plus an `error_strategy(..)` override, rather than from an
+    /// explicit `maneuver_config(..)`. Such a config still follows `aegis.timeout.run_timeout`,
+    /// so the one-time ignored-policy warning still applies to it. Private: it is not part of
+    /// the public constructor signature.
+    maneuver_config_from_aegis: bool,
 }
 
 impl std::fmt::Debug for Commander {
@@ -354,6 +363,7 @@ impl Commander {
             paladin_port,
             herald: None,
             strategy_selection: StrategySelection::default(),
+            maneuver_config_from_aegis: false,
         }
     }
 
@@ -549,12 +559,13 @@ impl Commander {
     /// The Maneuver configuration used when none was set explicitly (D-04).
     ///
     /// The error strategy is the Maneuver default (`FailFast`) whatever
-    /// `aegis.on_error` says; the Maneuver's own workflow timeout is
+    /// `aegis.on_error` says (`CommanderBuilder::error_strategy` overrides just that field on
+    /// top of this config, keeping the aegis-derived timeout); the Maneuver's own workflow timeout is
     /// `aegis.timeout.run_timeout` (`None` when no timeout is set). Note the change of
     /// meaning: on Formation, Phalanx and Campaign `run_timeout` bounds each attempt, while here
     /// it becomes one whole-flow clock for the entire Maneuver. `aegis.on_error` and
     /// `aegis.retry` are not read at all; the Commander warns once per execution when either is
-    /// set (`maneuver_ignored_aegis_policies`).
+    /// set and this derived config is in use (`maneuver_warned_aegis_policies`).
     fn default_maneuver_config(&self) -> crate::maneuver::ManeuverConfig {
         crate::maneuver::ManeuverConfig {
             error_strategy: crate::maneuver::ErrorStrategy::default(),
@@ -569,6 +580,21 @@ impl Commander {
             collect_timing_metrics: true,
             detailed_observability: false,
         }
+    }
+
+    /// The ignored `aegis` policies the Maneuver warning must name (empty: no warning).
+    ///
+    /// The warning is only true when the Maneuver config is derived from `aegis`
+    /// (`default_maneuver_config`): with an explicit `ManeuverConfig` the Maneuver reads none
+    /// of `aegis`, so the message ("Maneuver reads only aegis.timeout.run_timeout") would be
+    /// false for that run. A config built by `CommanderBuilder::error_strategy` alone still
+    /// follows `aegis.timeout.run_timeout`, so it counts as derived. Pure, so the gating is
+    /// unit-tested directly.
+    fn maneuver_warned_aegis_policies(&self) -> Vec<&'static str> {
+        if self.maneuver_config.is_some() && !self.maneuver_config_from_aegis {
+            return Vec::new();
+        }
+        maneuver_ignored_aegis_policies(&self.config.aegis)
     }
 
     /// Internal execution logic (strategy resolution, delegation, enrichment)
@@ -956,9 +982,10 @@ impl Commander {
                     agents.insert(agent_name, paladin.clone());
                 }
 
-                // Maneuver reads only `aegis.timeout.run_timeout`; a set `on_error` or `retry`
-                // is dropped, so say so once per execution (the Campaign message's shape).
-                let ignored = maneuver_ignored_aegis_policies(&self.config.aegis);
+                // On the aegis-derived path Maneuver reads only `aegis.timeout.run_timeout`; a
+                // set `on_error` or `retry` is dropped, so say so once per execution (the
+                // Campaign message's shape). An explicit `ManeuverConfig` reads no `aegis`.
+                let ignored = self.maneuver_warned_aegis_policies();
                 if !ignored.is_empty() {
                     warn!(
                         "Maneuver {} ignores {}: Maneuver reads only aegis.timeout.run_timeout, \
@@ -1513,7 +1540,9 @@ impl Commander {
 ///
 /// The Commander adds no bound of its own, so that 300 second default is not a general bound:
 /// ChainOfCommand and Grove do not read `aegis`, so it does not bound them, and a Maneuver uses
-/// `run_timeout` as one whole-flow clock instead of per attempt.
+/// `run_timeout` as one whole-flow clock instead of per attempt. That holds while the Maneuver
+/// config is derived from `aegis` (including via `error_strategy`); a config supplied through
+/// `maneuver_config` carries its own `timeout` and ignores `aegis` entirely.
 ///
 /// # Validation
 ///
@@ -1590,6 +1619,8 @@ pub struct CommanderBuilder {
     aggregator: Option<Paladin>,
     flow_expression: Option<String>,
     maneuver_config: Option<crate::maneuver::ManeuverConfig>,
+    /// Error strategy to lay over the Maneuver config at `build()` (see `error_strategy`).
+    error_strategy: Option<crate::maneuver::ErrorStrategy>,
     paladin_port: Arc<dyn PaladinPort>,
     strategy_selection: Option<StrategySelection>,
 }
@@ -1614,6 +1645,7 @@ impl CommanderBuilder {
             aggregator: None,
             flow_expression: None,
             maneuver_config: None,
+            error_strategy: None,
             paladin_port,
             strategy_selection: None,
         }
@@ -1729,7 +1761,12 @@ impl CommanderBuilder {
 
     /// Set the error strategy for Maneuver execution
     ///
-    /// Configures how errors should be handled during Maneuver execution.
+    /// Configures how errors should be handled during Maneuver execution. Only the error
+    /// strategy changes: when no explicit [`maneuver_config`](Self::maneuver_config) is set, the
+    /// rest of the Maneuver config stays the one derived from `aegis` at `build()`, so a
+    /// configured `aegis.timeout.run_timeout` still bounds the Maneuver (and an unset one stays
+    /// unbounded). When an explicit `maneuver_config` is set, the strategy is laid over it.
+    /// Calling `maneuver_config` after this method replaces the whole config, strategy included.
     ///
     /// # Arguments
     ///
@@ -1742,9 +1779,7 @@ impl CommanderBuilder {
     /// builder.error_strategy(ErrorStrategy::ContinueParallel)
     /// ```
     pub fn error_strategy(mut self, strategy: crate::maneuver::ErrorStrategy) -> Self {
-        let mut config = self.maneuver_config.unwrap_or_default();
-        config.error_strategy = strategy;
-        self.maneuver_config = Some(config);
+        self.error_strategy = Some(strategy);
         self
     }
 
@@ -1752,6 +1787,12 @@ impl CommanderBuilder {
     ///
     /// Provides fine-grained control over Maneuver execution behavior including
     /// error handling, output formatting, timing metrics, and timeouts.
+    ///
+    /// The config replaces the aegis-derived Maneuver config outright, `timeout` included
+    /// (`ManeuverConfig::default()` carries a 300 second timeout, whatever `aegis.timeout`
+    /// says), and the Maneuver then reads no `aegis` field. Set `timeout` explicitly. A
+    /// `error_strategy` call made before this one is discarded; one made after it is laid
+    /// over this config.
     ///
     /// # Arguments
     ///
@@ -1768,6 +1809,8 @@ impl CommanderBuilder {
     /// ```
     pub fn maneuver_config(mut self, config: crate::maneuver::ManeuverConfig) -> Self {
         self.maneuver_config = Some(config);
+        // An earlier `error_strategy` must not override the config just supplied.
+        self.error_strategy = None;
         self
     }
 
@@ -1783,7 +1826,8 @@ impl CommanderBuilder {
     ///
     /// The Commander adds no bound of its own: ChainOfCommand and Grove do not read `aegis`, so
     /// the 300 second default does not bound them, and a Maneuver uses `run_timeout` as one
-    /// whole-flow clock rather than per attempt.
+    /// whole-flow clock rather than per attempt (unless an explicit `maneuver_config` was set,
+    /// which carries its own `timeout`).
     ///
     /// # Returns
     ///
@@ -1884,6 +1928,19 @@ impl CommanderBuilder {
         // Set optional Maneuver fields
         commander.flow_expression = self.flow_expression;
         commander.maneuver_config = self.maneuver_config;
+        if let Some(strategy) = self.error_strategy {
+            match commander.maneuver_config.as_mut() {
+                Some(explicit) => explicit.error_strategy = strategy,
+                None => {
+                    // Start from the aegis-derived config so the override does not swap a
+                    // configured (or absent) `run_timeout` for `ManeuverConfig::default()`'s.
+                    let mut derived = commander.default_maneuver_config();
+                    derived.error_strategy = strategy;
+                    commander.maneuver_config = Some(derived);
+                    commander.maneuver_config_from_aegis = true;
+                }
+            }
+        }
         if let Some(selection) = self.strategy_selection {
             commander.strategy_selection = selection;
         }
@@ -3170,6 +3227,109 @@ mod tests {
         assert!(
             maneuver_ignored_aegis_policies(&run_timeout_aegis(Duration::from_secs(45))).is_empty()
         );
+    }
+
+    /// A builder over an `on_error`-absorbing config with a 45 second `run_timeout`, so the
+    /// Maneuver warning has something to name and the timeout has a value to preserve.
+    fn absorbing_builder() -> CommanderBuilder {
+        let config = BattalionConfig::new("gate").with_aegis(Aegis {
+            on_error: Some(ErrorHandlerSpec::Absorb {
+                fallback_delta: StateDelta::new(),
+            }),
+            ..run_timeout_aegis(Duration::from_secs(45))
+        });
+        CommanderBuilder::new(Arc::new(MockPaladinPort))
+            .strategy(BattalionStrategy::Formation)
+            .paladins(vec![create_test_paladin()])
+            .config(config)
+    }
+
+    /// WR-01: the Maneuver warning fires only on the aegis-derived path. An explicit
+    /// `ManeuverConfig` reads no `aegis`, so the message would be false for that run.
+    #[test]
+    fn maneuver_warning_fires_only_on_the_derived_config_path() {
+        let derived = absorbing_builder().build().unwrap();
+        assert!(derived.maneuver_config.is_none());
+        assert_eq!(
+            derived.maneuver_warned_aegis_policies(),
+            vec!["aegis.on_error"]
+        );
+
+        let explicit = absorbing_builder()
+            .maneuver_config(crate::maneuver::ManeuverConfig::default())
+            .build()
+            .unwrap();
+        assert!(explicit.maneuver_warned_aegis_policies().is_empty());
+
+        // `error_strategy` alone still follows `aegis.timeout.run_timeout`: still derived.
+        let strategy_only = absorbing_builder()
+            .error_strategy(crate::maneuver::ErrorStrategy::ContinueParallel)
+            .build()
+            .unwrap();
+        assert_eq!(
+            strategy_only.maneuver_warned_aegis_policies(),
+            vec!["aegis.on_error"]
+        );
+
+        // Nothing ignored, nothing to warn about, on either path.
+        let quiet = commander_with(BattalionConfig::new("quiet"));
+        assert!(quiet.maneuver_warned_aegis_policies().is_empty());
+    }
+
+    /// WR-01: the documented M-B-11 remediation, `error_strategy(ContinueParallel)`, must not
+    /// swap the aegis-derived timeout for `ManeuverConfig::default()`'s 300 seconds.
+    #[test]
+    fn error_strategy_keeps_the_aegis_derived_maneuver_timeout() {
+        let configured = absorbing_builder()
+            .error_strategy(crate::maneuver::ErrorStrategy::ContinueParallel)
+            .build()
+            .unwrap();
+        let cfg = configured.maneuver_config.unwrap();
+        assert_eq!(
+            cfg.error_strategy,
+            crate::maneuver::ErrorStrategy::ContinueParallel
+        );
+        assert_eq!(cfg.timeout, Some(Duration::from_secs(45)));
+
+        // No `aegis` timeout: the Maneuver stays unbounded rather than gaining 300 seconds.
+        let unbounded = CommanderBuilder::new(Arc::new(MockPaladinPort))
+            .strategy(BattalionStrategy::Formation)
+            .paladins(vec![create_test_paladin()])
+            .config(BattalionConfig::new("unbounded"))
+            .error_strategy(crate::maneuver::ErrorStrategy::ContinueParallel)
+            .build()
+            .unwrap();
+        assert_eq!(unbounded.maneuver_config.unwrap().timeout, None);
+    }
+
+    /// WR-01: `error_strategy` and `maneuver_config` compose in call order -- a later
+    /// `error_strategy` is laid over the explicit config, a later `maneuver_config` wins
+    /// outright (the pre-fix behaviour of both orders).
+    #[test]
+    fn error_strategy_and_maneuver_config_compose_in_call_order() {
+        let explicit =
+            || crate::maneuver::ManeuverConfig::default().with_timeout(Duration::from_secs(60));
+
+        let strategy_last = absorbing_builder()
+            .maneuver_config(explicit())
+            .error_strategy(crate::maneuver::ErrorStrategy::ContinueParallel)
+            .build()
+            .unwrap();
+        let cfg = strategy_last.maneuver_config.unwrap();
+        assert_eq!(
+            cfg.error_strategy,
+            crate::maneuver::ErrorStrategy::ContinueParallel
+        );
+        assert_eq!(cfg.timeout, Some(Duration::from_secs(60)));
+
+        let config_last = absorbing_builder()
+            .error_strategy(crate::maneuver::ErrorStrategy::ContinueParallel)
+            .maneuver_config(explicit())
+            .build()
+            .unwrap();
+        let cfg = config_last.maneuver_config.unwrap();
+        assert_eq!(cfg.error_strategy, crate::maneuver::ErrorStrategy::FailFast);
+        assert_eq!(cfg.timeout, Some(Duration::from_secs(60)));
     }
 
     /// D-04: with no explicit `ManeuverConfig` the bridge fails fast whatever `on_error` says,

@@ -787,7 +787,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 46-13-PLAN.md — book Upgrading page leads with v0.10.1 → v0.11.0, Migration Guide pointer, G-4 provider note, CHANGELOG documentation entries, STATE / ROADMAP / web3sec-todo bookkeeping (wave 6)
+- [x] 46-13-PLAN.md — book Upgrading page leads with v0.10.1 → v0.11.0, Migration Guide pointer, G-4 provider note, CHANGELOG documentation entries, STATE / ROADMAP / web3sec-todo bookkeeping (wave 6)
 
 ### Phase 47: v0.11.0 Crate Release
 

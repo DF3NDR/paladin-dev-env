@@ -73,8 +73,8 @@ The repo-root `release.toml` encodes:
 
 ## Canonical Publish Order
 
-The eleven-crate order actually published by `.github/workflows/release.yml`'s `publish-crates`
-job (package names, dependency-first):
+The twelve-crate order actually published by `.github/workflows/release.yml`'s `publish-crates`
+job, the twelve publishable crates (package names, dependency-first):
 
 1. `paladin-ai-core` (source directory `crates/paladin-core`)
 2. `paladin-ports`
@@ -82,7 +82,9 @@ job (package names, dependency-first):
 4. `paladin-battalion`, `paladin-llm`, `paladin-memory`, `paladin-web`,
    `paladin-notifications`, `paladin-content`, `paladin-storage` (parallel-safe leaf tier;
    published sequentially in the workflow, but none depends on another)
-5. `paladin-ai` (facade, package name `paladin-ai`, source directory is the workspace root)
+5. `paladin-eval` (composition crate, ADR-0048; it depends on `paladin-battalion`, `paladin-llm`
+   and `paladin-storage`, so it publishes after the leaf tier)
+6. `paladin-ai` (facade, package name `paladin-ai`, source directory is the workspace root)
 
 **Why `paladin-herald` sits after `paladin-ports` rather than immediately after `paladin-ai-core`:**
 it carries a normal `[dependencies]` edge on `paladin-ai-core` (must publish after it) but also a
@@ -101,7 +103,7 @@ crate's manifest lives at the repository root) carries a `package.include` allow
 `cargo package` bundles the entire repository tree — `docs/`, `.planning/`, `.claude/` and
 everything else — and exceeds crates.io's 10 MiB upload cap. `cargo publish --dry-run` does not
 catch this: dry-run aborts before the upload step where the server enforces the size limit. The
-ten `crates/*` packages are unaffected, since their package roots are their own subdirectories.
+eleven `crates/*` packages are unaffected, since their package roots are their own subdirectories.
 
 ## Operator Guide: Cutting a Release
 
@@ -198,7 +200,7 @@ run make release VERSION=X.Y.Z (finalizes changelogs) before tagging
 The pipeline has no alternate body source — there is no fallback to a commit-log summary. A
 heading-only section (no body text before the next heading) is accepted and extracts to an empty
 string, because `scripts/finalize-crate-changelogs.sh` legitimately produces one for a quiet
-prerelease; presence of the heading is the pass signal, not presence of content. The ten per-crate
+prerelease; presence of the heading is the pass signal, not presence of content. The eleven per-crate
 changelogs that ship inside the published crates contribute nothing to the release body — they are
 a separate, per-package artifact, not release notes.
 
@@ -313,27 +315,34 @@ package name, never by directory name — the two rows where they diverge (`pala
 | `paladin-notifications` | `crates/paladin-notifications` | `release.yml` | `crates-io` | 2026-08-27 | linked (reported) |
 | `paladin-content` | `crates/paladin-content` | `release.yml` | `crates-io` | 2026-08-27 | linked (reported) |
 | `paladin-storage` | `crates/paladin-storage` | `release.yml` | `crates-io` | 2026-08-27 | linked (reported) |
+| `paladin-eval` | `crates/paladin-eval` | `release.yml` | `crates-io` | on or before 2026-09-21 | linked (proven by publish) |
 | `paladin-ai` | workspace root (`Cargo.toml`) | `release.yml` | `crates-io` | 2026-08-27 | linked (reported) |
 
-All eleven crates are covered; none is excluded. "linked (reported)" reflects that this table is
-copied from the evidence ledger's Trust Link Ledger, whose "linked" confirmation came from the
-human operator who created these configurations one at a time through the crates.io web UI (no
-API or CLI exists for this step) — not independently re-verified by re-opening each crate's
+All twelve publishable crates are covered; none is excluded. "linked (reported)" reflects that this
+table's eleven older rows are copied from the evidence ledger's Trust Link Ledger, whose "linked"
+confirmation came from the human operator who created these configurations one at a time through
+the crates.io web UI (no API or CLI exists for this step) — not independently re-verified by re-opening each crate's
 settings page, because crates.io exposes no public API for reading a Trusted Publishing
 configuration back. The proof publish (`0.8.1-rc.2`, run 33089177606) is what falsifies a silently
 missing or misconfigured link: a crate whose configuration was not actually saved would fail at
 the `Authenticate with crates.io` step or at that crate's own publish step rather than passing
-silently — and all eleven passed. If any row is later found incorrect, it is corrected here and
-the discrepancy is recorded, not silently overwritten.
+silently — and all eleven passed (the eleven crates that existed then). If any row is later found
+incorrect, it is corrected here and the discrepancy is recorded, not silently overwritten.
+
+The `paladin-eval` row is not operator-reported. It is proven by that crate's first publish,
+`0.10.1` in release run 35659477719 on 2026-09-21, whose crates.io record carries non-null
+`trustpub_data` (run id 35659477719, commit `f7dae267`), so its link date is "on or before" that
+publish.
 
 ### Credential History
 
 | Event | Date | Actor | Evidence |
 |---|---|---|---|
-| Bootstrap publish of `0.8.1-rc.1` (all eleven crates) using the standing `CARGO_REGISTRY_TOKEN` | 2026-08-26 | Am0rfu5 (repository owner; workflow dispatches and PR merges performed by Claude Code at the owner's explicit request) | `.planning/phases/19-crates-io-trusted-publishing-replace-the-long-lived-registry/19-PUBLISH-EVIDENCE.md`, "Bootstrap Publish (old credential)"; run [33009214745](https://github.com/DF3NDR/paladin-dev-env/actions/runs/33009214745) |
-| OIDC proof publish of `0.8.1-rc.2` (all eleven crates, non-null `trustpub_data`) | 2026-08-27 | Am0rfu5 (repository owner; PR merges and the tag push performed by Claude Code at the owner's explicit delegation) | `.planning/phases/19-crates-io-trusted-publishing-replace-the-long-lived-registry/19-PUBLISH-EVIDENCE.md`, "OIDC Proof Event (PUB-03)"; run [33089177606](https://github.com/DF3NDR/paladin-dev-env/actions/runs/33089177606) |
+| Bootstrap publish of `0.8.1-rc.1` (all eleven crates at the time) using the standing `CARGO_REGISTRY_TOKEN` | 2026-08-26 | Am0rfu5 (repository owner; workflow dispatches and PR merges performed by Claude Code at the owner's explicit request) | `.planning/phases/19-crates-io-trusted-publishing-replace-the-long-lived-registry/19-PUBLISH-EVIDENCE.md`, "Bootstrap Publish (old credential)"; run [33009214745](https://github.com/DF3NDR/paladin-dev-env/actions/runs/33009214745) |
+| OIDC proof publish of `0.8.1-rc.2` (all eleven crates at the time, non-null `trustpub_data`) | 2026-08-27 | Am0rfu5 (repository owner; PR merges and the tag push performed by Claude Code at the owner's explicit delegation) | `.planning/phases/19-crates-io-trusted-publishing-replace-the-long-lived-registry/19-PUBLISH-EVIDENCE.md`, "OIDC Proof Event (PUB-03)"; run [33089177606](https://github.com/DF3NDR/paladin-dev-env/actions/runs/33089177606) |
 | crates.io publish-scoped token ("Paladin") revoked | 2026-08-27 | Am0rfu5, via the crates.io UI (Account Settings → API Tokens) | `.planning/phases/19-crates-io-trusted-publishing-replace-the-long-lived-registry/19-PUBLISH-EVIDENCE.md`, "Revocation Ledger" row 1 |
 | GitHub repository secret `CARGO_REGISTRY_TOKEN` deleted from `DF3NDR/paladin-dev-env` | 2026-08-27 | Am0rfu5, via the GitHub web UI (agent-side `gh secret delete` was blocked by the local Claude Code permission classifier, so the deletion was routed to the human) | `.planning/phases/19-crates-io-trusted-publishing-replace-the-long-lived-registry/19-PUBLISH-EVIDENCE.md`, "Revocation Ledger" rows 2-3 |
+| OIDC publish of `paladin-eval` 0.10.1 (first publish of this crate, non-null `trustpub_data`) | 2026-09-21 | the `release.yml` workflow (tag pushed by the repository owner, Am0rfu5) | run [35659477719](https://github.com/DF3NDR/paladin-dev-env/actions/runs/35659477719); crates.io `paladin-eval` 0.10.1 `trustpub_data` |
 
 This history is not folded into `SECURITY-EXCEPTIONS.md`. That register is scoped to RustSec
 advisory suppressions and is mechanically parsed by `scripts/check-advisory-register.sh`, which
@@ -372,7 +381,7 @@ Naming this path here is what stops it from being improvised badly under pressur
 
 ### Known Limits
 
-- **A single minted token must outlive the whole eleven-crate sequential loop**, including its
+- **A single minted token must outlive the whole twelve-crate sequential loop**, including its
   index-wait sleeps. The proof run used roughly 23% of the token's ~30-minute lifetime
   (`Authenticate with crates.io` completed at `15:48:40Z`; the last crate's registry `created_at`
   read `15:55:35.67Z`, a span of ~6m56s) — comfortable at current pacing, but an accepted risk

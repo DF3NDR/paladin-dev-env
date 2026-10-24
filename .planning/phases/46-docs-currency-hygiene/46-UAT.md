@@ -3,16 +3,16 @@ status: testing
 phase: 46-docs-currency-hygiene
 source: 46-01-SUMMARY.md, 46-02-SUMMARY.md, 46-03-SUMMARY.md, 46-04-SUMMARY.md, 46-05-SUMMARY.md, 46-06-SUMMARY.md, 46-07-SUMMARY.md, 46-08-SUMMARY.md, 46-09-SUMMARY.md, 46-10-SUMMARY.md, 46-11-SUMMARY.md, 46-12-SUMMARY.md, 46-13-SUMMARY.md, 46-14-SUMMARY.md
 started: 2026-10-24T17:16:32Z
-updated: 2026-10-24T18:52:05Z
+updated: 2026-10-24T18:54:44Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 4
-name: Treasurer concept page and configuration reference
+number: 5
+name: Stored v0.10 configs with removed keys are refused with a guiding error
 expected: |
-  docs/src/SUMMARY.md lists a Treasurer page under Architecture right after Commissary, and docs/src/architecture/treasurer.md covers the ledger, allowance windows, mid-run halt, pricing and a "Rate pacing (Cadence)" section. docs/src/user-guide/configuration.md has one `## Treasurer` block with a key table covering all APP_TREASURER_* overrides, a "Treasurer pricing" section and the warn rule example (79/80/81 percent) plus the allowance period range 1m to 366d. config.example.yml has a commented `cadence:` block with defaults and the Redis url_env form. docs/src/appendix/adr-index.md row 0050 says built in v0.11.0 and rows 0052-0054 and 0056-0062 are present.
+  Deserializing a BattalionConfig document that still carries `timeout_seconds`, `retry_policy` or `error_strategy` fails with one error that names each key present, its aegis.* replacement and MIGRATION row M-B-06 (never a value). A ConclaveConfig with `timeout_seconds` is refused the same way, pointing at battalion_config.aegis.timeout.run_timeout. A v0.11 document, or one with an unrelated unknown key, still loads, and the CLI's own conclave YAML `timeout_seconds` still works. `cargo test -p paladin-battalion legacy_keys` passes.
 awaiting: user response
 
 ## Tests
@@ -31,7 +31,7 @@ result: pass
 
 ### 4. Treasurer concept page and configuration reference
 expected: docs/src/SUMMARY.md lists a Treasurer page under Architecture right after Commissary, and docs/src/architecture/treasurer.md covers the ledger, allowance windows, mid-run halt, pricing and a "Rate pacing (Cadence)" section. docs/src/user-guide/configuration.md has one `## Treasurer` block with a key table covering all APP_TREASURER_* overrides, a "Treasurer pricing" section and the warn rule example (79/80/81 percent) plus the allowance period range 1m to 366d. config.example.yml has a commented `cadence:` block with defaults and the Redis url_env form. docs/src/appendix/adr-index.md row 0050 says built in v0.11.0 and rows 0052-0054 and 0056-0062 are present.
-result: [pending]
+result: pass
 
 ### 5. Stored v0.10 configs with removed keys are refused with a guiding error
 expected: Deserializing a BattalionConfig document that still carries `timeout_seconds`, `retry_policy` or `error_strategy` fails with one error that names each key present, its aegis.* replacement and MIGRATION row M-B-06 (never a value). A ConclaveConfig with `timeout_seconds` is refused the same way, pointing at battalion_config.aegis.timeout.run_timeout. A v0.11 document, or one with an unrelated unknown key, still loads, and the CLI's own conclave YAML `timeout_seconds` still works. `cargo test -p paladin-battalion legacy_keys` passes.
@@ -84,9 +84,9 @@ coverage_id: D4
 ## Summary
 
 total: 14
-passed: 7
+passed: 8
 issues: 0
-pending: 7
+pending: 6
 skipped: 0
 blocked: 0
 

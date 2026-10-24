@@ -3,16 +3,16 @@ status: testing
 phase: 46-docs-currency-hygiene
 source: 46-01-SUMMARY.md, 46-02-SUMMARY.md, 46-03-SUMMARY.md, 46-04-SUMMARY.md, 46-05-SUMMARY.md, 46-06-SUMMARY.md, 46-07-SUMMARY.md, 46-08-SUMMARY.md, 46-09-SUMMARY.md, 46-10-SUMMARY.md, 46-11-SUMMARY.md, 46-12-SUMMARY.md, 46-13-SUMMARY.md, 46-14-SUMMARY.md
 started: 2026-10-24T17:16:32Z
-updated: 2026-10-24T17:27:26Z
+updated: 2026-10-24T18:52:05Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 3
-name: Dependency allowlist guard catches drift
+number: 4
+name: Treasurer concept page and configuration reference
 expected: |
-  `make check-dependency-allowlist` exits 0 on HEAD (paladin-core 14 keys, paladin-ports 12 including `log`, matching the dated 2026-10-24 amendment in ADR-0015). Temporarily adding a surplus dependency line to crates/paladin-ports/Cargo.toml makes it exit non-zero naming the key; reverting restores exit 0. `make test-shell-guards` passes the 15-assertion harness and `make check-gates` lists check-dependency-allowlist as a member and exits 0.
+  docs/src/SUMMARY.md lists a Treasurer page under Architecture right after Commissary, and docs/src/architecture/treasurer.md covers the ledger, allowance windows, mid-run halt, pricing and a "Rate pacing (Cadence)" section. docs/src/user-guide/configuration.md has one `## Treasurer` block with a key table covering all APP_TREASURER_* overrides, a "Treasurer pricing" section and the warn rule example (79/80/81 percent) plus the allowance period range 1m to 366d. config.example.yml has a commented `cadence:` block with defaults and the Redis url_env form. docs/src/appendix/adr-index.md row 0050 says built in v0.11.0 and rows 0052-0054 and 0056-0062 are present.
 awaiting: user response
 
 ## Tests
@@ -27,7 +27,7 @@ result: pass
 
 ### 3. Dependency allowlist guard catches drift
 expected: `make check-dependency-allowlist` exits 0 on HEAD (paladin-core 14 keys, paladin-ports 12 including `log`, matching the dated 2026-10-24 amendment in ADR-0015). Temporarily adding a surplus dependency line to crates/paladin-ports/Cargo.toml makes it exit non-zero naming the key; reverting restores exit 0. `make test-shell-guards` passes the 15-assertion harness and `make check-gates` lists check-dependency-allowlist as a member and exits 0.
-result: [pending]
+result: pass
 
 ### 4. Treasurer concept page and configuration reference
 expected: docs/src/SUMMARY.md lists a Treasurer page under Architecture right after Commissary, and docs/src/architecture/treasurer.md covers the ledger, allowance windows, mid-run halt, pricing and a "Rate pacing (Cadence)" section. docs/src/user-guide/configuration.md has one `## Treasurer` block with a key table covering all APP_TREASURER_* overrides, a "Treasurer pricing" section and the warn rule example (79/80/81 percent) plus the allowance period range 1m to 366d. config.example.yml has a commented `cadence:` block with defaults and the Redis url_env form. docs/src/appendix/adr-index.md row 0050 says built in v0.11.0 and rows 0052-0054 and 0056-0062 are present.
@@ -84,9 +84,9 @@ coverage_id: D4
 ## Summary
 
 total: 14
-passed: 6
+passed: 7
 issues: 0
-pending: 8
+pending: 7
 skipped: 0
 blocked: 0
 

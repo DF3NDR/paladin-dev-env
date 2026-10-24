@@ -3,16 +3,16 @@ status: testing
 phase: 46-docs-currency-hygiene
 source: 46-01-SUMMARY.md, 46-02-SUMMARY.md, 46-03-SUMMARY.md, 46-04-SUMMARY.md, 46-05-SUMMARY.md, 46-06-SUMMARY.md, 46-07-SUMMARY.md, 46-08-SUMMARY.md, 46-09-SUMMARY.md, 46-10-SUMMARY.md, 46-11-SUMMARY.md, 46-12-SUMMARY.md, 46-13-SUMMARY.md, 46-14-SUMMARY.md
 started: 2026-10-24T17:16:32Z
-updated: 2026-10-24T19:00:03Z
+updated: 2026-10-24T19:05:52Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 6
-name: Maneuver warns once when ignored aegis policies are set
+number: 7
+name: MIGRATION.md is a two-part upgrade guide
 expected: |
-  Running a Commander with the Maneuver strategy and a BattalionConfig whose `aegis.on_error` or `aegis.retry` is set logs exactly one warn per execution reading "Maneuver {name} ignores aegis.on_error and aegis.retry: Maneuver reads only aegis.timeout.run_timeout, as one whole-flow clock". With neither field set no warning appears. The BattalionConfig.aegis rustdoc has a Maneuver bullet, and Commander, CommanderBuilder and build() rustdoc state the Commander adds no bound of its own. `cargo test -p paladin-battalion maneuver_ignored` passes.
+  MIGRATION.md opens with "# Upgrading Paladin", then section 10 (v0.10.1 to v0.11.0) with headings 10.1 through 10.8, including a freeze note dated 2026-10-24 against commit e28e43b5, an empty-deprecations statement in 10.7 and a six-step operator checklist in 10.8. Section 9 (v0.9.0 to v0.10.0) sits below with one pointer line under each 9.x heading and its original text otherwise unchanged. v0.11 rows cite 10.x and v0.10 rows cite 9.x. `grep -c TBD MIGRATION.md` prints 0 and `make check-migration-allowlist` exits 0 reading both the 9.2 and 10.2 registers.
 awaiting: user response
 
 ## Tests
@@ -39,7 +39,7 @@ result: pass
 
 ### 6. Maneuver warns once when ignored aegis policies are set
 expected: Running a Commander with the Maneuver strategy and a BattalionConfig whose `aegis.on_error` or `aegis.retry` is set logs exactly one warn per execution reading "Maneuver {name} ignores aegis.on_error and aegis.retry: Maneuver reads only aegis.timeout.run_timeout, as one whole-flow clock". With neither field set no warning appears. The BattalionConfig.aegis rustdoc has a Maneuver bullet, and Commander, CommanderBuilder and build() rustdoc state the Commander adds no bound of its own. `cargo test -p paladin-battalion maneuver_ignored` passes.
-result: [pending]
+result: pass
 
 ### 7. MIGRATION.md is a two-part upgrade guide
 expected: MIGRATION.md opens with "# Upgrading Paladin", then section 10 (v0.10.1 to v0.11.0) with headings 10.1 through 10.8, including a freeze note dated 2026-10-24 against commit e28e43b5, an empty-deprecations statement in 10.7 and a six-step operator checklist in 10.8. Section 9 (v0.9.0 to v0.10.0) sits below with one pointer line under each 9.x heading and its original text otherwise unchanged. v0.11 rows cite 10.x and v0.10 rows cite 9.x. `grep -c TBD MIGRATION.md` prints 0 and `make check-migration-allowlist` exits 0 reading both the 9.2 and 10.2 registers.
@@ -84,9 +84,9 @@ coverage_id: D4
 ## Summary
 
 total: 14
-passed: 9
+passed: 10
 issues: 0
-pending: 5
+pending: 4
 skipped: 0
 blocked: 0
 

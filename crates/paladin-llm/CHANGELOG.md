@@ -168,7 +168,7 @@ and this project follows lockstep workspace versioning.
   retry loop could re-send a request the vendor had already billed. It is now
   `LlmError::EmptyCompletion("Response contained no choices")` carrying `billed_usage()` on the
   served model (else the request model) -- the shape the shared engine and Gemini already return --
-  and is `Transience::Permanent` (`MIGRATION.md` 9.1 M-B-22).
+  and is `Transience::Permanent` (`MIGRATION.md` 10.1 M-B-22).
 - Every adapter bills its empty and refused calls (G-50-5a, Phase 50 plan 50-27). OpenAI,
   DeepSeek, Anthropic, Gemini and the shared engine (Kimi, Qwen, Grok, Ollama, OpenAI-compatible)
   map usage before the shared guard and put it on `LlmError::EmptyCompletion` /
@@ -266,7 +266,7 @@ and this project follows lockstep workspace versioning.
   the request model), the mapped `TokenUsage` and no cost. A body with no `usage` object yields no
   bill, never a zero one. An empty or refused body that omits `usage` now reaches the guard instead
   of failing as a schema mismatch; a successful body without `usage` is still that schema-mismatch
-  `ProcessingError` (`MIGRATION.md` 9.1 M-B-22). Every other adapter path bills from plan 50-27.
+  `ProcessingError` (`MIGRATION.md` 10.1 M-B-22). Every other adapter path bills from plan 50-27.
 - Vendor usage totals are reconciled on every adapter (G-50-5a, Phase 50 plans 50-23 and 50-24).
   - The OpenAI, DeepSeek and Gemini adapters parse their vendor total on both paths. The total is
     now optional on the wire, so a usage object without one parses. They record any disagreement,
@@ -316,13 +316,13 @@ and this project follows lockstep workspace versioning.
   `compiled-default`, 2026-10-20); `with_max_tokens` is the override. `new(k, url, m)` becomes
   `new(k, m).with_base_url(url)`. `OllamaConfig::new` and `OpenAiCompatibleConfig::new` are the two
   endpoint-only exceptions and are unchanged; `from_env()` is unchanged on every type. Registered in
-  `MIGRATION.md` section 9.2 and 9.8 (DR-19) and the crate's `cargo-semver-checks` lints table
+  `MIGRATION.md` section 10.2 and 10.8 (DR-19) and the crate's `cargo-semver-checks` lints table
   (`method_parameter_count_changed`).
 - Phase 50 (PARITY-03, PARITY-06; owner decision option-a): the nine `*Config` types and
   `LlmProviderConfig` are `#[non_exhaustive]`, so a struct literal outside the crate no longer
   compiles; use `new(..)` or `from_env()` plus the `with_*` builders or field assignment (the `new`
   signatures are unchanged). `FallbackChainError` gains the struct variant `EmptyStepModel { index }`
-  (a numeric cast of `EmptyChain` no longer compiles). Registered in `MIGRATION.md` section 9.2 and
+  (a numeric cast of `EmptyChain` no longer compiles). Registered in `MIGRATION.md` section 10.2 and
   the crate's `cargo-semver-checks` lints table.
 
 ## [0.10.1] - 2026-09-21

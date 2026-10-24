@@ -48,7 +48,7 @@ and this project follows lockstep workspace versioning.
   `Admission::with_derived_budget` / `derived_budget`; `Run.halt_reason`; `NoticeKind` (a `kind`
   field on `NoticeRecord` and `AllowanceNotice`) and `RunEventKind::AllowanceHalted`; the herald
   helpers `HALT_REASON_METADATA_KEY`, `ExecutionMetadata::with_halt_reason` and
-  `halt_reason_display` (see `MIGRATION.md` §9.2).
+  `halt_reason_display` (see `MIGRATION.md` §10.2).
 
 - Phase 41 (allowance admission, ALLOW-01/02/04): `platform::container::allowance` module with
   `AllowanceScopeKind`, `AllowanceLimitKind`, `AllowanceRefusal`, `AllowanceWarning`,
@@ -58,14 +58,14 @@ and this project follows lockstep workspace versioning.
   (`RunEventKind` is now `#[non_exhaustive]` and gains `as_str`, the one to-string source).
 - `RunSchedule.created_by: Option<RunAttribution>` and `with_created_by`; `RunScope.allowance_warnings`
   and `with_allowance_warnings`; `ExecutionMetadata::with_allowance_warnings` and
-  `allowance_warning_display` (see `MIGRATION.md` §9.2).
+  `allowance_warning_display` (see `MIGRATION.md` §10.2).
 
 - `platform::container::cost` module: `Cost`, `CurrencyCode`, `CostError`, `PriceRow`,
   `PriceTable`, `cost_of_call`, `CostTally` — pure `i64` nano-unit fixed-point cost arithmetic, no
   floating point anywhere in the module (PRICE-02).
 - `PaladinResult.cost: Option<Cost>` and `TraceEvent::NodeFinished`/`RunFinished.cost:
   Option<Cost>` additive fields, riding beside `usage` everywhere it travels (PRICE-03; see the
-  root `CHANGELOG.md` and `MIGRATION.md` §9.2).
+  root `CHANGELOG.md` and `MIGRATION.md` §10.2).
 - `TraceDispatcher::total_cost()`, the synchronous twin of `total_usage()`.
 - `ExecutionMetadataBuilder::cost`, `ExecutionMetadata::cost_currency`/`cost_display`, and
   `ExecutionMetadata::from_run_finished(record, model_used)` — the engine-path producer built
@@ -123,7 +123,7 @@ and this project follows lockstep workspace versioning.
   new keys and still reads the v0.10 ones. `Entity<T>` stores its payload under `data` (read-alias
   `node`), `ContentItem` and `PromptItem` store their entity under `entity` (read-alias `node`), and
   `EntityVersion` stores `entity_id` / `entity_data`. A document carrying both spellings is
-  rejected; a v0.10 binary cannot read v0.11 output. See `MIGRATION.md` 9.1 M-B-12 and 9.4.
+  rejected; a v0.10 binary cannot read v0.11 output. See `MIGRATION.md` 10.1 M-B-12 and 10.4.
 - The `cost_estimate`/`total_cost()` rustdoc reserved-note on `ExecutionMetadata` now reads
   "produced by the Treasurer" instead of "no in-tree producer yet" (D-12).
 - Phase 44 (legacy clean break, LEGACY-01, LEGACY-02; ADR-0059): `BattalionConfig` gains
@@ -132,18 +132,18 @@ and this project follows lockstep workspace versioning.
   `cache`). The `aegis` rustdoc is the per-pattern contract: a per-attempt timeout, a retry whose
   `max_attempts` counts total attempts, and `Absorb` to continue past a failure. A v0.10
   `BattalionConfig` document still deserializes; its removed keys are ignored and `aegis` is
-  `Aegis::default()`. `BattalionConfig::new` arms no timeout. See `MIGRATION.md` 9.1 M-B-06 and
-  M-B-07 and the Phase 44 9.2 rows.
+  `Aegis::default()`. `BattalionConfig::new` arms no timeout. See `MIGRATION.md` 10.1 M-B-06 and
+  M-B-07 and the Phase 44 10.2 rows.
 - Phase 44 (LEGACY-01; ADR-0059; one-way): `BattalionResult.node_errors` is retyped from
   `Vec<battalion::NodeError>` to `Vec<node_error::NodeError>`, whose element is
   `{ node_id, attempt, transience, source }`. A stored v0.10 document with a non-empty
   `node_errors` no longer deserializes; an empty or absent array still does. See `MIGRATION.md`
-  9.1 M-B-08 and 9.4.
+  10.1 M-B-08 and 10.4.
 
 ### Removed
 
 - Phase 44 (LEGACY-01, LEGACY-02, LEGACY-03; ADR-0059; a clean break with no shim, see `MIGRATION.md`
-  9.2): the legacy Battalion `RetryPolicy`, `ErrorStrategy` and `NodeError`; `BattalionConfig`'s
+  10.2): the legacy Battalion `RetryPolicy`, `ErrorStrategy` and `NodeError`; `BattalionConfig`'s
   `timeout_seconds`, `retry_policy` and `error_strategy` fields and its `with_timeout`,
   `with_retry_policy` and `with_error_strategy` builders; `BattalionError::Timeout`;
   `ConclaveError::Timeout`; `ConclaveConfig::timeout_seconds` and `ConclaveConfig::with_timeout`
@@ -151,7 +151,7 @@ and this project follows lockstep workspace versioning.
   `PaladinError::LlmError`, `PaladinError::is_retryable` and `PaladinError::is_terminal`. Use
   `BattalionConfig.aegis`, the structured `node_error::NodeError`, `PaladinError::LlmFailure` and
   `PaladinError::transience()`.
-- Phase 48 (ENTITY-01..05; ADR-0060; a clean break with no shim, see `MIGRATION.md` 9.2): the
+- Phase 48 (ENTITY-01..05; ADR-0060; a clean break with no shim, see `MIGRATION.md` 10.2): the
   generic base wrapper `Node<T>` and `base::entity::node`, replaced by `base::entity::Entity<T>` with
   payload `data`; the `NodeVersion*` family and `base::service::node_version_service`, replaced by
   `EntityVersion*` in `entity_version_service`; the Citadel module's placeholder `PaladinData`,

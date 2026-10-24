@@ -16,7 +16,7 @@ and this project follows lockstep workspace versioning.
   `stop_reason: "allowance_halted"` and `ExecuteResponse.halt_reason` on the agent `execute`,
   `execute/stream` and `jobs` routes; `422 model_unpriced` (`ApiError::model_unpriced`) on the
   agent routes and `POST /v1/runs`; `RunEventKind::AllowanceHalted` as an operator-only
-  `allowance_halted` event (see `MIGRATION.md` §9.2 and §9.6).
+  `allowance_halted` event (see `MIGRATION.md` §10.2 and §10.6).
 
 - Phase 41 (allowance admission, ALLOW-02): `429 allowance_exhausted` with a store-clock `Retry-After`
   on `POST /v1/runs`, `POST /v1/threads/{id}/fork` and the agent `execute`, `execute/stream` and
@@ -31,7 +31,7 @@ and this project follows lockstep workspace versioning.
 - `Principal.tenant_id: TenantId` (required, derived from `AgentAuthConfig` inside `authenticate()`
   and nowhere else), `Principal::new`, `Principal::read_scope`, `Principal::ledger_scope` and
   `From<&Principal> for PrincipalRef`; `Principal` is now `#[non_exhaustive]` (TENANT-01;
-  **breaking** — see root `MIGRATION.md` §9.2).
+  **breaking** — see root `MIGRATION.md` §10.2).
 - `AgentAuthConfig.bearer_tenant: Option<TenantId>` — the tenant every verified bearer principal
   carries; a verified bearer token fails closed (`401`) while it is `None` (TENANT-01).
 - `run_controller::load_visible_run` — the single-run half of the tenant read gate and the entry
@@ -47,7 +47,7 @@ and this project follows lockstep workspace versioning.
   `ExecuteResponse.cost: Option<CostDto>` (`POST /agents/{id}/execute`) are both derived from
   `TreasuryLedgerPort::spend` at read time — one query per request/page, `null` when no ledger
   backend is configured, the run has no settled spend, or its settlements span more than one
-  currency (LEDGR-04; see root `MIGRATION.md` §9.2).
+  currency (LEDGR-04; see root `MIGRATION.md` §10.2).
 
 - Every repository/backend failure on the `/runs` routes (`GET /runs`, `GET /runs/{run_id}`,
   `/stream`, `/webhook-deliveries`, `POST /runs`, cancel) now renders a fixed `500 internal`

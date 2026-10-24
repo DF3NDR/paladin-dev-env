@@ -88,7 +88,7 @@ and this project follows lockstep workspace versioning.
   `RateLimitDimensionKind` and `RetryDelaySource` carry a provider's parsed rate-limit numbers
   (never a raw header string), read through `LlmError::retry_after()` and
   `LlmError::rate_limit_hints()`. `NodeCachePort::put_fenced`, a defaulted method that delegates to
-  `put`, so no implementor breaks (see `MIGRATION.md` section 9.2).
+  `put`, so no implementor breaks (see `MIGRATION.md` section 10.2).
 
 - `RunTracePort::max_seq(&self, &ThreadId)`, the largest persisted `seq` of a thread (`0` when it
   has none), with a defaulted implementation that pages through `read` so an existing implementor
@@ -105,17 +105,17 @@ and this project follows lockstep workspace versioning.
   `SpendGuard` output port with `SpendDecision` and `NeverHalts`; the defaulted
   `AllowanceAdmissionPort::admit_for_model` with `AdmissionError::ModelUnpriced`;
   `RunSubmissionError::ModelUnpriced`; `RunOutcomeRecord.halt_reason`; the notice kind carried
-  through `TreasuryNoticePort` (see `MIGRATION.md` §9.2).
+  through `TreasuryNoticePort` (see `MIGRATION.md` §10.2).
 
 - Phase 41 (allowance admission, ALLOW-01/02/04): `AllowanceAdmissionPort` and `AdmissionError`
   (input), `TreasuryNoticePort` (output), and the defaulted `TreasuryLedgerPort::balance`
   (`BalanceQuery`).
 - `RunSubmissionError::AllowanceExhausted(AllowanceRefusal)`, `SubmitRun.attributed_to` and
-  `CreateRunSchedule.created_by` (see `MIGRATION.md` §9.2).
+  `CreateRunSchedule.created_by` (see `MIGRATION.md` §10.2).
 
 - `LlmResponse.cost: Option<Cost>` additive field, priced by `paladin_llm`'s
   `PricingLlmAdapter::generate` from the response's own served model (PRICE-03; see
-  `MIGRATION.md` §9.2).
+  `MIGRATION.md` §10.2).
 - `StreamingResponse.cost: Option<Cost>` and `ChunkMetadata.cost: Option<Cost>` /
   `ChunkMetadata.execution: Option<ExecutionMetadata>` additive fields on the two
   `#[non_exhaustive]` port types the streaming path carries (PRICE-03).
@@ -126,7 +126,7 @@ and this project follows lockstep workspace versioning.
 
 - `RunQuery.scope: RunReadScope` (`Default` = `All`) — every `RunRepositoryPort::list` adapter
   applies a `Tenant(t)` scope inside its own query; the run contract suite gains attribution
-  round-trip and scoped-list clauses (PLAT-07; see root `MIGRATION.md` §9.2).
+  round-trip and scoped-list clauses (PLAT-07; see root `MIGRATION.md` §10.2).
 - `PaladinExecutorPort::execute_scoped` and `StreamingExecutorPort::execute_stream_scoped` —
   defaulted methods that carry a `RunScope` (and its tenant ledger scope) into an executor; every
   existing implementor compiles unchanged (TENANT-02).
@@ -139,7 +139,7 @@ and this project follows lockstep workspace versioning.
 
 - `LlmError::RateLimitExceeded` is now the `#[non_exhaustive]` struct variant `{ retry_after:
   Option<Duration>, hints: Option<Box<RateLimitHints>> }` (PACE-01; Phase 43 plan 43-02;
-  `MIGRATION.md` section 9.2). Construct it with `LlmError::rate_limited(None)` or
+  `MIGRATION.md` section 10.2). Construct it with `LlmError::rate_limited(None)` or
   `rate_limited(Some(delay))` and match it as `LlmError::RateLimitExceeded { .. }`; `Display`
   stays `Rate limit exceeded` and `transience()` stays `Transient`. `CadencePort` gained the
   required methods `try_lock` and `unlock` in the same phase, before any release, so an
@@ -148,7 +148,7 @@ and this project follows lockstep workspace versioning.
 - **Breaking:** `SubmitRun.requested_by`, `ForkRun.requested_by` and `RunSubmissionPort::cancel`'s
   `requested_by` parameter are `Option<PrincipalRef>` (tenant, API key id and role travel together)
   instead of `Option<(String, UserRole)>`; `None` keeps its internal-caller meaning (TENANT-01,
-  TENANT-02; see root `MIGRATION.md` §9.2).
+  TENANT-02; see root `MIGRATION.md` §10.2).
 - `CompositeSink::on_event` moves the record into its last child instead of cloning it for every
   child; no behaviour change (OBS-05).
 
@@ -159,7 +159,7 @@ and this project follows lockstep workspace versioning.
   `reasoning: None`, or build with `LlmResponse::new(..)` plus `with_reasoning`. `PaladinResult`
   gains `run_metadata` after `served_by`; use `..Default::default()` or `PaladinResult::new(..)`.
   `LlmError` gains the `Refusal` variant (the enum is `#[non_exhaustive]`; a classifier needs an
-  arm). Each is registered in `MIGRATION.md` section 9.2 and the semver allowlist.
+  arm). Each is registered in `MIGRATION.md` section 10.2 and the semver allowlist.
 - Phase 50 (G-50-5a, PARITY-05; plans 50-25 and 50-26): `LlmError::EmptyCompletion(String)`
   becomes the `#[non_exhaustive]` struct variant `EmptyCompletion { detail, billed }`, and
   `LlmError::Refusal` gains `billed` and is marked `#[non_exhaustive]`. `billed:
@@ -168,7 +168,7 @@ and this project follows lockstep workspace versioning.
   variants with the new `LlmError::empty_completion` / `LlmError::refusal`, attach a bill with
   `LlmError::with_billed_usage`, and read it with `LlmError::billed_usage`. Both look through
   `AllProvidersFailed` to its last error. Match with `EmptyCompletion { .. }` / `Refusal { .. }`.
-  `Display` and `Permanent` are unchanged. Registered in `MIGRATION.md` section 9.2 (the
+  `Display` and `Permanent` are unchanged. Registered in `MIGRATION.md` section 10.2 (the
   `LlmError` row) and the semver allowlist (`enum_tuple_variant_changed_kind`).
 
 ## [0.10.1] - 2026-09-21

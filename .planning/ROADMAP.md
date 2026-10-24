@@ -235,7 +235,7 @@ from `.project/Milestone_14-Treasurer/` (overview + Epic 1 PRD R1-R6) and
 - [x] **Phase 43: Rate Pacing** - In-process and Redis-shared 429 back-off with jitter, a distributed cache-stampede lock, and safe degradation when Redis is unavailable (completed 2026-10-09)
 - [x] **Phase 44: Legacy Clean-Break Removal** - Remove legacy Battalion `RetryPolicy`/`ErrorStrategy`/`NodeError`/timeouts and `PaladinError::LlmError(String)`, migrating the last string-matching retry check to the typed taxonomy (completed 2026-10-11)
 - [x] **Phase 45: RustFS Swap & Platform/Observability Deviations** - Replace MinIO with RustFS across dev/test and CI, wire SSE/webhook emission for legacy `Runnable::Agent` runs, and close the tracing-overhead gap (completed 2026-09-30)
-- [ ] **Phase 46: Docs Currency & Hygiene** - Close the v0.10.0 audit's docs fixes, publish the Treasurer mdBook page and migration guide, reconcile Nyquist validation, and dispose of the three v2 debt lines
+- [x] **Phase 46: Docs Currency & Hygiene** - Close the v0.10.0 audit's docs fixes, publish the Treasurer mdBook page and migration guide, reconcile Nyquist validation, and dispose of the three v2 debt lines (completed 2026-10-24)
 - [ ] **Phase 47: v0.11.0 Crate Release** - Tag and publish v0.11.0: all 12 crates on crates.io, CHANGELOG and MIGRATION complete, publish-order gate green
 - [x] **Phase 48: Base Entity Rename** - Rename the base-layer entity wrapper `Node<T>` → `Entity<T>` (payload field `node` → `data`; clean break under a Phase-48-only X-03 supersession, or a one-release deprecated alias — decided at discuss; serde alias for persisted JSON), disposition the unused base-layer items, and reserve "node" for the graph sense only — **executes before Phases 46 and 47** (added 2026-10-12, after Phase 44 sealed) (completed 2026-10-14)
 - [x] **Phase 49: Downstream Adoption of v0.10.1 (web3sec Consumer Bump)** - Scope cut to its Paladin-side half on 2026-10-14 (owner decision): the compile-only consumer-surface muster and the `MIGRATION.md` library-consumer note landed (plans 49-01..03); the consumer bump itself (ADOPT-01..03) is superseded by one web3sec move straight to `v0.11.0` after Phases 50 and 51 (todo `2026-10-14-web3sec-single-bump-to-v0-11-0.md`) (completed 2026-10-14)
@@ -831,7 +831,7 @@ Plans:
 | 43. Rate Pacing | v0.11.0 | 13/13 | Complete    | 2026-10-09 |
 | 44. Legacy Clean-Break Removal | v0.11.0 | 13/13 | Complete    | 2026-10-11 |
 | 45. RustFS Swap & Platform/Observability Deviations | v0.11.0 | 7/7 | Complete    | 2026-09-30 |
-| 46. Docs Currency & Hygiene | v0.11.0 | 0/TBD | Not started | - |
+| 46. Docs Currency & Hygiene | v0.11.0 | 14/14 | Complete    | 2026-10-24 |
 | 47. v0.11.0 Crate Release | v0.11.0 | 0/TBD | Not started | - |
 | 48. Base Entity Rename (runs after 44, before 46-47) | v0.11.0 | 9/9 | Complete    | 2026-10-14 |
 | 49. Downstream Adoption of v0.10.1 (web3sec Consumer Bump) (runs after 48, before 46-47) | v0.11.0 | 3/3 | Complete    | 2026-10-14 |

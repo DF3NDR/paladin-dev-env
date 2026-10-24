@@ -4,15 +4,15 @@ milestone: v0.11.0
 milestone_name: Crate Release
 current_phase: 46
 current_phase_name: Docs Currency & Hygiene
-status: planning
+status: executing
 stopped_at: Phase 46 context gathered
-last_updated: "2026-10-24T03:33:26.470Z"
+last_updated: "2026-10-24T11:23:13.380Z"
 last_activity: 2026-10-23
 last_activity_desc: Phase 51 complete, transitioned to Phase 46
 progress:
   total_phases: 14
   completed_phases: 13
-  total_plans: 150
+  total_plans: 164
   completed_plans: 150
 ---
 
@@ -64,7 +64,7 @@ under `milestones/`.
 
 Phase: 46 — Docs Currency & Hygiene
 Plan: Not started
-Status: Ready to plan
+Status: Ready to execute
 Last activity: 2026-10-23 — Phase 51 complete, transitioned to Phase 46
 
 ## Performance Metrics

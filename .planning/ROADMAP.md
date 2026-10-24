@@ -754,7 +754,39 @@ last among feature work; the v0.10 → v0.11 migration guide must carry Phase 48
 
   4. Each of the three v2 debt lines (oversized service files, clone/lock contention,
      dependency-allowlist drift) is fixed or carries a written waiver.
-**Plans**: TBD
+**Plans**: 13 plans in 6 waves
+
+Plans:
+**Wave 1**
+
+- [ ] 46-01-PLAN.md — CURR-22 audit fixes: twelve publishable crates on the three release pages, `paladin-eval` Trusted Publishing and Credential History rows, CHANGELOG `[0.10.0]` / `[0.10.1]` heading dates (root + crates) (wave 1)
+- [ ] 46-02-PLAN.md — Nyquist reconcile-only for Phases 22 and 24 (wave 1)
+- [ ] 46-03-PLAN.md — Phase 28 promoted to `nyquist_compliant: true`; Nyquist reconcile-only for Phases 29 and 30 (wave 1)
+- [ ] 46-04-PLAN.md — Nyquist reconcile-only for Phases 34, 36 and 36.1 (wave 1)
+- [ ] 46-05-PLAN.md — v2 debt lines: ADR-0015 re-measured, `check-dependency-allowlist` gate (script, harness, `check-gates`, CI), three WINDOWS dispositions, STATE/ROADMAP pointers (wave 1)
+- [ ] 46-06-PLAN.md — four consumer-surface muster pins from the web3sec dogfood report (wave 1)
+- [ ] 46-07-PLAN.md — Treasurer mdBook page, one `## Treasurer` configuration reference (pricing, allowance, warn threshold, Cadence), example-config `cadence:` block, ADR index refresh (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 46-08-PLAN.md — removed v0.10 `BattalionConfig` / `ConclaveConfig` keys refused at load (D-23), ADR-0059 amendment, M-B-06 / register rows (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 46-09-PLAN.md — Phase 44 review follow-ups: Maneuver ignored-policy `warn!`, Commander / `aegis` rustdoc, WR-05 notes, IN-05 / IN-N1 (wave 3)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 46-10-PLAN.md — `MIGRATION.md` becomes two-part (section 10 above section 9), v0.11 lines moved verbatim, register gate widened in script / CI / harness (wave 4)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 46-11-PLAN.md — section 10 freeze: cross-references, web3sec G-1..G-7, opening, 10.7, 10.8 operator checklist (wave 5)
+- [ ] 46-12-PLAN.md — live `§9.x` citations of v0.11 rows retargeted to section 10 outside `MIGRATION.md` (wave 5)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] 46-13-PLAN.md — book Upgrading page leads with v0.10.1 → v0.11.0, Migration Guide pointer, G-4 provider note, CHANGELOG documentation entries, STATE / ROADMAP / web3sec-todo bookkeeping (wave 6)
 
 ### Phase 47: v0.11.0 Crate Release
 

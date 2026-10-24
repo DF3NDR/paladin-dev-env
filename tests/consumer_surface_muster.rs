@@ -630,6 +630,13 @@ fn stockpile_read_pin(stockpile: &Stockpile) -> (usize, usize, u32, u32, bool) {
     )
 }
 
+/// Phase 46 (D-04, web3sec 2026-10-24 handoff §3 item 1): `Stockpile::render` is pinned as a
+/// fn pointer, so a change to its receiver or its `String` return type turns this target red.
+/// NEVER CALLED: it only has to type-check.
+fn stockpile_render_pin() {
+    let _render: fn(&Stockpile) -> String = Stockpile::render;
+}
+
 /// Appendix B item 7: the four `MockLlmAdapter` builders, each coerced to `Arc<dyn LlmPort>`.
 fn mock_builder_pins() -> Vec<Arc<dyn LlmPort>> {
     let one: Arc<dyn LlmPort> = Arc::new(MockLlmAdapter::new().with_response("x"));

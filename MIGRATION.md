@@ -4,6 +4,10 @@
 
 # 10. Upgrading from v0.10.1 to v0.11.0
 
+v0.11.0 is the Treasurer release. It adds spend governance (a price table, a cost ledger, per-tenant and per-key allowances that can halt a run mid-flight) and Cadence, per-(provider, model) rate pacing after a provider 429, in-process or fleet-wide through Redis. It also brings provider parity (all nine adapters share one error, usage and request-parameter contract, and a model swap is configuration only) and reasoning effort (`ReasoningEffort`, judged against each model's profile before a call). Four clean breaks ship with it: the legacy Battalion retry, error-strategy and timeout types are removed in favour of `Aegis` (ADR-0059), the base wrapper `Node<T>` becomes `Entity<T>` (ADR-0060), the provider-parity surface changes outright (ADR-0061), and reasoning effort adds its own breaks (ADR-0062). None of them has a deprecation cycle.
+
+> **Freeze note.** Frozen 2026-10-24 on the downstream consumer's dogfood report against `e28e43b5` (Phase 46, D-03). Phase 47 re-reads this part only if a code change after `e28e43b5` moves the consumer surface.
+
 ## 10.1 Behavioral changes (user-visible without code changes)
 
 | ID | Change | Who is affected | Required user action |
@@ -334,7 +338,7 @@ gate (`crates/paladin-web/tests/openapi_golden_v0_9.rs`) is untouched: `RunRespo
 
 ## 10.7 Deprecations
 
-No item is marked `#[deprecated]` in v0.11.0. Phases 48, 50 and 51 are clean breaks under ADR-0060, ADR-0061 and ADR-0062: each changes its public surface outright, with no deprecation cycle, and its rows are in 10.2.
+No item is marked `#[deprecated]` in v0.11.0, so this section lists no deprecated item and stays empty of them (D-00e). Phases 48, 50 and 51 are clean breaks under ADR-0060, ADR-0061 and ADR-0062: each changes its public surface outright, with no deprecation cycle, and its rows are in 10.2.
 
 - **Phase 44 (ADR-0059).** The legacy Battalion `RetryPolicy`, `ErrorStrategy` and `NodeError` summary types, and the legacy Formation/Phalanx/Campaign timeout handling, that v0.10 left live and undeprecated are removed outright, without a deprecation cycle (D-00c) -- see the Phase 44 rows in 10.2.
 - **Phase 48 (ADR-0060).** The base wrapper, the version family and the two wrapper fields are renamed, and the Citadel placeholder types are unified, outright and without a deprecation cycle -- no item is marked `#[deprecated]`; see the Phase 48 rows in 10.2.
@@ -342,6 +346,17 @@ No item is marked `#[deprecated]` in v0.11.0. Phases 48, 50 and 51 are clean bre
 ## 10.8 Upgrade checklist
 
 ### Operators: v0.10.1 → v0.11.0
+
+One ordered checklist for an operator upgrading a v0.10.1 deployment to v0.11.0. Every step below names a command or file present in the tree; none invents a subcommand that does not exist.
+
+1. **Back up state.** Snapshot the run store (`RunStoreConfig`'s SQLite file or PostgreSQL database), the waypoint store, the Garrison SQLite database if used, and any Citadel state files. The migrations of step 2 add tables, columns and an index and are not reversed; a restored backup plus the v0.10.1 binary is the rollback path. Entity JSON and Citadel snapshots written by v0.11.0 use renamed keys, so v0.10 cannot read them back (section 10.4).
+2. **Apply migrations by starting the new binary, not a separate command.** Migrations `007` to `014` under `crates/paladin-storage/migrations/{sqlite,postgres}/` (the Treasurer ledger, the run attribution columns, the schedule creator columns, `treasury_notices` and its index, `runs.halt_reason`, `treasury_notices.notice_kind`; the full list is section 10.4, and SQLite has no `009`) run at adapter construction via `sqlx::migrate!`; there is no `sqlx migrate run` step. Start the new `paladin-server` binary once against the restored backup and confirm it comes up cleanly.
+3. **Update config.** Check each of these:
+   - **Tenants (TENANT-01), the one required edit.** Every `http.auth.api_keys` entry needs a `tenant:` line, and the bearer token needs `http.auth.bearer_token.tenant`; the server refuses to boot otherwise (the note below).
+   - **Removed Battalion keys are refused at load (M-B-06).** A stored `BattalionConfig` or `ConclaveConfig` document that still carries `timeout_seconds`, `retry_policy` or `error_strategy` is refused, naming each key; convert them to `aegis.timeout.run_timeout`, `aegis.retry` and `aegis.on_error` first. Size the timeout as the longest single Paladin call: it now bounds each attempt, not the run.
+   - **`llm.<provider>` blocks now take effect (M-B-15).** Review `default_temperature` and any `${VAR}` keys in those blocks before the first start (`config.example.yml` shows the shape).
+   - **Cadence is on by default (M-B-05).** Set `treasurer.cadence.enabled: false` to turn it off, or tune the `treasurer.cadence` keys (`docs/src/getting-started/configuration.md`, "Treasurer rate pacing (Cadence)"). The default backend is in-process; a Redis backend needs a build with `--features redis-cadence`.
+   - **`treasurer` is optional.** `treasurer.pricing` and `treasurer.allowance` are only needed to price calls and to govern spend; a deployment that sets neither has no pricing and no allowance (Cadence aside).
 
    **Phase 40 note (TENANT-01, the one exception — see §10.5):** a deployment that configures
    `http.auth.api_keys` must add a `tenant:` line to EVERY entry, and a deployment with
@@ -352,14 +367,18 @@ No item is marked `#[deprecated]` in v0.11.0. Phases 48, 50 and 51 are clean bre
    route, §10.6), so any operator tooling that reads other tenants' runs over HTTP needs an
    `admin`-role key. A deployment with no `api_keys` and bearer disabled is unaffected.
 
+4. **Roll out the allowance webhook only after every replica runs v0.11.0.** If you set `treasurer.allowance.webhook`, upgrade every replica first: a replica on an older build cannot decode the `allowance_warning` and `allowance_halted` deliveries in the shared queue and stalls run-webhook delivery until it is upgraded. The order of the three allowance steps (upgrade, `webhooks.allow_private`, the secret in `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET`) is in `docs/src/deployment-topologies/http-service-host.md`, "Treasurer allowances".
+5. **Deploy.** Roll out the new binary and manifests with the config of step 3 already in place. The shipped manifests are `k8s/deployment.yaml`, `k8s/server/deployment.yaml` and `k8s/server/worker-deployment.yaml`; a forked or hand-written manifest needs the same config and secrets.
+6. **Verify.** Run `paladin-cli setup-check --verbose` for an environment, toolchain, provider and service connectivity check. Then send one request to an agent route (`POST /v1/agents/{id}/execute`) with a key that carries a `tenant:` line: it answers `200`, and its body carries `cost` when pricing is configured. A `GET /v1/runs/{run_id}` for a run another tenant submitted answers `404`.
+
 ### Library consumers: v0.10.1 → v0.11.0
 
 This subsection is for a library consumer that depends on the facade `paladin-ai` (plus
 `paladin-ports` / `paladin-memory`) by path or submodule and moves from the `v0.10.1` tag to
 `v0.11.0`. The operator checklist above is separate and does not apply to a consumer that only
 links the libraries. Every item below already has its entry in section 10.2 (and, where relevant,
-section 10.1); this subsection is a consumer-shaped index over those entries, not a new register
-row.
+section 10.1), except the pre-`v0.10.0` rows named in the "Starting before `v0.10.0`" paragraph, which
+are in section 9.2; this subsection is a consumer-shaped index over register rows, not a new register.
 
 **No total-only `TokenUsage` constructor (applies at `v0.10.1` already).** `TokenUsage::from_total`
 was removed outright in Phase 31 (the `TokenUsage` row of section 9.2), and nothing replaced it. The

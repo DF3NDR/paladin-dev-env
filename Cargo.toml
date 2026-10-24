@@ -94,14 +94,14 @@ include = [
 # MIGRATION.md §9.2 row and `.cargo/semver-checks-allowlist.toml` entry (kept
 # set-equal by CI's `semver` job).
 #
-# PACE-02 (MIGRATION.md §9.2, Phase 43 plan 43-06, measured at the closeout in 43-13):
+# PACE-02 (MIGRATION.md §10.2, Phase 43 plan 43-06, measured at the closeout in 43-13):
 # `AgentRuntimeDeps` gained the additive `cadence: Option<CadenceWiring>` field. The D-27
 # diagnostic (cargo-semver-checks 0.50.0 vs 0.10.1, crate-wide allows disabled) fired
 # `constructible_struct_adds_field` for it, which the allow below already covers; the row is
 # therefore `Y` with a matching `.cargo/semver-checks-allowlist.toml` entry, and no new lint
 # line was needed.
 #
-# PARITY-06 (MIGRATION.md §9.2, Phase 50 plan 50-14, D-15): `ModelFallbackConfig` gained the
+# PARITY-06 (MIGRATION.md §10.2, Phase 50 plan 50-14, D-15): `ModelFallbackConfig` gained the
 # additive `steps` field (with the new `FallbackStepConfig`) and `AgentRuntimeDeps` gained
 # `llm_config: Option<LlmConfig>`. Both stay constructible (both implement `Default`; in-tree
 # literals use `..Default::default()`), and the D-27 diagnostic (0.50.0 vs 0.10.1, this table's
@@ -110,7 +110,7 @@ include = [
 # new line was needed. `ModelFallbackConfig` has its own row and entry; `AgentRuntimeDeps`'s
 # existing row and entry were extended, not duplicated.
 #
-# REASON-01 (MIGRATION.md §9.2, Phase 51 plan 51-08, D-00b, D-00e): `AgentDefinition` gained the
+# REASON-01 (MIGRATION.md §10.2, Phase 51 plan 51-08, D-00b, D-00e): `AgentDefinition` gained the
 # `#[serde(default)]` fields `reasoning_effort` and `reasoning_fallback` (the YAML keys
 # `agents[].reasoning_effort` and `agents[].reasoning_fallback`). It stays constructible and
 # NOT `#[non_exhaustive]`, so only full struct literals break; every in-tree one named both fields

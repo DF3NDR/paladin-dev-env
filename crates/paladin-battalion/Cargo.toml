@@ -100,7 +100,7 @@ harness = false
 # this table existed) fired function_missing and module_missing for them. The
 # engine's own backoff module is unaffected and is the replacement. Register
 # and remove these lines only in the same commit as the matching MIGRATION.md
-# section 9.2 row and `.cargo/semver-checks-allowlist.toml` entries, kept
+# section 10.2 row and `.cargo/semver-checks-allowlist.toml` entries, kept
 # set-equal by CI's `semver` job; every in-tree caller migrated in the same
 # commit series.
 #

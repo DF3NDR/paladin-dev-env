@@ -1,12 +1,13 @@
 # cargo-semver-checks per-item deliberate-breaking allowlist (X-10.5, D-06).
 #
-# Source of truth: `MIGRATION.md` §9.2 ("Rust API changes"). This file is the
+# Source of truth: `MIGRATION.md` §9.2 and §10.2 ("Rust API changes": the v0.10 and
+# v0.11.0 registers, both read by the gate). This file is the
 # machine-checked mirror of that table's rows marked `Deliberate-breaking? = Y`
 # -- NOT a config the `cargo semver-checks` CLI reads directly. The `semver`
 # CI job in `.github/workflows/ci.yml` runs a set-equality check between this
-# file's `[[entry]]` list and MIGRATION.md §9.2's deliberate-breaking rows, in
-# both directions: every entry here must have a matching §9.2 row, and every
-# §9.2 row marked `Y` must have a matching entry here. Neither direction may
+# file's `[[entry]]` list and MIGRATION.md §9.2's and §10.2's deliberate-breaking rows, in
+# both directions: every entry here must have a matching §9.2 or §10.2 row, and every
+# §9.2 or §10.2 row marked `Y` must have a matching entry here. Neither direction may
 # be satisfied by a blanket wildcard -- every entry names one crate and one
 # specific lint.
 #
@@ -28,7 +29,7 @@
 # Schema per entry:
 #   crate           = "<published crates.io package name>"
 #   lint            = "<cargo-semver-checks lint id being suppressed>"
-#   migration_row   = "<the MIGRATION.md §9.2 Crate/Type row this mirrors>"
+#   migration_row   = "<the MIGRATION.md §9.2 or §10.2 Crate/Type row this mirrors>"
 #   requirement_id  = "<owning requirement, e.g. FT-01>"
 #   justification   = "<one line: why this is deliberate-breaking, not a mitigation>"
 #
@@ -199,7 +200,7 @@ justification = "LlmResponse gained the additive cost: Option<Cost> field (D-10)
 # D-18/D-00c convention: an entry whose `lint` value begins "register-only"
 # records a deliberate break that `cargo semver-checks` cannot itself detect
 # (no lint in its 0.50.0 catalog models a changed field or parameter TYPE,
-# only additions/removals/count changes) -- MIGRATION.md's §9.2 row, not the
+# only additions/removals/count changes) -- MIGRATION.md's §10.2 row, not the
 # tool, is the control for that pair. It still names exactly one crate and
 # one type, mirroring every other entry in this file.
 
@@ -308,7 +309,7 @@ requirement_id = "PACE-01"
 justification = "The reshaped LlmError::RateLimitExceeded variant is marked #[non_exhaustive] so a later field (a further parsed header, say) can be added without a break, in the same way the enclosing enum already is. Out-of-crate code can no longer build the variant with a literal; LlmError::rate_limited and LlmError::rate_limited_with_hints are the constructors. Phase 50 plan 50-26 (G-50-5a, PARITY-05) marks LlmError::EmptyCompletion and LlmError::Refusal #[non_exhaustive] the same way, so a later field is free; the D-27 run (cargo-semver-checks 0.50.0 vs 0.10.1, crate-wide allows disabled) reports this lint on EmptyCompletion (Refusal is new since 0.10.1), which this one entry covers (no new pair). LlmError::empty_completion and LlmError::refusal are the constructors."
 
 # --- Phase 50 plan 50-26 (G-50-5a, PARITY-05) -------------------------------
-# Mirrors the extended `paladin-ports | LlmError` 9.2 row. The D-27 run fired
+# Mirrors the extended `paladin-ports | LlmError` 10.2 row. The D-27 run fired
 # enum_tuple_variant_changed_kind (new below) and enum_variant_marked_non_exhaustive
 # (covered above) for EmptyCompletion; Refusal and BilledUsage fired nothing.
 
@@ -327,12 +328,12 @@ requirement_id = "PACE-02, PARITY-06"
 justification = "AgentRuntimeDeps gained the cadence: Option<CadenceWiring> field (D-03, 43-06) -- the Cadence wiring that paces every hop of a config-built model_fallback chain; Default carries an in-process wiring built from treasurer.cadence's defaults and None opts out. The struct stays constructible (not #[non_exhaustive]) because it implements Default and in-tree literals already use ..Default::default(); only a downstream full struct literal breaks. Found by the D-27 diagnostic at the Phase 43 closeout (43-13), which contradicted the row's earlier N; suppressed by the root Cargo.toml's crate-wide allow line. Phase 50 plan 50-14 (D-15, PARITY-06) adds the second additive field on the same struct, llm_config: Option<LlmConfig> (default None, behaves as an empty llm: section), with the same constructible-not-non_exhaustive decision and the same Default-based in-tree construction; the D-27 run with the crate-wide allow disabled reports constructible_struct_adds_field on AgentRuntimeDeps.cadence and AgentRuntimeDeps.llm_config, which this one entry covers (no new pair)."
 
 # --- Phase 44 (Legacy Clean-Break Removal, LEGACY-01..04) ---------------------
-# Entries below mirror the Phase 44 `Y` rows of MIGRATION.md section 9.2 (plan
+# Entries below mirror the Phase 44 `Y` rows of MIGRATION.md section 10.2 (plan
 # 44-11). The D-27 diagnostic (cargo-semver-checks 0.50.0, the CI-pinned
 # version, against the published 0.10.1 with `--release-type minor` and
 # `--default-features`) ran once per crate with that crate's crate-wide allow
 # lines disabled; each manifest was restored byte-for-byte afterwards. Every
-# entry is a lint the tool fired for a Phase 44 item, in section 9.2 row order
+# entry is a lint the tool fired for a Phase 44 item, in section 10.2 row order
 # with lint ids alphabetical inside a row. Lints it fired for earlier phases'
 # items (PaladinResult.cost, RunFinishStatus, RunEventKind, the TraceEvent
 # fields, RunOutcome::Halted.cause, the paladin-ports and paladin-ai fields)
@@ -440,13 +441,13 @@ requirement_id = "LEGACY-01"
 justification = "The paladin_battalion::retry module is removed (ADR-0059, D-00c), together with the facade's pub use re-export of it (paladin::application::services::battalion::retry; the cargo-semver-checks run on the paladin-ai facade fired no lint for it). paladin_battalion::engine::retry is a different module and is unaffected. Every in-tree use migrated in the same commit series (44-07, 44-10); suppressed by a new crate-wide allow line in a new [package.metadata.cargo-semver-checks.lints] table in crates/paladin-battalion/Cargo.toml."
 
 # --- Phase 48 (Base Entity Rename, ENTITY-01..05) ----------------------------
-# Entries below mirror the Phase 48 `Y` rows of MIGRATION.md section 9.2 (plan
+# Entries below mirror the Phase 48 `Y` rows of MIGRATION.md section 10.2 (plan
 # 48-07). The D-27 diagnostic (cargo-semver-checks 0.50.0, the CI-pinned
 # version, against the published 0.10.1 with `--release-type minor` and
 # `--default-features`) ran once per crate with that crate's crate-wide allow
 # lines disabled; each manifest was restored byte-for-byte afterwards (checked
 # with cmp). Every entry is a lint the tool fired for a Phase 48 item, in
-# section 9.2 row order with lint ids alphabetical inside a row. Lints it fired
+# section 10.2 row order with lint ids alphabetical inside a row. Lints it fired
 # for earlier phases' items (PaladinResult.cost, RunFinishStatus, RunEventKind,
 # the TraceEvent fields, the Phase 44 Battalion and Conclave removals, and the
 # paladin-ai fields) belong to those phases' rows and are not repeated here.
@@ -542,7 +543,7 @@ requirement_id = "ENTITY-01"
 justification = "PromptItem's public field node is renamed entity (ADR-0060, D-08): the prompt item's payload is read as item.entity.data. The v0.10 node key is still read for stored documents. Every in-tree reader migrated in the same commit series (48-05); suppressed by the crate-wide allow line in crates/paladin-core/Cargo.toml."
 
 # --- Phase 50 (Provider Parity & Configuration-Driven Model Swap, PARITY-01..08) ---
-# Entries below mirror the Phase 50 `Y` rows of MIGRATION.md section 9.2 for
+# Entries below mirror the Phase 50 `Y` rows of MIGRATION.md section 10.2 for
 # `paladin-llm` (plan 50-10). The D-27 diagnostic (cargo-semver-checks 0.50.0,
 # the CI-pinned version, against the published 0.10.1 with `--release-type
 # minor`) ran twice on this plan's tree -- once with `--default-features` and

@@ -84,11 +84,11 @@ rand = { workspace = true }
 # node-error summary type), enum_missing (the legacy Battalion error-strategy
 # enum) and enum_variant_missing (the whole-run timeout variant of the
 # Battalion and Conclave error enums, and the string-carrying LLM variant of
-# the Paladin error enum). Each has a matching MIGRATION.md section 9.2 row
+# the Paladin error enum). Each has a matching MIGRATION.md section 10.2 row
 # and `.cargo/semver-checks-allowlist.toml` entry, kept set-equal by CI's
 # `semver` job; every in-tree site migrated in the same commit series.
 #
-# ENTITY-01..05 (ADR-0060, D-27, Phase 48 plan 48-07, MIGRATION.md section 9.2):
+# ENTITY-01..05 (ADR-0060, D-27, Phase 48 plan 48-07, MIGRATION.md section 10.2):
 # the base entity wrapper was renamed and the citadel placeholder types were
 # unified, with no deprecated shim. The same diagnostic (cargo-semver-checks
 # 0.50.0 against the published 0.10.1, `--release-type minor`,
@@ -103,7 +103,7 @@ rand = { workspace = true }
 # (ContentItem and PromptItem). Two lints are new here: module_missing and
 # trait_missing. The already-allowed struct_missing, enum_missing,
 # struct_pub_field_missing and constructible_struct_adds_field cover the rest.
-# Each Phase 48 lint has a matching MIGRATION.md section 9.2 row and
+# Each Phase 48 lint has a matching MIGRATION.md section 10.2 row and
 # `.cargo/semver-checks-allowlist.toml` entry, kept set-equal by CI's
 # `semver` job; every in-tree site migrated in plans 48-03, 48-04 and 48-05.
 #
@@ -115,7 +115,7 @@ rand = { workspace = true }
 # published 0.10.1, `--release-type minor`, this table removed and restored byte-for-byte,
 # `cmp`-verified): `constructible_struct_adds_field`, already allowed above, named
 # `PaladinData.reasoning_effort` and `PaladinData.reasoning_fallback`. The MIGRATION.md
-# section 9.2 row and the `.cargo/semver-checks-allowlist.toml` entry were registered in the
+# section 10.2 row and the `.cargo/semver-checks-allowlist.toml` entry were registered in the
 # same commit as the fields; every in-tree full literal named both fields in that commit.
 #
 # REASON-05 (D-00b, D-11, Phase 51 plan 51-09): `TraceEvent::NodeFinished`
@@ -124,7 +124,7 @@ rand = { workspace = true }
 # `enum_struct_variant_field_added`, the last line below, fired against the published 0.10.1
 # and named both fields (it also named the earlier `cost` and `halt_reason` additions, which
 # are not Phase 51), so the line was added in this plan and the break keeps its MIGRATION.md
-# section 9.2 `Y` row and `.cargo/semver-checks-allowlist.toml` entry. `TraceEvent`
+# section 10.2 `Y` row and `.cargo/semver-checks-allowlist.toml` entry. `TraceEvent`
 # postdates the CI-pinned v0.9.0 baseline, so CI's `semver` job cannot observe it.
 #
 # 2026-10-24 (Phase 46, D-24 / WR-05): remove the crate-wide `struct_missing`,

@@ -783,7 +783,7 @@ Plans:
 
 - [x] 46-11-PLAN.md — section 10 freeze: cross-references, web3sec G-1..G-7, opening, 10.7, 10.8 operator checklist (wave 5)
 - [x] 46-12-PLAN.md — live `§9.x` citations of v0.11 rows retargeted to section 10 in the CHANGELOG `[Unreleased]` sections and the TOML comment blocks (wave 5)
-- [ ] 46-14-PLAN.md — live `§9.x` citations of v0.11 rows retargeted to section 10 in rustdoc and code comments, the consumer-surface muster header and the Switching-providers page (wave 5)
+- [x] 46-14-PLAN.md — live `§9.x` citations of v0.11 rows retargeted to section 10 in rustdoc and code comments, the consumer-surface muster header and the Switching-providers page (wave 5)
 
 **Wave 6** *(blocked on Wave 5 completion)*
 

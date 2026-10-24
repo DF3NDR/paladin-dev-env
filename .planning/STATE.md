@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 46
 current_phase_name: docs-currency-hygiene
 status: executing
-stopped_at: Completed 46-12-PLAN.md
-last_updated: "2026-10-24T15:43:00.373Z"
+stopped_at: Completed 46-14-PLAN.md
+last_updated: "2026-10-24T15:52:46.921Z"
 last_activity: 2026-10-24
 last_activity_desc: Phase 46 execution started
 progress:
   total_phases: 14
   completed_phases: 13
   total_plans: 164
-  completed_plans: 162
+  completed_plans: 163
 ---
 
 # Project State
@@ -63,7 +63,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 46 (docs-currency-hygiene) — EXECUTING
-Plan: 13 of 14
+Plan: 14 of 14
 Status: Ready to execute
 Last activity: 2026-10-24 — Phase 46 execution started
 
@@ -350,6 +350,7 @@ Last activity: 2026-10-24 — Phase 46 execution started
 | Phase 46 P10 | 13 min | 2 tasks | 4 files |
 | Phase 46 P11 | 20 min | 3 tasks | 1 files |
 | Phase 46 P12 | 9 min | 3 tasks | 14 files |
+| Phase 46 P14 | 15 min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -636,6 +637,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 46]: 46-10: MIGRATION.md is two-part (section 10 above kept v0.10 record 9); register gate window is /^## (9|10)\.2 / in script, ci.yml and harness; four in-place rows split into v0.10.1 text in 9.2 plus same-key 10.2 delta rows — D-01/D-02: row identity preserved, gate widened in the same commit as the first row moved
 - [Phase ?]: 46-11: section 10 frozen 2026-10-24 on web3sec's dogfood report against e28e43b5; DR-11 cites both registers (10.2 AllowanceHalted, 9.2 CallLimit/TokenBudget); D-06 warn! deferred
 - [Phase 46]: 46-12: every [Unreleased] 9.x citation (root and crate changelogs) names a v0.11 row and is retargeted to section 10; the recipe misses 44 lines (backtick/line-break forms), classified and retargeted too — D-02 / RESEARCH F4: the release note is live, not history; plan acceptance covers every 9.x citation left
+- [Phase ?]: 46-14: #[non_exhaustive] and PaladinError variant comments keep 9.2 (v0.10.1 register rows); muster forward rules and DR/Phase 44-50 citations retargeted to section 10
 
 ### Pending Todos
 
@@ -855,8 +857,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-24T15:43:00.339Z
-**Stopped at:** Completed 46-12-PLAN.md
+**Last session:** 2026-10-24T15:52:46.889Z
+**Stopped at:** Completed 46-14-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

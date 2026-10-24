@@ -95,7 +95,10 @@ impl std::fmt::Debug for StrategySelection {
 /// - **Explicit Strategy**: Manually select Formation, Phalanx, Campaign, ChainOfCommand, Conclave, Council, or Grove
 /// - **Per-attempt Aegis policy**: `config.aegis` bounds and retries each Paladin attempt of
 ///   Formation, Phalanx, Campaign and the Conclave (`aegis.timeout` is a per-attempt bound, not a
-///   whole-run clock; `aegis.retry` counts total attempts)
+///   whole-run clock; `aegis.retry` counts total attempts). The Commander adds no bound of its
+///   own: ChainOfCommand and Grove do not read `aegis`, and a Maneuver reads only
+///   `aegis.timeout.run_timeout`, as one whole-flow clock (a set `aegis.on_error` or
+///   `aegis.retry` is ignored, with a one-time warning per execution)
 /// - **Error Handling**: fail fast by default; `aegis.on_error = Absorb` lets a Formation continue
 ///   past a failed Paladin
 /// - **Telemetry**: Comprehensive execution metadata including timing and success/failure counts
@@ -290,6 +293,25 @@ impl std::fmt::Debug for Commander {
             .field("strategy_selection", &self.strategy_selection)
             .finish()
     }
+}
+
+/// The `aegis` policies a Maneuver run cannot honour, in a fixed order (D-24, WR-04).
+///
+/// A Maneuver reads only `aegis.timeout.run_timeout`, as one whole-flow clock rather than per
+/// attempt (see `Commander::default_maneuver_config`). It has no retry loop and no continue
+/// mode, so a set `aegis.on_error` or `aegis.retry` is dropped. This returns the dropped
+/// fields, `aegis.on_error` first and `aegis.retry` second, and an empty vector when neither is
+/// set (a timeout alone is honoured, so it is never named). The function is pure so the
+/// decision is unit-tested directly: the repository does not capture log output.
+fn maneuver_ignored_aegis_policies(aegis: &Aegis) -> Vec<&'static str> {
+    let mut ignored = Vec::new();
+    if aegis.on_error.is_some() {
+        ignored.push("aegis.on_error");
+    }
+    if aegis.retry.is_some() {
+        ignored.push("aegis.retry");
+    }
+    ignored
 }
 
 impl Commander {
@@ -528,7 +550,11 @@ impl Commander {
     ///
     /// The error strategy is the Maneuver default (`FailFast`) whatever
     /// `aegis.on_error` says; the Maneuver's own workflow timeout is
-    /// `aegis.timeout.run_timeout` (`None` when no timeout is set).
+    /// `aegis.timeout.run_timeout` (`None` when no timeout is set). Note the change of
+    /// meaning: on Formation, Phalanx and Campaign `run_timeout` bounds each attempt, while here
+    /// it becomes one whole-flow clock for the entire Maneuver. `aegis.on_error` and
+    /// `aegis.retry` are not read at all; the Commander warns once per execution when either is
+    /// set (`maneuver_ignored_aegis_policies`).
     fn default_maneuver_config(&self) -> crate::maneuver::ManeuverConfig {
         crate::maneuver::ManeuverConfig {
             error_strategy: crate::maneuver::ErrorStrategy::default(),
@@ -928,6 +954,18 @@ impl Commander {
                         .unwrap_or(&format!("agent{}", i))
                         .clone();
                     agents.insert(agent_name, paladin.clone());
+                }
+
+                // Maneuver reads only `aegis.timeout.run_timeout`; a set `on_error` or `retry`
+                // is dropped, so say so once per execution (the Campaign message's shape).
+                let ignored = maneuver_ignored_aegis_policies(&self.config.aegis);
+                if !ignored.is_empty() {
+                    warn!(
+                        "Maneuver {} ignores {}: Maneuver reads only aegis.timeout.run_timeout, \
+                         as one whole-flow clock",
+                        self.config.name,
+                        ignored.join(" and ")
+                    );
                 }
 
                 // Use ManeuverConfig from Commander if set, otherwise create from BattalionConfig
@@ -1473,6 +1511,10 @@ impl Commander {
 ///   - Aegis timeout: `run_timeout` of 300 seconds (5 minutes), applied **per attempt**
 ///   - No Aegis retry and no `on_error` handler (fail fast)
 ///
+/// The Commander adds no bound of its own, so that 300 second default is not a general bound:
+/// ChainOfCommand and Grove do not read `aegis`, so it does not bound them, and a Maneuver uses
+/// `run_timeout` as one whole-flow clock instead of per attempt.
+///
 /// # Validation
 ///
 /// The `build()` method performs comprehensive validation:
@@ -1738,6 +1780,10 @@ impl CommanderBuilder {
     /// - Name: "default_commander_battalion"
     /// - `aegis.timeout`: `run_timeout` of 300 seconds, applied **per attempt**
     /// - `aegis.retry` and `aegis.on_error`: none (fail fast)
+    ///
+    /// The Commander adds no bound of its own: ChainOfCommand and Grove do not read `aegis`, so
+    /// the 300 second default does not bound them, and a Maneuver uses `run_timeout` as one
+    /// whole-flow clock rather than per attempt.
     ///
     /// # Returns
     ///
@@ -3078,6 +3124,52 @@ mod tests {
             }),
             ..Aegis::default()
         })
+    }
+
+    /// D-24 / WR-04: the decision behind the Commander's one-time Maneuver warning is a pure
+    /// function (the repository does not capture log output), naming exactly the `aegis`
+    /// fields Maneuver drops, in a fixed order, and never the timeout it honours.
+    #[test]
+    fn maneuver_ignored_aegis_policies_names_only_the_fields_maneuver_drops() {
+        let absorb = || {
+            Some(ErrorHandlerSpec::Absorb {
+                fallback_delta: StateDelta::new(),
+            })
+        };
+        let retry = || {
+            Some(AegisRetryPolicy {
+                max_attempts: 3,
+                ..AegisRetryPolicy::default()
+            })
+        };
+
+        assert!(maneuver_ignored_aegis_policies(&Aegis::default()).is_empty());
+        assert_eq!(
+            maneuver_ignored_aegis_policies(&Aegis {
+                on_error: absorb(),
+                ..Aegis::default()
+            }),
+            vec!["aegis.on_error"]
+        );
+        assert_eq!(
+            maneuver_ignored_aegis_policies(&Aegis {
+                retry: retry(),
+                ..Aegis::default()
+            }),
+            vec!["aegis.retry"]
+        );
+        assert_eq!(
+            maneuver_ignored_aegis_policies(&Aegis {
+                on_error: absorb(),
+                retry: retry(),
+                ..Aegis::default()
+            }),
+            vec!["aegis.on_error", "aegis.retry"]
+        );
+        // Maneuver honours `timeout.run_timeout`, so a timeout alone is not ignored.
+        assert!(
+            maneuver_ignored_aegis_policies(&run_timeout_aegis(Duration::from_secs(45))).is_empty()
+        );
     }
 
     /// D-04: with no explicit `ManeuverConfig` the bridge fails fast whatever `on_error` says,

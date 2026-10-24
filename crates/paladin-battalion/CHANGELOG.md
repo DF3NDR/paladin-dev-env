@@ -72,6 +72,12 @@ and this project follows lockstep workspace versioning.
 
 ### Changed
 
+- Phase 46 (D-24 / WR-04; plan 46-09): a `Commander` running a Maneuver logs one `warn!` per
+  execution when `aegis.on_error` or `aegis.retry` is set, naming the Battalion and the ignored
+  field(s), because Maneuver reads only `aegis.timeout.run_timeout` (as one whole-flow clock). The
+  decision is the private pure function `maneuver_ignored_aegis_policies`. The `Commander` and
+  `CommanderBuilder` rustdoc state that the Commander adds no bound of its own.
+
 - Phase 51 (REASON-01; plan 51-09): the node-cache key of a Paladin node appends the agent's
   `reasoning_effort` and `reasoning_fallback` when set (research Pitfall 7), so an answer produced
   at one effort is never served at another. An agent that sets neither composes the same key as

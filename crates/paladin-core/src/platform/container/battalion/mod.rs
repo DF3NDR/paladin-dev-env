@@ -99,6 +99,10 @@ pub struct BattalionConfig {
     ///   takes its retry count from `ConclaveConfig.retry_attempts` and only
     ///   the backoff shape from `retry`, and retries `Transient` failures only
     ///   regardless of `retry_on`.
+    /// - **Maneuver**, run through the Commander, reads only `timeout.run_timeout`, as one
+    ///   whole-flow clock rather than per attempt, and ignores `retry` and `on_error` (the
+    ///   Commander logs a one-time warning per execution when either is set). An explicit
+    ///   `ManeuverConfig` given to the `CommanderBuilder` replaces the one derived from `aegis`.
     /// - `cache` is ignored by every Battalion pattern.
     /// - **ChainOfCommand, Grove and Council** do not read `aegis` at all and
     ///   are not time-bounded by it.

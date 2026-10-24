@@ -989,6 +989,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A Commander running a Maneuver warns when `aegis.on_error` or `aegis.retry` is set (D-24 /
+  WR-04; Phase 46 plan 46-09; `MIGRATION.md` M-B-11).** Maneuver reads only
+  `aegis.timeout.run_timeout`, as one whole-flow clock, and ignores both, so the Commander now logs
+  one `warn!` per execution naming the Battalion and the ignored field, in the shape Campaign
+  already uses for `aegis.on_error`. The `BattalionConfig.aegis`, `Commander` and
+  `CommanderBuilder` rustdoc now say which `aegis` fields each pattern honours and that the
+  builder's 300 second default does not bound ChainOfCommand or Grove. No behaviour other than the
+  log line changes.
+
 - **Build, load and chain pre-flight judge the provider-level defaults too (REASON-01, REASON-04;
   Phase 51 plans 51-16 to 51-20, gap G-2; `MIGRATION.md` 9.2 and 9.8 DR-21).**
   `PaladinBuilder::build` judges the agent's effort, or the port's provider-level default when the

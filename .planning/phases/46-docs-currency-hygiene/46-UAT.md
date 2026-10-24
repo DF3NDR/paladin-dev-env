@@ -3,16 +3,16 @@ status: testing
 phase: 46-docs-currency-hygiene
 source: 46-01-SUMMARY.md, 46-02-SUMMARY.md, 46-03-SUMMARY.md, 46-04-SUMMARY.md, 46-05-SUMMARY.md, 46-06-SUMMARY.md, 46-07-SUMMARY.md, 46-08-SUMMARY.md, 46-09-SUMMARY.md, 46-10-SUMMARY.md, 46-11-SUMMARY.md, 46-12-SUMMARY.md, 46-13-SUMMARY.md, 46-14-SUMMARY.md
 started: 2026-10-24T17:16:32Z
-updated: 2026-10-24T17:20:52Z
+updated: 2026-10-24T17:27:26Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 2
-name: Eight archived VALIDATION files are out of draft
+number: 3
+name: Dependency allowlist guard catches drift
 expected: |
-  The VALIDATION.md files for Phases 22, 24, 28, 29, 30, 34, 36 and 36.1 each read `status: validated` and `nyquist_compliant: true` in frontmatter, carry a populated per-task map (no `| TBD |` cells) and a `## Gaps` section reading "None." Phase 28's file cites its two closed UAT sign-offs as the basis for the D-15 promotion.
+  `make check-dependency-allowlist` exits 0 on HEAD (paladin-core 14 keys, paladin-ports 12 including `log`, matching the dated 2026-10-24 amendment in ADR-0015). Temporarily adding a surplus dependency line to crates/paladin-ports/Cargo.toml makes it exit non-zero naming the key; reverting restores exit 0. `make test-shell-guards` passes the 15-assertion harness and `make check-gates` lists check-dependency-allowlist as a member and exits 0.
 awaiting: user response
 
 ## Tests
@@ -23,7 +23,7 @@ result: pass
 
 ### 2. Eight archived VALIDATION files are out of draft
 expected: The VALIDATION.md files for Phases 22, 24, 28, 29, 30, 34, 36 and 36.1 each read `status: validated` and `nyquist_compliant: true` in frontmatter, carry a populated per-task map (no `| TBD |` cells) and a `## Gaps` section reading "None." Phase 28's file cites its two closed UAT sign-offs as the basis for the D-15 promotion.
-result: [pending]
+result: pass
 
 ### 3. Dependency allowlist guard catches drift
 expected: `make check-dependency-allowlist` exits 0 on HEAD (paladin-core 14 keys, paladin-ports 12 including `log`, matching the dated 2026-10-24 amendment in ADR-0015). Temporarily adding a surplus dependency line to crates/paladin-ports/Cargo.toml makes it exit non-zero naming the key; reverting restores exit 0. `make test-shell-guards` passes the 15-assertion harness and `make check-gates` lists check-dependency-allowlist as a member and exits 0.
@@ -84,9 +84,9 @@ coverage_id: D4
 ## Summary
 
 total: 14
-passed: 5
+passed: 6
 issues: 0
-pending: 9
+pending: 8
 skipped: 0
 blocked: 0
 

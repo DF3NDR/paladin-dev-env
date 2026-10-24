@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-10-23 after Phase 51)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 46 — docs-currency-hygiene
+**Current focus:** Phase 47 — v0.11.0 Crate Release
 2026-10-14 from the web3sec handoff and sequenced before Phases 46-47 (the first of a series of
 consumer-driven phases). Phase 50 (Provider Parity & Configuration-Driven Model Swap, added
 2026-10-14 from the second web3sec handoff, `50-HANDOFF-web3sec-parity.md`) follows it, then Phase 51

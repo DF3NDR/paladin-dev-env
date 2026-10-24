@@ -160,6 +160,12 @@ jobs:
       - name: Check publish order
         run: ./scripts/check-publish-order.sh
 
+      # Phase 46 D-21 (CURR-25): pins paladin-core / paladin-ports
+      # [dependencies] to ADR-0015's measured sets. CI runs each gate script
+      # itself and does not call `make check-gates`, so the gate needs its own step.
+      - name: Check core/ports dependency allowlist (ADR-0015)
+        run: ./scripts/check-dependency-allowlist.sh
+
       # Closes a pre-existing gap (D-09b, plan 15.1-09): the sibling
       # check-workflow-suppressions_test.sh regression harness has existed
       # since Phase 12 but was wired only into `make test-shell-guards`,

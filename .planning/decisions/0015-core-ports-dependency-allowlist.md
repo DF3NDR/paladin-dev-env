@@ -6,6 +6,11 @@ Accepted
 
 **Date:** 2026-08-06
 
+**Amended 2026-10-24 (Phase 46, D-20/D-21):** re-measured from the manifests' `[dependencies]` tables: `paladin-core` fourteen keys (unchanged from the measurement below); `paladin-ports` twelve -- the eleven listed below plus `log`, the logging facade `output/trace_sink_port.rs` uses for `log::error!`. `log` is not a provider SDK, transport client, storage driver or web framework, so invariant (i) holds. The two sets are now pinned by `scripts/check-dependency-allowlist.sh` (wired into `make check-gates` and CI's `cargo-deny` job); changing either set needs a dated note here in the same commit.
+
+- `paladin-core` (14): `serde`, `serde_json`, `uuid`, `chrono`, `thiserror`, `async-trait`, `tokio`, `sha2`, `blake3`, `petgraph`, `murmur3`, `url`, `regex`, `futures`.
+- `paladin-ports` (12): `paladin_core`, `async-trait`, `serde`, `thiserror`, `uuid`, `chrono`, `tokio`, `serde_json`, `futures`, `log`, `md5`, `mime_guess`.
+
 ## Context
 
 `.project/Milestone_5-Workspace-Decomposition/Epic_1/prd-workspace-initialization-and-paladin-core-extraction.md`

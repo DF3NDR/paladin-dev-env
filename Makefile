@@ -217,6 +217,10 @@ check-migration-allowlist: ## Verify MIGRATION.md §9.2 register is set-equal to
 check-publish-order: ## Verify every versioned workspace dependency (normal, build and dev) of each publishable crate appears earlier in the CRATES publish order (SHIP-06/SC3)
 	@./scripts/check-publish-order.sh
 
+.PHONY: check-dependency-allowlist
+check-dependency-allowlist: ## Verify paladin-core / paladin-ports [dependencies] match ADR-0015's measured sets (D-21)
+	@./scripts/check-dependency-allowlist.sh
+
 .PHONY: check-release-consistency
 # Deliberately NOT part of check-gates: every sibling guard above is a
 # no-argument offline check runnable against the current tree as-is: this
@@ -232,7 +236,7 @@ check-release-consistency: ## Verify a release tag's version matches every publi
 	@./scripts/check-release-consistency.sh --tag "$(RELEASE_TAG)"
 
 .PHONY: check-consumer-surface
-# Deliberately NOT part of check-gates: the eight members of check-gates are
+# Deliberately NOT part of check-gates: the nine members of check-gates are
 # offline script guards that finish in about a second, while this target
 # compiles the facade crate. `make check` and `make lint` (so `make clean-code`)
 # and CI's clippy, all-targets check and integration-test steps already compile
@@ -245,7 +249,7 @@ check-consumer-surface: ## Compile and run the consumer-surface muster (ADOPT-04
 	@$(CARGO) test --test consumer_surface_muster
 
 .PHONY: check-gates
-check-gates: check-changelogs check-crate-names check-advisory-register check-workflow-suppressions check-workflow-triggers check-codeql-dismissals check-migration-allowlist check-publish-order ## Run all offline release-gate guards
+check-gates: check-changelogs check-crate-names check-advisory-register check-workflow-suppressions check-workflow-triggers check-codeql-dismissals check-migration-allowlist check-publish-order check-dependency-allowlist ## Run all offline release-gate guards
 
 .PHONY: test-shell-guards
 # Loops over every tests/scripts/*_test.sh rather than a hardcoded list, so

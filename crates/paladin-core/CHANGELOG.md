@@ -93,6 +93,12 @@ and this project follows lockstep workspace versioning.
 
 ### Changed
 
+- `BattalionConfig` and `ConclaveConfig` now refuse, at deserialization, a document that carries a key
+  Phase 44 removed (`timeout_seconds`, `retry_policy`, `error_strategy`; `timeout_seconds` on the
+  Conclave), with one error naming each key, its `aegis.*` replacement and MIGRATION.md `M-B-06`, instead of
+  ignoring it (D-23, Phase 46 plan 46-08); unrelated unknown keys still load and the struct shapes and
+  `Serialize` output are unchanged.
+
 - **BREAKING:** `TraceEvent::NodeFinished` gains `reasoning_requested: Option<String>` and
   `reasoning_effective: Option<String>` (REASON-05, D-00b, D-11; Phase 51 plan 09). Migration: name
   both as `None` in a constructing struct-variant literal, or match with `..`.

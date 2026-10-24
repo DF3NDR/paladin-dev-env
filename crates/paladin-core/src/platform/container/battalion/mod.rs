@@ -11,6 +11,8 @@ pub mod formation;
 pub mod grove;
 pub mod phalanx;
 
+mod legacy_keys;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -52,7 +54,19 @@ use crate::platform::container::registry_error::RegistryError;
 /// config.validate_aegis()?;
 /// # Ok::<(), paladin_core::platform::container::battalion::BattalionError>(())
 /// ```
+///
+/// # Removed v0.10 keys
+///
+/// A stored document that still carries `timeout_seconds`, `retry_policy` or
+/// `error_strategy` is refused at load: deserialization fails with one error that
+/// names every such key present, the `aegis.*` setting that replaces it
+/// (`aegis.timeout.run_timeout`, `aegis.retry`, `aegis.on_error`) and `MIGRATION.md`
+/// row `M-B-06`; a key present with a `null` value is refused the same way, and no
+/// value is ever echoed. Nothing maps a removed key onto its replacement. Unrelated
+/// unknown keys are still ignored, and a document without `aegis` loads with
+/// [`Aegis::default`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "legacy_keys::BattalionConfigWire")]
 pub struct BattalionConfig {
     /// Name of the Battalion
     pub name: String,
@@ -1061,10 +1075,10 @@ mod tests {
     }
 
     #[test]
-    fn battalion_config_v0_10_document_deserializes_with_default_aegis() {
-        // A v0.10-shaped document: it carries the three keys this release
-        // removed. They are ignored, and `aegis`
-        // falls back to its default.
+    fn battalion_config_v0_10_document_is_refused_naming_each_removed_key() {
+        // A v0.10-shaped document: it carries the three keys Phase 44 removed.
+        // v0.11 refuses it at load (Phase 46, D-23) instead of loading it as a
+        // silently unbounded run.
         let document = serde_json::json!({
             "name": "stored_battalion",
             "description": "written by v0.10",
@@ -1079,12 +1093,13 @@ mod tests {
             "error_strategy": "FailFast",
             "metadata_output_dir": null
         });
-        let config: BattalionConfig =
-            serde_json::from_value(document).expect("a v0.10 document still deserializes");
-        assert_eq!(config.name, "stored_battalion");
-        assert_eq!(config.description.as_deref(), Some("written by v0.10"));
-        assert_eq!(config.aegis, Aegis::default());
-        assert!(config.metadata_output_dir.is_none());
+        let message = serde_json::from_value::<BattalionConfig>(document)
+            .expect_err("a v0.10 document carrying removed keys is refused")
+            .to_string();
+        for key in ["timeout_seconds", "retry_policy", "error_strategy"] {
+            assert!(message.contains(key), "missing {key}: {message}");
+        }
+        assert!(message.contains("M-B-06"), "{message}");
     }
 
     #[test]

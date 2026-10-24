@@ -6,6 +6,8 @@ Accepted
 
 **Date:** 2026-10-09
 
+**Amended 2026-10-24 (Phase 46, D-23):** the removed keys are no longer ignored at load. A stored document carrying `timeout_seconds`, `retry_policy` or `error_strategy` on `BattalionConfig` (or `timeout_seconds` on `ConclaveConfig`) fails to deserialize with an error naming each key and its `aegis.*` replacement and citing MIGRATION.md 10.1 M-B-06. Unrelated unknown keys still load. This is a refusal, not a compatibility deserializer: nothing maps a removed key forward, so D-00c stands (no shim, alias or compatibility mapping), and D-00e is intact. The earlier text of this ADR that records the removed keys as ignored (D-01's "a serialized `BattalionConfig` document loses three keys and gains one") describes the Phase 44 state and is superseded on this point only.
+
 **Phase:** 44 (Legacy Clean-Break Removal), plan 44-02; Code Conformance is measured at the closeout, plan 44-12.
 
 ## Supersedes

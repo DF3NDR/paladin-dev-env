@@ -1639,6 +1639,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking Changes
 
+- **BREAKING (`paladin-ai-core`): a stored v0.10 `BattalionConfig` / `ConclaveConfig` document that still
+  carries a removed key is refused at load** (D-23, Phase 46 plan 46-08; MIGRATION.md 10.1 `M-B-06`).
+  `BattalionConfig` fails to deserialize when its document carries `timeout_seconds`, `retry_policy` or
+  `error_strategy`, and `ConclaveConfig` when it carries `timeout_seconds` or its nested `battalion_config`
+  does. One error names every removed key present with its replacement (`aegis.timeout.run_timeout`,
+  `aegis.retry`, `aegis.on_error`; `battalion_config.aegis.timeout.run_timeout` for the Conclave's own
+  key), cites `M-B-06` and never echoes a value; a key present with `null` is refused too. Phase 44 had
+  loaded such a document with the keys ignored, so a run v0.10 bounded loaded as unbounded. There is no
+  alias or compatibility mapping (ADR-0059 amended). Unrelated unknown keys still load, the public struct
+  shapes and `Serialize` output are unchanged, and the CLI's own conclave YAML `timeout_seconds` key is
+  unaffected. Delete or convert the keys in stored documents before upgrading.
+
 - **BREAKING (`paladin-llm`): seven `*Config::new(..)` constructors take `(api_key, model)`**
   (SURFACE-02, D-05, D-06, D-07, D-09; Phase 50.1 plans 02, 04, 05 and 06). `DeepSeekConfig`,
   `GeminiConfig`, `QwenConfig`, `GrokConfig` and `KimiConfig` go from `new(api_key, base_url,

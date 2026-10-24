@@ -737,6 +737,7 @@ milestone's validation/tech-debt bookkeeping is current.
 last among feature work; the v0.10 → v0.11 migration guide must carry Phase 48's
 `Node<T>` → `Entity<T>` rows — added 2026-10-12), and Phase 49 (the consumer-surface muster and its `MIGRATION.md` consumer note are inputs to the v0.10 → v0.11 migration guide — added 2026-10-14), and Phase 50 (the ADR amending 0004, the facade re-exports, the typed refusal and the "Switching providers" mdBook page are inputs to the docs pass and the migration guide — added 2026-10-14), and Phase 51 (the ADR amending 0004 a second time, the `ReasoningEffort` public type, its MIGRATION §9.2 rows and the "Reasoning effort" mdBook page are inputs to the docs pass and the migration guide — added 2026-10-14), and Phase 50.1 (the §9.8 consumer-guide additions — pre-`v0.10.0` pointers, 429/Cadence, decorator forwarding, context-window consequence — the harmonised `*Config::new` §9.2/§9.8 rows and the facade Aegis exports are inputs to the v0.10 → v0.11 migration guide, as is web3sec's adaptation feedback after 50.1 seals — added 2026-10-19)
 **Requirements**: CURR-22, CURR-23, CURR-24, CURR-25
+**UI hint**: no
 **Success Criteria** (what must be TRUE):
 
   1. The v0.10.0 acceptance-audit docs fixes are closed: "twelve publishable crates" appears in

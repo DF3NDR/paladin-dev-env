@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 46
 current_phase_name: docs-currency-hygiene
 status: executing
-stopped_at: Completed 46-07-PLAN.md
-last_updated: "2026-10-24T14:21:49.284Z"
+stopped_at: Completed 46-08-PLAN.md
+last_updated: "2026-10-24T14:38:50.325Z"
 last_activity: 2026-10-24
 last_activity_desc: Phase 46 execution started
 progress:
   total_phases: 14
   completed_phases: 13
   total_plans: 164
-  completed_plans: 157
+  completed_plans: 158
 ---
 
 # Project State
@@ -63,7 +63,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 46 (docs-currency-hygiene) — EXECUTING
-Plan: 8 of 14
+Plan: 9 of 14
 Status: Ready to execute
 Last activity: 2026-10-24 — Phase 46 execution started
 
@@ -345,6 +345,7 @@ Last activity: 2026-10-24 — Phase 46 execution started
 | Phase 46 P05 | ~12 min | 2 tasks | 9 files |
 | Phase 46 P06 | 3 min | 2 tasks | 1 files |
 | Phase 46 P07 | 26 min | 2 tasks | 5 files |
+| Phase 46 P08 | ~35 min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -626,6 +627,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 46]: 46-05: ADR-0015 amended 2026-10-24 (paladin-core 14, paladin-ports 12 incl. log) and pinned by scripts/check-dependency-allowlist.sh in make check-gates and CI cargo-deny; WINDOWS rows 80/81 waived, 82 fixed — Guard compares [dependencies] keys exactly and rejects build/target tables; the sets are mirrored in the ADR so the guard cannot silently bless drift (D-21)
 - [Phase 46]: 46-06: consumer-surface muster pins four web3sec items (Stockpile::render, BattalionResult counters, prelude glob in private mod prelude_glob, llm_port::ModelProfile re-export), test-only, each shown red then green
 - [Phase 46]: Cadence is one section of the Treasurer page (D-08); the Treasurer page states bounded overshoot and tumbling-window double-spend rather than promising an allowance can never be overspent; ADR-0055 left out of the ADR index
+- [Phase 46]: D-23: removed v0.10 BattalionConfig/ConclaveConfig keys are refused at load via a private try_from wire struct (legacy_keys.rs); no shim, alias or mapping, no deny_unknown_fields, ADR-0059 amended — A bounded v0.10 run must not load as unbounded in v0.11; message names keys and aegis.* replacements and cites M-B-06, never a value
 
 ### Pending Todos
 
@@ -845,8 +847,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-24T14:21:49.251Z
-**Stopped at:** Completed 46-07-PLAN.md
+**Last session:** 2026-10-24T14:38:50.291Z
+**Stopped at:** Completed 46-08-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

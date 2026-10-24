@@ -769,7 +769,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 46-08-PLAN.md — removed v0.10 `BattalionConfig` / `ConclaveConfig` keys refused at load (D-23), ADR-0059 amendment, M-B-06 / register rows (wave 2)
+- [x] 46-08-PLAN.md — removed v0.10 `BattalionConfig` / `ConclaveConfig` keys refused at load (D-23), ADR-0059 amendment, M-B-06 / register rows (wave 2)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

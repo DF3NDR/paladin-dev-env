@@ -3,16 +3,16 @@ status: testing
 phase: 46-docs-currency-hygiene
 source: 46-01-SUMMARY.md, 46-02-SUMMARY.md, 46-03-SUMMARY.md, 46-04-SUMMARY.md, 46-05-SUMMARY.md, 46-06-SUMMARY.md, 46-07-SUMMARY.md, 46-08-SUMMARY.md, 46-09-SUMMARY.md, 46-10-SUMMARY.md, 46-11-SUMMARY.md, 46-12-SUMMARY.md, 46-13-SUMMARY.md, 46-14-SUMMARY.md
 started: 2026-10-24T17:16:32Z
-updated: 2026-10-24T19:07:09Z
+updated: 2026-10-24T19:14:01Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 8
-name: Changelogs and allowlist cite section 10
+number: 9
+name: Book Upgrading page leads with v0.11.0 and the DeepSeek note is present
 expected: |
-  Every v0.11 line in CHANGELOG.md [Unreleased] and in the battalion, core, llm, ports, web and herald crate [Unreleased] sections cites MIGRATION.md section 10.x (no live 9.x citation left for a v0.11 row; historical 9.x citations below [Unreleased] remain). CHANGELOG.md [Unreleased] has a `### Documentation` subsection with four bullets and a Changed bullet for the dependency-allowlist gate. The .cargo/semver-checks-allowlist.toml header names both section 9.2 and 10.2, and the Phase 38-51 comment blocks cite 10.2.
+  docs/src/api-reference/upgrading.md opens with "Upgrading from v0.10.1 to v0.11.0" holding a Behavioral changes table (M-B-05 to M-B-22, each once), a Library consumers index (DR-1 to DR-26 grouped by topic) and a six-step Operator checklist, linking MIGRATION.md section 10 anchors; the v0.9.x to v0.10.0 content follows below unchanged. docs/src/api-reference/migration-guide.md carries a pointer line to the v0.11.0 record. docs/src/user-guide/switching-providers.md has a dated (2026-10-24), attributed note that DeepSeek lists deepseek-flash and not deepseek-v4-flash, and cites section 10.8 for DR-18 and DR-19.
 awaiting: user response
 
 ## Tests
@@ -47,7 +47,7 @@ result: pass
 
 ### 8. Changelogs and allowlist cite section 10
 expected: Every v0.11 line in CHANGELOG.md [Unreleased] and in the battalion, core, llm, ports, web and herald crate [Unreleased] sections cites MIGRATION.md section 10.x (no live 9.x citation left for a v0.11 row; historical 9.x citations below [Unreleased] remain). CHANGELOG.md [Unreleased] has a `### Documentation` subsection with four bullets and a Changed bullet for the dependency-allowlist gate. The .cargo/semver-checks-allowlist.toml header names both section 9.2 and 10.2, and the Phase 38-51 comment blocks cite 10.2.
-result: [pending]
+result: pass
 
 ### 9. Book Upgrading page leads with v0.11.0 and the DeepSeek note is present
 expected: docs/src/api-reference/upgrading.md opens with "Upgrading from v0.10.1 to v0.11.0" holding a Behavioral changes table (M-B-05 to M-B-22, each once), a Library consumers index (DR-1 to DR-26 grouped by topic) and a six-step Operator checklist, linking MIGRATION.md section 10 anchors; the v0.9.x to v0.10.0 content follows below unchanged. docs/src/api-reference/migration-guide.md carries a pointer line to the v0.11.0 record. docs/src/user-guide/switching-providers.md has a dated (2026-10-24), attributed note that DeepSeek lists deepseek-flash and not deepseek-v4-flash, and cites section 10.8 for DR-18 and DR-19.
@@ -84,9 +84,9 @@ coverage_id: D4
 ## Summary
 
 total: 14
-passed: 11
+passed: 12
 issues: 0
-pending: 3
+pending: 2
 skipped: 0
 blocked: 0
 

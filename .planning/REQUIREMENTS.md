@@ -426,7 +426,7 @@ D-A..D-D of the handoff plus D-E (the seed-rule conflict found at filing) are se
 - [ ] **CURR-24**: Nyquist validation for Phases 22, 24, 29, 30, 34, 36 and 36.1 moves out of
   `draft`, and Phase 28 is made `nyquist_compliant` or its gaps are recorded
 
-- [ ] **CURR-25**: The three v2 debt lines (oversized service files, clone/lock contention,
+- [x] **CURR-25**: The three v2 debt lines (oversized service files, clone/lock contention,
   dependency-allowlist drift) are each fixed or waived with a written reason
 
 ### Release (SHIP, continued)
@@ -511,7 +511,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CURR-22 | Phase 46 | Complete |
 | CURR-23 | Phase 46 | Pending |
 | CURR-24 | Phase 46 | Pending |
-| CURR-25 | Phase 46 | Pending |
+| CURR-25 | Phase 46 | Complete |
 | SHIP-07 | Phase 47 | Pending |
 | ENTITY-01 | Phase 48 | Complete |
 | ENTITY-02 | Phase 48 | Complete |

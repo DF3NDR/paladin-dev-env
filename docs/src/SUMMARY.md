@@ -40,6 +40,7 @@
 - [Hexagonal Design](architecture/hexagonal-design.md)
 - [Domain Model](architecture/domain-model.md)
 - [Commissary](architecture/commissary.md)
+- [Treasurer](architecture/treasurer.md)
 - [Design Patterns](architecture/design-patterns.md)
 - [Crate Map](architecture/crate-map.md)
 

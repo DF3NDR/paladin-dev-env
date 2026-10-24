@@ -13,8 +13,7 @@
 # Failing cases are asserted FIRST, matching the "prove it fails" house
 # convention, before either passing case is treated as evidence the guard
 # works at all. The final case runs the guard against the real,
-# unmodified tree -- the live PRIM-05 evidence that 15 pairs match 15
-# pairs and that every crate-wide cargo-semver-checks allow in a Cargo.toml
+# unmodified tree -- the live PRIM-05 evidence that the pair sets match and that every crate-wide cargo-semver-checks allow in a Cargo.toml
 # is mirrored by an allowlist entry.
 #
 # Usage:  ./tests/scripts/check-migration-allowlist_test.sh
@@ -51,6 +50,33 @@ write_migration() {
         echo "| Crate | Type | Change | Mitigation | Deliberate breaking? | Req |"
         echo "| --- | --- | --- | --- | --- | --- |"
         printf '%s\n' "${body}"
+        echo ""
+        echo "## 9.3 Toolchain & dependencies"
+    } > "${file}"
+}
+
+# write_migration_two_parts FILE BODY10 BODY9 -> the two-part layout MIGRATION.md
+# has since Phase 46 (D-01): a §10.1 / §10.2 / §10.3 trio above a §9.2 / §9.3
+# pair. BODY10 goes under §10.2 and BODY9 under §9.2, each below the table
+# header, so the guard's `(9|10)` window is exercised on both registers.
+write_migration_two_parts() {
+    local file="$1" body10="$2" body9="$3"
+    {
+        echo "## 10.1 Behavioral changes (user-visible without code changes)"
+        echo ""
+        echo "## 10.2 Rust API changes (compile-affecting; the X-10 register)"
+        echo ""
+        echo "| Crate | Type | Change | Mitigation | Deliberate breaking? | Req |"
+        echo "| --- | --- | --- | --- | --- | --- |"
+        printf '%s\n' "${body10}"
+        echo ""
+        echo "## 10.3 Toolchain & dependencies"
+        echo ""
+        echo "## 9.2 Rust API changes (compile-affecting; the X-10 register)"
+        echo ""
+        echo "| Crate | Type | Change | Mitigation | Deliberate breaking? | Req |"
+        echo "| --- | --- | --- | --- | --- | --- |"
+        printf '%s\n' "${body9}"
         echo ""
         echo "## 9.3 Toolchain & dependencies"
     } > "${file}"
@@ -248,6 +274,49 @@ write_migration "${f_mig}" "$(migration_row paladin-fixture Widget Y)"
 write_allowlist "${f_allow}" "$(allowlist_entry paladin-fixture Widget)"
 write_manifest "${f_root}" paladin-fixture struct_missing
 assert_silent "${f_mig}" "${f_allow}" "every crate-wide allowed lint is mirrored for its own crate" "${f_root}"
+
+# --- 10a. A Y row under §10.2 with its allowlist entry -> 0 (the §10.2
+#          register is read). ---------------------------------------------------
+f_mig="${SCRATCH}/case10a-migration.md"
+f_allow="${SCRATCH}/case10a-allowlist.toml"
+write_migration_two_parts "${f_mig}" "$(migration_row paladin-fixture Widget Y)" ""
+write_allowlist "${f_allow}" "$(allowlist_entry paladin-fixture Widget)"
+assert_silent "${f_mig}" "${f_allow}" "a Y row under §10.2 with its allowlist entry (10.2 register is read)"
+
+# --- 10b. A Y row under §10.2 with NO allowlist entry -> non-zero (an
+#          unregistered deliberate break cannot hide under §10.2). -------------
+f_mig="${SCRATCH}/case10b-migration.md"
+f_allow="${SCRATCH}/case10b-allowlist.toml"
+write_migration_two_parts "${f_mig}" "$(migration_row paladin-fixture Widget Y)" ""
+write_allowlist "${f_allow}" ""
+assert_fire "${f_mig}" "${f_allow}" "a Y row under §10.2 with no allowlist entry"
+
+# --- 10c. Y rows for the same crate|type under BOTH §10.2 and §9.2, one
+#          allowlist entry -> 0 (the pair set collapses across the two
+#          registers, as the four in-place rows require). ----------------------
+f_mig="${SCRATCH}/case10c-migration.md"
+f_allow="${SCRATCH}/case10c-allowlist.toml"
+write_migration_two_parts "${f_mig}" "$(migration_row paladin-fixture Widget Y)" "$(migration_row paladin-fixture Widget Y)"
+write_allowlist "${f_allow}" "$(allowlist_entry paladin-fixture Widget)"
+assert_silent "${f_mig}" "${f_allow}" "Y rows for one crate|type under both §10.2 and §9.2 collapse to one set member"
+
+# --- 10d. A Y row placed under §10.1 (outside the register window) with no
+#          allowlist entry -> 0 (not read). -------------------------------------
+f_mig="${SCRATCH}/case10d-migration.md"
+f_allow="${SCRATCH}/case10d-allowlist.toml"
+{
+    echo "## 10.1 Behavioral changes (user-visible without code changes)"
+    echo ""
+    echo "| Crate | Type | Change | Mitigation | Deliberate breaking? | Req |"
+    echo "| --- | --- | --- | --- | --- | --- |"
+    migration_row paladin-fixture Widget Y
+    echo ""
+    echo "## 10.2 Rust API changes (compile-affecting; the X-10 register)"
+    echo ""
+    echo "## 10.3 Toolchain & dependencies"
+} > "${f_mig}"
+write_allowlist "${f_allow}" ""
+assert_silent "${f_mig}" "${f_allow}" "a Y row under §10.1 is outside the register window and is not read"
 
 # --- 11. The REAL tree -> exit 0 (live PRIM-05 evidence: 15 pairs = 15 pairs). -
 ASSERTIONS=$((ASSERTIONS + 1))

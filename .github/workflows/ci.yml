@@ -402,13 +402,13 @@ jobs:
 
       # X-10.5 set-equality gate: every allowlist entry in
       # .cargo/semver-checks-allowlist.toml must correspond to a MIGRATION.md
-      # §9.2 row marked deliberate-breaking (`Y`), and every such row must
+      # §9.2 or §10.2 row marked deliberate-breaking (`Y`), and every such row must
       # have a matching allowlist entry. Reads both files directly -- a
       # missing file fails this step rather than silently treating either
       # side as an empty set.
       #
       # ROW-LEVEL (D-04): the comparison is the SET of `crate | type` PAIRS,
-      # not just crate names -- a §9.2 row and an allowlist entry naming
+      # not just crate names -- a §9.2 or §10.2 row and an allowlist entry naming
       # DIFFERENT types under the SAME crate must fail. The set is a
       # DEDUPLICATED set, never a row count against an entry count:
       # `paladin-ai | Settings` is deliberately marked `Y` on two separate
@@ -416,14 +416,17 @@ jobs:
       # `trace`/`web_server` fields, Phase 28) that both legitimately mirror
       # the SAME allowlist entry -- they must collapse to one set member, not
       # report a false 10-rows-vs-9-entries mismatch.
-      - name: Verify allowlist is set-equal to the MIGRATION.md §9.2 register
+      - name: Verify allowlist is set-equal to the MIGRATION.md §9.2 and §10.2 registers
         run: |
           set -euo pipefail
           test -f .cargo/semver-checks-allowlist.toml
           test -f MIGRATION.md
 
-          # Register side: scoped to the §9.2 section only, so a "Y"
-          # elsewhere in the document can't leak in. Data rows are selected
+          # Register side: scoped to the §9.2 and §10.2 sections only
+          # (MIGRATION.md is a two-part guide: §10.2 is the v0.11 register, §9.2
+          # the v0.10 one, both read so a deliberate break cannot hide under a
+          # heading the window does not read), so a "Y" elsewhere in the
+          # document can't leak in. Data rows are selected
           # by a leading pipe immediately followed by a backtick, which
           # excludes the table header and its `---` separator row. Field 2
           # is the crate (trimmed of spaces/tabs/backticks); field 3's FIRST
@@ -432,7 +435,7 @@ jobs:
           # The deliberate-breaking marker is located by scanning fields 6
           # through NF (never a fixed column) for a trimmed value that is
           # exactly "Y" or begins with "Y" followed by a space, em dash or
-          # hyphen: one §9.2 row's Mitigation cell contains a literal `|`
+          # hyphen: one register row's Mitigation cell contains a literal `|`
           # inside a backticked span, which under naive `-F'|'` splitting
           # shifts that row's marker one field to the right -- scanning the
           # range instead of a fixed column is what keeps that row from
@@ -444,7 +447,7 @@ jobs:
           # (a real error). Under `set -euo pipefail` a bare no-match grep
           # kills the step before it prints anything, which is exactly how
           # this step failed on its first-ever run.
-          awk '/^## 9\.2 /{flag=1; next} /^## 9\.3 /{flag=0} flag' MIGRATION.md \
+          awk '/^## (9|10)\.2 /{flag=1; next} /^## (9|10)\.3 /{flag=0} flag' MIGRATION.md \
             | { grep -E '^\| `' || test $? -eq 1; } \
             | awk -F'|' '{
                 crate=$2; gsub(/^[ \t`]+|[ \t`]+$/, "", crate);
@@ -475,16 +478,16 @@ jobs:
               }' \
             | sort -u > /tmp/allowlist-pairs.txt
 
-          echo "MIGRATION.md §9.2 deliberate-breaking crate|type pairs:"
+          echo "MIGRATION.md §9.2 and §10.2 deliberate-breaking crate|type pairs:"
           cat /tmp/migration-deliberate-pairs.txt
           echo "Allowlist crate|type pairs:"
           cat /tmp/allowlist-pairs.txt
 
           if ! diff -u /tmp/migration-deliberate-pairs.txt /tmp/allowlist-pairs.txt; then
-            echo "::error::Allowlist and MIGRATION.md §9.2 deliberate-breaking crate|type pairs are not set-equal (see diff above)."
+            echo "::error::Allowlist and MIGRATION.md §9.2 and §10.2 deliberate-breaking crate|type pairs are not set-equal (see diff above)."
             exit 1
           fi
-          echo "Allowlist is set-equal to the MIGRATION.md §9.2 deliberate-breaking register (crate|type pairs)."
+          echo "Allowlist is set-equal to the MIGRATION.md §9.2 and §10.2 deliberate-breaking registers (crate|type pairs)."
 
       # D-01: MIGRATION.md's §9 sections previously carried a placeholder
       # marker naming the requirement or phase that owned closing it -- every

@@ -2,7 +2,7 @@
 # check-migration-allowlist.sh
 #
 # Local, offline mirror of the CI step "Verify allowlist is set-equal to the
-# MIGRATION.md §9.2 register" in .github/workflows/ci.yml's `semver` job
+# MIGRATION.md §9.2 and §10.2 registers" in .github/workflows/ci.yml's `semver` job
 # (PRIM-05). That step exists only inline in ci.yml -- there is no local
 # script and no make target, so it cannot be sampled after a single task
 # commit without hand-copying the step into a shell. This script is that
@@ -13,10 +13,10 @@
 # silently diverge.
 #
 # ROW-LEVEL (D-04): the comparison is the SET of `crate | type` PAIRS, not
-# just crate names -- a §9.2 row and an allowlist entry naming DIFFERENT
+# just crate names -- a §9.2 or §10.2 row and an allowlist entry naming DIFFERENT
 # types under the SAME crate must fail. The set is a DEDUPLICATED set, never
 # a row count against an entry count: `paladin-ai | Settings` is
-# deliberately marked `Y` on two separate §9.2 rows that both legitimately
+# deliberately marked `Y` on separate §9.2 and §10.2 rows that all legitimately
 # mirror the SAME allowlist entry -- they must collapse to one set member.
 #
 # Inputs are resolved relative to the workspace root (derived from this
@@ -70,7 +70,10 @@ trap 'rm -rf "${SCRATCH}"' EXIT
 MIGRATION_PAIRS="${SCRATCH}/migration-deliberate-pairs.txt"
 ALLOWLIST_PAIRS="${SCRATCH}/allowlist-pairs.txt"
 
-# Register side: scoped to the §9.2 section only, so a "Y" elsewhere in the
+# Register side: scoped to the §9.2 and §10.2 sections only (MIGRATION.md is a
+# two-part guide: §10.2 is the v0.11 register, §9.2 the v0.10 one, both read
+# by this gate so a deliberate break cannot hide under a heading the window
+# does not read), so a "Y" elsewhere in the
 # document can't leak in. Data rows are selected by a leading pipe
 # immediately followed by a backtick, which excludes the table header and
 # its `---` separator row. Field 2 is the crate (trimmed of
@@ -79,7 +82,7 @@ ALLOWLIST_PAIRS="${SCRATCH}/allowlist-pairs.txt"
 # reduces to `StopReason`. The deliberate-breaking marker is located by
 # scanning fields 6 through NF (never a fixed column) for a trimmed value
 # that is exactly "Y" or begins with "Y" followed by a space, em dash or
-# hyphen: one §9.2 row's Mitigation cell contains a literal `|` inside a
+# hyphen: one register row's Mitigation cell contains a literal `|` inside a
 # backticked span, which under naive `-F'|'` splitting shifts that row's
 # marker one field to the right -- scanning the range instead of a fixed
 # column is what keeps that row from being silently skipped. All trimming
@@ -88,7 +91,7 @@ ALLOWLIST_PAIRS="${SCRATCH}/allowlist-pairs.txt"
 # register or an empty allowlist is a legal state -- both empty is the
 # set-equal baseline this check shipped with) while still failing on exit 2
 # (a real error).
-awk '/^## 9\.2 /{flag=1; next} /^## 9\.3 /{flag=0} flag' "${MIGRATION_FILE}" \
+awk '/^## (9|10)\.2 /{flag=1; next} /^## (9|10)\.3 /{flag=0} flag' "${MIGRATION_FILE}" \
     | { grep -E '^\| `' || test $? -eq 1; } \
     | awk -F'|' '{
         crate=$2; gsub(/^[ \t`]+|[ \t`]+$/, "", crate);
@@ -119,14 +122,14 @@ awk '/^## 9\.2 /{flag=1; next} /^## 9\.3 /{flag=0} flag' "${MIGRATION_FILE}" \
       }' \
     | sort -u > "${ALLOWLIST_PAIRS}"
 
-echo "MIGRATION.md §9.2 deliberate-breaking crate|type pairs:"
+echo "MIGRATION.md §9.2 and §10.2 deliberate-breaking crate|type pairs:"
 cat "${MIGRATION_PAIRS}"
 echo "Allowlist crate|type pairs:"
 cat "${ALLOWLIST_PAIRS}"
 
 STATUS=0
 if ! diff -u "${MIGRATION_PAIRS}" "${ALLOWLIST_PAIRS}"; then
-    echo "::error::Allowlist and MIGRATION.md §9.2 deliberate-breaking crate|type pairs are not set-equal (see diff above)."
+    echo "::error::Allowlist and MIGRATION.md §9.2 and §10.2 deliberate-breaking crate|type pairs are not set-equal (see diff above)."
     STATUS=1
 fi
 
@@ -179,5 +182,5 @@ fi
 if [ "${STATUS}" -ne 0 ]; then
     exit 1
 fi
-echo "Allowlist is set-equal to the MIGRATION.md §9.2 deliberate-breaking register (crate|type pairs)."
+echo "Allowlist is set-equal to the MIGRATION.md §9.2 and §10.2 deliberate-breaking registers (crate|type pairs)."
 echo "Every crate-wide cargo-semver-checks allow is mirrored by an allowlist entry (crate|lint pairs)."

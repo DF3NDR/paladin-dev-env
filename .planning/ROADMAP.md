@@ -773,7 +773,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 46-09-PLAN.md — Phase 44 review follow-ups: Maneuver ignored-policy `warn!`, Commander / `aegis` rustdoc, WR-05 notes, IN-05 / IN-N1 (wave 3)
+- [x] 46-09-PLAN.md — Phase 44 review follow-ups: Maneuver ignored-policy `warn!`, Commander / `aegis` rustdoc, WR-05 notes, IN-05 / IN-N1 (wave 3)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

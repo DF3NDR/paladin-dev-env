@@ -761,7 +761,7 @@ Plans:
 
 - [x] 46-01-PLAN.md — CURR-22 audit fixes: twelve publishable crates on the three release pages, `paladin-eval` Trusted Publishing and Credential History rows, CHANGELOG `[0.10.0]` / `[0.10.1]` heading dates (root + crates) (wave 1)
 - [x] 46-02-PLAN.md — Nyquist reconcile-only for Phases 22 and 24 (wave 1)
-- [ ] 46-03-PLAN.md — Phase 28 promoted to `nyquist_compliant: true`; Nyquist reconcile-only for Phases 29 and 30 (wave 1)
+- [x] 46-03-PLAN.md — Phase 28 promoted to `nyquist_compliant: true`; Nyquist reconcile-only for Phases 29 and 30 (wave 1)
 - [ ] 46-04-PLAN.md — Nyquist reconcile-only for Phases 34, 36 and 36.1 (wave 1)
 - [ ] 46-05-PLAN.md — v2 debt lines: ADR-0015 re-measured, `check-dependency-allowlist` gate (script, harness, `check-gates`, CI), three WINDOWS dispositions, STATE/ROADMAP pointers (wave 1)
 - [ ] 46-06-PLAN.md — four consumer-surface muster pins from the web3sec dogfood report (wave 1)

@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 46
 current_phase_name: docs-currency-hygiene
 status: executing
-stopped_at: Completed 46-02-PLAN.md
-last_updated: "2026-10-24T11:58:43.573Z"
+stopped_at: Completed 46-03-PLAN.md
+last_updated: "2026-10-24T12:08:37.444Z"
 last_activity: 2026-10-24
 last_activity_desc: Phase 46 execution started
 progress:
   total_phases: 14
   completed_phases: 13
   total_plans: 164
-  completed_plans: 152
+  completed_plans: 153
 ---
 
 # Project State
@@ -63,7 +63,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 46 (docs-currency-hygiene) — EXECUTING
-Plan: 3 of 14
+Plan: 4 of 14
 Status: Ready to execute
 Last activity: 2026-10-24 — Phase 46 execution started
 
@@ -340,6 +340,7 @@ Last activity: 2026-10-24 — Phase 46 execution started
 | Phase 50.1 P07 | 45min | 3 tasks | 2 files |
 | Phase 46 P01 | 25min | 3 tasks | 15 files |
 | Phase 46 P02 | 20 min | 2 tasks | 2 files |
+| Phase 46 P03 | 35 min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -616,6 +617,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 50.1 seal]: UAT 1/1 — owner chose fix-before-tag for WR-01..03 (2026-10-20). WR-01/02 were doc-only; WR-03 (`5ebd315b`) tightened `validate()` in seven adapters to a full `http://`/`https://` prefix, a behaviour change recorded in both CHANGELOGs and MIGRATION §9.8 (`aa48314d`) at the owner's request before sealing
 - [Phase ?]: 46-01: paladin-eval publishes after the leaf tier and before paladin-ai; its trust link is 'proven by publish' (run 35659477719), not operator-reported
 - [Phase 46]: 46-02: Phases 22 and 24 reconciled reconcile-only (D-14): both validated with nyquist_compliant true, 0 gaps; no test written — Every requirement id has a green automated row re-run on HEAD; Steps 4-5 of validate-phase skipped
+- [Phase 46]: 46-03: Phase 28 promoted to nyquist_compliant true on 28-UAT 2/2 and WINDOWS rows 35/61 (D-15); Phase 29 and 30 validated and compliant true with superseded rows carrying re-run equivalents; reconcile-only, no test written
 
 ### Pending Todos
 
@@ -835,8 +837,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-24T11:58:43.541Z
-**Stopped at:** Completed 46-02-PLAN.md
+**Last session:** 2026-10-24T12:08:37.410Z
+**Stopped at:** Completed 46-03-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   override it, and a decorator should forward it as it forwards `model_profile`. Only the
   per-request `Budget`-versus-`max_tokens` rule is not pre-judged. A conformance case on all nine
   adapters and a 54-combination agent-host grid pin that the build, load and pre-flight verdicts
-  equal the send-time verdict. `MIGRATION.md` 9.2 and 9.8 DR-21.
+  equal the send-time verdict. `MIGRATION.md` 10.2 and 10.8 DR-21.
 
 - **Reasoning Effort guide, decision record and live evidence (REASON-02, REASON-03, REASON-06, REASON-07;
   Phase 51 plans 02, 10, 13, 14).** The book gains a "Reasoning Effort" page
@@ -35,8 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--timeout-seconds`); the 2026-10-22 adapter-path transcript for `claude-opus-4-8`,
   `deepseek-v4-pro` and `kimi-k3`, and the documented `llm.kimi` configuration (`low`, 16,000
   tokens, 300 s) answering, is `.planning/phases/51-adjustable-reasoning-effort/51-EFFORT-SMOKE.md`.
-  `MIGRATION.md` gains the additive Phase 51 rows in 9.2, the six configuration keys in 9.5 and
-  DR-20 to DR-26 in 9.8; the four deliberate breaks (`CompatRequestParameters`, `PaladinData`,
+  `MIGRATION.md` gains the additive Phase 51 rows in 10.2, the six configuration keys in 10.5 and
+  DR-20 to DR-26 in 10.8; the four deliberate breaks (`CompatRequestParameters`, `PaladinData`,
   `AgentDefinition`, `TraceEvent::NodeFinished`) carry cargo-semver-checks 0.50.0 lint ids measured
   against the published 0.10.1. No public item changed in this entry.
 - **Requested and effective reasoning effort on the trace (REASON-05, D-11; Phase 51 plan 09).**
@@ -164,7 +164,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are now public re-exports beside `build_cadence` and `compose_llm`. A consumer that builds adapters
   directly and wants rate pacing without pricing builds one wiring with `build_cadence` and wraps each
   adapter with `with_cadence`; the module's "Pacing only" doc test shows it through `paladin::` paths
-  alone, with no pricing table. MIGRATION.md section 9.8 gains the matching consumer-guide entries
+  alone, with no pricing table. MIGRATION.md section 10.8 gains the matching consumer-guide entries
   (SURFACE-04): the pre-`v0.10.0` pointer list, the no-pacing-for-a-directly-built-adapter row (M-B-05),
   the `LlmPort::model_profile` forwarding rule for a consumer's own decorator, and the
   adapter-wide context-window consequence.
@@ -175,7 +175,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `paladin::core::platform::container::waypoint`. `paladin::prelude` also names `Aegis`,
   `ErrorHandlerSpec`, `TimeoutPolicy`, `StateDelta`, `NodeError`, `NodeErrorSource`, `TimeoutKind`,
   `NodeId` and `Transience`. A consumer no longer needs a direct core-crate dependency for the
-  MIGRATION.md section 9.8 rows DR-1, DR-2, DR-8 and DR-9. Purely additive; the consumer-surface
+  MIGRATION.md section 10.8 rows DR-1, DR-2, DR-8 and DR-9. Purely additive; the consumer-surface
   muster pins both forms.
 - **Seeded profiles for the current model range (SURFACE-06, D-14, D-15; Phase 50.1 plans 08 and
   09).** 51 models gain a dated `SeededProfile` row from the operator's live probe of 2026-10-20
@@ -189,7 +189,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   default call answered 404 on chat completions; they need the Responses API), `gemini-2.5-*`, and
   the rate-limited or struck ids the page lists. `grok-4.7` is seeded under a recorded exception:
   its `temperature=2.00` probe failed at the vendor identically in both runs, so its range stops at
-  1.99. Behaviour for a model that gains a row (MIGRATION.md section 9.8, "Models seeded in Phase
+  1.99. Behaviour for a model that gains a row (MIGRATION.md section 10.8, "Models seeded in Phase
   50.1."): an explicit parameter its profile does not admit, or a `max_tokens` above its seeded
   maximum output, is refused at build naming provider, model and parameter; `paladin.unprofiled_model`
   is no longer stamped; Anthropic and DeepSeek `validate_model` and `get_available_models` include
@@ -296,9 +296,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   imports every path and pins every signature, struct shape and trait that the downstream consumer
   takes from Paladin, so a change that breaks that surface fails `make check`, `make lint` and CI
   before a consumer bump finds it. `make check-consumer-surface` runs it and is not part of
-  `check-gates`. MIGRATION.md section 9.8 gains `### Library consumers: v0.10.1 → v0.11.0`, with
+  `check-gates`. MIGRATION.md section 10.8 gains `### Library consumers: v0.10.1 → v0.11.0`, with
   the no-total-only-`TokenUsage` pitfall and an eleven-item break list, each item pointing at its
-  existing §9.2 row. No library API, §9.2 row or semver-checks allowlist entry changes.
+  existing §10.2 row. No library API, §10.2 row or semver-checks allowlist entry changes.
 - **Rate pacing, the Cadence (PACE-02; Phase 43 plan 43-01).** A new `CadencePort` output port
   (`paladin-ports`) with an in-process adapter, `InMemoryCadence` (`paladin-storage`), and a
   `CadenceLlmAdapter` decorator (`paladin-llm`) composed as `Pricing(Cadence(provider))` on every
@@ -429,7 +429,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   public surface: `SpendGuard`, `SpendDecision`, `NeverHalts` (ports), `HaltReason` and
   `AllowanceRefusal::details_json` (core), `HaltCause` and `WarEngine::with_spend_guard`
   (battalion), `RunWorkerPool::with_treasurer`, `Treasurer::spend_guard` and `TreasurerSpendGuard`
-  (facade); see `MIGRATION.md` §9.2. The paragraphs that follow are the rest of the Phase 42
+  (facade); see `MIGRATION.md` §10.2. The paragraphs that follow are the rest of the Phase 42
   entry, one per plan; the three known windows it leaves open are under *Known limitations*.
 
   **Persisted halt reason (plan 42-03).** Migration `013_add_run_halt_reason.sql` (both
@@ -453,7 +453,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ledger-unavailable halt is a `done` with `{"reason":"ledger_unavailable"}`, never an `error`; a
   halt with no reason keeps today's payload. A replayed stream takes its terminal status and reason
   from the run row (skipping a persisted `RunFinished` while the row is not terminal). See
-  `MIGRATION.md` §9.2 and §9.6.
+  `MIGRATION.md` §10.2 and §10.6.
 
   **Resumable by fork (plan 42-04).** A halted run resumes by forking from its
   `final_waypoint_id` (`POST /v1/threads/{id}/fork`): the fork re-runs admission, so it is refused
@@ -474,7 +474,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AllowanceHalted` (`allowance_halted`), an operator-only event: the durable webhook path stores
   and reads it back, signs it with the operator notice secret exactly like `allowance_warning`,
   and shapes its payload with the same twelve keys; callers still cannot subscribe to it. See
-  `MIGRATION.md` §9.2 and §9.4.
+  `MIGRATION.md` §10.2 and §10.4.
 
   **Mid-run allowance notices (plan 42-11).** The boundary guard now tells the operator about
   allowance pressure as it happens. A run that crosses `warn_at` while running warns at its first
@@ -485,7 +485,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   notifies nobody. Claims go through the Phase 41 notice store and webhook queue, never a second
   channel, and never change the guard's decision. Enable on every replica before relying on it:
   an older build cannot parse `allowance_halted`. No public Rust item is added. See `MIGRATION.md`
-  §9.6.
+  §10.6.
 
   **The halt reason in the heralds, and a vocabulary guard (plan 42-12).** A run the Treasurer
   halted now renders one halt line in the markdown, JSON and table heralds, beside the allowance
@@ -499,7 +499,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the run's own `RunFinished`. `tests/treasurer_vocabulary_guard.rs` keeps `Treasurer` a
   framework-only word (ALLOW-05, ADR-0050): it fails on the word under `examples/`, `benches/`
   or any fixture tree, and on the downstream fixture term outside its guardrail-documenting files,
-  and it proves it can fail by scanning a planted temporary tree first. See `MIGRATION.md` §9.2.
+  and it proves it can fail by scanning a planted temporary tree first. See `MIGRATION.md` §10.2.
 
 - **A per-run token budget derived from the remaining allowance (ALLOW-05; Phase 42 plan 42-07,
   ADR-0057).** The `Treasurer` can now turn what is left of a principal's tightest allowance
@@ -516,7 +516,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failure) after the response that crossed it, keeping that response and the truncation notice.
   `ModelCallLimit`, `ToolCallLimit` and the Commissary are unchanged. Installing the cutoff on
   every per-agent service and the HTTP and worker wiring land in plans 42-08 and 42-09; see
-  `MIGRATION.md` §9.2.
+  `MIGRATION.md` §10.2.
 
   **The HTTP agent routes stop on the allowance (plan 42-08).** Every per-agent service now
   installs the one `TokenBudget`, `build_run_api` prices the `Treasurer` from `treasurer.pricing`,
@@ -533,7 +533,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`ApiError::model_unpriced`, `details.model`, no `Retry-After`) before the agent runs on all
   three routes; a derived budget of zero is refused `429 allowance_exhausted`. The frozen v0.9
   golden gate carries a fourth sanctioned exception for the two additive wire changes, and
-  `openapi.json` is regenerated; see `MIGRATION.md` §9.2 and §9.6.
+  `openapi.json` is regenerated; see `MIGRATION.md` §10.2 and §10.6.
 
   **Agent-kind runs stop on the allowance (plan 42-09).** A run of an agent-kind assistant
   (`Runnable::Agent`) is now bounded by the caller's allowance. `POST /v1/runs` admits it with the
@@ -550,14 +550,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checkpoint: resume by a fresh `POST /v1/runs` (recorded in `.planning/WINDOWS.md`). A
   schedule-fired run refused as unpriced is logged and counted as a submission error, never an
   allowance skip. `openapi.json` is regenerated (the `422` on `POST /runs`); see `MIGRATION.md`
-  §9.2 and §9.6.
+  §10.2 and §10.6.
 
 - **Facade re-export of the allowance module (Phase 41 plan 41-09, D-20).** The `paladin` facade now
   re-exports `paladin::core::platform::container::allowance` (`AllowanceRefusal`, `AllowanceWarning`,
   `AllowanceNotice`, `Admission`, `NoticeRecord`, `NoticeOutcome`, `crosses_warn_threshold`, ...), beside
   `container::principal` and `container::treasury_ledger`, so a facade user needs no direct
   `paladin-core` dependency to name them. `.project/current-exports.txt` is refreshed; ADR-0056
-  records the admission model and `MIGRATION.md` §9.2 carries one consolidated new-types row per crate.
+  records the admission model and `MIGRATION.md` §10.2 carries one consolidated new-types row per crate.
 
 - **Per-API-key rolling-window allowances, refused at admission (ALLOW-01, ALLOW-02; Phase 41
   plan 41-01).** A new `treasurer.allowance.api_keys.<name>: { period, amount }` config subtree
@@ -572,7 +572,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never gated. Windows are tumbling and aligned to the UTC epoch, so a tenant can spend up to
   twice an allowance across one boundary, by design. `RunSubmissionService::with_treasurer`,
   `RunSubmissionError::AllowanceExhausted` and `ApiError::allowance_exhausted` are the new
-  public surface; see `MIGRATION.md` §9.2 and §9.6. Later Phase 41 plans extend this entry.
+  public surface; see `MIGRATION.md` §10.2 and §10.6. Later Phase 41 plans extend this entry.
   **Plan 41-03 completes the operator grammar:** `treasurer.allowance` now also takes
   `tenants.<id>` entries, an optional `lifetime` cap and per-entry `warn_at`, a global `warn_at`
   (default `80`), and an optional operator `webhook { url, secret }` target (the secret is
@@ -657,7 +657,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   call is made; an invalid price aborts each build path — and stops `paladin-server` at boot,
   before any agent or provider is constructed — with an error naming `treasurer.pricing`.
   `paladin_core::platform::container::cost` is now re-exported from the facade's `core::platform`
-  container list. Purely additive — no `MIGRATION.md` §9.2 row (D-00g).
+  container list. Purely additive — no `MIGRATION.md` §10.2 row (D-00g).
 
 - **Treasurer cost arithmetic and the streamed cost producer (PRICE-02, PRICE-03; Phase 38 plan
   38-02).** `paladin-core::platform::container::cost` adds `Cost` (`i64` nano-unit amount plus a
@@ -678,7 +678,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streamed chunk (priced or not) and exposes it through the new
   `PaladinExecutionService::finalize_stream_output`, mirroring `format_result` for the streaming
   path. `MarkdownHerald::finalize_stream` renders `0.0450 USD` instead of a hard-coded `$` prefix.
-  Purely additive — no `MIGRATION.md` §9.2 row (D-00g).
+  Purely additive — no `MIGRATION.md` §10.2 row (D-00g).
 
 - **ADR-0052/ADR-0053 — Treasurer attachment point and ledger balance model (PRICE-02, PRICE-03;
   Phase 38 plan 38-01).** Two accepted ADRs, recorded before any pricing code landed: metering
@@ -694,7 +694,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after `usage`; `PricingLlmAdapter::generate` prices each response from its own served model and
   usage — surviving a `FallbackLlmAdapter` hop to a differently-named model — via a
   `price_or_warn(table, model, usage)` helper shared with the streaming path, so the pricing/
-  warn-once rule (D-08) cannot diverge between the two. See `MIGRATION.md` §9.2.
+  warn-once rule (D-08) cannot diverge between the two. See `MIGRATION.md` §10.2.
 
 - **JSON and table heralds render cost and currency (PRICE-03; Phase 38 plan 38-05).**
   `JsonHerald::finalize_stream` emits a `currency` field beside `cost_estimate` (`null` for both
@@ -713,7 +713,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CostTally` sums each model call's cost beside its usage, and the engine's `NodeDispatchResult`
   bridges each Paladin attempt's own real cost into that attempt's `NodeFinished.cost`, so
   `RunFinished.cost` is a real, end-to-end figure on both run paths — never a fabricated zero when
-  any call was unpriced. See `MIGRATION.md` §9.2.
+  any call was unpriced. See `MIGRATION.md` §10.2.
 
 - **`ExecutionMetadata::from_run_finished` and `HeraldTraceSink` — the engine-path cost producer
   (PRICE-03; Phase 38 plan 38-08).** `ExecutionMetadata::from_run_finished(record, model_used)`
@@ -790,7 +790,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (required when bearer auth is enabled); the new `AuthConfig::validate` checks both at boot and
   additionally rejects an empty key value, an invalid or duplicate key `name` and a duplicate key
   value, naming keys by `name` and never printing a secret. There is no implicit default tenant.
-  See `MIGRATION.md` §9.2, §9.5 and §9.8 step 3.
+  See `MIGRATION.md` §10.2, §10.5 and §10.8 step 3.
 
 - **Run attribution: every run and every ledger settlement records the principal that caused it
   (TENANT-02; Phase 40 plans 40-01, 40-02, 40-04, 40-05).** `Run.submitted_by:
@@ -920,7 +920,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `StreamingResponse.reasoning` from `reasoning_content`, and the compat presets map
   `prompt_tokens_details.cache_write_tokens` into `TokenUsage.cache_write_tokens`. The match arms
   every `LlmError` classifier needs (`transience`, `typed_origin`, `llm_error_class`,
-  `classify_fetch_failure`) name the new variant. `MIGRATION.md` 9.1 M-B-16.
+  `classify_fetch_failure`) name the new variant. `MIGRATION.md` 10.1 M-B-16.
 - **A fallback chain can send each hop its own model (PARITY-06; Phase 50 plan 50-14; D-15, D-10,
   D-00h).** `FallbackStep { port, model }` (`FallbackStep::new`) and
   `FallbackLlmAdapter::from_steps(Vec<FallbackStep>)` build a chain whose every hop is sent its
@@ -941,7 +941,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   against the new `AgentRuntimeDeps.llm_config` and built with the new
   `ModelFallbackMiddleware::from_steps` / `paced_steps`. Names only, never a credential. It is
   mutually exclusive with `providers` (a validation error naming both keys); a `providers`-only
-  configuration builds exactly as before. `MIGRATION.md` 9.5.
+  configuration builds exactly as before. `MIGRATION.md` 10.5.
 - **`PaladinResult.run_metadata` carries the run's `paladin.*` visibility keys (PARITY-02; Phase 50
   plan 50-18; ADR-0061 (h), owner reading R-1 = `option-b`).** `PaladinResult` gains
   `run_metadata: BTreeMap<String, String>`, directly after `served_by`: the `paladin.*` keys every
@@ -999,7 +999,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   log line changes.
 
 - **Build, load and chain pre-flight judge the provider-level defaults too (REASON-01, REASON-04;
-  Phase 51 plans 51-16 to 51-20, gap G-2; `MIGRATION.md` 9.2 and 9.8 DR-21).**
+  Phase 51 plans 51-16 to 51-20, gap G-2; `MIGRATION.md` 10.2 and 10.8 DR-21).**
   `PaladinBuilder::build` judges the agent's effort, or the port's provider-level default when the
   agent sets none, through `LlmPort::check_reasoning`, so a Paladin built over a directly built
   adapter whose default its model cannot honour is refused at build, and a provider-level
@@ -1059,7 +1059,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **BREAKING (`paladin-ai-core`): `TraceEvent::NodeFinished` gains the fields
   `reasoning_requested: Option<String>` and `reasoning_effective: Option<String>` (REASON-05, D-00b,
-  D-11; Phase 51 plan 09; `MIGRATION.md` 9.2).** Both are `#[serde(default, skip_serializing_if =
+  D-11; Phase 51 plan 09; `MIGRATION.md` 10.2).** Both are `#[serde(default, skip_serializing_if =
   "Option::is_none")]`, the `cost` precedent. Only a constructing struct-variant literal or an
   exhaustive destructure of `NodeFinished` breaks. Migration: add `reasoning_requested: None,
   reasoning_effective: None` to the literal, or match with `..`. There is no deprecated alias.
@@ -1074,13 +1074,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **BREAKING (`paladin-ai`): `AgentDefinition` gains the fields `reasoning_effort:
   Option<ReasoningEffort>` and `reasoning_fallback: Option<ReasoningFallback>` (REASON-01, D-00b,
-  D-00e; Phase 51 plan 08; `MIGRATION.md` 9.2).** Both are `#[serde(default)]`, so every existing
+  D-00e; Phase 51 plan 08; `MIGRATION.md` 10.2).** Both are `#[serde(default)]`, so every existing
   YAML file loads unchanged; only a full struct literal of the definition breaks. Migration: add
   `reasoning_effort: None, reasoning_fallback: None` to the literal. There is no deprecated alias.
 
 - **BREAKING (`paladin-ai-core`): `PaladinData` gains the fields `reasoning_effort:
   Option<ReasoningEffort>` and `reasoning_fallback: Option<ReasoningFallback>` (REASON-01, D-00b,
-  D-00e; Phase 51 plan 07; `MIGRATION.md` 9.2).** The agent is the second level of the
+  D-00e; Phase 51 plan 07; `MIGRATION.md` 10.2).** The agent is the second level of the
   reasoning-effort precedence (request, agent, provider default, vendor default). Both fields are
   `#[serde(default, skip_serializing_if = "Option::is_none")]` and `None` in `Default`, so a stored
   Citadel snapshot still loads and a Paladin that sets neither serialises byte-identically. Only
@@ -1089,13 +1089,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **BREAKING (`paladin-llm`): `CompatRequestParameters` gains the field `reasoning:
   ReasoningWire`, and `CompatRequestParameters::all()` becomes `all(reasoning: ReasoningWire)`
-  (REASON-02, D-00b; Phase 51 plan 04; `MIGRATION.md` 9.2).** The type has no `Default` by design,
+  (REASON-02, D-00b; Phase 51 plan 04; `MIGRATION.md` 10.2).** The type has no `Default` by design,
   so every construction site states where its vendor parses a reasoning effort. Migration: add
   `reasoning: ReasoningWire::Unsupported` to the literal, or pass the wire to `all(..)`
   (`CompatRequestParameters::all(ReasoningWire::Unsupported)` keeps today's behaviour). There is no
   deprecated alias.
 - **A base URL must start with `http://` or `https://` on all nine adapters (WR-03; Phase 50.1
-  review fix `5ebd315b`; `MIGRATION.md` 9.8).** The OpenAI, DeepSeek, Kimi, Qwen, Grok, Ollama and
+  review fix `5ebd315b`; `MIGRATION.md` 10.8).** The OpenAI, DeepSeek, Kimi, Qwen, Grok, Ollama and
   OpenAI-compatible configs used to accept any `base_url` that began with `http`, so `httpx://host`
   or a scheme-less `http-gateway.internal/v1` passed `validate()` and failed later at the HTTP
   layer. They now apply the same full-prefix check Anthropic and Gemini already did (one shared
@@ -1103,7 +1103,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `"Base URL must start with http:// or https://"` (previously `"... with http or https"`). The
   `with_base_url` rustdoc already promised this. A valid `http://` or `https://` URL is unaffected.
 - **Vendor usage totals are reconciled on every adapter (G-50-5a; Phase 50 plans 50-23 and 50-24;
-  `MIGRATION.md` 9.1 M-B-20).**
+  `MIGRATION.md` 10.1 M-B-20).**
   - The OpenAI, DeepSeek and Gemini adapters now parse the vendor's own total (`total_tokens`,
     `totalTokenCount`) on both paths. They compare it with the mapped
     `prompt_tokens + completion_tokens`, and also check reasoning and cache containment. A finding
@@ -1128,8 +1128,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     live-measured*, and describes every fold and the reconciliation for all nine adapters.
 
 - **`llm.<provider>` blocks now take effect: the server builds every agent through
-  `create_from_config` (PARITY-03; Phase 50 plan 50-10; D-12, D-13, D-02; `MIGRATION.md` 9.1
-  M-B-15 and 9.5).** `build_agent_registry*`, `paladin_port_from_settings*` and
+  `create_from_config` (PARITY-03; Phase 50 plan 50-10; D-12, D-13, D-02; `MIGRATION.md` 10.1
+  M-B-15 and 10.5).** `build_agent_registry*`, `paladin_port_from_settings*` and
   `FacadeProvisioner` resolve each agent's own `provider` (else `llm.default_provider`) and `model`
   against the provider's block (host, key, timeout, retries, limits, model overrides), then the
   provider's environment variables, then the adapter default. A block's `default_temperature` is
@@ -1190,7 +1190,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sent, never clamped. The dropped-parameter log moved from `debug!` to `warn!`.
 
 - **The original adapters follow the per-model parameter policy (PARITY-01, PARITY-02,
-  PARITY-05; Phase 50 plan 50-05; ADR-0061; `MIGRATION.md` 9.1, M-B-13).** OpenAI, DeepSeek,
+  PARITY-05; Phase 50 plan 50-05; ADR-0061; `MIGRATION.md` 10.1, M-B-13).** OpenAI, DeepSeek,
   Anthropic and Gemini build their request, buffered and streamed, through `sampling::apply` with
   the profile their model registry resolves, stamp `paladin.params_omitted`,
   `paladin.response_format_adjusted` and `paladin.unprofiled_model` on buffered responses as the
@@ -1208,7 +1208,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   adapters' new fields are private).
 
 - **The base version family is renamed to the Entity vocabulary** (Phase 48; ENTITY-03; ADR-0060;
-  see the Phase 48 rows in `MIGRATION.md` 9.2). `base::service::node_version_service` becomes
+  see the Phase 48 rows in `MIGRATION.md` 10.2). `base::service::node_version_service` becomes
   `base::service::entity_version_service`, and `NodeVersion`, `NodeVersionMetadata`,
   `NodeVersionRepository`, `NodeVersionService` and `InMemoryNodeVersionRepository` become
   `EntityVersion`, `EntityVersionMetadata`, `EntityVersionRepository`, `EntityVersionService` and
@@ -1224,7 +1224,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `FieldVersionService` and `CollectionVersionService` stay, pending the content / general data
   orchestration review (D-05); only their import path moved.
 - **Persisted entity JSON is written with new keys and still reads the old ones (Phase 48;
-  ENTITY-01; ADR-0060; see `MIGRATION.md` 9.1 M-B-12 and 9.4).** The entity payload key `node`
+  ENTITY-01; ADR-0060; see `MIGRATION.md` 10.1 M-B-12 and 10.4).** The entity payload key `node`
   becomes `data`, `ContentItem` and `PromptItem` store their entity under `entity` instead of
   `node`, and a version record stores `entity_id` / `entity_data`. v0.11 reads both spellings and
   writes only the new ones; a document carrying both spellings of one key is rejected. This is
@@ -1236,7 +1236,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   means the base wrapper every Paladin, Council, Grove, User, Log, `ContentItem` and `PromptItem`
   is built on.
 - `LlmError::RateLimitExceeded` is now a struct variant `{ retry_after, hints }`, marked
-  `#[non_exhaustive]` (PACE-01; Phase 43 plan 43-02; `MIGRATION.md` section 9.2). Construct it with
+  `#[non_exhaustive]` (PACE-01; Phase 43 plan 43-02; `MIGRATION.md` section 10.2). Construct it with
   `LlmError::rate_limited(None)` (or `rate_limited(Some(delay))` /
   `rate_limited_with_hints(hints)`), and match it with `LlmError::RateLimitExceeded { .. }`. Its
   `Display` text and its `Transient` classification are unchanged, so no message assertion moves.
@@ -1244,12 +1244,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loop, matching OpenAI (D-02; PACE-02; Phase 43 plan 43-03); its network and 5xx retries are
   unchanged. An account-level quota or spend-cap 429 (OpenAI `insufficient_quota`, Anthropic
   `enforced_spend_limit_reached`) is now reported as `LlmError::UsageLimitExceeded`, which is
-  permanent, instead of `LlmError::RateLimitExceeded` (`MIGRATION.md` section 9.1).
+  permanent, instead of `LlmError::RateLimitExceeded` (`MIGRATION.md` section 10.1).
 - The compat engine (and through it the Kimi, Qwen, Grok, Ollama and OpenAI-compatible presets),
   the DeepSeek adapter and the Gemini adapter now surface a 429 on their first attempt instead of
   retrying it inside their own loops, and carry the provider's `Retry-After` (delta-seconds or
   HTTP-date), `retry-after-ms` and generic `x-ratelimit-*` values on the error, on both the buffered
-  and streaming paths (D-02; PACE-01, PACE-02; Phase 43 plan 43-04; `MIGRATION.md` section 9.1).
+  and streaming paths (D-02; PACE-01, PACE-02; Phase 43 plan 43-04; `MIGRATION.md` section 10.1).
   Their network, timeout and 5xx retries are unchanged. The shared conformance suite gained a
   tenth case, `rate_limit_is_surfaced_once_with_its_retry_delay`, which every adapter fixture runs.
 - The output of an agent run that ends on the Treasurer's derived allowance figure now carries
@@ -1265,7 +1265,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wins, a tie goes to the allowance). A deployment with the operator budget disabled (the
   default) and no allowance is unchanged. `build_agent_with_llm` and `build_agent` (crate-private)
   take the operator figure, and `FacadeProvisioner::with_token_budget` carries it for runtime
-  provisioning. See `MIGRATION.md` §9.6 and the configuration guide.
+  provisioning. See `MIGRATION.md` §10.6 and the configuration guide.
 
 - **The SSE `done` says `cancelled` for a caller cancel, and a worker drain emits no terminal
   event (PLAT-09; Phase 42 plan 42-06).** A run a caller cancelled streamed `done` with
@@ -1275,14 +1275,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PerRunCancelProbe` the worker attaches to every engine. A graceful worker shutdown no longer
   emits a `halted` `done` for a run that is still `running` and requeued
   (`RunEventBusSink::with_shutdown_token`). A client that matched `halted` to detect a cancel must
-  also match `cancelled`. See `MIGRATION.md` §9.2 and §9.6.
+  also match `cancelled`. See `MIGRATION.md` §10.2 and §10.6.
 
 - **`SubmitRun.attributed_to` and `CreateRunSchedule.created_by` (Phase 41 plan 41-05).** Both
   are new `Option<RunAttribution>` fields on plain public structs, so a caller that builds
   `SubmitRun { .. }` or `CreateRunSchedule { .. }` with a struct literal must add the field
   (`attributed_to: None` / `created_by: None` keeps today's behaviour). `RunSchedule` gains
   `created_by` and `with_created_by`, and `SkipReason` gains `AllowanceExhausted`; both types
-  were already `#[non_exhaustive]`. See `MIGRATION.md` §9.2.
+  were already `#[non_exhaustive]`. See `MIGRATION.md` §10.2.
 
 - **`treasurer:` now rejects unknown keys (Phase 41 plan 41-03).** `TreasurerConfig` and every
   `treasurer.allowance` struct fail the config load on an unrecognised key (for example
@@ -1293,10 +1293,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   currency, display }`), computed from `TreasuryLedgerPort::spend` at read time — one query per
   request/page, never persisted on the run row, `null` when no ledger backend is configured, the
   run has no settled spend, or its settlements span more than one currency (D-10; LEDGR-04, Phase
-  39 plan 39-06; see `MIGRATION.md` §9.2).
+  39 plan 39-06; see `MIGRATION.md` §10.2).
 - The agent execute response (`ExecuteResponse.cost`) carries `PaladinResult.cost` the same way,
   inverting the Phase 38 deferral that named this phase (LEDGR-04, Phase 39 plan 39-06; see
-  `MIGRATION.md` §9.2).
+  `MIGRATION.md` §10.2).
 - Every ledger row this phase's production writers create carries the documented
   `LedgerScope::unattributed()` sentinel scope (`tenant_id`/`api_key_id` both the literal
   `"unattributed"`) until Phase 40 records a run's real submitting principal (D-01).
@@ -1312,7 +1312,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `LlmResponse`, `PaladinResult`, `TraceEvent::NodeFinished`/`RunFinished`, `StreamingResponse` and
   `ChunkMetadata` each gain a `cost: Option<Cost>` field beside `usage`; a full struct literal of
   the first three (`LlmResponse`, `PaladinResult`, `TraceEvent::NodeFinished`/`RunFinished`) needs
-  `cost: None` added — see `MIGRATION.md` §9.2 (Phase 38 plans 38-02, 38-04, 38-06, 38-07).
+  `cost: None` added — see `MIGRATION.md` §10.2 (Phase 38 plans 38-02, 38-04, 38-06, 38-07).
 
 - Ledger settlements on both production paths are attributed to the submitting principal's tenant
   and API key (`LedgerScope::from_attribution`) instead of the Phase 39 `unattributed` sentinel,
@@ -1323,7 +1323,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `GET /runs/{run_id}/stream`, `POST /runs/{run_id}/cancel` and
   `GET /runs/{run_id}/webhook-deliveries` also answer `501` when no run store is configured, as
   `GET /runs/{run_id}` already did (PLAT-07; Phase 40 plans 40-01, 40-05; see `MIGRATION.md`
-  §9.6). `WINDOWS.md` row 32 (WR-03, "any authenticated principal can read every run") is closed;
+  §10.6). `WINDOWS.md` row 32 (WR-03, "any authenticated principal can read every run") is closed;
   the `/v1/threads/*` routes remain unscoped and are tracked as a new open row.
 - **The dev/test/CI and reference object store is RustFS (STORE-01, STORE-03; ADR-0055).** Every
   live configuration now runs the pinned `rustfs/rustfs:1.0.0` (the manifest-list digest is in a
@@ -1356,8 +1356,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Formation that continues passes an empty input to the next Paladin; Campaign has no continue mode
   and warns once). A timed-out final attempt is a `BattalionError::Node` with a `Timeout` source
   (Formation, Campaign) or an entry inside `AggregationError` (Phalanx). `BattalionConfig::new`
-  arms no timeout. (ADR-0059; LEGACY-01..04; see MIGRATION.md 9.1 M-B-06..M-B-11 and the Phase 44
-  9.2 rows)
+  arms no timeout. (ADR-0059; LEGACY-01..04; see MIGRATION.md 10.1 M-B-06..M-B-11 and the Phase 44
+  10.2 rows)
 - **`BattalionResult.node_errors` carries the structured `NodeError`, a one-way door (Phase 44;
   LEGACY-01).** The element changes from the v0.10 `{ node_name, error }` summary to
   `{ node_id, attempt, transience, source }` (`node_id` is the Paladin's name; `source` is an
@@ -1366,7 +1366,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does, and there is no compatibility deserializer. The JSON herald emits the new shape, and the
   Markdown and Table heralds render `**<node id>:** attempt <n>, <Transience>: <source>` and
   `  <node id> (attempt <n>, <Transience>): <source>`, with no provider or HTTP status. (ADR-0059;
-  LEGACY-01..04; see MIGRATION.md 9.1 M-B-08, section 9.4 and the Phase 44 9.2 rows)
+  LEGACY-01..04; see MIGRATION.md 10.1 M-B-08, section 10.4 and the Phase 44 10.2 rows)
 - **The Conclave and the circuit breaker classify by `transience()`, and the Conclave uses the
   engine backoff (Phase 44; LEGACY-03).** The Conclave retries an expert only when
   `PaladinError::transience()` is `Transient` (never by message text; `Unknown` is not retried),
@@ -1374,7 +1374,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CircuitBreakerOpen`, Garrison storage and tokenization failures and Arsenal timeout and
   transport failures are now retried. The circuit breaker counts `Transient` failures only, so a
   `Permanent` failure (a 401 from a bad key) or an `Unknown` one no longer trips it. (ADR-0059;
-  LEGACY-01..04; see MIGRATION.md 9.1 M-B-09, M-B-10 and the Phase 44 9.2 rows)
+  LEGACY-01..04; see MIGRATION.md 10.1 M-B-09, M-B-10 and the Phase 44 10.2 rows)
 - **The Commander's defaults (Phase 44; LEGACY-01, LEGACY-02).** A bare `CommanderBuilder` bounds
   each attempt at 300 s (the `BattalionConfig` it builds on its own arms no timeout); the Commander
   no longer wraps `execute()` in a whole-run timeout, so ChainOfCommand and Grove are unbounded
@@ -1382,9 +1382,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `retry_attempts = max_attempts - 1` from `aegis.retry`; and its default Maneuver strategy is
   `maneuver::ErrorStrategy::FailFast` (set `CommanderBuilder::error_strategy` to keep
   `ContinueParallel`). The CLI keeps its `timeout_seconds` YAML keys, which now bound each attempt.
-  (ADR-0059; LEGACY-01..04; see MIGRATION.md 9.1 M-B-06, M-B-09, M-B-11 and the Phase 44 9.2 rows)
+  (ADR-0059; LEGACY-01..04; see MIGRATION.md 10.1 M-B-06, M-B-09, M-B-11 and the Phase 44 10.2 rows)
 - **Empty output has one meaning on seven providers (PARITY-05; Phase 50 plan 50-12; D-09,
-  D-11a; `MIGRATION.md` 9.1 M-B-16).** Text that is empty after trimming is now
+  D-11a; `MIGRATION.md` 10.1 M-B-16).** Text that is empty after trimming is now
   `LlmError::EmptyCompletion` on any finish reason, buffered and streamed, for the five
   OpenAI-compatible presets, OpenAI and DeepSeek (it was `Ok("")` unless the finish reason was
   `length`, and streams were never checked: a stream with no text now ends in
@@ -1395,7 +1395,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `FinishReason::FunctionCall`. One crate-private rule, `response_guards::classify_completion`,
   decides all of this, so the adapters cannot drift apart.
 - **Anthropic and Gemini join the response rules; Anthropic refusals, stop reasons and thinking
-  text (PARITY-05; Phase 50 plan 50-13; D-09, D-11, D-11a; `MIGRATION.md` 9.1 M-B-17).** An
+  text (PARITY-05; Phase 50 plan 50-13; D-09, D-11, D-11a; `MIGRATION.md` 10.1 M-B-17).** An
   Anthropic `stop_reason: "refusal"` is now `LlmError::Refusal` (it was reported as an
   `EmptyCompletion` with max-tokens advice), buffered and streamed, with `detail` built from
   `stop_details` and redacted before it is bounded. Every Anthropic stop reason has a name:
@@ -1421,8 +1421,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `testcontainers-modules` dev-dependency.
 - The `.github/actionlint.yaml` `services.command` suppression, which was dead configuration.
 - **The legacy Battalion fault-handling surfaces, a clean break with no shim (Phase 44; LEGACY-01,
-  LEGACY-02, LEGACY-03; ADR-0059; LEGACY-01..04; see MIGRATION.md 9.1 M-B-06..M-B-11 and the Phase
-  44 9.2 rows).** Each removal names its replacement:
+  LEGACY-02, LEGACY-03; ADR-0059; LEGACY-01..04; see MIGRATION.md 10.1 M-B-06..M-B-11 and the Phase
+  44 10.2 rows).** Each removal names its replacement:
   - The legacy Battalion `RetryPolicy`, `ErrorStrategy` and `NodeError` types in `paladin-core`
     (the same-named Aegis `RetryPolicy`, the Maneuver's `ErrorStrategy` and the structured
     `node_error::NodeError` are different items and stay). Replacements: `BattalionConfig.aegis`
@@ -1446,7 +1446,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `engine::retry::backoff_delay`. The API baseline `.project/current-exports.txt` loses that one
     line.
 - **The base entity wrapper's old name, a clean break with no shim (Phase 48; ENTITY-01..05;
-  ADR-0060; see `MIGRATION.md` 9.1 M-B-12 and the Phase 48 9.2 rows).** Each removal names its
+  ADR-0060; see `MIGRATION.md` 10.1 M-B-12 and the Phase 48 10.2 rows).** Each removal names its
   replacement:
   - The generic base wrapper `Node<T>` and its module `base::entity::node`. Replacement:
     `paladin_core::base::entity::Entity<T>`, with the payload field renamed from `node` to `data`.
@@ -1494,7 +1494,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   51-19, G-2, review WR-01).
 
 - **Billed failures, hopped-past fallback bills and failed engine attempts are priced and settled
-  (G-50-5a, PARITY-05; Phase 50 plans 50-26 to 50-30; `MIGRATION.md` 9.1 M-B-21).** A vendor
+  (G-50-5a, PARITY-05; Phase 50 plans 50-26 to 50-30; `MIGRATION.md` 10.1 M-B-21).** A vendor
   bills a call that ends in an empty completion or a refusal, but Paladin used to drop that usage
   with the error, so the Treasurer under-charged. Now:
   - every adapter, buffered and streamed, puts the call's usage on the error
@@ -1521,7 +1521,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `provider_swap_matrix` case `billed_failures_and_hopped_refusals_reach_the_ledger` (plan 50-31).
 
 - **Gemini tool-use prompt tokens and Anthropic vision cache tokens are counted (G-50-5a; Phase 50
-  plan 50-23; `MIGRATION.md` 9.1 M-B-20).**
+  plan 50-23; `MIGRATION.md` 10.1 M-B-20).**
   - Gemini reports `toolUsePromptTokenCount` beside `promptTokenCount`, and its `totalTokenCount`
     includes it. The Gemini adapter dropped it, so it reported, and the Treasurer priced, fewer
     prompt tokens than Gemini bills. The adapter now folds it into `prompt_tokens` (saturating).
@@ -1532,7 +1532,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     It now folds them into `prompt_tokens` as the chat path does, on both vision surfaces.
 
 - **Grok reasoning tokens are counted and priced (G-50-5a; Phase 50 plan 50-21; `MIGRATION.md`
-  9.1 M-B-19).** xAI reports `completion_tokens_details.reasoning_tokens` beside
+  10.1 M-B-19).** xAI reports `completion_tokens_details.reasoning_tokens` beside
   `completion_tokens` (its total is prompt + completion + reasoning), while the shared compat
   engine read every preset with OpenAI's inclusive contract, so every Grok reasoning call dropped
   its reasoning tokens from `total_tokens`, reported more reasoning than completion, and was
@@ -1547,7 +1547,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   flagged on every reasoning call by the reconciliation below. Kimi, Qwen, Ollama and OpenAI-compatible keep the inclusive reading.
 
 - **The OpenAI adapter sends `max_completion_tokens`, so `gpt-5.4-nano` no longer returns HTTP 400
-  (G-50-5b; Phase 50 plan 50-19; `MIGRATION.md` 9.1 M-B-18).** The adapter sent the output limit
+  (G-50-5b; Phase 50 plan 50-19; `MIGRATION.md` 10.1 M-B-18).** The adapter sent the output limit
   as `max_tokens`, which `gpt-5.4-nano` (the first seeded OpenAI model) rejects with
   `unsupported_parameter`, and the defaults always set a limit, so every request to it failed.
   Every OpenAI chat-completions body (buffered, streamed and every `response_format`) and the
@@ -1681,40 +1681,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AnthropicConfig::new` sets `max_tokens` to 4,096 for every model, the value `from_env()` and the
   layered path already used (owner decision `compiled-default`, 2026-10-20), so a model's larger
   seeded maximum output is reachable only through `with_max_tokens`. Registered in `MIGRATION.md`
-  section 9.2 (one SURFACE-02 row per type) and section 9.8 (DR-19; DR-12 amended) and the seven
+  section 10.2 (one SURFACE-02 row per type) and section 10.8 (DR-19; DR-12 amended) and the seven
   `paladin-llm | <Type>Config` allowlist entries (`method_parameter_count_changed`, measured with
   cargo-semver-checks 0.50.0 against 0.10.1).
 - **BREAKING (`paladin-web`): `Principal` gains the required `tenant_id: TenantId` field and is
   marked `#[non_exhaustive]`** — build it with `Principal::new(id, role, tenant_id)`; a struct
   literal outside the crate no longer compiles (TENANT-01; Phase 40 plan 40-01; `MIGRATION.md`
-  §9.2, allowlist entry `paladin-web | Principal`).
+  §10.2, allowlist entry `paladin-web | Principal`).
 - **BREAKING (`paladin-web`): `AgentAuthConfig` gains `bearer_tenant: Option<TenantId>`** — a
   full struct literal must add it (`..Default::default()` sites are unchanged); a verified bearer
-  token does not authenticate while it is `None` (TENANT-01; 40-01; `MIGRATION.md` §9.2).
+  token does not authenticate while it is `None` (TENANT-01; 40-01; `MIGRATION.md` §10.2).
 - **BREAKING (config): `http.auth.api_keys[].tenant` is required on every API key, and
   `http.auth.bearer_token.tenant` is required when bearer auth is enabled** — `paladin-server`
   refuses to boot otherwise, naming the key's `name` and never its value; duplicate key names and
   duplicate key values are also rejected at boot. This is the one deliberate exception to the
   "every new config surface defaults to today's behaviour" rule (X-09): there is no implicit default
-  tenant (TENANT-01; 40-01, 40-03; `MIGRATION.md` §9.5, §9.8 step 3).
+  tenant (TENANT-01; 40-01, 40-03; `MIGRATION.md` §10.5, §10.8 step 3).
 - **BREAKING (`paladin-ports`): `SubmitRun.requested_by`, `ForkRun.requested_by` and
   `RunSubmissionPort::cancel`'s `requested_by` are `Option<PrincipalRef>`** instead of
   `Option<(String, UserRole)>`; `None` keeps its internal-caller meaning (TENANT-01, TENANT-02;
-  40-01; `MIGRATION.md` §9.2, register-only entries).
+  40-01; `MIGRATION.md` §10.2, register-only entries).
 - **BREAKING (`paladin-ports`, new-in-0.10 type): `RunQuery` gains `scope: RunReadScope`** —
   `..Default::default()` sites are unchanged (`All`); a full struct literal must add it (PLAT-07;
-  40-02; `MIGRATION.md` §9.2).
+  40-02; `MIGRATION.md` §10.2).
 - **BREAKING (HTTP API): run reads are tenant-scoped** — another tenant's run answers `404` on
   every `/runs/{run_id}*` route (`GET`, `/stream`, `/webhook-deliveries`, `POST .../cancel`) and is
   absent from `GET /runs`; `/stream`, `/cancel` and `/webhook-deliveries` also answer `501` without
   a run store. Cross-tenant operator reads need an `admin`-role key (PLAT-07; 40-01, 40-05;
-  `MIGRATION.md` §9.6).
+  `MIGRATION.md` §10.6).
 - **BREAKING (`paladin-ai-core`): the base wrapper is `Entity<T>` with payload `data`, and
   persisted entity JSON is written with the new keys** -- `Node<T>` and `base::entity::node` are
   gone, `ContentItem.node` and `PromptItem.node` are `.entity`, the version family is
   `EntityVersion*`, and the Citadel stores the real `PaladinData` and `PaladinStatus`. v0.11 reads
   the v0.10 keys but a v0.10 binary cannot read v0.11 output (ENTITY-01..05; ADR-0060;
-  `MIGRATION.md` 9.1 M-B-12, 9.2 Phase 48 rows, 9.4).
+  `MIGRATION.md` 10.1 M-B-12, 10.2 Phase 48 rows, 10.4).
 - **BREAKING (`paladin-llm`): the nine adapter configs gain `max_tokens`, `max_retries`,
   `context_window` and `model_overrides` and are marked `#[non_exhaustive]`** (`OpenAIConfig` gains
   `max_tokens`, `context_window` and `model_overrides`; `AnthropicConfig` gains `max_retries`,
@@ -1733,13 +1733,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stays constructible. Build responses with `LlmResponse::new(..)` and `with_reasoning(..)`,
   which name no later field. Legacy JSON without the key deserializes with `reasoning == None`,
   and a response without reasoning serializes byte-identically. Registered on the existing
-  `paladin-ports | LlmResponse` `MIGRATION.md` 9.2 row and allowlist entry (the second break
-  after `cost`), and in 9.8 DR-6.
+  `paladin-ports | LlmResponse` `MIGRATION.md` 10.2 row and allowlist entry (the second break
+  after `cost`), and in 10.8 DR-6.
 - **BREAKING (`paladin-ai`): `ModelFallbackConfig` gains `steps` and `AgentRuntimeDeps` gains
   `llm_config`** -- two fields on constructible root types; a full struct literal must add
   `steps: Vec::new()` or `llm_config: None` (or end in `..Default::default()`, which every
   in-tree literal now does) (D-15, PARITY-06; Phase 50 plan 50-14). Both types still derive or
-  implement `Default`. Registered on a new `paladin-ai | ModelFallbackConfig` `MIGRATION.md` 9.2
+  implement `Default`. Registered on a new `paladin-ai | ModelFallbackConfig` `MIGRATION.md` 10.2
   row and allowlist entry, and on the existing `paladin-ai | AgentRuntimeDeps` row and entry
   (the second field after `cadence`).
 - **BREAKING (`paladin-llm`): `FallbackChainError` gains the `EmptyStepModel { index }` variant**
@@ -1754,7 +1754,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   map) (PARITY-02; Phase 50 plan 50-18, owner reading R-1). The struct stays constructible and
   is still not `#[non_exhaustive]`. Measured by cargo-semver-checks as
   `constructible_struct_adds_field` on `PaladinResult.run_metadata`; registered by extending the
-  existing `paladin-ai-core | PaladinResult` `MIGRATION.md` 9.2 row and allowlist entry. The
+  existing `paladin-ai-core | PaladinResult` `MIGRATION.md` 10.2 row and allowlist entry. The
   consumer takes it in its single move to v0.11.0.
 - **BREAKING (`paladin-ports`): `LlmError::EmptyCompletion` and `LlmError::Refusal` are
   `#[non_exhaustive]` struct variants that carry the bill of a billed-but-failed call** (G-50-5a,
@@ -1768,12 +1768,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Permanent` classification are unchanged. Every adapter fills the bill on both paths, and it is
   priced and settled (plans 50-27 to 50-30; see *Fixed*). Measured by cargo-semver-checks
   as `enum_tuple_variant_changed_kind` and `enum_variant_marked_non_exhaustive` on
-  `EmptyCompletion`, and registered on the `paladin-ports | LlmError` `MIGRATION.md` 9.2 row, its
-  allowlist entries and the 9.8 consumer row DR-17.
+  `EmptyCompletion`, and registered on the `paladin-ports | LlmError` `MIGRATION.md` 10.2 row, its
+  allowlist entries and the 10.8 consumer row DR-17.
 
 ### Known limitations
 
-- **Phase 50 provider-parity limits (ADR-0061; `MIGRATION.md` 9.1 M-B-13 to M-B-22).** (1) Seven of
+- **Phase 50 provider-parity limits (ADR-0061; `MIGRATION.md` 10.1 M-B-13 to M-B-22).** (1) Seven of
   the nine providers were probed on 2026-10-15; Ollama and OpenAI-compatible were skipped (no
   daemon or endpoint), so they have no seeded models and run on adapter-wide values. Every model
   the registry does not list does too, visibly unprofiled (`paladin.unprofiled_model`).

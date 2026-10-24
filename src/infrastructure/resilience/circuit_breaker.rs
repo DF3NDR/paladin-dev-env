@@ -97,6 +97,14 @@ pub enum CircuitState {
 /// the caller without affecting the circuit. The classification reads the
 /// typed variant only, never the failure's message text.
 ///
+/// "Without affecting the circuit" is literal (IN-05): a `Permanent` or `Unknown`
+/// failure leaves the breaker's state unchanged. In `Closed` it neither
+/// increments nor resets the consecutive-failure count, so the count is really
+/// "`Transient` failures since the last success" and a `Permanent` failure
+/// between two `Transient` ones does not reset it. In `HalfOpen` it neither
+/// counts against the probe nor re-opens the circuit, so a probe that fails
+/// `Permanent` leaves the breaker `HalfOpen`, neither closing nor re-opening it.
+///
 /// # Thread Safety
 ///
 /// The circuit breaker is thread-safe and can be shared across threads using `Arc<CircuitBreaker>`.

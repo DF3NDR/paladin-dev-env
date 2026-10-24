@@ -175,6 +175,12 @@ impl PhalanxExecutionService {
     /// `aegis.timeout`. When `cancellation_token` fires the call returns
     /// [`BattalionError::Cancelled`], and a Paladin waiting in retry backoff
     /// stops retrying.
+    ///
+    /// Only waiting and backing-off Paladins stop. An attempt already in
+    /// flight when the token fires runs to its end and keeps its concurrency
+    /// permit until then. The `FirstSuccess` aggregation does not read
+    /// `max_concurrency` at all (it builds no semaphore); that is pre-existing
+    /// behaviour, so a limit set alongside `FirstSuccess` is not applied.
     pub async fn execute_with_cancellation(
         &self,
         phalanx: &Phalanx,

@@ -103,6 +103,13 @@ harness = false
 # section 9.2 row and `.cargo/semver-checks-allowlist.toml` entries, kept
 # set-equal by CI's `semver` job; every in-tree caller migrated in the same
 # commit series.
+#
+# 2026-10-24 (Phase 46, D-24 / WR-05): remove the crate-wide `function_missing`
+# and `module_missing` allows below once 0.11.0 is the published semver
+# baseline. Until then they switch those lints off for the whole crate, so an
+# accidental public removal would pass the semver gate. Removing a line also
+# removes its mirrored `.cargo/semver-checks-allowlist.toml` entry
+# (`make check-migration-allowlist`).
 [package.metadata.cargo-semver-checks.lints]
 function_missing = "allow"
 module_missing = "allow"

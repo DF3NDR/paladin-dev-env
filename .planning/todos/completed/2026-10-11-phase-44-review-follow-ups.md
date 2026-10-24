@@ -1,4 +1,5 @@
 ---
+completed: 2026-10-24
 created: 2026-10-11T18:00:00Z
 title: Phase 44 code review follow-ups (Commander/Maneuver bounds docs, crate-wide semver allows, info items)
 area: battalion
@@ -48,3 +49,7 @@ was fixed in `dc55f18e`):
 
 Docs and a one-time `warn!` for WR-04, the dated note for WR-05, and optional cleanups for the info
 items. A good fit for `/gsd-quick` or Phase 46 (docs currency).
+
+## Resolution
+
+Resolved by Phase 46 plan 46-09: WR-04, WR-05, IN-05, IN-N1 done; IN-01..IN-04 and IN-N2 (test tightening) deferred per 46-CONTEXT D-24.

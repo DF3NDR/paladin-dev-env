@@ -126,6 +126,13 @@ rand = { workspace = true }
 # are not Phase 51), so the line was added in this plan and the break keeps its MIGRATION.md
 # section 9.2 `Y` row and `.cargo/semver-checks-allowlist.toml` entry. `TraceEvent`
 # postdates the CI-pinned v0.9.0 baseline, so CI's `semver` job cannot observe it.
+#
+# 2026-10-24 (Phase 46, D-24 / WR-05): remove the crate-wide `struct_missing`,
+# `enum_missing` and `enum_variant_missing` allows below once 0.11.0 is the
+# published semver baseline. Until then they switch those lints off for the
+# whole crate, so an accidental public removal would pass the semver gate.
+# Removing a line also removes its mirrored `.cargo/semver-checks-allowlist.toml`
+# entry (`make check-migration-allowlist`).
 [package.metadata.cargo-semver-checks.lints]
 enum_marked_non_exhaustive = "allow"
 constructible_struct_adds_field = "allow"

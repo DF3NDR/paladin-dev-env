@@ -20,8 +20,8 @@
 //! Baseline: the current Paladin tree. This file is not expected to compile against the `v0.10.1`
 //! tag, which predates several of the shapes pinned here.
 //!
-//! Red-muster rule: an intended break updates the pin, its MIGRATION.md section 9.2 row and the
-//! section 9.8 library-consumer table in one commit. An unintended break is a library defect; the
+//! Red-muster rule: an intended break updates the pin, its MIGRATION.md section 10.2 row and the
+//! section 10.8 library-consumer table in one commit. An unintended break is a library defect; the
 //! library is fixed, and is never shimmed, re-exported or deprecated to turn this target green.
 //!
 //! Deliberately not pinned: the consumer-owned private auth-failure helper in the MCP protocol
@@ -577,7 +577,7 @@ fn phase_50_1_config_shapes() -> Result<DeepSeekAdapter, LlmError> {
 // red first.
 
 /// D-11: deliberately exhaustive; a new variant turns this red and is a registered break with a
-/// MIGRATION.md section 9.2 row. No wildcard arm, on purpose.
+/// MIGRATION.md section 10.2 row. No wildcard arm, on purpose.
 fn finish_reason_is_exhaustive(reason: &FinishReason) -> u8 {
     match reason {
         FinishReason::Stop => 0,
@@ -589,7 +589,7 @@ fn finish_reason_is_exhaustive(reason: &FinishReason) -> u8 {
 }
 
 /// D-11: deliberately exhaustive; a new variant turns this red and is a registered break with a
-/// MIGRATION.md section 9.2 row. No wildcard arm, on purpose.
+/// MIGRATION.md section 10.2 row. No wildcard arm, on purpose.
 fn arsenal_error_is_exhaustive(error: &ArsenalError) -> u8 {
     match error {
         ArsenalError::ToolNotFound(_) => 0,

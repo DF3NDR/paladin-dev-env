@@ -134,7 +134,7 @@ let adapter = AnthropicAdapter::new(config)?;
 ```
 
 Seven of the nine construct with the same shape, `new(api_key, model)` (Phase 50.1, SURFACE-02,
-MIGRATION.md section 9.8 DR-19): `OpenAIConfig`, `AnthropicConfig`, `DeepSeekConfig`,
+MIGRATION.md section 10.8 DR-19): `OpenAIConfig`, `AnthropicConfig`, `DeepSeekConfig`,
 `KimiConfig`, `QwenConfig`, `GrokConfig` and `GeminiConfig`. The first argument is the API key,
 never a URL. The endpoint defaults to the vendor's own (`ANTHROPIC_DEFAULT_BASE_URL` and its
 siblings) and is replaced with `with_base_url`. The two endpoint-only configs keep their
@@ -436,7 +436,7 @@ quota-exhaustion body.
     total is the check on it, as above.
   - A caller that drives `LlmPort` directly reads a failed call's bill from the error. A caller
     that wants a failed execution's spend installs a `SpendScope` around the call with
-    `ATTEMPT_SPEND.scope(..)` (`paladin_ports::output::spend_scope`; `MIGRATION.md` 9.8 DR-18).
+    `ATTEMPT_SPEND.scope(..)` (`paladin_ports::output::spend_scope`; `MIGRATION.md` 10.8 DR-18).
 - **Which readings are measured.** Each provider's reading of reasoning against
   `completion_tokens` carries a label in the reasoning column below:
   - *measured 2026-10-18*: confirmed by an operator-run probe on the raw vendor wire that day, one

@@ -632,7 +632,7 @@ mod openai_table {
     ///   output comes from the operator's docs evidence (b), URL and access date in a comment.
     /// - no default call returned reasoning text (Chat Completions never does), so `reasoning`
     ///   is `false` for every OpenAI row; a model that hides its reasoning can still return an
-    ///   empty answer under a small output cap (MIGRATION section 9.8).
+    ///   empty answer under a small output cap (MIGRATION section 10.8).
     pub(crate) static OPENAI: &[SeededProfile] = &[
         SeededProfile {
             model: "gpt-5.4-nano",
@@ -1296,7 +1296,7 @@ mod openai_table {
     // Docs badge "Deprecated"; the live listing shows `shutdown_date=null`, and the owner decided
     // on 2026-10-20 that a measured deprecated id is seeded (`50.1-PROBE-CANDIDATES.md`).
     // Probes 12 and 14 were ACCEPTED but finished `length` with EMPTY content: hidden reasoning
-    // consumed the whole small output budget (MIGRATION section 9.8 names this).
+    // consumed the whole small output budget (MIGRATION section 10.8 names this).
     fn gpt_5() -> ModelProfile {
         ModelProfile::new()
             // Probe 3: temperature 1.00 ACCEPTED; probes 2, 4 and 5 (0.00, 0.50, 1.01) answered
@@ -1389,7 +1389,7 @@ mod openai_table {
     // Docs badge "Deprecated"; the live listing shows `shutdown_date=null`, and the owner decided
     // on 2026-10-20 that a measured deprecated id is seeded (`50.1-PROBE-CANDIDATES.md`).
     // Probes 12 and 14 were ACCEPTED but finished `length` with EMPTY content: hidden reasoning
-    // consumed the whole small output budget (MIGRATION section 9.8 names this).
+    // consumed the whole small output budget (MIGRATION section 10.8 names this).
     fn gpt_5_nano() -> ModelProfile {
         ModelProfile::new()
             // Probe 3: temperature 1.00 ACCEPTED; probes 2, 4 and 5 (0.00, 0.50, 1.01) answered

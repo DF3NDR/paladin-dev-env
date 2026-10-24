@@ -742,7 +742,7 @@ mod tests {
                 false,
             ),
             (PaladinError::StopWordDetected("STOP".to_string()), false),
-            // New retries versus v0.10 (recorded as MIGRATION.md 9.1 rows).
+            // New retries versus v0.10 (recorded as MIGRATION.md 10.1 rows).
             (PaladinError::CircuitBreakerOpen, true),
             (
                 PaladinError::GarrisonError(GarrisonError::StorageError("db".to_string())),

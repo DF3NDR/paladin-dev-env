@@ -777,7 +777,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 46-10-PLAN.md — `MIGRATION.md` becomes two-part (section 10 above section 9), v0.11 lines moved verbatim, register gate widened in script / CI / harness (wave 4)
+- [x] 46-10-PLAN.md — `MIGRATION.md` becomes two-part (section 10 above section 9), v0.11 lines moved verbatim, register gate widened in script / CI / harness (wave 4)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 

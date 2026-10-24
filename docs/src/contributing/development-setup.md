@@ -649,7 +649,7 @@ for the exact, current step-by-step procedure; it is not duplicated here to avoi
 drifting copy.
 
 Pushing the `v*.*.*` tag triggers the release pipeline, which runs the test suite and then publishes
-the eleven workspace crates to crates.io in dependency order (see
+the twelve publishable crates to crates.io in dependency order (see
 [Release Automation](../appendix/release-automation.md#canonical-publish-order) for the canonical,
 up-to-date order — it changes if a new crate is added, so it is not restated here), builds Docker
 images and binaries, generates the SBOM, and creates the GitHub release.

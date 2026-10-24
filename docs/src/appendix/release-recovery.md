@@ -37,8 +37,8 @@ The rehearsal proved three procedure points beyond what the sections below alrea
 
 ## 1. Establishing what actually reached crates.io
 
-Before doing anything else, find out which of the eleven crates are already at the tag version.
-This is the same registry-state check `scripts/publish-crates.sh` performs before attempting
+Before doing anything else, find out which of the twelve publishable crates are already at the tag
+version. This is the same registry-state check `scripts/publish-crates.sh` performs before attempting
 each crate's publish — the runbook and the pipeline read the same source of truth, so they
 cannot disagree.
 
@@ -86,7 +86,7 @@ the job log. Every crate ends in exactly one of four states:
   exited non-zero, or the post-publish index-visibility poll timed out.
 
 **A run reporting zero crates as `published-now` fails deliberately.** That is not a broken
-pipeline; it means every one of the eleven crates was already `already-at-this-version` before
+pipeline; it means every one of the twelve crates was already `already-at-this-version` before
 the run started — the tag is already fully published and there was nothing left to recover. The
 job's own error message names the version, states the tag appears fully published, and points
 back at this document.
@@ -199,7 +199,7 @@ first. Each status token below is what you will see verbatim in the job log or y
 A publishable crate's `Cargo.toml` `[package] version` does not exactly equal the tag version
 (string equality — `0.8.1` and `0.8.1-rc.2` do not match). Fix: bump the crate to match the tag
 (the workspace uses lockstep versioning, so this should mean re-running the version bump across
-all eleven crates) or fix the tag if it was cut against the wrong commit.
+all twelve crates) or fix the tag if it was cut against the wrong commit.
 
 ### `ZERO_PACKAGES`
 
@@ -220,8 +220,8 @@ following the Keep-a-Changelog shape its sibling crates already use.
 
 The changelog file exists but has no `## [X.Y.Z]` heading for the tag version. This section is
 normally written by the release tooling (`make release`'s changelog finalization step, extended
-to cover all ten crate changelogs alongside the root one) as part of cutting the release, not by
-hand. Fix: run the release flow rather than hand-editing eleven files; if you are seeing this
+to cover all eleven crate changelogs alongside the root one) as part of cutting the release, not by
+hand. Fix: run the release flow rather than hand-editing twelve files; if you are seeing this
 locally before tagging, it means the finalization step has not run yet.
 
 This gate's clause checks the same root-changelog condition as the `create-release` job's own

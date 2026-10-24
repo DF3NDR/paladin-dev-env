@@ -354,6 +354,13 @@ window of `not set` is not a statement that the model has none.
   are unchanged and still rest on the 2026-10-15 basis. 1.99 itself was not probed for `grok-4.7`. The window is the listing's `context_length`; no maximum output is
   set because the docs state no text output limit.
 
+**DeepSeek model ids (as of 2026-10-24, from the downstream consumer's live `/models` check, not
+re-run by Paladin).** The consumer, web3sec, reported that DeepSeek's `/models` listing contains
+`deepseek-flash`, which is seeded in the table above, and does not list `deepseek-v4-flash`. That
+id is unseeded: it runs on the adapter-wide fallback profile (the `deepseek | (adapter-wide
+fallback)` row) with one warning per model. Paladin has not re-checked the listing; treat it as
+the consumer's finding on that date, and re-run a probe before relying on it.
+
 **Probed but not seeded** (so they run on the adapter-wide fallback): the eight retired Claude ids
 (`claude-3-*`, `claude-2.*`, `claude-instant-1.2`, all HTTP 404) and the other Claude ids in the
 live listing (the 4.5 generation; not candidates, not probed); `gemini-2.5-pro`, `gemini-2.5-flash`

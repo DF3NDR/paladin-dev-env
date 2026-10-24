@@ -1410,6 +1410,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `FinishReason::ContentFilter` like `SAFETY`. All nine providers now turn an empty answer into
   the same typed error. No compat preset gains a usage-cap mapping: none of their quota bodies
   was captured, and the owner accepted each as unverified (plan 50-17).
+- **`make check-gates` and CI pin the `paladin-core` and `paladin-ports` `[dependencies]` to
+  ADR-0015's measured sets (Phase 46 plan 46-05, D-21).** The new offline gate
+  `check-dependency-allowlist` (`scripts/check-dependency-allowlist.sh`, the ninth `check-gates`
+  member, and a step in `ci.yml`) fails when either crate's `[dependencies]` table gains
+  or loses a crate outside the allowlist ADR-0015 records, so the hexagonal dependency rule is
+  checked rather than remembered. No public API or dependency changes.
 
 ### Removed
 
@@ -1614,6 +1620,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `RunTracePort::read` failed on it with "duplicate field `run_id`" on SQLite. Rows already
   written with the doubled key still read back. `TraceEvent::RunStarted` no longer serializes
   `run_id` on its own; inside a `TraceRecord` the value is unchanged. Public API unchanged.
+
+### Documentation
+
+- **Treasurer architecture page and one configuration reference (CURR-23; Phase 46 plan 46-07,
+  D-07..D-10).** The book gains `docs/src/architecture/treasurer.md` (the price table, the cost
+  ledger, per-tenant and per-key allowances, and Cadence), and `configuration.md` carries a single
+  `## Treasurer` block covering the key reference, pricing, allowances (including the warn
+  threshold) and rate pacing (Cadence).
+- **`MIGRATION.md` is a two-part guide, with section 10 "Upgrading from v0.10.1 to v0.11.0" (CURR-23;
+  Phase 46 plans 46-10, 46-11, D-01..D-03).** Section 10 (behavioral changes M-B-05 onward, the
+  section 10.2 register, the section 10.8 operator checklist and library-consumer table) sits above
+  the kept v0.10 record in section 9, and is frozen on the downstream consumer's dogfood report
+  against `e28e43b5`. `MIGRATION.md` section 10 is the authoritative v0.11.0 upgrade record.
+- **The Upgrading page leads with v0.10.1 to v0.11.0 (CURR-23; Phase 46 plan 46-13, D-05).**
+  `docs/src/api-reference/upgrading.md` opens with a condensed behavioral-change table, the
+  library-consumer index by topic and the operator checklist, each linking `MIGRATION.md`
+  section 10 by anchor; the v0.9.x to v0.10.0 orientation stays below it, and the Migration Guide
+  points at the new record.
+- **Switching providers: a dated DeepSeek listing note (G-4; Phase 46 plan 46-13, D-03).** The
+  page records, as the downstream consumer's live `/models` check of 2026-10-24 (not re-run by
+  Paladin), that DeepSeek lists `deepseek-flash` (seeded) and does not list `deepseek-v4-flash`,
+  which is unseeded and runs on the adapter-wide fallback profile.
 
 ### Security
 

@@ -145,6 +145,8 @@ Phase 37 plans; 2 open artifacts acknowledged — both already deferred by Phase
 entry points with `# Examples` doctests, `WINDOWS.md` `open_count: 0`, MSRV 1.88 measured. Full
 record: `MILESTONES.md`. **Next: `/gsd-new-milestone`** — new phases start at Phase 38.
 
+**Phase 46 complete (2026-10-24)** — docs currency & hygiene (CURR-22..25; 14 plans in 6 waves, verification `passed` 4/4). In the tree: the three release pages name the twelve publishable crates and `paladin-eval` carries Trusted Publishing and Credential History rows; root and crate CHANGELOG `[0.10.0]`/`[0.10.1]` heading dates equal the tag dates; `MIGRATION.md` is a two-part guide (frozen section 10, v0.10.1 → v0.11.0, above the byte-identical v0.10 record in section 9) with the semver register gate reading both `9.2` and `10.2` and every live `§9.x` citation retargeted; a Treasurer book page, a `## Treasurer` configuration reference and the Upgrading page lead with v0.11.0; Nyquist files for Phases 22, 24, 28, 29, 30, 34, 36 and 36.1 are `nyquist_compliant`; the three v2 debt lines are WINDOWS rows 80 (waived), 81 (waived) and 82 (fixed by `check-dependency-allowlist`); removed v0.10 `BattalionConfig`/`ConclaveConfig` keys are refused at load (ADR-0059 amended); the Commander warns when Maneuver ignores `aegis.on_error`/`aegis.retry`. Code review: 0 critical, 3 warning, 5 info (`46-REVIEW.md`). **Next: Phase 47, the v0.11.0 crate release.**
+
 **Phase 50.1 complete (2026-10-20)** — consumer-surface-readiness (SURFACE-01..06; 9 plans in 7
 waves, inserted from the fourth web3sec handoff). In the tree: the Aegis family (`Aegis`,
 `ErrorHandlerSpec`, `TimeoutPolicy`, `StateDelta`, `NodeError`, `NodeErrorSource`, `TimeoutKind`,
@@ -2075,6 +2077,10 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
+*Last updated: 2026-10-24 after **Phase 46: Docs Currency & Hygiene** completed and verified —
+CURR-22..25 validated (REQUIREMENTS.md traceability Complete); 14/14 plans in 6 waves; verification
+`passed` 4/4; code review 0 critical / 3 warning / 5 info; STATE advanced to Phase 47.*
+
 *Last updated: 2026-10-23 after **Phase 51: Adjustable Reasoning Effort** completed and verified —
 REASON-01..07 validated (REQUIREMENTS.md traceability Complete); 20/20 plans (six gap-closure plans
 51-15..20 after the first verification found 5/7); verification `passed` 7/7, UAT 3/3 (CI run

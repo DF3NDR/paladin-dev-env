@@ -60,7 +60,7 @@ and this project follows lockstep workspace versioning.
   principal's tenant and API key via `RunScope::with_ledger_scope(principal.ledger_scope())`; open
   access settles under `(open-access, anonymous)`, never the `unattributed` sentinel (TENANT-02).
 
-## [0.10.1] - 2026-09-20
+## [0.10.1] - 2026-09-21
 
 Patch release carried by the workspace-wide version bump (0.10.0 -> 0.10.1). No source change in
 this crate; the committed `openapi.json` baseline's `info.version` field was regenerated
@@ -69,7 +69,7 @@ this crate; the committed `openapi.json` baseline's `info.version` field was reg
 from `CARGO_PKG_VERSION` at build time — a data-file update, not a behavior change. See the root
 `CHANGELOG.md`'s `[0.10.1]` section for the two release-pipeline defects this patch fixes.
 
-## [0.10.0] - 2026-09-10
+## [0.10.0] - 2026-09-18
 
 ### Added
 - `ThreadApiState` gained additive fields `runs: Option<Arc<dyn RunRepositoryPort>>` and

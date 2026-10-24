@@ -325,13 +325,13 @@ and this project follows lockstep workspace versioning.
   (a numeric cast of `EmptyChain` no longer compiles). Registered in `MIGRATION.md` section 9.2 and
   the crate's `cargo-semver-checks` lints table.
 
-## [0.10.1] - 2026-09-20
+## [0.10.1] - 2026-09-21
 
 Patch release carried by the workspace-wide version bump (0.10.0 -> 0.10.1). No source
 change in this crate — see the root `CHANGELOG.md`'s `[0.10.1]` section for the two
 release-pipeline defects this patch fixes.
 
-## [0.10.0] - 2026-09-10
+## [0.10.0] - 2026-09-18
 
 ### Added
 - `FallbackLlmAdapter` — a new `LlmPort` implementation that hops across a configured provider

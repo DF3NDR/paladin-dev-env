@@ -110,7 +110,7 @@ and this project follows lockstep workspace versioning.
   `paladin_battalion::retry` module with its `should_retry` and `calculate_retry_delay`, and the
   facade's matching re-export. Use `aegis.retry` and `engine::retry::backoff_delay`.
 
-## [0.10.1] - 2026-09-20
+## [0.10.1] - 2026-09-21
 
 ### Fixed
 
@@ -122,7 +122,7 @@ and this project follows lockstep workspace versioning.
   resolve both by path, unchanged. This was the defect that stopped the real `v0.10.0` release
   after 3 of 12 crates; see the root `CHANGELOG.md`'s `[0.10.1]` section.
 
-## [0.10.0] - 2026-09-10
+## [0.10.0] - 2026-09-18
 
 ### Added
 - `WarEngine`/`WarGraph`, the new graph/superstep execution engine (ENG-01…ENG-08): per-superstep

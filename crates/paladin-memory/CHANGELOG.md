@@ -7,13 +7,13 @@ and this project follows lockstep workspace versioning.
 
 ## [Unreleased]
 
-## [0.10.1] - 2026-09-20
+## [0.10.1] - 2026-09-21
 
 Patch release carried by the workspace-wide version bump (0.10.0 -> 0.10.1). No source
 change in this crate — see the root `CHANGELOG.md`'s `[0.10.1]` section for the two
 release-pipeline defects this patch fixes.
 
-## [0.10.0] - 2026-09-10
+## [0.10.0] - 2026-09-18
 
 ### Added
 - `TokenCounterPort` implementations: `HeuristicTokenCounter` (no new dependency) and

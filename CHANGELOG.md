@@ -1471,6 +1471,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Release-doc currency (CURR-22; Phase 46 plan 46-01, D-11/D-12/D-13).** CHANGELOG `[0.10.0]` and
+  `[0.10.1]` heading dates (root and all eleven crate changelogs) now equal their tag commit dates,
+  2026-09-18 and 2026-09-21; the release docs name the twelve publishable crates and carry
+  `paladin-eval`'s Trusted Publishing and Credential History rows.
+
 - **Reasoning effort gap closure (REASON-01, REASON-04, REASON-05; Phase 51 plans 51-15 to 51-19).**
   Single-agent runs now carry `reasoning_requested` / `reasoning_effective` on `NodeFinished`
   (51-15, gap G-1). The agent host took the provider block's `reasoning_fallback` before the
@@ -1793,7 +1798,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.planning/phases/45-rustfs-swap-platform-observability-deviations/45-BENCH-EVIDENCE.md`;
   ledger row 61 (amends row 35).
 
-## [0.10.1] - 2026-09-20
+## [0.10.1] - 2026-09-21
 
 Patch release. Fixes the two defects that stopped the `v0.10.0` release pipeline partway through
 (3 of 12 crates published) and adds the gate that would have caught the ordering defect before
@@ -1844,7 +1849,7 @@ merge. No library source change; no public API change.
   defect above should have failed before merge; it is proven red against the `v0.10.0` manifests
   and green on the fixed tree.
 
-## [0.10.0] - 2026-09-10
+## [0.10.0] - 2026-09-18
 
 **2026-09-20:** this tag's release run published only 3 of the 12 publishable crates
 (`paladin-ai-core`, `paladin-ports`, `paladin-herald`) before stopping at the `paladin-battalion`

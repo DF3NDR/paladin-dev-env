@@ -13,13 +13,13 @@ and this project follows lockstep workspace versioning.
   field and the `cause` on `RunOutcome::Halted`; no public item is added or changed. An eval scenario
   cannot yet assert `run_status: cancelled` (`RunStatusValue` has no `Cancelled` value), a deferred item.
 
-## [0.10.1] - 2026-09-20
+## [0.10.1] - 2026-09-21
 
 Patch release carried by the workspace-wide version bump (0.10.0 -> 0.10.1). No source
 change in this crate — see the root `CHANGELOG.md`'s `[0.10.1]` section for the two
 release-pipeline defects this patch fixes.
 
-## [0.10.0] - 2026-09-10
+## [0.10.0] - 2026-09-18
 
 ### Added
 - Initial release: the `.eval.yaml` scenario file format (`schema_version: "1"`,

@@ -420,7 +420,7 @@ D-A..D-D of the handoff plus D-E (the seed-rule conflict found at filing) are se
   `paladin-eval` Trusted Publishing and Credential History rows; the CHANGELOG `[0.10.0]` heading
   date
 
-- [ ] **CURR-23**: A Treasurer mdBook page, a configuration reference for pricing, `allowance` and
+- [x] **CURR-23**: A Treasurer mdBook page, a configuration reference for pricing, `allowance` and
   the warn threshold, and a v0.10 → v0.11 `MIGRATION.md` guide are published
 
 - [ ] **CURR-24**: Nyquist validation for Phases 22, 24, 29, 30, 34, 36 and 36.1 moves out of
@@ -509,7 +509,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PLAT-09 | Phase 42 | Complete |
 | OBS-05 | Phase 45 | Complete |
 | CURR-22 | Phase 46 | Complete |
-| CURR-23 | Phase 46 | Pending |
+| CURR-23 | Phase 46 | Complete |
 | CURR-24 | Phase 46 | Pending |
 | CURR-25 | Phase 46 | Complete |
 | SHIP-07 | Phase 47 | Pending |

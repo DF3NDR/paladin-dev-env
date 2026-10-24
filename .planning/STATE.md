@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 46
 current_phase_name: docs-currency-hygiene
 status: executing
-stopped_at: Completed 46-10-PLAN.md
-last_updated: "2026-10-24T15:07:20.581Z"
+stopped_at: Completed 46-11-PLAN.md
+last_updated: "2026-10-24T15:28:47.677Z"
 last_activity: 2026-10-24
 last_activity_desc: Phase 46 execution started
 progress:
   total_phases: 14
   completed_phases: 13
   total_plans: 164
-  completed_plans: 160
+  completed_plans: 161
 ---
 
 # Project State
@@ -63,7 +63,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 46 (docs-currency-hygiene) — EXECUTING
-Plan: 11 of 14
+Plan: 12 of 14
 Status: Ready to execute
 Last activity: 2026-10-24 — Phase 46 execution started
 
@@ -348,6 +348,7 @@ Last activity: 2026-10-24 — Phase 46 execution started
 | Phase 46 P08 | ~35 min | 2 tasks | 9 files |
 | Phase 46 P09 | 25 min | 2 tasks | 10 files |
 | Phase 46 P10 | 13 min | 2 tasks | 4 files |
+| Phase 46 P11 | 20 min | 3 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -632,6 +633,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 46]: D-23: removed v0.10 BattalionConfig/ConclaveConfig keys are refused at load via a private try_from wire struct (legacy_keys.rs); no shim, alias or mapping, no deny_unknown_fields, ADR-0059 amended — A bounded v0.10 run must not load as unbounded in v0.11; message names keys and aegis.* replacements and cites M-B-06, never a value
 - [Phase 46]: 46-09: Commander warns once per Maneuver execution when aegis.on_error or aegis.retry is set, via the pure private fn maneuver_ignored_aegis_policies (D-24 / WR-04); WR-05, IN-05, IN-N1 closed, IN-01..IN-04 and IN-N2 deferred — Maneuver reads only aegis.timeout.run_timeout; a silently dropped policy needs a signal, as Campaign already gives
 - [Phase 46]: 46-10: MIGRATION.md is two-part (section 10 above kept v0.10 record 9); register gate window is /^## (9|10)\.2 / in script, ci.yml and harness; four in-place rows split into v0.10.1 text in 9.2 plus same-key 10.2 delta rows — D-01/D-02: row identity preserved, gate widened in the same commit as the first row moved
+- [Phase ?]: 46-11: section 10 frozen 2026-10-24 on web3sec's dogfood report against e28e43b5; DR-11 cites both registers (10.2 AllowanceHalted, 9.2 CallLimit/TokenBudget); D-06 warn! deferred
 
 ### Pending Todos
 
@@ -851,8 +853,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-24T15:07:20.547Z
-**Stopped at:** Completed 46-10-PLAN.md
+**Last session:** 2026-10-24T15:28:47.645Z
+**Stopped at:** Completed 46-11-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

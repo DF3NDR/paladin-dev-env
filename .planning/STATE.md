@@ -3,17 +3,17 @@ gsd_state_version: 1.0
 milestone: v0.11.0
 milestone_name: Crate Release
 current_phase: 46
-current_phase_name: Docs Currency & Hygiene
+current_phase_name: docs-currency-hygiene
 status: executing
-stopped_at: Phase 46 context gathered
-last_updated: "2026-10-24T11:23:13.380Z"
-last_activity: 2026-10-23
-last_activity_desc: Phase 51 complete, transitioned to Phase 46
+stopped_at: Completed 46-01-PLAN.md
+last_updated: "2026-10-24T11:39:55.166Z"
+last_activity: 2026-10-24
+last_activity_desc: Phase 46 execution started
 progress:
   total_phases: 14
   completed_phases: 13
   total_plans: 164
-  completed_plans: 150
+  completed_plans: 151
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-10-23 after Phase 51)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 46 — Docs Currency & Hygiene (then Phase 47, the v0.11.0 crate release)
+**Current focus:** Phase 46 — docs-currency-hygiene
 2026-10-14 from the web3sec handoff and sequenced before Phases 46-47 (the first of a series of
 consumer-driven phases). Phase 50 (Provider Parity & Configuration-Driven Model Swap, added
 2026-10-14 from the second web3sec handoff, `50-HANDOFF-web3sec-parity.md`) follows it, then Phase 51
@@ -43,7 +43,7 @@ delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-1
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 150/150 plans (100%) of the phases planned so far (38-45, 48-51);
+**Progress:** [████████████████████] 150/150 plans ([█████████░] 92%) of the phases planned so far (38-45, 48-51);
 Phases 46 and 47 are not yet planned; Phase 49 closed 2026-10-14 (3/3 kept plans, 3 cancelled); Phase 50.1 sealed 2026-10-20;
 Phase 51 sealed 2026-10-23 (20/20 plans, verification `passed` 7/7, UAT 3/3, security 61/61 closed, ADR-0062); Phase 46 is next, then Phase 47.
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -62,10 +62,10 @@ under `milestones/`.
 
 ## Current Position
 
-Phase: 46 — Docs Currency & Hygiene
-Plan: Not started
+Phase: 46 (docs-currency-hygiene) — EXECUTING
+Plan: 2 of 14
 Status: Ready to execute
-Last activity: 2026-10-23 — Phase 51 complete, transitioned to Phase 46
+Last activity: 2026-10-24 — Phase 46 execution started
 
 ## Performance Metrics
 
@@ -338,6 +338,7 @@ Last activity: 2026-10-23 — Phase 51 complete, transitioned to Phase 46
 | Phase 50.1 P05 | 60min | 2 tasks | 24 files |
 | Phase 50.1 P06 | 75min | 3 tasks | 21 files |
 | Phase 50.1 P07 | 45min | 3 tasks | 2 files |
+| Phase 46 P01 | 25min | 3 tasks | 15 files |
 
 ## Accumulated Context
 
@@ -612,6 +613,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 50.1-07: OpenAI ids with a Deprecated badge that were measured end to end (gpt-5.1, gpt-5, gpt-5-mini, gpt-5-nano, o3) SHOULD be seeded by plan 50.1-09; D-15 excludes only shutdowns on or before 2027-01-31
 - [Phase ?]: 50.1-07: grok-4.7 (temperature=2.00 UNREACHABLE in both runs) and the 7 default-rejected ids (gpt-5.5-pro, gpt-5.4-pro, gpt-5.2-pro, gpt-5-pro, gemini-2.5-pro/flash/flash-lite) are not seedable; 50 of 58 candidates measured end to end
 - [Phase 50.1 seal]: UAT 1/1 — owner chose fix-before-tag for WR-01..03 (2026-10-20). WR-01/02 were doc-only; WR-03 (`5ebd315b`) tightened `validate()` in seven adapters to a full `http://`/`https://` prefix, a behaviour change recorded in both CHANGELOGs and MIGRATION §9.8 (`aa48314d`) at the owner's request before sealing
+- [Phase ?]: 46-01: paladin-eval publishes after the leaf tier and before paladin-ai; its trust link is 'proven by publish' (run 35659477719), not operator-reported
 
 ### Pending Todos
 
@@ -831,9 +833,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-24T03:33:22.034Z
-**Stopped at:** Phase 46 context gathered
-**Resume file:** .planning/phases/46-docs-currency-hygiene/46-CONTEXT.md
+**Last session:** 2026-10-24T11:39:55.132Z
+**Stopped at:** Completed 46-01-PLAN.md
+**Resume file:** None
 
 ## Operator Next Steps
 

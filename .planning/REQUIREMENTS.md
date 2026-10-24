@@ -415,7 +415,7 @@ D-A..D-D of the handoff plus D-E (the seed-rule conflict found at filing) are se
 
 ### Docs and hygiene (CURR, continued)
 
-- [ ] **CURR-22**: The docs fixes assigned by the v0.10.0 acceptance audit are closed: "twelve
+- [x] **CURR-22**: The docs fixes assigned by the v0.10.0 acceptance audit are closed: "twelve
   publishable crates" in `development-setup.md`, `release-automation.md` and `release-recovery.md`;
   `paladin-eval` Trusted Publishing and Credential History rows; the CHANGELOG `[0.10.0]` heading
   date
@@ -508,7 +508,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PLAT-08 | Phase 45 | Complete |
 | PLAT-09 | Phase 42 | Complete |
 | OBS-05 | Phase 45 | Complete |
-| CURR-22 | Phase 46 | Pending |
+| CURR-22 | Phase 46 | Complete |
 | CURR-23 | Phase 46 | Pending |
 | CURR-24 | Phase 46 | Pending |
 | CURR-25 | Phase 46 | Pending |

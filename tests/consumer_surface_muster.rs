@@ -92,6 +92,16 @@ fn prelude_and_ports_agree(
     (e, q, r)
 }
 
+/// Phase 46 (D-04, web3sec 2026-10-24 handoff §3 item 4): `ModelProfile` through the
+/// `paladin_ports::output::llm_port::ModelProfile` re-export names the SAME type as
+/// `paladin_ports::output::model_profile::ModelProfile` (the import at the top of this file).
+/// NEVER CALLED: it only has to type-check.
+fn llm_port_model_profile_reexport_pin(
+    profile: paladin_ports::output::llm_port::ModelProfile,
+) -> ModelProfile {
+    profile
+}
+
 /// The facade prelude and the core container modules name ONE `Armament` and `BattalionConfig`.
 fn prelude_names_agree(
     a: paladin::prelude::Armament,
@@ -507,6 +517,16 @@ fn node_error_read_pin(result: &BattalionResult) -> Vec<(String, u32, Transience
         .collect()
 }
 
+/// Phase 46 (D-04, web3sec 2026-10-24 handoff §3 item 2): the three `BattalionResult` counters
+/// the consumer reads, with their exact types. Read, never constructed. NEVER CALLED.
+fn battalion_result_counts_pin(result: &BattalionResult) -> (usize, usize, &HashMap<String, u64>) {
+    (
+        result.paladin_success_count,
+        result.paladin_failure_count,
+        &result.per_paladin_times,
+    )
+}
+
 /// The prelude names and the module paths name ONE type each.
 fn prelude_aegis_names_agree() {
     let _aegis: fn(paladin::prelude::Aegis) -> Aegis = |a| a;
@@ -518,6 +538,24 @@ fn prelude_aegis_names_agree() {
     let _kind: fn(paladin::prelude::TimeoutKind) -> TimeoutKind = |a| a;
     let _node_id: fn(paladin::prelude::NodeId) -> NodeId = |a| a;
     let _transience: fn(paladin::prelude::Transience) -> Transience = |a| a;
+}
+
+/// Phase 46 (D-04, web3sec 2026-10-24 handoff §3 item 3): a `use paladin::prelude::*;` glob
+/// import site, the way the consumer imports the prelude. It lives in its own private module so
+/// the glob cannot clash with this file's explicit imports, and its only `use` is the glob. The
+/// items are named ONLY through the glob, so removing one from the prelude breaks this module,
+/// and using several of them keeps `unused_imports` from firing under `clippy -D warnings`.
+mod prelude_glob {
+    use paladin::prelude::*;
+
+    /// NEVER CALLED: it only has to type-check. Returns its inputs plus one counter read.
+    pub(super) fn prelude_glob_resolves(
+        builder: PaladinBuilder,
+        llm: std::sync::Arc<dyn LlmPort>,
+        result: &BattalionResult,
+    ) -> (PaladinBuilder, std::sync::Arc<dyn LlmPort>, usize) {
+        (builder, llm, result.paladin_success_count)
+    }
 }
 
 /// Phase 50.1 (SURFACE-02, D-05, D-09; Appendix B item 5): the `*Config::new(api_key, model)`

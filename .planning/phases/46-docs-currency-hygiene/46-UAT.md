@@ -3,16 +3,16 @@ status: testing
 phase: 46-docs-currency-hygiene
 source: 46-01-SUMMARY.md, 46-02-SUMMARY.md, 46-03-SUMMARY.md, 46-04-SUMMARY.md, 46-05-SUMMARY.md, 46-06-SUMMARY.md, 46-07-SUMMARY.md, 46-08-SUMMARY.md, 46-09-SUMMARY.md, 46-10-SUMMARY.md, 46-11-SUMMARY.md, 46-12-SUMMARY.md, 46-13-SUMMARY.md, 46-14-SUMMARY.md
 started: 2026-10-24T17:16:32Z
-updated: 2026-10-24T19:05:52Z
+updated: 2026-10-24T19:07:09Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 7
-name: MIGRATION.md is a two-part upgrade guide
+number: 8
+name: Changelogs and allowlist cite section 10
 expected: |
-  MIGRATION.md opens with "# Upgrading Paladin", then section 10 (v0.10.1 to v0.11.0) with headings 10.1 through 10.8, including a freeze note dated 2026-10-24 against commit e28e43b5, an empty-deprecations statement in 10.7 and a six-step operator checklist in 10.8. Section 9 (v0.9.0 to v0.10.0) sits below with one pointer line under each 9.x heading and its original text otherwise unchanged. v0.11 rows cite 10.x and v0.10 rows cite 9.x. `grep -c TBD MIGRATION.md` prints 0 and `make check-migration-allowlist` exits 0 reading both the 9.2 and 10.2 registers.
+  Every v0.11 line in CHANGELOG.md [Unreleased] and in the battalion, core, llm, ports, web and herald crate [Unreleased] sections cites MIGRATION.md section 10.x (no live 9.x citation left for a v0.11 row; historical 9.x citations below [Unreleased] remain). CHANGELOG.md [Unreleased] has a `### Documentation` subsection with four bullets and a Changed bullet for the dependency-allowlist gate. The .cargo/semver-checks-allowlist.toml header names both section 9.2 and 10.2, and the Phase 38-51 comment blocks cite 10.2.
 awaiting: user response
 
 ## Tests
@@ -43,7 +43,7 @@ result: pass
 
 ### 7. MIGRATION.md is a two-part upgrade guide
 expected: MIGRATION.md opens with "# Upgrading Paladin", then section 10 (v0.10.1 to v0.11.0) with headings 10.1 through 10.8, including a freeze note dated 2026-10-24 against commit e28e43b5, an empty-deprecations statement in 10.7 and a six-step operator checklist in 10.8. Section 9 (v0.9.0 to v0.10.0) sits below with one pointer line under each 9.x heading and its original text otherwise unchanged. v0.11 rows cite 10.x and v0.10 rows cite 9.x. `grep -c TBD MIGRATION.md` prints 0 and `make check-migration-allowlist` exits 0 reading both the 9.2 and 10.2 registers.
-result: [pending]
+result: pass
 
 ### 8. Changelogs and allowlist cite section 10
 expected: Every v0.11 line in CHANGELOG.md [Unreleased] and in the battalion, core, llm, ports, web and herald crate [Unreleased] sections cites MIGRATION.md section 10.x (no live 9.x citation left for a v0.11 row; historical 9.x citations below [Unreleased] remain). CHANGELOG.md [Unreleased] has a `### Documentation` subsection with four bullets and a Changed bullet for the dependency-allowlist gate. The .cargo/semver-checks-allowlist.toml header names both section 9.2 and 10.2, and the Phase 38-51 comment blocks cite 10.2.
@@ -84,9 +84,9 @@ coverage_id: D4
 ## Summary
 
 total: 14
-passed: 10
+passed: 11
 issues: 0
-pending: 4
+pending: 3
 skipped: 0
 blocked: 0
 

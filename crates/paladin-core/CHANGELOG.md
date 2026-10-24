@@ -131,9 +131,10 @@ and this project follows lockstep workspace versioning.
   `Route` and `Custom` handlers, `RetryPredicate::Custom` and zero-length durations, and ignores
   `cache`). The `aegis` rustdoc is the per-pattern contract: a per-attempt timeout, a retry whose
   `max_attempts` counts total attempts, and `Absorb` to continue past a failure. A v0.10
-  `BattalionConfig` document still deserializes; its removed keys are ignored and `aegis` is
-  `Aegis::default()`. `BattalionConfig::new` arms no timeout. See `MIGRATION.md` 10.1 M-B-06 and
-  M-B-07 and the Phase 44 10.2 rows.
+  `BattalionConfig` document carrying a removed key is refused at load, naming the key and its
+  `aegis.*` replacement (Phase 46, D-23; `MIGRATION.md` 10.1 M-B-06); a document without them
+  loads with `aegis` as `Aegis::default()`. `BattalionConfig::new` arms no timeout. See
+  `MIGRATION.md` 10.1 M-B-06 and M-B-07 and the Phase 44 10.2 rows.
 - Phase 44 (LEGACY-01; ADR-0059; one-way): `BattalionResult.node_errors` is retyped from
   `Vec<battalion::NodeError>` to `Vec<node_error::NodeError>`, whose element is
   `{ node_id, attempt, transience, source }`. A stored v0.10 document with a non-empty

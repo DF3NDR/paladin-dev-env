@@ -1435,8 +1435,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (`retry`, `on_error`) and the structured `NodeError`.
   - `BattalionConfig`'s `timeout_seconds`, `retry_policy` and `error_strategy` fields and its
     `with_timeout`, `with_retry_policy` and `with_error_strategy` builders. Replacement:
-    `BattalionConfig::with_aegis(Aegis { timeout, retry, on_error, .. })`; a v0.10 document still
-    deserializes, the removed keys are ignored and `aegis` is `Aegis::default()`.
+    `BattalionConfig::with_aegis(Aegis { timeout, retry, on_error, .. })`; a v0.10 document
+    carrying a removed key is refused at load, naming the key and its `aegis.*` replacement
+    (Phase 46, D-23; MIGRATION.md 10.1 M-B-06), and a document without them loads with `aegis`
+    as `Aegis::default()`.
   - `BattalionError::Timeout` and `ConclaveError::Timeout`. Replacement: a per-attempt
     `NodeErrorSource::Timeout` on `BattalionError::Node`, or `ConclaveError::AggregatorFailed` for
     the aggregator.

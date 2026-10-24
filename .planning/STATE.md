@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 46
 current_phase_name: docs-currency-hygiene
 status: executing
-stopped_at: Completed 46-05-PLAN.md
-last_updated: "2026-10-24T13:51:23.650Z"
+stopped_at: Completed 46-06-PLAN.md
+last_updated: "2026-10-24T13:55:05.834Z"
 last_activity: 2026-10-24
 last_activity_desc: Phase 46 execution started
 progress:
   total_phases: 14
   completed_phases: 13
   total_plans: 164
-  completed_plans: 155
+  completed_plans: 156
 ---
 
 # Project State
@@ -63,7 +63,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 46 (docs-currency-hygiene) — EXECUTING
-Plan: 6 of 14
+Plan: 7 of 14
 Status: Ready to execute
 Last activity: 2026-10-24 — Phase 46 execution started
 
@@ -343,6 +343,7 @@ Last activity: 2026-10-24 — Phase 46 execution started
 | Phase 46 P03 | 35 min | 3 tasks | 3 files |
 | Phase 46 P04 | ~90 min | 3 tasks | 3 files |
 | Phase 46 P05 | ~12 min | 2 tasks | 9 files |
+| Phase 46 P06 | 3 min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -622,6 +623,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 46]: 46-03: Phase 28 promoted to nyquist_compliant true on 28-UAT 2/2 and WINDOWS rows 35/61 (D-15); Phase 29 and 30 validated and compliant true with superseded rows carrying re-run equivalents; reconcile-only, no test written
 - [Phase 46]: 46-04: Phases 34, 36 and 36.1 reconciled out of draft, nyquist_compliant true, 0 gaps (reconcile-only, D-14) — Every requirement id has green automated rows; superseded verify literals name the scoped equivalent re-run on HEAD; Phase 34 gates run from path-adjusted scratchpad copies, never committed.
 - [Phase 46]: 46-05: ADR-0015 amended 2026-10-24 (paladin-core 14, paladin-ports 12 incl. log) and pinned by scripts/check-dependency-allowlist.sh in make check-gates and CI cargo-deny; WINDOWS rows 80/81 waived, 82 fixed — Guard compares [dependencies] keys exactly and rejects build/target tables; the sets are mirrored in the ADR so the guard cannot silently bless drift (D-21)
+- [Phase 46]: 46-06: consumer-surface muster pins four web3sec items (Stockpile::render, BattalionResult counters, prelude glob in private mod prelude_glob, llm_port::ModelProfile re-export), test-only, each shown red then green
 
 ### Pending Todos
 
@@ -841,8 +843,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-24T13:51:23.615Z
-**Stopped at:** Completed 46-05-PLAN.md
+**Last session:** 2026-10-24T13:55:05.799Z
+**Stopped at:** Completed 46-06-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

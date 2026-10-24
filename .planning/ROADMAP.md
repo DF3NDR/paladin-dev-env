@@ -764,7 +764,7 @@ Plans:
 - [x] 46-03-PLAN.md — Phase 28 promoted to `nyquist_compliant: true`; Nyquist reconcile-only for Phases 29 and 30 (wave 1)
 - [x] 46-04-PLAN.md — Nyquist reconcile-only for Phases 34, 36 and 36.1 (wave 1)
 - [x] 46-05-PLAN.md — v2 debt lines: ADR-0015 re-measured, `check-dependency-allowlist` gate (script, harness, `check-gates`, CI), three WINDOWS dispositions, STATE/ROADMAP pointers (wave 1)
-- [ ] 46-06-PLAN.md — four consumer-surface muster pins from the web3sec dogfood report (wave 1)
+- [x] 46-06-PLAN.md — four consumer-surface muster pins from the web3sec dogfood report (wave 1)
 - [ ] 46-07-PLAN.md — Treasurer mdBook page, one `## Treasurer` configuration reference (pricing, allowance, warn threshold, Cadence), example-config `cadence:` block, ADR index refresh (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*

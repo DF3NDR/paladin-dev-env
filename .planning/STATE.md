@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 46
 current_phase_name: docs-currency-hygiene
 status: executing
-stopped_at: Completed 46-06-PLAN.md
-last_updated: "2026-10-24T13:55:05.834Z"
+stopped_at: Completed 46-07-PLAN.md
+last_updated: "2026-10-24T14:21:49.284Z"
 last_activity: 2026-10-24
 last_activity_desc: Phase 46 execution started
 progress:
   total_phases: 14
   completed_phases: 13
   total_plans: 164
-  completed_plans: 156
+  completed_plans: 157
 ---
 
 # Project State
@@ -43,7 +43,7 @@ delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-1
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 150/150 plans ([██████████] 95%) of the phases planned so far (38-45, 48-51);
+**Progress:** [████████████████████] 150/150 plans ([██████████] 96%) of the phases planned so far (38-45, 48-51);
 Phases 46 and 47 are not yet planned; Phase 49 closed 2026-10-14 (3/3 kept plans, 3 cancelled); Phase 50.1 sealed 2026-10-20;
 Phase 51 sealed 2026-10-23 (20/20 plans, verification `passed` 7/7, UAT 3/3, security 61/61 closed, ADR-0062); Phase 46 is next, then Phase 47.
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -63,7 +63,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 46 (docs-currency-hygiene) — EXECUTING
-Plan: 7 of 14
+Plan: 8 of 14
 Status: Ready to execute
 Last activity: 2026-10-24 — Phase 46 execution started
 
@@ -344,6 +344,7 @@ Last activity: 2026-10-24 — Phase 46 execution started
 | Phase 46 P04 | ~90 min | 3 tasks | 3 files |
 | Phase 46 P05 | ~12 min | 2 tasks | 9 files |
 | Phase 46 P06 | 3 min | 2 tasks | 1 files |
+| Phase 46 P07 | 26 min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -624,6 +625,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 46]: 46-04: Phases 34, 36 and 36.1 reconciled out of draft, nyquist_compliant true, 0 gaps (reconcile-only, D-14) — Every requirement id has green automated rows; superseded verify literals name the scoped equivalent re-run on HEAD; Phase 34 gates run from path-adjusted scratchpad copies, never committed.
 - [Phase 46]: 46-05: ADR-0015 amended 2026-10-24 (paladin-core 14, paladin-ports 12 incl. log) and pinned by scripts/check-dependency-allowlist.sh in make check-gates and CI cargo-deny; WINDOWS rows 80/81 waived, 82 fixed — Guard compares [dependencies] keys exactly and rejects build/target tables; the sets are mirrored in the ADR so the guard cannot silently bless drift (D-21)
 - [Phase 46]: 46-06: consumer-surface muster pins four web3sec items (Stockpile::render, BattalionResult counters, prelude glob in private mod prelude_glob, llm_port::ModelProfile re-export), test-only, each shown red then green
+- [Phase 46]: Cadence is one section of the Treasurer page (D-08); the Treasurer page states bounded overshoot and tumbling-window double-spend rather than promising an allowance can never be overspent; ADR-0055 left out of the ADR index
 
 ### Pending Todos
 
@@ -843,8 +845,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-24T13:55:05.799Z
-**Stopped at:** Completed 46-06-PLAN.md
+**Last session:** 2026-10-24T14:21:49.251Z
+**Stopped at:** Completed 46-07-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

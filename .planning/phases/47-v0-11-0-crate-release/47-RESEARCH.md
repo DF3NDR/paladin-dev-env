@@ -389,17 +389,31 @@ Tag (maintainer): `git tag -a v0.11.0 "$B" -m "v0.11.0"` then `git push origin v
 | A5 | `make openapi` yields a one-line diff (version string) | Runtime State | Verified indirectly (`env!("CARGO_PKG_VERSION")`, committed line 14); not run (disk). Any other change is a D-07 stop |
 | A6 | `ci.yml` on the merge commit will be green incl. `End-to-End Tests` and `Publish Dry Run` (never run on this tree) | Pitfall 8 | A red main-push run blocks the tag after the irreversible merge |
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+> **Annotation 2026-10-25 (plan-checker WARNING-1, plan revision 1):** heading retitled from `## Open Questions`;
+> the six questions below are kept verbatim. They are resolved **by plan, not by answer**: each is a maintainer
+> decision, routed as one item of the single blocking `checkpoint:decision` in **47-01 Task 3** (reply
+> `recommended DATE=YYYY-MM-DD`, a per-item reply, or `hold`). The reply is recorded verbatim with its timestamp in
+> `47-01-SUMMARY.md` `## Pre-build decision` and quoted into `47-CI-EVIDENCE.md` by 47-02 Task 1; plans 47-02, 47-03
+> and 47-04 read their item from there and do not start without it, and `hold`, `B1=c` or `B2=c` stops the phase. The
+> value the maintainer chooses is not restated here -- the SUMMARY is the record.
 
 1. **B-1: how to shrink the root `[0.11.0]` section (maintainer decision, blocks the build wave).**
    - Known: 156,528 chars now; hard limits 131,072 bytes (argv) and 125,000 chars (API); budget at most about 110,000 bytes.
    - Unclear: which content the maintainer wants to keep in the root file versus per-crate changelogs and MIGRATION §10.
    - Recommendation: a preflight checkpoint presenting the section-size table above; the agent condenses only what the maintainer approves, then the size gate and offline payload rehearsal must pass.
+   - **RESOLVED-BY-PLAN (2026-10-25):** decision item `B1` in 47-01 Task 3 (`a` agent condenses, recommended; `b` maintainer supplies the text; `c` hold). Applied by 47-02 Tasks 2 and 3 (`Added`, then `Changed`, chunk by chunk with a re-diff against the pre-condensation commit after each chunk) and proven at the extraction boundary by 47-03 Task 2 step 6.
 2. **B-2: tokio advisory remedy (maintainer decision).** Recommend lockfile-only `--precise 1.53.3` as a separate `fix(deps)` commit before the bump; alternative is a governed exception. Both leave `cargo audit` unchanged.
+   - **RESOLVED-BY-PLAN (2026-10-25):** decision item `B2` in 47-01 Task 3 (`a` lockfile-only `--precise 1.53.3`, recommended; `b` governed exception; `c` hold). Applied by 47-02 Task 1 as its own commit before the bump.
 3. **D-11 row 7 wording:** delete the empty `[Unreleased]` anchor (recommended) or amend the assertion (Pitfall 3).
+   - **RESOLVED-BY-PLAN (2026-10-25):** decision item `R7` in 47-01 Task 3 (`a` delete the empty anchor, recommended; `b` keep it and amend the assertion). Applied by 47-03 Task 2 step 3 and re-read as re-seal row 7 in 47-04.
 4. **Stamp date:** the day the maintainer expects to tag; if it slips, a docs-only commit corrects headings before the tick (D-00n).
+   - **RESOLVED-BY-PLAN (2026-10-25):** decision item `DATE` in 47-01 Task 3. Stamped by 47-03 Task 2; re-confirmed at the 47-06 sign-off (a slip is answered `redate YYYY-MM-DD` and corrected by a docs-only commit, D-00n) and again before the tag in 47-07 (a slip is answered `redate`); 47-08 records the tagger date against DATE as fact.
 5. **Empty crate sections:** add the one-line lockstep note or leave heading-only (Pitfall 6).
+   - **RESOLVED-BY-PLAN (2026-10-25):** decision item `EMPTY` in 47-01 Task 3 (`a` one-line lockstep note, part of the recommended set; `b` heading-only, kept as a finding). Applied by 47-03 Task 2 step 2.
 6. **Space strategy for the local re-seal:** clean-and-rebuild here, or run rows 2, 3, 5, 6 on the maintainer's machine and rely on CI twins (rows 2-5 each have a PR-run twin; row 6 has none).
+   - **RESOLVED-BY-PLAN (2026-10-25):** decision item `SPACE` in 47-01 Task 3 (`a` clean-and-rebuild here, recommended; `b` the maintainer runs rows 2, 3 and 6 on their machine at the recorded head SHA, row 5 staying CI-attributed). Applied by 47-03 Task 3 (`cargo clean` before the first post-bump compile) and 47-04 Task 2 (rows 2, 3, 4 and 6).
 
 ## Environment Availability
 

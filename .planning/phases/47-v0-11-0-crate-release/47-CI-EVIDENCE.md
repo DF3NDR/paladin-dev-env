@@ -45,6 +45,7 @@ labelled as a research figure, never as a measurement.
 - SHA-PRE-BUMP: 680cf9c294dc22de02c1faae19afc45188470a35
 - SHA-H: c945684647c4f9c78fdde2fbe2fc8fc2e8806106
 - SHA-R: d82d67cac926412a21cccd72278fe8fe9df672c0
+- SHA-A0: d4e66b47628559b175f1958b4f5267058096dd7f
 - **B-1 pre-condensation measurements (plan 47-02 Task 2, measured at `SHA-PRE-B1`):** root `[Unreleased]` body 156528 bytes; `### Added` 84557 bytes and 57 top-level bullets; `### Changed` 36407 bytes and 44 top-level bullets (a top-level bullet is a column-0 `- ` line with everything nested under it; the subsection byte counts here exclude the heading line, so they sit 10 bytes under the 47-01 table's 84567 and 36419, which include it). Lead paragraph added by Task 2 names the SHA above.
 
 Machine-readable SHA lines added by later plans use the exact form `- SHA-<label>: <40-hex>` on their own
@@ -232,6 +233,50 @@ PR run `40194322581` jobs at read time:
 | Redis Run Queue Contract Suite (live server) | queued | (none yet) |
 | Crate Isolation (paladin-content) | queued | (none yet) |
 | Crate Isolation (paladin-ai-core) | queued | (none yet) |
+
+### Plan 47-05 — push of SHA-A0 and the PR #59 retitle (2026-10-25)
+
+**D-02 and precondition checks (read 2026-10-25T21:06Z, before any write):** `gh api repos/DF3NDR/paladin-dev-env/branches/main --jq .commit.sha` printed `df24689c3d1fd52b0e730105c15b22c2c4ad1404` (unmoved); `git status --porcelain` printed nothing; `git branch --show-current` printed `claude/laughing-dirac-e0h2ax`; `git ls-remote --tags origin 'refs/tags/v0.11.0*'` printed nothing.
+
+**SHA-A0 is `d4e66b47628559b175f1958b4f5267058096dd7f`** (`git rev-parse HEAD`, `docs(47-04): complete the re-seal and sign-off section plan`). Its tree outside `.planning/` is byte-identical to `SHA-H` `c945684647c4f9c78fdde2fbe2fc8fc2e8806106` and to `SHA-R` `d82d67cac926412a21cccd72278fe8fe9df672c0`: `git diff --name-only <SHA-H> d4e66b47 -- . ':!.planning'` and the same against `<SHA-R>` both printed nothing.
+
+**The push, stated as measured.** SHA-A0 reached `origin` before this plan began: the orchestrator's post-wave-4 push, about 2026-10-25T21:04Z, put it there (the `push` runs below were created at 21:04:25Z, the `pull_request` runs at 21:04:30Z). This plan then ran the plan's explicit `git push origin claude/laughing-dirac-e0h2ax` at 2026-10-25T21:06:49Z (plain, no force flag, no hooks installed in `.git/hooks`); output verbatim: `Everything up-to-date`, exit 0. No empty commit and no commit outside the plan was made to force a push. After it, `git ls-remote origin refs/heads/claude/laughing-dirac-e0h2ax` printed `d4e66b47628559b175f1958b4f5267058096dd7f` and `GET /pulls/59 .head.sha` printed the same 40 hex characters: **PR head equals SHA-A0**.
+
+**PR #59 before the write (read 21:06Z):** `title` "feat(43-02): honour the provider retry delay as a minimum and cap the gate at max_wait", `body` 459 characters, `commits` 1116, `changed_files` 1109, `mergeable_state` `blocked`, `auto_merge` null, `base` `main` at `df24689c3d1fd52b0e730105c15b22c2c4ad1404`.
+
+**The REST write (D-03).** `gh api -X PATCH repos/DF3NDR/paladin-dev-env/pulls/59 -f title='release: v0.11.0 — Treasurer Spend Governance' -F body=@<scratchpad file>` at 2026-10-25T21:07:17Z; exit 0, HTTP success (no refusal, so no maintainer fallback command is needed). Response: `{"title":"release: v0.11.0 — Treasurer Spend Governance","state":"open","head":"d4e66b47628559b175f1958b4f5267058096dd7f","bodylen":4313}`.
+
+**PR #59 read back independently (2026-10-25T21:07:24Z), `GET /pulls/59`:**
+
+| Field | Value |
+|---|---|
+| `title` | `release: v0.11.0 — Treasurer Spend Governance` |
+| `head.sha` | `d4e66b47628559b175f1958b4f5267058096dd7f` (= SHA-A0) |
+| `body` length | 4313 characters |
+| `commits` | 1116 (per GitHub; the sandbox clone is shallow) |
+| `changed_files` | 1109 (per GitHub) |
+| `mergeable_state` | `blocked` |
+| `state` / `auto_merge` | `open` / `null` |
+
+Body content checked by `grep` on the read-back text: the heading `v0.11.0 — Treasurer Spend Governance`, the eight-row re-seal table carrying the audit's recorded result words (rows 4, 5 and 6 worded as CI-attributed or mixed, not as local passes), the four pointers (`CHANGELOG.md` `[0.11.0]`, `MIGRATION.md` section 10, `47-CI-EVIDENCE.md`, `47-ACCEPTANCE-AUDIT.md`), the twelve derived crate names with the count, `1116 commits and 1109 changed files per GitHub (the sandbox clone is shallow)`, the merge-commit instruction, a statement that CI on the pushed head had not concluded and the sign-off box is unticked, and the session URL line. The body names no model. No tag `v0.11.0*` exists on the remote. Nothing was merged, approved, labelled, closed, commented on or dispatched.
+
+**Attribution-line difference, recorded as a finding (not corrected).** The body sent ended with `🤖 Generated with [Claude Code](https://claude.com/claude-code)` then the session URL line. The body read back from GitHub does not contain the `🤖 Generated with ...` line and ends with the session URL line, a blank line, `---` and `_Generated by [Claude Code](https://claude.ai/code)_`. That footer was not authored by this plan; something between the request and the stored body rewrote the attribution. `diff` of the sent file against the read-back shows exactly those two differences and no other. It was not re-written: a second PATCH would meet the same rewrite, and the substantive body is intact.
+
+**Workflow runs on SHA-A0 at the single read, 2026-10-25T21:06:17Z (re-read 21:07:24Z, unchanged), via `gh api "repos/DF3NDR/paladin-dev-env/actions/runs?head_sha=d4e66b47628559b175f1958b4f5267058096dd7f&per_page=100"`:** 9 runs, none concluded. This is a snapshot, not polled to completion (D-00i). Per-job conclusions and the `coverage` figure are filled by plan 47-06.
+
+| Workflow | Run ID (URL) | Event | Status at read | Conclusion |
+|---|---|---|---|---|
+| `ci.yml` | [40233738810](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40233738810) | `push` | `queued` | `(none yet)` |
+| `ci.yml` | [40233745953](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40233745953) | `pull_request` | `queued` | `(none yet)` |
+| `codeql.yml` | [40233738867](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40233738867) | `push` | `in_progress` | `(none yet)` |
+| `codeql.yml` | [40233746019](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40233746019) | `pull_request` | `in_progress` | `(none yet)` |
+| `pre-commit` | [40233738812](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40233738812) | `push` | `in_progress` | `(none yet)` |
+| `pre-commit` | [40233745937](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40233745937) | `pull_request` | `queued` | `(none yet)` |
+| `feature-flags.yml` | [40233738811](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40233738811) | `push` | `queued` | `(none yet)` |
+| `feature-flags.yml` | [40233745927](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40233745927) | `pull_request` | `queued` | `(none yet)` |
+| `Docs` | [40233746031](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40233746031) | `pull_request` | `queued` | `(none yet)` |
+
+**The earlier push run on `d900b21b` was cancelled, not failed.** `ci.yml` push run `40228639490` (head `d900b21b73ba5a06ab9a57c43d6e66d3d4f792cb`, created 2026-10-25T19:59:42Z) reads `status: completed`, `conclusion: cancelled`, updated 2026-10-25T21:04:48Z: the workflow's concurrency group (`cancel-in-progress` off `main`) cancelled it when the push of SHA-A0 landed. Its `Unit Tests (stable)`, `Unit Tests (beta)`, `Semver Checks (vs v0.9.0)`, `MSRV (Rust 1.88)` and `License & Dependency Policy` jobs had concluded `success` before the cancellation (plan 47-04 rows cite them); those are mid-plan observations on a different head and are **not** the proof of record. The proof of record is the runs on SHA-A0 above, read once by plan 47-06.
 
 ---
 
@@ -604,3 +649,9 @@ This is option 1 of the row-6 checkpoint, gated. Effect, exactly as decided:
 - The legs that never ran in row 60 were then run directly in the Makefile's order and are all green: doc tests, `make audit`, `make build-release`, `cargo publish --workspace --dry-run` (Local sweep rows 62-65), with the twelve-crate order recorded. They were run as separate commands, after a second `cargo clean` before the release build (SPACE=a headroom judgement, not an out-of-space abort), so **`make publish-dry-run` as one chain was never green locally**; the row reads as a mix of local passes and one CI-attributed leg, and says so.
 - Row 60's RED verdict and its Findings entry are left as written (append-only, D-00d). D-00j was honoured: the plan halted with nothing fixed and resumed only on this decision. Cause of the two local failures remains **undetermined**; CI's green `Unit Tests (stable)` on the same tree is consistent with a sandbox-specific timing bound (WINDOWS row 73) but is not a diagnosis.
 
+### 2026-10-25 — Plan 47-05: SHA-A0 pushed by the orchestrator, PR #59 retitled, attribution footer rewritten in transit
+
+- **SHA-A0 provenance.** `SHA-A0` `d4e66b47628559b175f1958b4f5267058096dd7f` reached `origin` through the orchestrator's post-wave-4 push (about 21:04Z), not through a push made by this plan; the plan's own `git push` returned `Everything up-to-date`. Recorded as measured; PR #59's `head.sha` equals it (CI-run table, "Plan 47-05").
+- **The earlier run was cancelled.** `ci.yml` push run `40228639490` on `d900b21b` ended `cancelled` by the concurrency group when SHA-A0 landed; its already-concluded `success` jobs are mid-plan observations, not proof of record (plan 47-06 reads the SHA-A0 runs once).
+- **PR body attribution differs from what was sent.** The stored body lacks the `🤖 Generated with [Claude Code](https://claude.com/claude-code)` line sent and ends with an appended `---` / `_Generated by [Claude Code](https://claude.ai/code)_` footer. Not authored by this plan and not re-written; owner: none, informational (the maintainer may edit the footer by hand if the exact line matters).
+- **PR title and body written through REST on the first attempt** (no refusal, no maintainer fallback command). The body states the audit's rows 4, 5 and 6 as CI-attributed or mixed, says CI on the pushed head had not concluded, and says the box is unticked.

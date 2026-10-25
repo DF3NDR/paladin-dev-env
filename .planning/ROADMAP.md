@@ -809,7 +809,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 47-02-PLAN.md — Maintainer-approved pre-build remedies as separate commits: B-2 lockfile pin, B-1 root `[0.11.0]` condensation (chunked, ledger, byte-identity checks) (wave 2)
+- [x] 47-02-PLAN.md — Maintainer-approved pre-build remedies as separate commits: B-2 lockfile pin, B-1 root `[0.11.0]` condensation (chunked, ledger, byte-identity checks) (wave 2)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

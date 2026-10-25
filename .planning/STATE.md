@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 47
 current_phase_name: v0.11.0 Crate Release
 status: executing
-stopped_at: Completed 47-01-PLAN.md
-last_updated: "2026-10-25T18:21:27.184Z"
+stopped_at: Completed 47-02-PLAN.md
+last_updated: "2026-10-25T18:55:06.231Z"
 last_activity: 2026-10-25
 last_activity_desc: Phase 47 execution started
 progress:
   total_phases: 15
   completed_phases: 14
   total_plans: 174
-  completed_plans: 165
+  completed_plans: 166
 ---
 
 # Project State
@@ -63,7 +63,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 47 (v0.11.0 Crate Release) — EXECUTING
-Plan: 2 of 10
+Plan: 3 of 10
 Status: Ready to execute
 Last activity: 2026-10-25 — Phase 47 execution started
 
@@ -354,6 +354,7 @@ Last activity: 2026-10-25 — Phase 47 execution started
 | Phase 46 P14 | 15 min | 3 tasks | 4 files |
 | Phase 46 P13 | 17 min | 3 tasks | 7 files |
 | Phase 47 P01 | 1h | 3 tasks | 2 files |
+| Phase 47 P02 | 2h20m | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -642,6 +643,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 46]: 46-12: every [Unreleased] 9.x citation (root and crate changelogs) names a v0.11 row and is retargeted to section 10; the recipe misses 44 lines (backtick/line-break forms), classified and retargeted too — D-02 / RESEARCH F4: the release note is live, not history; plan acceptance covers every 9.x citation left
 - [Phase ?]: 46-14: #[non_exhaustive] and PaladinError variant comments keep 9.2 (v0.10.1 register rows); muster forward rules and DR/Phase 44-50 citations retargeted to section 10
 - [Phase ?]: [Phase 47] 47-01: maintainer pre-build decision B1=a B2=a R7=a EMPTY=a SPACE=a DATE=2026-10-25 (reply 2026-10-25T18:19:21Z)
+- [Phase ?]: 47-02: B2=a applied (tokio 1.53.3, Cargo.lock only) and B1=a applied (root [Unreleased] 156528 -> 108926 bytes, SHA-PRE-B1 700a92d8); Added tightened in the Task 3 commit
 
 ### Pending Todos
 
@@ -867,8 +869,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-25T18:21:27.148Z
-**Stopped at:** Completed 47-01-PLAN.md
+**Last session:** 2026-10-25T18:55:06.198Z
+**Stopped at:** Completed 47-02-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

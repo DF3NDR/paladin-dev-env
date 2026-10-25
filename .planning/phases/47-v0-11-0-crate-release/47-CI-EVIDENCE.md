@@ -36,7 +36,7 @@ labelled as a research figure, never as a measurement.
   `rustup toolchain list`: `stable-x86_64-unknown-linux-gnu (default)`,
   `nightly-2026-09-20-x86_64-unknown-linux-gnu`, `1.97.1-x86_64-unknown-linux-gnu (active)` — **MSRV 1.88 is
   absent** (so the MSRV gate has no local row; its CI twin is the `MSRV (Rust 1.88)` job). `cargo-release`
-  is not installed at the start of plan 47-01; Task 2 installs exactly 1.1.7 (`--locked`) and records it.
+  was not installed at the start of plan 47-01; Task 2 installed exactly 1.1.7 (`--locked`, outside the repository): `cargo-release 1.1.7` (Local sweep rows 13-14).
 - **Tick commit:** (filled by plan 47-08).
 - **Merge commit:** (filled by plan 47-08).
 - **Tagged commit:** (filled by plan 47-08).
@@ -49,7 +49,8 @@ line (labels H, R, A0, A1, A2, B).
 ## Local sweep
 
 Rows 1-12 are plan 47-01 Task 1's own record: a read-only pass over the tree, the toolchain, the advisory
-databases and the sandbox. All rows ran on local HEAD `f72fe6acd6a56eab11f5d72944ee8cf8858cace2` on
+databases and the sandbox. Rows 13-18 are Task 2's: the one tool install, the B-1 reproduction, the limits and
+the MIGRATION section 10 freeze check. All rows ran on local HEAD `f72fe6acd6a56eab11f5d72944ee8cf8858cace2` on
 2026-10-25 between 13:01Z and 13:04Z. Nothing outside `.planning/` was modified.
 
 | # | Command | Result (verbatim/summarized) | Verdict |
@@ -66,6 +67,37 @@ databases and the sandbox. All rows ran on local HEAD `f72fe6acd6a56eab11f5d7294
 | 10 | `test -S /var/run/docker.sock`; `command -v docker`; `docker info` (SHA `f72fe6acd6a56eab11f5d72944ee8cf8858cace2`) | `test -S` exit 1 (no socket). `/usr/bin/docker` present (Client: Docker Engine - Community 29.8.2). `docker info`: `failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory`. | **No Docker daemon**: Docker-backed integration rows have no local run |
 | 11 | `rustup toolchain list` (SHA `f72fe6acd6a56eab11f5d72944ee8cf8858cace2`) | `stable-x86_64-unknown-linux-gnu (default)`, `nightly-2026-09-20-x86_64-unknown-linux-gnu`, `1.97.1-x86_64-unknown-linux-gnu (active)`. No `1.88` toolchain. | MSRV 1.88 absent locally |
 | 12 | `gh api repos/DF3NDR/paladin-dev-env/branches/main --jq .commit.sha` (read 2026-10-25T13:03:59Z) | `df24689c3d1fd52b0e730105c15b22c2c4ad1404` — equals the D-02 baseline; `main` has not moved. | UNMOVED |
+| 13 | `cd <scratchpad> && cargo install --locked cargo-release --version 1.1.7` (outside the repository; SHA `f72fe6acd6a56eab11f5d72944ee8cf8858cace2`; 13:05:25Z to about 13:08Z) | **Exit 0**. 122 `Compiling` lines; `Installing /root/.cargo/bin/cargo-release`; "Installed package cargo-release v1.1.7 (executable cargo-release)". The only tool installed in this plan (RESEARCH Package Legitimacy Audit: crate-ci/cargo-release, OK verdict). `df -h /` before: `252G size, 37G used, 2.5G avail, 94%`; after: `252G size, 37G used, 2.5G avail, 94%` (the build's low-water mark, read mid-build, was `2.2G avail, 95%`, so the install fit). | INSTALLED |
+| 14 | `cargo release --version` then `git status --porcelain` (SHA `f72fe6acd6a56eab11f5d72944ee8cf8858cace2`) | `cargo-release 1.1.7` (`release.toml` still records 1.1.2, see Findings). `git status --porcelain` empty after the install: no tracked file changed. | 1.1.7 |
+| 15 | B-1 reproduction. Body file = `awk '/^## \[Unreleased\]/{f=1;next} /^## \[/{if(f)exit} f' CHANGELOG.md > <mktemp file>` (156528 bytes); then `( export CREATE_OR_REUSE_RELEASE_LIB_ONLY=1; source scripts/create-or-reuse-release.sh; _cor_build_payload v0.11.0 "Release v0.11.0" <file> false >/dev/null )` (SHA `f72fe6acd6a56eab11f5d72944ee8cf8858cace2`) | **Exit 126**. stderr verbatim: `scripts/create-or-reuse-release.sh: line 105: /usr/bin/jq: Argument list too long`. Control, same function on a one-line body: exit 0, 122-byte payload. Threshold probe on truncated copies of the same body: 110000 bytes exit 0 (111453-byte payload), 125000 exit 0, 131000 exit 0, **131100 exit 126**, 140000 exit 126 (the same `Argument list too long` text). `getconf ARG_MAX` = 2097152, `getconf PAGE_SIZE` = 4096, so the per-argument cap is 32 pages = 131072 bytes (`MAX_ARG_STRLEN`), matching the observed break between 131000 and 131100. **B-1 reproduced offline by the real payload builder.** | **RED**: B-1 reproduced |
+| 16 | Limits recorded beside row 15 (SHA `f72fe6acd6a56eab11f5d72944ee8cf8858cace2`) | Argv cap **131,072 bytes**: measured in row 15. GitHub release-body cap of **125,000 characters**: a **research figure** (RESEARCH A3, MEDIUM confidence), **not measured** in this plan. Decision budget **110,000 bytes** (about 1 KB is appended later by `finalize-release-body.sh`). Measured root body 156528 bytes exceeds all three: by 25,456 bytes over the argv cap, 46,528 bytes over the decision budget. | MEASURED vs RESEARCH figures, labelled |
+| 17 | `git diff --stat e28e43b5..HEAD -- src 'crates/*/src'` (SHA `f72fe6acd6a56eab11f5d72944ee8cf8858cace2`) | 2 files, 33 insertions, 0 deletions: `src/application/cli/config/battalion_config.rs` (25 lines, all inside `#[cfg(test)] mod tests`: one new test `cli_conclave_yaml_timeout_seconds_still_loads`) and `src/infrastructure/resilience/circuit_breaker.rs` (8 lines, all `///` rustdoc on `CircuitBreaker`). Two commits touch these paths since `e28e43b5`: `b0429436` (46-08) and `68d03cdb` (46-09). No `crates/*/src` file changed. `git rev-list --count e28e43b5..HEAD` = 98 commits in all. | no signature changed |
+| 18 | `gh api repos/DF3NDR/paladin-dev-env/actions/runs/40194317691/jobs --paginate` (the `push` `ci.yml` run on PR #59's head `2e857c6ce7e0d9f37ff5cc74def293d2d0587756`; read 2026-10-25T13:08:35Z) | **`API Surface Tracking`: `completed` / `success`** (job `121172036318`, completed 13:08:09Z): steps `Check API surface changes=success`, `Check deprecation warnings=success`, `Generate API diff on failure=skipped`. The `pull_request` run `40194322581` carried the same job `in_progress` (4 of 11 steps done) at the same read. | `success` on the PR head |
+
+**MIGRATION section 10 freeze answer (D-00n).** Rows 17-18: the public surface is unmoved since `e28e43b5` — the only two source changes are a test and rustdoc, and `API Surface Tracking` concluded `success` on PR #59's head `2e857c6ce7e0d9f37ff5cc74def293d2d0587756`. **MIGRATION section 10 stays frozen at `e28e43b5`**; nothing is put to the maintainer on this point. (Caveat recorded for plan 47-04: the `pull_request` run of the same job had not concluded at the read; the push-run conclusion is the one cited.)
+
+### B-1 reproduction detail: the root `[Unreleased]` body by subsection (plan 47-01 Task 2)
+
+Measured with `awk` over the body file of row 15 (every `### ` heading inside the section, bytes including newlines; the sum equals `wc -c` = 156528):
+
+| Subsection | Bytes |
+|---|---|
+| `### Added` | 84567 |
+| `### Changed` | 36419 |
+| `### Removed` | 5231 |
+| `### Fixed` | 11327 |
+| `### Documentation` | 1683 |
+| `### Security` | 2491 |
+| `### Breaking Changes` | 10847 |
+| `### Known limitations` | 3962 |
+| (lead text before the first `###`, one blank line) | 1 |
+| **Total** | **156528** |
+
+`### Added` (84567) plus `### Changed` (36419) is 120,986 bytes; the other six subsections plus the one-byte lead are 35,542 bytes
+(`Removed`, `Fixed`, `Documentation`, `Security`, `Breaking Changes`, `Known limitations` sum to 35,541). To land at or under the
+110,000-byte budget with the six others kept byte-identical, `Added` plus `Changed` must shrink to at most
+74,458 bytes (a cut of at least 46,528 bytes, 38.5 percent), before the lead paragraph B1=a adds.
+
 
 ---
 
@@ -211,3 +243,129 @@ every one is `ABSENT` at `0.11.0`. The formal table below is filled by plan 47-0
 
 ## Findings carried forward (D-00d)
 
+Every entry below is recorded, none is fixed (D-00d). Entries are dated and appended; an earlier entry is amended
+at source only when a later plan corrects it, with a dated note.
+
+### 2026-10-25 — D-09: the CI semver job is pinned to `--baseline-version 0.9.0` and is a no-op (deferred)
+
+`.github/workflows/ci.yml` job `Semver Checks (vs v0.9.0)` (display name at line 346) runs
+`cargo semver-checks check-release --package <pkg> --default-features --baseline-version 0.9.0` for eleven packages
+(lines 381-401); `paladin-eval` is deliberately excluded (comment at lines 371-379: no published `0.9.0`
+baseline). The "known no-op" figure is carried from `37.1-CI-EVIDENCE.md` row 16 (`0 checks: 0 pass, 254 skip`
+on `paladin-battalion`), **not re-measured in this plan** (the job was still running on the PR head at the
+read). Deferred per D-09. Recommendation: in the next milestone's first phase re-pin the baseline to `0.11.0`
+and add `paladin-eval`. If the job fires at `0.11.0`, D-00j applies (A-4).
+
+### 2026-10-25 — D-14: gates with no pull-request twin
+
+(1) `check-migration-allowlist` is **not wired into `ci.yml`**: `grep -n migration .github/workflows/ci.yml`
+returns nothing; the `License & Dependency Policy` job runs `check-changelogs`, `check-crate-names`,
+`check-advisory-register`, `check-workflow-suppressions`, `check-workflow-triggers`, `check-codeql-dismissals`,
+`check-publish-order` and `check-dependency-allowlist` as individual steps (lines 128-165), but not
+`check-migration-allowlist`; it runs only through local `make check-gates`. (2) `End-to-End Tests` (`ci.yml`
+lines 2009-2013) and `Publish Dry Run` (lines 2152-2156) carry
+`if: github.event_name == 'push' && github.ref == 'refs/heads/main'`; neither appears in the job list of either
+`ci.yml` run on the PR head (34 jobs each, CI-run table above). Their **first run on this tree is on the merge
+commit** (RESEARCH Pitfall 8), after the irreversible merge and before the tag.
+
+### 2026-10-25 — B-1: the release body exceeds the payload builder's argv cap (blocker, reproduced)
+
+The root `CHANGELOG.md` `[Unreleased]` body is **156528 bytes** (Local sweep row 4); its measured subsections are
+in the B-1 table below row 18 (`Added` 84567, `Changed` 36419, `Breaking Changes` 10847, `Fixed` 11327,
+`Removed` 5231, `Known limitations` 3962, `Security` 2491, `Documentation` 1683). `_cor_build_payload v0.11.0
+"Release v0.11.0" <body> false` exited **126** with `/usr/bin/jq: Argument list too long` (row 15); the break
+falls between 131000 and 131100 bytes, the 131,072-byte per-argument cap. A failed `create-release` blocks
+`publish-crates` after the tag is pushed and immovable. To land at 110,000 bytes with the six non-`Added`/`Changed`
+subsections intact, `Added` plus `Changed` must go from 120,986 to at most 74,458 bytes. The 125,000-character
+GitHub cap is a research figure (A3), not measured here. Put to the maintainer as B1 in Task 3.
+
+### 2026-10-25 — B-2: RUSTSEC-2026-0386 turns `cargo deny` red; `cargo audit` only warns (blocker, reproduced)
+
+`cargo deny check advisories` exits 1 (`advisories FAILED`) on **RUSTSEC-2026-0386** (tokio `1.52.3`,
+`AsyncFd::new` and related constructors violate I/O safety; `Cargo.lock:530`; the lockfile carries
+`name = "tokio"` / `version = "1.52.3"` at lines 6002-6003); the tool's own solution line reads "Upgrade to
+>=1.51.6, <1.52.0 OR >=1.53.3 (try `cargo update -p tokio`)". `cargo audit` exits 0 and lists the same id among 10
+allowed warnings (row 7). On the PR head `2e857c6ce7e0d9f37ff5cc74def293d2d0587756` the required
+`License & Dependency Policy` context is **`failure`** in both `ci.yml` runs (jobs `121172138252`, `121172036253`),
+failing step `Run cargo-deny check` (CI-run table). `make security` must pass before a phase seals. Put to the
+maintainer as B2 in Task 3. Nothing was changed.
+
+### 2026-10-25 — Row-7 wording: the stamp script keeps the `## [Unreleased]` anchor
+
+`scripts/finalize-crate-changelogs.sh` inserts the dated section **immediately after** `## [Unreleased]` and
+preserves the anchor (lines 34-38 and 241-245: `replacement = f"{anchor}\n\n{new_heading}"`); the
+preservation is pinned by `tests/scripts/finalize-crate-changelogs_test.sh` around lines 170-173
+(`grep -qF -- "## [Unreleased]"` must succeed after stamping). So after the stamp an `[Unreleased]` count of 1
+survives per changelog, and D-11 row 7's literal "count 0" needs a decision. Put to the maintainer as R7 in Task 3.
+
+### 2026-10-25 — Three crates have an empty `[Unreleased]`
+
+Re-measured (Local sweep row 5): `paladin-content`, `paladin-memory` and `paladin-notifications` each have **0**
+non-blank `[Unreleased]` lines, so their stamped `[0.11.0]` section would be a heading with no body (the gate
+passes: presence is the signal). Nine others are non-empty (`paladin-eval` has 4). Put to the maintainer as EMPTY
+in Task 3; no content is invented.
+
+### 2026-10-25 — `k8s/server/worker-deployment.yaml` still labels `version: v0.10.0`
+
+`k8s/server/worker-deployment.yaml` lines 20 and 35 carry `version: v0.10.0` (metadata label and pod-template
+label); `grep -rn v0.10.0 k8s` finds only these two. Stale (the workspace is `0.10.1`). Recorded, **not fixed**: it
+is not a gated release input, and a change outside `.planning/` is barred in this plan.
+
+### 2026-10-25 — Shallow clone: commit counts come from GitHub
+
+`.git/shallow` is present (two shallow roots); `git rev-list --count HEAD` = 662 and there is no merge base with
+`origin/main`. PR #59's counts are read from `GET /pulls/59` at head `2e857c6c`: **1089 commits, 1096 changed
+files** (RESEARCH recorded 1083/1082 and CONTEXT 1,081/1,080; the figures move with every docs commit and are
+point-in-time observations, never contracts).
+
+### 2026-10-25 — 13 open WINDOWS rows; none is Phase 47's
+
+`node .claude/gsd-core/bin/gsd-tools.cjs windows status`: 82 entries, **13 open** (ids 56, 58, 62, 63, 64, 65, 66,
+67, 68, 69, 73, 77, 79; 39 waived, 30 fixed), `last_updated` 2026-10-24T13:47:20Z. Kinds: `lint-warning` (56),
+`deviation` (58, 62-67, 77, 79) and `unrun-verify` (68, 69, 73), from phases 38, 40, 41, 42, 48, 50 and 50.1. None
+originates in Phase 47. `/gsd-ship` is not used by this phase because PR #59 already exists. The 13 rows are carried
+to the ready-to-close prerequisites for the milestone audit.
+
+### 2026-10-25 — CONTEXT drift (items the build wave must use, not CONTEXT's wording)
+
+(1) `Cargo.toml` line 58 is the root `[package]` version (`version = "0.10.1"`); there is **no
+`[workspace.package]` version** (that table, from line 12, carries only `rust-version = "1.88"`).
+(2) `Cargo.lock` changes in the bump commit (13 workspace entries). (3) `crates/paladin-ports/Cargo.toml` line 16
+carries an exact pin `paladin-ai-core ... version = "=0.10.1"`, and `0.10.1` also appears inside `#` comments of
+that file (lines 71, 85), which are correct history and must not be rewritten. (4) `make finalize-crate-changelogs`
+takes only `VERSION` (Makefile lines 634-639, no date argument) and stamps today's date; a chosen date needs the
+script's `--date` flag. (5) `release.toml` lines 49-50 record `cargo release --version` as `cargo-release 1.1.2`;
+this phase uses 1.1.7 (Local sweep row 14).
+
+### 2026-10-25 — Stale count comments and a version-bearing job name
+
+`release.toml` lines 41 and 47 say "the ten per-crate CHANGELOG.md files" (11 crate changelogs plus the root exist,
+Local sweep row 5); `scripts/finalize-crate-changelogs.sh:8` says "eleven-file manual chore: today all ten crate";
+`.github/workflows/ci.yml:277` says "all ten"; the `ci.yml` job display name is `Semver Checks (vs v0.9.0)` (line
+346). `Makefile:629` already says "all twelve publishable crates" (correct). Recorded, not edited.
+
+### 2026-10-25 — MIGRATION section 10 freeze check (D-00n): public surface unmoved
+
+`git diff --stat e28e43b5..HEAD -- src 'crates/*/src'` lists exactly two files, 33 insertions, no deletions:
+`src/application/cli/config/battalion_config.rs` (+25, test module only) and
+`src/infrastructure/resilience/circuit_breaker.rs` (+8, rustdoc only); no `crates/*/src` file changed (Local sweep
+row 17). `API Surface Tracking` concluded `success` on PR #59's head in the `push` `ci.yml` run `40194317691` (row 18;
+the `pull_request` run's copy was `in_progress` at the read). **Answer: MIGRATION section 10 stays frozen at
+`e28e43b5`.** Plan 47-04 re-reads the `pull_request` run's copy of the job.
+
+### 2026-10-25 — Pre-build CI state: local HEAD is one unpushed docs commit ahead of the PR head, PR not yet retitled
+
+Local HEAD `f72fe6acd6a56eab11f5d72944ee8cf8858cace2` is one docs-only commit ahead of `origin/claude/laughing-dirac-e0h2ax`
+= PR #59 head `2e857c6ce7e0d9f37ff5cc74def293d2d0587756`; PR #59's title is still "feat(43-02): honour the provider
+retry delay as a minimum and cap the gate at max_wait" (plan 47-05 retitles it). Both `ci.yml` runs on the PR head
+were unconcluded at the read (the push run's `API Surface Tracking` had already succeeded; the
+`License & Dependency Policy` failure had landed in both). Earlier heads' runs (`22540cd2`, `885ec5ed`, `869091b0`)
+read `cancelled`, superseded by later pushes. No run on any head has yet concluded green for the whole workflow.
+
+### 2026-10-25 — Sandbox capacity and tooling limits for the re-seal
+
+`df -h /` reads 2.5 GB available (94 percent used) with `target` at 20 GB (rows 8-9); the `cargo-release` install
+fit (low-water mark 2.2 GB), but RESEARCH Pitfall 9 expects the post-bump rebuild not to (A-2): the SPACE decision in
+Task 3 governs recovery. There is **no Docker daemon** (the client binary `/usr/bin/docker` 29.8.2 is present, the
+socket `/var/run/docker.sock` is absent, row 10), so Docker-backed integration rows have no local run; their CI
+twins are the evidence. The MSRV `1.88` toolchain is absent (row 11); the CI `MSRV (Rust 1.88)` job is the twin.

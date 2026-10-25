@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 47
 current_phase_name: v0.11.0 Crate Release
 status: executing
-stopped_at: "Phase 47 plan 47-01: Tasks 1-2 done (7101b86f, efa9bd8f); paused at Task 3 checkpoint:decision (B1, B2, R7, EMPTY, SPACE, DATE) awaiting maintainer"
-last_updated: "2026-10-25T13:10:34.159Z"
+stopped_at: Completed 47-01-PLAN.md
+last_updated: "2026-10-25T18:21:27.184Z"
 last_activity: 2026-10-25
 last_activity_desc: Phase 47 execution started
 progress:
   total_phases: 15
   completed_phases: 14
   total_plans: 174
-  completed_plans: 164
+  completed_plans: 165
 ---
 
 # Project State
@@ -43,7 +43,7 @@ delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-1
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 150/150 plans ([██████████] 100%) of the phases planned so far (38-45, 48-51);
+**Progress:** [████████████████████] 150/150 plans ([██████████] 95%) of the phases planned so far (38-45, 48-51);
 Phases 46 and 47 are not yet planned; Phase 49 closed 2026-10-14 (3/3 kept plans, 3 cancelled); Phase 50.1 sealed 2026-10-20;
 Phase 51 sealed 2026-10-23 (20/20 plans, verification `passed` 7/7, UAT 3/3, security 61/61 closed, ADR-0062); Phase 46 is next, then Phase 47.
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -63,8 +63,8 @@ under `milestones/`.
 ## Current Position
 
 Phase: 47 (v0.11.0 Crate Release) — EXECUTING
-Plan: 1 of 10
-Status: Executing Phase 47
+Plan: 2 of 10
+Status: Ready to execute
 Last activity: 2026-10-25 — Phase 47 execution started
 
 ## Performance Metrics
@@ -353,6 +353,7 @@ Last activity: 2026-10-25 — Phase 47 execution started
 | Phase 46 P12 | 9 min | 3 tasks | 14 files |
 | Phase 46 P14 | 15 min | 3 tasks | 4 files |
 | Phase 46 P13 | 17 min | 3 tasks | 7 files |
+| Phase 47 P01 | 1h | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -640,6 +641,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 46-11: section 10 frozen 2026-10-24 on web3sec's dogfood report against e28e43b5; DR-11 cites both registers (10.2 AllowanceHalted, 9.2 CallLimit/TokenBudget); D-06 warn! deferred
 - [Phase 46]: 46-12: every [Unreleased] 9.x citation (root and crate changelogs) names a v0.11 row and is retargeted to section 10; the recipe misses 44 lines (backtick/line-break forms), classified and retargeted too — D-02 / RESEARCH F4: the release note is live, not history; plan acceptance covers every 9.x citation left
 - [Phase ?]: 46-14: #[non_exhaustive] and PaladinError variant comments keep 9.2 (v0.10.1 register rows); muster forward rules and DR/Phase 44-50 citations retargeted to section 10
+- [Phase ?]: [Phase 47] 47-01: maintainer pre-build decision B1=a B2=a R7=a EMPTY=a SPACE=a DATE=2026-10-25 (reply 2026-10-25T18:19:21Z)
 
 ### Pending Todos
 
@@ -865,9 +867,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-25T13:10:34.123Z
-**Stopped at:** Phase 47 plan 47-01: Tasks 1-2 done (7101b86f, efa9bd8f); paused at Task 3 checkpoint:decision (B1, B2, R7, EMPTY, SPACE, DATE) awaiting maintainer
-**Resume file:** .planning/phases/47-v0-11-0-crate-release/47-01-PLAN.md
+**Last session:** 2026-10-25T18:21:27.148Z
+**Stopped at:** Completed 47-01-PLAN.md
+**Resume file:** None
 
 ## Operator Next Steps
 

@@ -805,7 +805,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 47-01-PLAN.md — Preflight: open `47-CI-EVIDENCE.md`, install `cargo-release` 1.1.7, reproduce blockers B-1 (release-body size) and B-2 (`cargo deny` red on tokio RUSTSEC-2026-0386), then the maintainer's blocking six-part pre-build decision (wave 1)
+- [x] 47-01-PLAN.md — Preflight: open `47-CI-EVIDENCE.md`, install `cargo-release` 1.1.7, reproduce blockers B-1 (release-body size) and B-2 (`cargo deny` red on tokio RUSTSEC-2026-0386), then the maintainer's blocking six-part pre-build decision (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

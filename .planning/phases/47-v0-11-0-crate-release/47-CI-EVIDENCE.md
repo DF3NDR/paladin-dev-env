@@ -369,3 +369,20 @@ fit (low-water mark 2.2 GB), but RESEARCH Pitfall 9 expects the post-bump rebuil
 Task 3 governs recovery. There is **no Docker daemon** (the client binary `/usr/bin/docker` 29.8.2 is present, the
 socket `/var/run/docker.sock` is absent, row 10), so Docker-backed integration rows have no local run; their CI
 twins are the evidence. The MSRV `1.88` toolchain is absent (row 11); the CI `MSRV (Rust 1.88)` job is the twin.
+
+### 2026-10-25 — Maintainer's pre-build decision recorded (plan 47-01 Task 3; D-08)
+
+Reply received 2026-10-25T18:19:21Z (UTC), verbatim:
+
+> DATE=Today
+> All (a) choices
+
+Resolved by the orchestrator, one value per item: `B1=a` `B2=a` `R7=a` `EMPTY=a` `SPACE=a` `DATE=2026-10-25`
+("Today" is 2026-10-25, the UTC date of the reply). This equals the plan's `recommended` option. Effect on the
+findings above: B-1 is cleared by condensing `Added` and `Changed` to at most 110,000 bytes in total body size
+(chunk-by-chunk, ledgered); B-2 by `cargo update -p tokio --precise 1.53.3` as its own `fix(deps)` commit before the
+bump; R7 by deleting the empty `[Unreleased]` anchor in the stamp commit; EMPTY by one lockstep line under each of
+`paladin-content`, `paladin-memory` and `paladin-notifications`; SPACE by `cargo clean` before the first compile and
+again before row 6, with one retry on an out-of-space abort; the stamp date equals the tag date (D-00n). No tracked
+file outside `.planning/` had changed when the decision was recorded. The authoritative copy is
+`47-01-SUMMARY.md` under `## Pre-build decision`.

@@ -40,6 +40,9 @@ labelled as a research figure, never as a measurement.
 - **Tick commit:** (filled by plan 47-08).
 - **Merge commit:** (filled by plan 47-08).
 - **Tagged commit:** (filled by plan 47-08).
+- SHA-PRE-B1: 700a92d86f3d6b2e24bbd2c163daec7c307297e0
+- B1-MODE: a
+- **B-1 pre-condensation measurements (plan 47-02 Task 2, measured at `SHA-PRE-B1`):** root `[Unreleased]` body 156528 bytes; `### Added` 84557 bytes and 57 top-level bullets; `### Changed` 36407 bytes and 44 top-level bullets (a top-level bullet is a column-0 `- ` line with everything nested under it; the subsection byte counts here exclude the heading line, so they sit 10 bytes under the 47-01 table's 84567 and 36419, which include it). Lead paragraph added by Task 2 names the SHA above.
 
 Machine-readable SHA lines added by later plans use the exact form `- SHA-<label>: <40-hex>` on their own
 line (labels H, R, A0, A1, A2, B).
@@ -243,6 +246,24 @@ every one is `ABSENT` at `0.11.0`. The formal table below is filled by plan 47-0
 
 | Crate | `vers` | `cksum` | `yanked` |
 |---|---|---|---|
+
+---
+
+## B-1 condensation ledger
+
+Plan 47-02 (B1=a). Source for every row is `git show 700a92d86f3d6b2e24bbd2c163daec7c307297e0:CHANGELOG.md` (`SHA-PRE-B1`), line ranges taken from that file. Chunk ids `A1`, `A2`, ... are `### Added`; `C1`, `C2`, ... are `### Changed`. A chunk is a run of consecutive top-level bullets of about 12,000 source bytes or fewer (one bullet is never split). The re-diff was run after every chunk against the original subsection: (ids) every `M-B-`/`DR-`/`ADR-` id in the chunk's source lines is present in the condensed subsection; (figures) numeric tokens of the condensed subsection, phase-label lines and id tokens removed first, are a subset of the original subsection's; (code spans) backtick spans of the condensed subsection, excluding spans that are exactly a workspace crate name, are a subset of the original's; (untouched) every other subsection is byte-identical. The figure and code-span checks are a mechanical proxy for "no new claim"; see `- B-1 maintainer read:` below.
+
+| Chunk | Subsection | Source lines at SHA-PRE-B1 | Top-level bullets | Source bytes | Phase groups written to | Ids carried | Re-diff |
+|-------|------------|----------------------------|-------------------|--------------|-------------------------|-------------|---------|
+| A1 | `### Added` | 12-134 | 9 | 10777 | Phase 51 | ADR-0004, ADR-0062, DR-20, DR-21, DR-26 | PASS (ids, figures, code spans; other subsections untouched) |
+| A2 | `### Added` | 135-262 | 10 | 11311 | Phase 51, Phase 50.1, Phase 50 | ADR-0053, ADR-0061, DR-1, DR-2, DR-8, DR-9, M-B-05 | PASS (ids, figures, code spans; other subsections untouched) |
+| A3 | `### Added` | 263-393 | 4 | 11597 | Phase 50, Phase 49, Phase 43 | ADR-0004, ADR-0058, ADR-0061 | PASS (ids, figures, code spans; other subsections untouched) |
+| A4 | `### Added` | 394-503 | 3 | 9353 | Phase 43, Phase 42 | ADR-0050, ADR-0057 | PASS (ids, figures, code spans; other subsections untouched) |
+| A5 | `### Added` | 504-561 | 2 | 4961 | Phase 42, Phase 41 | ADR-0056, ADR-0057 | PASS (ids, figures, code spans; other subsections untouched) |
+| A6 | `### Added` | 562-698 | 5 | 11836 | Phase 41, Phase 38 | ADR-0052, ADR-0053 | PASS (ids, figures, code spans; other subsections untouched) |
+| A7 | `### Added` | 699-838 | 13 | 11846 | Phase 38, Phase 39, Phase 40, Phase 45, Phase 50 | ADR-0054 | PASS (ids, figures, code spans; other subsections untouched) |
+| A8 | `### Added` | 839-957 | 9 | 10180 | Phase 50 | ADR-0046, ADR-0061, M-B-16 | PASS (ids, figures, code spans; other subsections untouched) |
+| A9 | `### Added` | 958-989 | 2 | 2695 | Phase 50 | ADR-0061 | PASS (ids, figures, code spans; other subsections untouched) |
 
 ---
 

@@ -73,6 +73,11 @@ the MIGRATION section 10 freeze check. All rows ran on local HEAD `f72fe6acd6a56
 | 16 | Limits recorded beside row 15 (SHA `f72fe6acd6a56eab11f5d72944ee8cf8858cace2`) | Argv cap **131,072 bytes**: measured in row 15. GitHub release-body cap of **125,000 characters**: a **research figure** (RESEARCH A3, MEDIUM confidence), **not measured** in this plan. Decision budget **110,000 bytes** (about 1 KB is appended later by `finalize-release-body.sh`). Measured root body 156528 bytes exceeds all three: by 25,456 bytes over the argv cap, 46,528 bytes over the decision budget. | MEASURED vs RESEARCH figures, labelled |
 | 17 | `git diff --stat e28e43b5..HEAD -- src 'crates/*/src'` (SHA `f72fe6acd6a56eab11f5d72944ee8cf8858cace2`) | 2 files, 33 insertions, 0 deletions: `src/application/cli/config/battalion_config.rs` (25 lines, all inside `#[cfg(test)] mod tests`: one new test `cli_conclave_yaml_timeout_seconds_still_loads`) and `src/infrastructure/resilience/circuit_breaker.rs` (8 lines, all `///` rustdoc on `CircuitBreaker`). Two commits touch these paths since `e28e43b5`: `b0429436` (46-08) and `68d03cdb` (46-09). No `crates/*/src` file changed. `git rev-list --count e28e43b5..HEAD` = 98 commits in all. | no signature changed |
 | 18 | `gh api repos/DF3NDR/paladin-dev-env/actions/runs/40194317691/jobs --paginate` (the `push` `ci.yml` run on PR #59's head `2e857c6ce7e0d9f37ff5cc74def293d2d0587756`; read 2026-10-25T13:08:35Z) | **`API Surface Tracking`: `completed` / `success`** (job `121172036318`, completed 13:08:09Z): steps `Check API surface changes=success`, `Check deprecation warnings=success`, `Generate API diff on failure=skipped`. The `pull_request` run `40194322581` carried the same job `in_progress` (4 of 11 steps done) at the same read. | `success` on the PR head |
+| 19 | B-2 remedy (plan 47-02 Task 1): `cargo update -p tokio --precise 1.53.3`, then `git diff --name-only` (parent `7be8fe48`; committed as `0e1f7958976b84ac92cac7cd0a965b44c1359463`) | `Updating tokio v1.52.3 -> v1.53.3`; `git diff --name-only` printed exactly `Cargo.lock`. Package-level change: **`tokio` 1.52.3 -> 1.53.3** (checksum `8fc7f01b...` -> `ce3335fa...`); no package added or removed. Seven Windows-only dependency edges were re-pointed by the resolver to already-locked `windows-sys` entries (`errno` 0.3.14, `is-terminal` 0.4.17, `quinn-udp` 0.5.16, `rustix` 1.1.4, `rustls-platform-verifier` 0.7.0, `tempfile` 3.27.0 -> `windows-sys 0.52.0`; `nu-ansi-term` 0.50.3 -> `windows-sys 0.59.0`; each was `windows-sys 0.61.2`); none affects a Linux build. | B2=a APPLIED |
+| 20 | `cargo metadata --locked --offline --format-version 1 --no-deps` (SHA `0e1f7958976b84ac92cac7cd0a965b44c1359463`) | Exit 0. | PASS |
+| 21 | `cargo deny check` (all four checks; cargo-deny 0.20.2; SHA `0e1f7958976b84ac92cac7cd0a965b44c1359463`) | **Exit 0**: `advisories ok, bans ok, licenses ok, sources ok`. Row 6's `RUSTSEC-2026-0386` diagnostic is gone. | PASS (was exit 1, row 6) |
+| 22 | `cargo audit` (SHA `0e1f7958976b84ac92cac7cd0a965b44c1359463`) | **Exit 0**; `warning: 9 allowed warnings found` (row 7 had 10); `RUSTSEC-2026-0386` no longer appears in the output. | PASS |
+| 23 | `make check-gates` (SHA `0e1f7958976b84ac92cac7cd0a965b44c1359463`) | **Exit 0**; final lines: publish-order check `OK: 12 crate(s) checked`, and the `paladin-core (14)` / `paladin-ports (12)` dependency-set check. | PASS |
 
 **MIGRATION section 10 freeze answer (D-00n).** Rows 17-18: the public surface is unmoved since `e28e43b5` — the only two source changes are a test and rustdoc, and `API Surface Tracking` concluded `success` on PR #59's head `2e857c6ce7e0d9f37ff5cc74def293d2d0587756`. **MIGRATION section 10 stays frozen at `e28e43b5`**; nothing is put to the maintainer on this point. (Caveat recorded for plan 47-04: the `pull_request` run of the same job had not concluded at the read; the push-run conclusion is the one cited.)
 
@@ -386,3 +391,20 @@ bump; R7 by deleting the empty `[Unreleased]` anchor in the stamp commit; EMPTY 
 again before row 6, with one retry on an out-of-space abort; the stamp date equals the tag date (D-00n). No tracked
 file outside `.planning/` had changed when the decision was recorded. The authoritative copy is
 `47-01-SUMMARY.md` under `## Pre-build decision`.
+
+### 2026-10-25 — Maintainer's pre-build decision (47-01): D-08 authorisation for the B-1 and B-2 remedies (plan 47-02)
+
+This entry is the D-08 authorisation: it is written before any remedy lands. Source: `47-01-SUMMARY.md` under
+`## Pre-build decision`, maintainer reply received 2026-10-25T18:19:21Z (UTC), verbatim:
+
+> DATE=Today
+> All (a) choices
+
+One line per item, each with its effect in plan 47-02 and after:
+
+- B1=a: condense the root `CHANGELOG.md` `[Unreleased]` `### Added` then `### Changed` chunk by chunk (two commits, one ledger row per chunk) to a body of at most 110,000 bytes; the six other subsections stay byte-identical; every `M-B-`/`DR-`/`ADR-` id is preserved; the full text stays at `SHA-PRE-B1`.
+- B2=a: `cargo update -p tokio --precise 1.53.3`, `Cargo.lock` only, as its own `fix(deps)` commit before the bump (Local sweep rows 19-23).
+- R7=a: delete the empty `## [Unreleased]` anchor in the stamp commit (plan 47-03); assert `[Unreleased]` count 0 and `[0.11.0]` count 1 per changelog.
+- EMPTY=a: one line "No functional change; version bumped in lockstep with the workspace." under each of `paladin-content`, `paladin-memory` and `paladin-notifications` (plan 47-03).
+- SPACE=a: `cargo clean` before the first compile and again before row 6; an out-of-space abort is a capacity event, cleaned and re-run once; a second abort goes to the maintainer.
+- DATE=2026-10-25: the `## [0.11.0] - <DATE>` stamp equals the tag date (D-00n); merge, the merge-commit `ci.yml` run and the tag land the same calendar day or the date is re-decided.

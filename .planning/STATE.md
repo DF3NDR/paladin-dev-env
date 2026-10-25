@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 47
 current_phase_name: v0.11.0 Crate Release
 status: executing
-stopped_at: Completed 47-03-PLAN.md
-last_updated: "2026-10-25T19:06:51.342Z"
+stopped_at: Completed 47-04-PLAN.md
+last_updated: "2026-10-25T20:57:35.688Z"
 last_activity: 2026-10-25
 last_activity_desc: Phase 47 execution started
 progress:
   total_phases: 15
   completed_phases: 14
   total_plans: 174
-  completed_plans: 167
+  completed_plans: 168
 ---
 
 # Project State
@@ -43,7 +43,7 @@ delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-1
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 150/150 plans ([██████████] 96%) of the phases planned so far (38-45, 48-51);
+**Progress:** [████████████████████] 150/150 plans ([██████████] 97%) of the phases planned so far (38-45, 48-51);
 Phases 46 and 47 are not yet planned; Phase 49 closed 2026-10-14 (3/3 kept plans, 3 cancelled); Phase 50.1 sealed 2026-10-20;
 Phase 51 sealed 2026-10-23 (20/20 plans, verification `passed` 7/7, UAT 3/3, security 61/61 closed, ADR-0062); Phase 46 is next, then Phase 47.
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -63,7 +63,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 47 (v0.11.0 Crate Release) — EXECUTING
-Plan: 4 of 10
+Plan: 5 of 10
 Status: Ready to execute
 Last activity: 2026-10-25 — Phase 47 execution started
 
@@ -356,6 +356,7 @@ Last activity: 2026-10-25 — Phase 47 execution started
 | Phase 47 P01 | 1h | 3 tasks | 2 files |
 | Phase 47 P02 | 2h20m | 3 tasks | 4 files |
 | Phase 47 P03 | 50m | 3 tasks | 28 files |
+| Phase 47 P04 | 45m (final continuation) | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -645,6 +646,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 46-14: #[non_exhaustive] and PaladinError variant comments keep 9.2 (v0.10.1 register rows); muster forward rules and DR/Phase 44-50 citations retargeted to section 10
 - [Phase ?]: [Phase 47] 47-01: maintainer pre-build decision B1=a B2=a R7=a EMPTY=a SPACE=a DATE=2026-10-25 (reply 2026-10-25T18:19:21Z)
 - [Phase ?]: 47-02: B2=a applied (tokio 1.53.3, Cargo.lock only) and B1=a applied (root [Unreleased] 156528 -> 108926 bytes, SHA-PRE-B1 700a92d8); Added tightened in the Task 3 commit
+- [Phase 47]: 47-04: row 4 paladin-web and row 6 make test leg are CI-attributed by maintainer decision (D-00j halts); sign-off box stays unticked
 
 ### Pending Todos
 
@@ -870,8 +872,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-25T19:06:51.303Z
-**Stopped at:** Completed 47-03-PLAN.md
+**Last session:** 2026-10-25T20:57:35.653Z
+**Stopped at:** Completed 47-04-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

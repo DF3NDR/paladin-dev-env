@@ -817,7 +817,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 47-04-PLAN.md — Re-seal on the candidate final head: `47-ACCEPTANCE-AUDIT.md` with the eight signed rows, `make security`, unticked sign-off box (wave 4)
+- [x] 47-04-PLAN.md — Re-seal on the candidate final head: `47-ACCEPTANCE-AUDIT.md` with the eight signed rows, `make security`, unticked sign-off box (wave 4)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 

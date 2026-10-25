@@ -800,7 +800,48 @@ Plans:
   2. The release tag is cut on a `main` merge commit, per the two-SHA rule.
   3. CHANGELOG and MIGRATION.md are complete for v0.11.0, and the publish-order gate is green on
      the release run.
-**Plans**: TBD
+**Plans**: 10 plans in 10 waves (strictly sequential: one release branch, one evidence file, a hard stop at every CI or maintainer wait — D-00i / D-13)
+
+Plans:
+**Wave 1**
+
+- [ ] 47-01-PLAN.md — Preflight: open `47-CI-EVIDENCE.md`, install `cargo-release` 1.1.7, reproduce blockers B-1 (release-body size) and B-2 (`cargo deny` red on tokio RUSTSEC-2026-0386), then the maintainer's blocking six-part pre-build decision (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 47-02-PLAN.md — Maintainer-approved pre-build remedies as separate commits: B-2 lockfile pin, B-1 root `[0.11.0]` condensation (chunked, ledger, byte-identity checks) (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 47-03-PLAN.md — Build wave, three commits: `cargo release version 0.11.0`, dated changelog stamps + release-body gate, `make openapi` regen (wave 3)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 47-04-PLAN.md — Re-seal on the candidate final head: `47-ACCEPTANCE-AUDIT.md` with the eight signed rows, `make security`, unticked sign-off box (wave 4)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 47-05-PLAN.md — Push SHA-A0, retitle PR #59 and rewrite its body via REST, resume file, hard stop for CI (wave 5)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] 47-06-PLAN.md — PR CI evidence per job and coverage, push SHA-A1, maintainer tick checkpoint, tick verified on `origin` at the PR head (wave 6)
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [ ] 47-07-PLAN.md — CI on the tick commit, registry pre-flight (0.11.0 absent), one-way decision, merge + tag hand-off runbook, hard stop (wave 7)
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
+- [ ] 47-08-PLAN.md — Post-tag: tag ↔ merge-commit proof, `chore/47-close` cut, release-run evidence, sparse-index registry table (12 crates, Trusted Publishing) (wave 8)
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
+- [ ] 47-09-PLAN.md — MILESTONES.md release record, SHIP-07 tick after live registry re-read, `47-HANDOFF-web3sec.md`, folded todo update (wave 9)
+
+**Wave 10** *(blocked on Wave 9 completion)*
+
+- [ ] 47-10-PLAN.md — `47-READY-TO-CLOSE.md` against SC1–SC3, milestone-close prerequisites, push `chore/47-close` and open the docs-only PR (wave 10)
 
 ## Progress
 

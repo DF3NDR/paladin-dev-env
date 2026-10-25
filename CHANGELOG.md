@@ -7,985 +7,147 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+This root entry is condensed to fit the GitHub Release body limit (Phase 47, B-1). Full per-change detail is in each crate's `CHANGELOG.md` `[0.11.0]` section, in `MIGRATION.md` section 10, and in the uncondensed text at commit `700a92d86f3d6b2e24bbd2c163daec7c307297e0` (`git show 700a92d86f3d6b2e24bbd2c163daec7c307297e0:CHANGELOG.md`).
+
 ### Added
 
-- **`LlmPort::check_reasoning`: pre-judge a reasoning effort without sending (REASON-01, REASON-04;
-  Phase 51 plans 51-17 to 51-20, gap G-2).** A new provided method on `LlmPort`,
-  `check_reasoning(&self, model, effort: Option<ReasoningEffort>, fallback:
-  Option<ReasoningFallback>) -> Result<(), LlmError>`, returns `Ok(())` exactly when the port's
-  send-time check would admit that effort for that model (provider-level defaults included, the
-  request's or agent's value first, field by field) and otherwise the same
-  `LlmError::UnsupportedParameter` `generate` would return, with no network call. The default
-  body is the builder's earlier rule (the model's profile alone), so every implementor compiles
-  unchanged; the nine adapters, `PricingLlmAdapter`, `CadenceLlmAdapter` and `FallbackLlmAdapter`
-  override it, and a decorator should forward it as it forwards `model_profile`. Only the
-  per-request `Budget`-versus-`max_tokens` rule is not pre-judged. A conformance case on all nine
-  adapters and a 54-combination agent-host grid pin that the build, load and pre-flight verdicts
-  equal the send-time verdict. `MIGRATION.md` 10.2 and 10.8 DR-21.
+**Phase 51 — Adjustable Reasoning Effort**
 
-- **Reasoning Effort guide, decision record and live evidence (REASON-02, REASON-03, REASON-06, REASON-07;
-  Phase 51 plans 02, 10, 13, 14).** The book gains a "Reasoning Effort" page
-  (`docs/src/user-guides/reasoning-effort.md`): the values and where to set them, when a model
-  cannot honour one, the per-provider wire and per-model table (derived from the nine built
-  adapters by a drift test, so it cannot disagree with the code), and a measured `kimi-k3` effort,
-  output budget and timeout example. ADR-0062 records the exact-or-refuse policy and amends
-  ADR-0004. `live_vendor_smoke` gains `--effort` (the raw-wire probe, whose dated 2026-10-22
-  transcript seeds every model's effort data) and `--effort-smoke` (two requests per model through
-  the shipped adapter at the lowest and highest admitted level, with optional `--max-tokens` and
-  `--timeout-seconds`); the 2026-10-22 adapter-path transcript for `claude-opus-4-8`,
-  `deepseek-v4-pro` and `kimi-k3`, and the documented `llm.kimi` configuration (`low`, 16,000
-  tokens, 300 s) answering, is `.planning/phases/51-adjustable-reasoning-effort/51-EFFORT-SMOKE.md`.
-  `MIGRATION.md` gains the additive Phase 51 rows in 10.2, the six configuration keys in 10.5 and
-  DR-20 to DR-26 in 10.8; the four deliberate breaks (`CompatRequestParameters`, `PaladinData`,
-  `AgentDefinition`, `TraceEvent::NodeFinished`) carry cargo-semver-checks 0.50.0 lint ids measured
-  against the published 0.10.1. No public item changed in this entry.
-- **Requested and effective reasoning effort on the trace (REASON-05, D-11; Phase 51 plan 09).**
-  `TraceEvent::NodeFinished` carries `reasoning_requested` and `reasoning_effective`, the effort one
-  Paladin or structured-output attempt asked for and the effort it actually ran with (they differ
-  when a `reasoning_fallback` substituted a neighbouring level), as `ReasoningEffort` spellings.
-  The engine reads both from that attempt's own response metadata (`paladin.reasoning_requested`,
-  `paladin.reasoning_effective`), never from the agent's configured value. Both are `None` for a
-  function or battalion node, a cache hit, a failed attempt and any run with no effort in force;
-  a `None` pair is not serialised, so the JSON of an event with no effort is byte-identical to
-  before and a stored `run_traces` row or SSE frame that predates the fields loads with both
-  `None`.
+- `LlmPort::check_reasoning` pre-judges a reasoning effort with no network call: success exactly when the send-time check would admit it, otherwise the same `LlmError::UnsupportedParameter` `generate` returns. Every implementor compiles unchanged (REASON-01, REASON-04; DR-21).
+- Reasoning Effort guide page (`docs/src/user-guides/reasoning-effort.md`), ADR-0062 (exact-or-refuse policy, amends ADR-0004) and live evidence: `live_vendor_smoke` gains `--effort` and `--effort-smoke`; the 2026-10-22 transcript is in `.planning/phases/51-adjustable-reasoning-effort/51-EFFORT-SMOKE.md` (REASON-02, REASON-03, REASON-06, REASON-07).
+- `MIGRATION.md` gains the additive Phase 51 rows in 10.2, the six configuration keys in 10.5 and DR-20 to DR-26 in 10.8; the four deliberate breaks (`CompatRequestParameters`, `PaladinData`, `AgentDefinition`, `TraceEvent::NodeFinished`) carry cargo-semver-checks 0.50.0 lint ids measured against the published 0.10.1.
+- `TraceEvent::NodeFinished` carries `reasoning_requested` and `reasoning_effective` (the effort asked for and the effort run with), read from that attempt's own response metadata; both `None` when no effort is in force, and a `None` pair is not serialised, so older events and stored rows load unchanged (REASON-05, D-11).
+- Per-agent YAML in the `agents:` list: `reasoning_effort` (a level, `off`, `auto` or `{budget: N}`) and `reasoning_fallback` (`refuse`, `nearest_lower`, `nearest_higher`); an unknown spelling fails config load naming the field (REASON-01, REASON-04).
+- Build-time refusals name the YAML key that set the effort: an agent's own effort its model cannot honour fails at load with an error ending in the YAML key path that set it; a block default is only checked, never copied onto the agent, and a refused one names `llm.<provider>.reasoning_effort` (REASON-04).
+- Agent-level effort through `PaladinBuilder::reasoning_effort` and `reasoning_fallback` rides on every model call, beats `llm.<provider>.reasoning_effort` and yields only to the request's own; `PaladinBuilder::build` refuses an effort the model cannot honour with a `ConfigurationError` (REASON-01, REASON-04, REASON-05).
+- Fallback-chain pre-flight: `FallbackLlmAdapter::generate` / `generate_stream` resolve the effort against every hop's own profile before the first call, and the first hop that cannot honour or substitute it fails the request with `LlmError::UnsupportedParameter` naming that hop, with no hop called; `paladin.reasoning_requested` and `paladin.reasoning_effective` reach `PaladinResult.run_metadata` (plan 07; revised by plans 51-17 to 51-19).
+- Provider-level default: `llm.<provider>.reasoning_effort` and `llm.<provider>.reasoning_fallback`, plus `with_reasoning_effort` / `with_reasoning_fallback` on all nine `*Config` types and `LlmProviderConfig`; applied per request against that request's own model, always yielding to the request's own effort; no provider has a compiled-in default (REASON-01, REASON-02, REASON-04; plan 06).
+- `llm.<provider>.reasoning_wire` (`LlmProviderConfig::with_reasoning_wire`) declares the wire of `ollama` and `openai-compatible` endpoints; every other provider refuses it at construction. All nine adapters honour `LlmRequest.reasoning` exactly or refuse before any HTTP call (plans 51-03 to 51-05; REASON-02, REASON-04). Additive: every touched type is `#[non_exhaustive]`.
+- The five OpenAI-compatible presets (Kimi, Qwen, Grok, Ollama, generic OpenAI-compatible) declare their wire and send `LlmRequest.reasoning` in exactly that field or refuse before HTTP; `OllamaConfig` and `OpenAiCompatibleConfig` gain `reasoning_wire` and `with_reasoning_wire(ReasoningWire)`; an unset effort leaves every wire body byte-identical (REASON-02, REASON-03, REASON-04; plan 04).
+- DeepSeek and OpenAI honour effort exactly or refuse before any HTTP call and before any retry: new module `paladin_llm::reasoning` with `ReasoningWire`; `ModelOverride` gains `effort: Option<EffortSupport>` (YAML `llm.<provider>.models.<model-id>.effort`), validated at adapter construction; a substituting `ReasoningFallback` logs one `warn!` (REASON-02 to REASON-06; plan 03).
+- Provider-neutral vocabulary: `ReasoningEffort` (`Off`, `Auto`, `Minimal`, `Low`, `Medium`, `High`, `XHigh`, `Max`, `Budget(u32)`) and `ReasoningFallback` (`Refuse` by default, `NearestLower`, `NearestHigher`); `LlmRequest` gains `reasoning` and `reasoning_fallback` (REASON-01, REASON-02, REASON-04, REASON-06; plan 01).
+- One admission rule and the first typed refusal: `ModelProfile` gains `effort: EffortSupport` (fail closed: `Unmeasured`) and `effort_verified_on`; `LlmError::UnsupportedParameter` is what an effort the model cannot honour produces before any HTTP call. Additive; every touched type is `#[non_exhaustive]`, and the nine raw request bodies an unset effort produces are pinned byte for byte.
 
-- **Reasoning effort per agent in YAML (REASON-01, REASON-04; Phase 51 plan 08).** An agent in the
-  `agents:` list takes `reasoning_effort` (a level, `off`, `auto` or `{budget: N}`) and
-  `reasoning_fallback` (`refuse`, `nearest_lower`, `nearest_higher`). The agent host passes both to
-  `PaladinBuilder::reasoning_effort` / `reasoning_fallback`, so every model call the agent makes
-  carries them (request, then agent, then `llm.<provider>.reasoning_effort`). An unknown spelling
-  fails config load naming the field, and an agent that sets neither builds today's agent.
+**Phase 50.1 — Consumer-Surface Readiness for v0.11.0**
 
-- **Build-time refusals name the YAML key that set the effort (REASON-04; Phase 51 plan 08).** An
-  agent whose own `reasoning_effort` its model cannot honour fails at load with an error ending
-  in ``(set by `agents[<id>].reasoning_effort`)``. An agent that sets none, under a provider block
-  that sets `llm.<provider>.reasoning_effort`, has the block's value checked against the agent's
-  own model at build time (with the block's `reasoning_fallback`, else the agent's); a value the
-  model cannot honour, or a model nobody has measured, fails the agent naming
-  `llm.<provider>.reasoning_effort`. The block's value is only checked: it is never copied onto
-  the agent, so the adapter still applies it below the agent's own value. An agent and block that
-  set no effort build exactly as before.
+- `with_base_url` and `with_timeout_seconds` on all nine adapter configs (`OpenAIConfig`, `AnthropicConfig`, `DeepSeekConfig`, `GeminiConfig`, `KimiConfig`, `QwenConfig`, `GrokConfig`, `OllamaConfig`, `OpenAiCompatibleConfig`): the credential header goes wherever `with_base_url` points, so point it only at a trusted endpoint; redirects are never followed and the value must be `http` or `https` (SURFACE-02, D-05).
+- `with_timeout_seconds` replaces the constructor default (300 s for a seeded reasoning model); the last call wins and an explicit value beats the reasoning default. Also `paladin_llm::deepseek::adapter::DEEPSEEK_DEFAULT_BASE_URL`.
+- Pacing-only composition through the facade: `paladin::infrastructure::cadence::with_cadence` and `paladin::infrastructure::cadence::CadenceWiring` are public re-exports beside `build_cadence` and `compose_llm`, so a consumer that builds adapters directly can pace without pricing; MIGRATION.md section 10.8 gains the matching consumer-guide entries, including M-B-05 (SURFACE-05, SURFACE-04, D-13).
+- The Aegis family through the facade: five whole-module re-exports resolve at the same path as in the core crate (`paladin::core::platform::container::aegis` and four siblings), and `paladin::prelude` also names `Aegis`, `ErrorHandlerSpec`, `TimeoutPolicy`, `StateDelta`, `NodeError`, `NodeErrorSource`, `TimeoutKind`, `NodeId` and `Transience`, so DR-1, DR-2, DR-8 and DR-9 need no direct core-crate dependency (SURFACE-01, D-01, D-02).
+- Seeded profiles for the current model range: 51 models gain a dated `SeededProfile` row from the operator's live probe of 2026-10-20 (ten Anthropic, one DeepSeek, nine Gemini, 17 OpenAI, 11 Qwen, three Grok ids, among them `claude-opus-4-8` and `deepseek-v4-pro`). Not seeded: the four OpenAI pro-tier ids, `gemini-2.5-*` and the rate-limited or struck ids; `grok-4.7` is seeded under a recorded exception (its range stops at 1.99) (SURFACE-06, D-14, D-15).
+- Behaviour for a seeded model (MIGRATION.md section 10.8): an explicit parameter its profile does not admit, or a `max_tokens` above its seeded maximum output, is refused at build; `paladin.unprofiled_model` is no longer stamped; a direct `new` defaults a seeded reasoning model to 300 s; `AnthropicConfig::new` still sends `max_tokens` 4,096; `Commissary::for_model` rations against its seeded window; the OpenAI `max_completion_tokens` key is now also measured on the 17 new OpenAI ids (ADR-0061).
+- The consumer-surface muster, `tests/consumer_surface_muster.rs`, pins the surfaces a downstream consumer builds and matches (the `with_aegis` / `node_errors` round trip, `DeepSeekConfig::new` and `AnthropicConfig::new`, `Commissary::for_model`, `PaladinBuilder`, wildcard-free matches on `FinishReason` and `ArsenalError`); it runs in CI as the `consumer-surface` job (`Consumer-Surface Muster`), which fails if it ran no test (SURFACE-03, D-09, D-10, D-11).
 
-- **Reasoning effort: the agent level, a build-time refusal and a fallback-chain pre-flight
-  (REASON-01, REASON-04, REASON-05; Phase 51 plan 07).** `PaladinBuilder::reasoning_effort` and
-  `reasoning_fallback` set a per-agent default that rides on every model call the Paladin makes: it
-  beats `llm.<provider>.reasoning_effort` and yields only to an effort a request carries itself
-  (request, agent, provider default, vendor default). `PaladinBuilder::build` refuses an effort
-  the model cannot honour with a `ConfigurationError` naming the provider, the model,
-  `reasoning_effort`, the value and the reason, and refuses an explicit effort on a port that
-  reports no model profile (nothing was measured); for a `FallbackLlmAdapter` the check runs hop
-  by hop, each hop against its own model and its own provider-level defaults (revised by plans
-  51-17 to 51-19; this entry first described a check against the chain's intersected profile).
-  At send time `FallbackLlmAdapter::generate` / `generate_stream` resolve the request's effort
-  against every hop's own profile before the first call: the first hop, in chain order, that
-  cannot honour or substitute it fails the whole request with `LlmError::UnsupportedParameter`
-  naming that hop, and no hop is called. A reached hop sends its own resolution, and `paladin.reasoning_requested` /
-  `paladin.reasoning_effective` survive the chain's `served_by` / `served_model` stamping on both
-  paths and reach `PaladinResult.run_metadata` (latest call wins). An agent that sets nothing
-  builds today's request.
+**Phase 50 — Provider Parity & Configuration-Driven Model Swap**
 
-- **Reasoning effort: a provider-level default beneath every request, and the self-hosted wire in
-  YAML (REASON-01, REASON-02, REASON-04; Phase 51 plan 06).** All nine adapters now honour
-  `LlmRequest.reasoning` either exactly or by refusing before any HTTP call with
-  `LlmError::UnsupportedParameter` (plans 51-03 to 51-05: OpenAI and DeepSeek `reasoning_effort`,
-  Anthropic `output_config.effort` with the profile-gated `thinking` budget form, Gemini
-  `thinkingConfig`, and the five compat presets). New: `llm.<provider>.reasoning_effort` (a level,
-  `off`, `auto` or `{budget: N}`) and `llm.<provider>.reasoning_fallback` (`refuse`,
-  `nearest_lower`, `nearest_higher`), also `with_reasoning_effort` / `with_reasoning_fallback` on
-  all nine `*Config` types (and the public `reasoning_effort` / `reasoning_fallback` fields) and on
-  `LlmProviderConfig`. The default is applied per request against that request's own model and
-  always yields to the request's own effort; with neither set the wire body is unchanged, and no
-  provider has a compiled-in default. A refused default names `llm.<provider>.reasoning_effort`.
-  `llm.<provider>.reasoning_wire` (`LlmProviderConfig::with_reasoning_wire`) declares the wire of
-  `ollama` and `openai-compatible` endpoints; every other provider refuses it at construction
-  (named vendors change their wire only through a Paladin release). There is no environment
-  variable for any of the three keys. Additive: every touched type is `#[non_exhaustive]`.
+- The bill of a billed-but-failed call rides on the error: `paladin_ports::output::llm_port::BilledUsage { model, usage, cost }` (`#[non_exhaustive]`), the constructors `LlmError::empty_completion(detail)` and `LlmError::refusal(provider, model, detail)`, and the writer and reader `LlmError::with_billed_usage(billed)` and `LlmError::billed_usage()`; the variant shape change is under Breaking Changes (G-50-5a, PARITY-05; plans 50-25, 50-26).
+- Attempt spend scope: a Battalion attempt is charged for every call it made, however it ends. `IncurredSpend` is carried in a task-local beside the run trace emitter; a failed or timed-out attempt's `NodeFinished` carries that spend, the superstep settle charges it once per attempt, and a successful Paladin attempt is never double counted. Additive (G-50-5a remainder (b), PARITY-05; plan 50-29).
+- Hopped-past fallback bills are settled with the call: when a `FallbackLlmAdapter` hops past an error the vendor billed (a `Refusal` under `hop_on_refusal(true)`), `PricingLlmAdapter` prices the hop's `BilledUsage` against the hop's own model and the call settles in ONE ledger row under the existing `(run_id, ordinal, 1)` key with a per-model `model_breakdown` (ADR-0053 section 4); a chain that runs out (`AllProvidersFailed`) settles every billed hop the same way (G-50-5a remainder (a), PARITY-05, PARITY-06; plan 50-30).
+- Plan 50-32 adds `HoppedBills::install_pricer` (the first pricer installed wins) and `HoppedBills::count_and_take`; a hop bill is priced and counted into the attempt spend scope at its hop and not counted again at settlement.
+- Usage reconciliation: the five OpenAI-compatible presets parse the vendor's own `total_tokens` and compare it with the mapped `prompt_tokens + completion_tokens`, and check reasoning against `completion_tokens` and cache reads plus writes against `prompt_tokens`; a finding is never repaired, only logged once per adapter instance per (model, check) and recorded under `paladin.usage_unreconciled` (`USAGE_UNRECONCILED_METADATA_KEY`), token counts only; plan 50-23 extended it to the four bespoke adapters (G-50-5a; plan 50-21).
+- Per-model parameter support (PARITY-02; plan 50-02; ADR-0061, amends ADR-0004): `paladin-ports` gains `ModelProfile`, `ParamSupport`, `StopSupport` and `SamplingParam`, and the defaulted `LlmPort::model_profile(&self, model: &str) -> Option<ModelProfile>` returning `None`, so every existing implementor compiles unchanged. `ParamSupport::admits` is the single admission rule (no clamping, `NaN` never admitted); `PricingLlmAdapter`, `CadenceLlmAdapter` and `FallbackLlmAdapter` forward `model_profile`. Additive only.
+- Wire-time sampling filter (PARITY-02, PARITY-04, PARITY-05; plan 50-03; ADR-0061): `sampling::apply` is the one filter every request builder calls; a set parameter reaches the wire only when the model's `ModelProfile` admits it, and any other set value is omitted, never clamped, defaulted or swapped. Every omission is visible: one `warn!` per adapter instance per (model, parameter) and `paladin.params_omitted` on the buffered `LlmResponse`.
+- Two more metadata keys and the model registry core: `paladin.response_format_adjusted` (`json_object` or `omitted`) records a `response_format` the profile could not honour, and `paladin.unprofiled_model` records a model with neither a seeded entry nor an override (never a refusal); `registry::ModelOverride` (`deny_unknown_fields`) is the per-model operator statement, laid over the seeded entry field by field. Owner reading R-1 (option-b, plan 50-18) carried the keys onto the stream's terminal chunk.
+- The dated per-model registry is seeded from a live probe (PARITY-04; plan 50-06; D-05/D-08): `paladin-llm` gains one dated table per vendor (Anthropic, OpenAI, DeepSeek, Kimi, Qwen, Grok, Gemini, Ollama), every value tracing to the operator's live seed probe of 2026-10-15; a listed model gets its measured facts and its `verified_on` date, and any other model runs on the adapter-wide fallback, visibly unprofiled. Ollama's table is empty because the probe skipped it. New public constants `ANTHROPIC_DEFAULT_MODEL` and `DEEPSEEK_DEFAULT_MODEL`.
+- The Commissary and the HistoryTrimmer ration against the model's own window (PARITY-04; plan 50-07; ADR-0061, D-05): paladin_llm::window::effective_capabilities returns the port's `ProviderCapabilities` with `max_context_tokens` replaced by the model profile's `context_window` when it has one, and `Commissary::for_model(port, model, counter, plan)` builds a Commissary over it, so `kimi-k3` is rationed against its seeded 1,048,576-token window instead of the adapter-wide 262,144. The `HistoryTrimmer` resolves its limit the same way; `Commissary::new` and `Commissary::from_port` are unchanged.
+- Configuration knobs on every adapter config (PARITY-03; plan 50-08; D-12): each of the nine `paladin-llm` adapter configs carries `max_tokens` (the default output budget sent when a request sets none), `max_retries`, `context_window` (an adapter-wide window override) and `model_overrides` (a `BTreeMap<String, ModelOverride>`), with the `#[must_use]` builders `with_max_tokens`, `with_max_retries`, `with_context_window` and `with_model_overrides`. An invalid override or a window below a model's maximum output fails adapter construction naming the provider and model. The configs that hold a key (all but `OllamaConfig`) now print it as `<redacted>` from `Debug`. Every existing `new`, `from_env` and `from_parts` signature is unchanged.
+- Config-driven provider construction (PARITY-03; plan 50-09; D-12, D-13): `LlmProviderFactory::create_from_config(&LlmConfig, provider, model)` builds any of the nine adapters from its `llm.<provider>` block, which gains `max_tokens`, `context_window` and `models.<model-id>` (all optional, so every existing YAML file loads to the same values). Each input comes from the most specific statement that sets it: per-agent model, then the block, then the provider's legacy environment variables, then the compiled default; an environment variable never overrides a value written in the block. A seeded or overridden reasoning model gets a 300 s timeout when neither sets one.
+- `api_key` may be empty or an exact `${NAME}` placeholder; `abc${X}` and `$X` are used literally and an unset placeholder variable is a construction error, never sent to the vendor. Every error names the provider, the model and the variable tried, never a key value, and a malformed model id (empty, whitespace or control characters, `..`, `?`, `#`, `%`, a leading `/`, over 256 characters) is refused before any adapter is built.
+- The facade exports all nine adapter/config pairs and the `llm:` config types (PARITY-03; plan 50-10; D-14, D-00f): `paladin` re-exports the Kimi, Qwen, Grok, Gemini, Ollama and OpenAI-compatible adapter/config pairs behind their existing `llm-*` features, and `LlmConfig`, `LlmProviderConfig` and `ModelOverride` unconditionally; ADR-0046's default features are unchanged (`llm-openai`, `llm-anthropic`, `llm-deepseek`). `FacadeProvisioner::with_llm_config` carries the operator's `llm:` section to runtime-provisioned agents.
+- Typed reasoning text and a constructor for `LlmResponse` (PARITY-05; plan 50-11; D-11): `StreamingResponse` gains `reasoning: Option<String>` (additive: `#[non_exhaustive]`) and the chainable `StreamingResponse::with_reasoning`; `LlmResponse` gains `LlmResponse::new(request_id, model, content, finish_reason, usage)`, leaving the other fields neutral, and the chainable `LlmResponse::with_reasoning`. Both store `None` for text that is empty after trimming; reasoning is a typed field, never `metadata`.
+- `LlmError::Refusal` (PARITY-05; plan 50-12; D-09, D-11, D-11a): `LlmError` gains `Refusal { provider, model, detail }`, a vendor's own refusal: permanent (never retried), distinct from a `ContentFilter` finish and from an empty answer; `detail` is the vendor text with credentials removed first and then bounded to 512 characters. The Kimi, Qwen, Grok, Ollama and OpenAI-compatible presets and OpenAI report it.
+- Reasoning and cache-write tokens: the compat presets and DeepSeek fill `LlmResponse.reasoning` and each streamed `StreamingResponse.reasoning` from `reasoning_content`, and the compat presets map `prompt_tokens_details.cache_write_tokens` into `TokenUsage.cache_write_tokens`. Every `LlmError` classifier (`transience`, `typed_origin`, `llm_error_class`, `classify_fetch_failure`) names the new variant. `MIGRATION.md` 10.1 M-B-16.
+- A fallback chain can send each hop its own model (PARITY-06; plan 50-14; D-15, D-10, D-00h): `FallbackStep { port, model }` and `FallbackLlmAdapter::from_steps(Vec<FallbackStep>)` build a chain whose every hop is sent its own model, on `generate` and `generate_stream`, and that model is what the hop is paced under, so a 429 on hop 1 gates `(hop-1 provider, hop-1 model)` only. `FallbackLlmAdapter::new` is unchanged. Every served response records the serving hop's model under `paladin.served_model` beside `paladin.served_by`.
+- `FallbackLlmAdapter::hop_on_refusal(bool)` (default `false`) is the explicit opt-in to trying the next step when a hop answers `LlmError::Refusal`; every other permanent error still stops the chain. `FallbackChainError::EmptyStepModel { index }` rejects an empty step model at construction.
+- `agent_runtime.model_fallback.steps` (PARITY-06; plan 50-14; D-15): the configuration path sends each fallback hop its own model too, `steps: [{provider, model}]` resolved through `LlmProviderFactory::create_from_config` against the new `AgentRuntimeDeps.llm_config` and built with `ModelFallbackMiddleware::from_steps` / `paced_steps` (names only, never a credential). It is mutually exclusive with `providers` (a validation error naming both keys); a `providers`-only configuration builds as before. `MIGRATION.md` 10.5.
+- `PaladinResult.run_metadata` carries the run's `paladin.*` visibility keys (PARITY-02; plan 50-18; ADR-0061 (h), owner reading R-1 = `option-b`): the keys every model call stamped (`paladin.params_omitted`, `paladin.unprofiled_model`, `paladin.response_format_adjusted`, `paladin.served_model`), so an omitted `auto_temperature`, an unprofiled model or a fallback hop is visible on the result without scraping logs. A key without the `paladin.` prefix is never copied; an empty map is absent from the serialised JSON, so a payload written before this field existed is byte-identical; `paladin-web`'s `ExecuteResponse` is not extended.
+- Streamed calls carry the same visibility keys on their terminal chunk (PARITY-02; plan 50-18; ADR-0061 (h), owner reading R-1 = `option-b`): `StreamingResponse` gains `metadata: HashMap<String, String>` (additive: `#[non_exhaustive]`; empty and then absent from the serialised JSON). The compat engine, OpenAI, DeepSeek, Anthropic and Gemini stamp the keys their buffered path stamps (`paladin.params_omitted`, `paladin.unprofiled_model`, `paladin.response_format_adjusted`) on the terminal chunk only; an `Err` terminal item (refusal, empty completion) carries none, and a `FallbackLlmAdapter` stream names the serving hop with `paladin.served_by` and `paladin.served_model`.
+- `ChunkMetadata` gains `run_metadata: BTreeMap<String, String>` and `ChunkMetadata::with_run_metadata`, populated by the same merge rule as `PaladinResult.run_metadata`; the SSE `done` event of `paladin-web` is not extended.
+- The Switching providers page, its drift test, the widened live smoke and the 17-case conformance suite (PARITY-07, PARITY-01, PARITY-08; plans 50-01, 50-04, 50-15, 50-16): `docs/src/user-guides/switching-providers.md` explains the configuration-only swap, the library path, the ADR-0061 parameter policy, the window precedence, the 300 s reasoning default and fallback chains, with per-provider tables for all nine providers; the registry test `switching_providers_page_lists_every_seeded_model` fails when the page and the seeded tables disagree. `tests/provider_swap_matrix.rs` runs one agent definition against all nine providers built from an `llm.<provider>` block (50 cases, none ignored); the shared conformance suite grew from ten to seventeen cases and now measures all nine adapters, Anthropic included.
+- The `live_vendor_smoke` example covers all nine providers, credential-gated (`SKIPPED` for an absent credential, never a pass), with `--probe`, `--models` and `--dry-run`. Test and example surface only; no public API change.
 
-- **Reasoning effort: the five OpenAI-compatible presets declare their wire and map it exactly
-  (REASON-02, REASON-03, REASON-04; Phase 51 plan 04).** Kimi, Qwen, Grok, Ollama and the generic
-  OpenAI-compatible adapter share one engine that now sends `LlmRequest.reasoning` in exactly the
-  field the preset declares, or refuses with `LlmError::UnsupportedParameter` before any HTTP call.
-  `top_level_effort`: a level as `reasoning_effort`, `off` as `"none"`, `auto` sends nothing.
-  `thinking_object`: `thinking: {type, effort}` (`disabled` for `off`, `enabled` for `auto`).
-  `enable_thinking`: the switch plus `thinking_budget`, bounded by the model's budget span. No wire
-  ever sends a second wire's field. Starting positions: Kimi `thinking_object` (the handoff's
-  measured form, restated by the dated probe), Qwen `enable_thinking`, Grok, Ollama and
-  OpenAI-compatible `unsupported`. `OllamaConfig` and `OpenAiCompatibleConfig` gain
-  `reasoning_wire` and `with_reasoning_wire(ReasoningWire)` so an operator can declare the field a
-  self-hosted endpoint parses (default `unsupported`; an explicit effort also needs the model's
-  `effort` override). A refused effort is a configuration statement, never a model-list fetch
-  condition. An unset effort leaves every wire body byte-identical.
-- **Reasoning effort: DeepSeek and OpenAI honour it exactly or refuse before HTTP
-  (REASON-02 to REASON-06; Phase 51 plan 03).** New module `paladin_llm::reasoning` with
-  `ReasoningWire` (`unsupported`, `top_level_effort`, `thinking_object`, `enable_thinking`) and the
-  re-exported keys `paladin.reasoning_requested` / `paladin.reasoning_effective`. `ModelOverride`
-  gains `effort: Option<EffortSupport>` (YAML `llm.<provider>.models.<model-id>.effort`), validated
-  at adapter construction (levels only, strictly ascending, no duplicates, disjoint from `coerced`,
-  budget `1 <= min <= max`) with an error naming `effort`. `DeepSeekAdapter` and `OpenAIAdapter`
-  send `LlmRequest.reasoning` exactly (DeepSeek: `reasoning_effort` plus the `thinking` switch;
-  OpenAI: top-level `reasoning_effort`, `none` for `off`) or return `LlmError::UnsupportedParameter`
-  before any HTTP call and before any retry, naming the provider, model, effort and the override
-  key that would unlock the model. A budget cannot reach either wire, and a `Budget(n)` must stay
-  below the effective `max_tokens`. A substituting `ReasoningFallback` logs one `warn!` (target
-  `paladin::reasoning`) per adapter instance, model and pair of values, and every response (and a
-  stream's terminal chunk) carries both metadata keys; an unset effort changes no wire byte and
-  stamps nothing. No model is seeded with effort data yet, so only an override unlocks an explicit
-  effort until the dated probe lands.
-- **Reasoning effort: the provider-neutral vocabulary, the one admission rule and the first
-  typed refusal (REASON-01, REASON-02, REASON-04, REASON-06; Phase 51 plan 01).**
-  `ReasoningEffort` (`Off`, `Auto`, `Minimal`, `Low`, `Medium`, `High`, `XHigh`, `Max`,
-  `Budget(u32)`) and `ReasoningFallback` (`Refuse` by default, `NearestLower`, `NearestHigher`)
-  in `paladin::core::platform::container::reasoning`, re-exported on
-  `paladin_ports::output::llm_port`. `LlmRequest` gains `reasoning` and `reasoning_fallback`
-  (both `None` from `LlmRequest::new`, set by `with_reasoning` / `with_reasoning_fallback`, absent
-  from a serialised unset request). `ModelProfile` gains `effort: EffortSupport` (fail closed:
-  `Unmeasured`) and `effort_verified_on`, with `EffortSupport::resolve` as the single admission
-  rule and `EffortSupport::intersect` for fallback chains. `LlmError::UnsupportedParameter`
-  (`param`, `value`, `provider`, `model`, `reason`; built by `LlmError::unsupported_parameter`;
-  `Permanent`) is the refusal an effort the model cannot honour produces before any HTTP call.
-  Additive: every touched type is `#[non_exhaustive]`. No adapter sends an effort yet; the nine
-  raw request bodies an unset effort produces are pinned byte for byte under
-  `crates/paladin-llm/tests/golden/reasoning_unset/` by the conformance case
-  `unset_reasoning_leaves_the_wire_body_unchanged`.
+**Phase 49 — Downstream Adoption of v0.10.1**
 
-- **`with_base_url` and `with_timeout_seconds` on all nine adapter configs (SURFACE-02, D-05;
-  Phase 50.1 plan 02).** `OpenAIConfig`, `AnthropicConfig`, `DeepSeekConfig`, `GeminiConfig`,
-  `KimiConfig`, `QwenConfig`, `GrokConfig`, `OllamaConfig` and `OpenAiCompatibleConfig` gain the
-  `#[must_use]` builders, generated by the one `config_knob_builders!` macro. `with_base_url`
-  replaces the vendor endpoint the constructor chose: the credential header goes wherever it
-  points, so point it only at a trusted endpoint; redirects are never followed and the value is
-  checked `http` or `https` when the adapter is built. `with_timeout_seconds` replaces the
-  constructor's default (300 s for a seeded reasoning model, the provider's own otherwise), the
-  last call wins and an explicit value always beats the reasoning default. Also
-  `paladin_llm::deepseek::adapter::DEEPSEEK_DEFAULT_BASE_URL`.
-- **Pacing-only composition through the facade (SURFACE-05, D-13; Phase 50.1 plan 01).**
-  `paladin::infrastructure::cadence::with_cadence` and `paladin::infrastructure::cadence::CadenceWiring`
-  are now public re-exports beside `build_cadence` and `compose_llm`. A consumer that builds adapters
-  directly and wants rate pacing without pricing builds one wiring with `build_cadence` and wraps each
-  adapter with `with_cadence`; the module's "Pacing only" doc test shows it through `paladin::` paths
-  alone, with no pricing table. MIGRATION.md section 10.8 gains the matching consumer-guide entries
-  (SURFACE-04): the pre-`v0.10.0` pointer list, the no-pacing-for-a-directly-built-adapter row (M-B-05),
-  the `LlmPort::model_profile` forwarding rule for a consumer's own decorator, and the
-  adapter-wide context-window consequence.
-- **The Aegis family through the `paladin` facade (SURFACE-01, D-01, D-02; Phase 50.1 plan 01).**
-  Five whole-module re-exports resolve at the same path as in the core crate:
-  `paladin::core::platform::container::aegis`, `paladin::core::platform::container::battlefield`,
-  `paladin::core::platform::container::node_error`, `paladin::core::platform::container::transience`
-  and `paladin::core::platform::container::waypoint`. `paladin::prelude` also names `Aegis`,
-  `ErrorHandlerSpec`, `TimeoutPolicy`, `StateDelta`, `NodeError`, `NodeErrorSource`, `TimeoutKind`,
-  `NodeId` and `Transience`. A consumer no longer needs a direct core-crate dependency for the
-  MIGRATION.md section 10.8 rows DR-1, DR-2, DR-8 and DR-9. Purely additive; the consumer-surface
-  muster pins both forms.
-- **Seeded profiles for the current model range (SURFACE-06, D-14, D-15; Phase 50.1 plans 08 and
-  09).** 51 models gain a dated `SeededProfile` row from the operator's live probe of 2026-10-20
-  (`50.1-SEED-PROBE.md`, two runs at commit `8ad298dd`; the 2026-10-15 rows are untouched):
-  ten Anthropic, one DeepSeek, nine Gemini, 17 OpenAI, 11 Qwen and three Grok ids, among them
-  `claude-opus-4-8` and `deepseek-v4-pro` (the two models web3sec runs, so a call to either carries
-  no `paladin.unprofiled_model`).
-  The full per-model list, with every value, is the Switching providers page. Every value is a probe
-  outcome, a listing field or the operator's dated vendor-docs evidence; an OpenAI or Qwen window or
-  maximum output the docs did not state stays unset. Not seeded: the four OpenAI pro-tier ids (their
-  default call answered 404 on chat completions; they need the Responses API), `gemini-2.5-*`, and
-  the rate-limited or struck ids the page lists. `grok-4.7` is seeded under a recorded exception:
-  its `temperature=2.00` probe failed at the vendor identically in both runs, so its range stops at
-  1.99. Behaviour for a model that gains a row (MIGRATION.md section 10.8, "Models seeded in Phase
-  50.1."): an explicit parameter its profile does not admit, or a `max_tokens` above its seeded
-  maximum output, is refused at build naming provider, model and parameter; `paladin.unprofiled_model`
-  is no longer stamped; Anthropic and DeepSeek `validate_model` and `get_available_models` include
-  it; a direct `new` defaults a seeded reasoning model to 300 s; `AnthropicConfig::new` still sends
-  `max_tokens` 4,096; `Commissary::for_model` rations against its seeded window. The OpenAI adapter's
-  `max_completion_tokens` key is now also measured on the 17 new OpenAI ids (ADR-0061 limit (5)).
-- **The consumer-surface muster covers the surfaces a downstream consumer builds and matches
-  (SURFACE-03, D-09, D-10, D-11; Phase 50.1 plans 03 and 06).** `tests/consumer_surface_muster.rs`
-  pins the `with_aegis` / `node_errors` round trip, `DeepSeekConfig::new` and `AnthropicConfig::new` in
-  the `(api_key, model)` shape with the builder chain, the `LlmError` rate-limit and usage-limit
-  arms, `Commissary::for_model` / `dispense` / `verify_fits`, the `MockLlmAdapter` builders,
-  `PaladinBuilder`, the streamable-HTTP MCP client, `PromptItem::parameters`, the four-field
-  `Armament` literal, and exhaustive wildcard-free matches on `FinishReason` and `ArsenalError`. It
-  runs in CI as the `consumer-surface` job (`Consumer-Surface Muster`), which fails if it ran no test.
-- **The bill of a billed-but-failed call, on the error (G-50-5a, PARITY-05; Phase 50 plans 50-25
-  and 50-26).** `paladin_ports::output::llm_port::BilledUsage { model, usage, cost }`
-  (`#[non_exhaustive]`; `BilledUsage::new(model, usage)`, `with_cost(cost)`), the constructors
-  `LlmError::empty_completion(detail)` and `LlmError::refusal(provider, model, detail)`, and the
-  bill's writer and reader `LlmError::with_billed_usage(billed)` and `LlmError::billed_usage()`
-  (which looks through `AllProvidersFailed` to its last error). Each has a doc example. The
-  variant shape change they go with is under *Breaking Changes*; the spend-scope items
-  (`IncurredSpend`, `paladin_ports::output::spend_scope`) are the two entries below.
+- Consumer-surface muster and library-consumer upgrade note (ADOPT-04, ADOPT-05; plans 49-01, 49-02): `tests/consumer_surface_muster.rs`, a compile-only integration test (`[[test]] consumer_surface_muster`, `required-features = ["llm-anthropic", "llm-deepseek"]`), pins every path, signature, struct shape and trait the downstream consumer takes from Paladin; `make check-consumer-surface` runs it and is not part of `check-gates`. MIGRATION.md section 10.8 gains `### Library consumers: v0.10.1 → v0.11.0` with an eleven-item break list, each item pointing at its existing §10.2 row; no library API, §10.2 row or allowlist entry changes.
 
-- **Attempt spend scope: a Battalion attempt is charged for every call it made, however it
-  ends** (G-50-5a remainder (b), PARITY-05; Phase 50 plan 50-29). `paladin_core::platform::container::cost::IncurredSpend`
-  (the usage, `CostTally` cost and call count an operation has incurred so far) and
-  `paladin_ports::output::spend_scope::{SpendScope, ATTEMPT_SPEND, record_incurred_spend,
-  current_attempt_spend}`, a `tokio::task_local!` following `RUN_TRACE_EMITTER`. The superstep
-  engine installs a fresh scope around every attempt (outside the attempt future, so a deadline-
-  or idle-dropped attempt still reports what it spent); `PaladinExecutionService` records every
-  buffered call, every billed failure, every structured call including each repair, and the
-  streamed terminal chunk or billed stream error (the scope is captured before the spawn and
-  re-installed in the forwarding task). A failed or timed-out attempt's `NodeFinished` now carries
-  that spend and the superstep settle charges it once per attempt; a structured attempt reports
-  the sum of every repair call rather than only the last call's `raw` figures; a successful
-  Paladin attempt still reports `PaladinResult.cost` and is never double counted. Additive: no
-  `PaladinError` or other public type changes shape, and the scope holds `TokenUsage` and `Cost`
-  only.
+**Phase 43 — Rate Pacing**
 
-- **Hopped-past fallback bills are settled with the call** (G-50-5a remainder (a), PARITY-05,
-  PARITY-06; Phase 50 plan 50-30). `paladin_ports::output::spend_scope::{HoppedBills, HOPPED_BILLS,
-  record_hopped_bill}`: a per-call collector beside `ATTEMPT_SPEND`. When a `FallbackLlmAdapter`
-  hops past an error the vendor billed (a `Refusal` under `hop_on_refusal(true)`), it records that
-  hop's `BilledUsage`; `PricingLlmAdapter`, outside the chain, prices it against the hop's own model
-  on both paths; and `PaladinExecutionService`, which installs a fresh collector around every model
-  call (all retries, buffered and streamed), folds each hop bill into the run's usage, cost and the
-  attempt spend scope and settles the call's priced parts in ONE ledger row under the call's
-  existing `(run_id, ordinal, 1)` key, with a per-model `model_breakdown` (ADR-0053 section 4). A
-  chain that runs out (`AllProvidersFailed`) settles every billed hop the same way, including on an
-  early `generate_stream` error, which `PricingLlmAdapter` now prices against its bill's own model.
-  A call with no hop bill settles exactly the one-part row it did before. A billed hop with no
-  collector installed (a direct `LlmPort` caller) is warned once per (provider, model) under
-  `paladin::usage`, token counts only. Additive: no public type changes shape. Plan 50-32 adds
-  `HoppedBills::install_pricer` (the first pricer installed wins; `PricingLlmAdapter` installs its
-  own before it delegates) and `HoppedBills::count_and_take`; a hop bill is priced and counted
-  into the attempt spend scope at its hop, and the service settles it without counting it again.
+- The Cadence (PACE-02; plan 43-01): a new `CadencePort` output port (`paladin-ports`), the in-process `InMemoryCadence` (`paladin-storage`) and the `CadenceLlmAdapter` decorator (`paladin-llm`), composed as `Pricing(Cadence(provider))` on every agent the server builds from configuration or provisions at runtime. A provider 429 gates later calls to that provider and model for an exponential back-off with full jitter (500 ms to 30 s); the decorator never retries. On by default, configured under `treasurer.cadence` (`enabled: false` restores the previous behaviour); the OpenAI adapter now surfaces its first 429 instead of retrying it inside its own loop.
+- New public surface of plan 43-01: `CadencePort`, `CadenceKey`, `GateReading`, `CadenceError`, `CadencePolicy` (ports), `InMemoryCadence` (storage), `CadenceLlmAdapter`, `CadenceSettings`, `CadenceWiring`, `with_cadence` (llm), `CadenceConfig`, `CadenceBackend`, `build_cadence`, `compose_llm` and `TreasurerConfig.cadence` (facade).
+- Plan 43-05 hardens it: streaming calls (`generate_stream`) are paced exactly like buffered ones; the callers one gate releases are spread by up to `min(wait / 10, 1 s)`, never below a provider's explicit delay; `InMemoryCadence` holds at most `DEFAULT_KEY_CAPACITY` (4096) keys, configurable with `InMemoryCadence::with_capacity`; a shared contract suite, `paladin_storage::cadence::contract_tests`, holds every adapter to the same rules; `rand` is now a required dependency of `paladin-llm`.
+- Plan 43-06, fallback chains pace first and hop last: `FallbackLlmAdapter::with_cadence` wraps every hop in the Cadence decorator, and a 429 on a hop is retried on the same provider after its gate for up to `treasurer.cadence.fallback_pace_budget_secs` (default 60) before the chain hops; a 5xx, timeout or network error still hops at once. `ModelFallbackMiddleware::paced` builds a paced middleware chain and `AgentRuntimeDeps.cadence` paces every config-built `model_fallback` chain; set it to `None` to opt out.
+- Plan 43-07, fleet-wide pacing through Redis (PACE-03): `RedisCadence` and `RedisCadenceConfig` in `paladin-storage`, behind the new `redis-cadence` Cargo feature (also a `paladin-ai` passthrough, in neither `default` nor `full`); a 429 recorded by one worker gates every worker on the same Redis server for that provider and model. One atomic Lua script per operation on the Redis server's own clock; lazy connection with explicit timeouts; the URL's password is redacted in `Debug` and in every error; every key carries a TTL; the CI job `redis-cadence-integration` fails if it was skipped.
+- Plan 43-08, a Redis outage is a degradation, never a failure (PACE-05): `ResilientCadence` in `paladin-storage` serves from the shared backend while it answers and, on the first error or timeout, from an in-process fallback built with `InMemoryCadence::with_multiplier` (delays multiplied, default 2.0); it warns once per outage, logs one line on recovery under `paladin::cadence` and probes the backend at most every `DEFAULT_PROBE_INTERVAL` (5 s).
+- Plan 43-09, the operator surface (PACE-02, PACE-03, PACE-05): `treasurer.cadence.backend` accepts `{ redis: { url_env: NAME } }`, naming the environment variable that holds the Redis URL (validated at boot; the URL itself is never stored, logged or serialised); on a binary built without `redis-cadence` that backend is a boot error naming the feature. Seven scalar keys gain `APP_TREASURER_CADENCE_*` environment overrides.
+- Plan 43-09 also paces the run engine's own port, and `paladin-server` builds one wiring shared by the resident agents, the runtime provisioner and the run engine (new: `build_agent_registry_with_cadence`, `paladin_port_from_settings_with_cadence`, `build_run_api_with_cadence`, `FacadeProvisioner::with_cadence`; the existing entry points keep their signatures and stay paced).
+- Plans 43-10 and 43-11, stampede lock (PACE-04): `CadencePort` gains `try_lock` and `unlock` with `LockKey` and `FencingToken` (tokens increase strictly per key; `Distributed` from Redis, `Local` from one process; never compared); `ResilientCadence` fails the lock open onto the in-process lock during an outage. `NodeCachePort` gains the defaulted `put_fenced` and `RedisNodeCache` overrides it so a stale lock holder's late write cannot overwrite a newer entry.
+- `WarEngine::with_cadence(port, lock_ttl)` (plan 43-11) puts the lock around the node cache's miss-to-store window, so concurrent identical cache misses execute a cache-policy node once; a lock error, an elapsed `lock_ttl` or a cancelled run never fails a node.
+- Plan 43-12 records every provider header name and error code the parser depends on against the provider's own documentation, and ADR-0058 (`.planning/decisions/0058-rate-pacing-cadence.md`) records the design; the `RateLimitExceeded` examples in the provider contribution guides now show the real struct variant.
+- Known limitations of pacing, which is reactive and bounded, not a guarantee a provider never refuses a call: (1) the Redis namespace is the fixed `paladin:cadence`, with no key for it in `treasurer.cadence`, so two independent fleets on one Redis server share pacing state; (2) during a Redis outage a worker paces from its own `429`s only, with delays multiplied by `degraded_multiplier`, a gate written to Redis before the outage is invisible until recovery, and recovery is detected within one probe interval (5 s); (3) Gemini's body-level `RetryInfo` retry delay is not parsed (`Retry-After` when present, the back-off estimate otherwise); (4) CLI one-shot commands are not paced; (5) a `FallbackLlmAdapter` built by hand and never given `with_cadence` keeps hopping immediately on a 429; (6) the stampede lock is not renewed: `lock_ttl_secs` must exceed the p99 node duration including retries, and the server attaches no node cache today, so it attaches no lock.
+- Provider retry delay on a 429 (PACE-01, PACE-02; plan 43-02): `LlmError::RateLimitExceeded` carries the provider's own retry delay and a rate-limit header snapshot, read through `LlmError::retry_after()` and `LlmError::rate_limit_hints()`; the new `RateLimitHints`, `RateLimitDimension`, `RateLimitDimensionKind` and `RetryDelaySource` types (`paladin-ports`) hold parsed numbers and durations only, never a raw header string. A delay is never guessed. The Cadence honours an explicit delay as a minimum and surfaces a delay beyond `treasurer.cadence.max_wait_secs` immediately as a typed `RateLimitExceeded` instead of holding a worker (D-06). The 429 `Display` text and its `Transient` classification are unchanged.
+- Provider rate-limit headers on a 429 (PACE-01; plan 43-03): a shared parser, `paladin_llm::rate_limit_headers`, turns a 429's headers into the `RateLimitHints` (`Retry-After` in delta-seconds or HTTP-date form, `retry-after-ms`, OpenAI's `x-ratelimit-*`, Anthropic's `anthropic-ratelimit-*`); the OpenAI and Anthropic adapters read them on the buffered and streaming paths. Parsing is panic-free, every delay is clamped to 24 hours and no raw header value reaches an error or a log line; `map_http_status_with_hints` carries the hints (`map_http_status` is unchanged); `httpdate` is now a direct dependency of `paladin-llm`.
 
-- **Usage reconciliation and `paladin_llm::usage_reconcile::USAGE_UNRECONCILED_METADATA_KEY`
-  (G-50-5a; Phase 50 plan 50-21).** The five OpenAI-compatible presets (Kimi, Qwen, Grok, Ollama,
-  OpenAI-compatible) now parse the vendor's own `total_tokens`, buffered and streamed, and compare
-  it with the mapped `prompt_tokens + completion_tokens`; they also check that reasoning does not
-  exceed `completion_tokens` and that cache reads plus writes do not exceed `prompt_tokens`. A
-  finding is never repaired and never written over the mapped total: it is logged once per adapter
-  instance per (model, check) (target `paladin::usage`) and recorded under
-  `paladin.usage_unreconciled` (`USAGE_UNRECONCILED_METADATA_KEY`) on `LlmResponse.metadata` or the
-  stream's terminal chunk, as `total:vendor=<n>,mapped=<m>`, `reasoning:reasoning=<n>,completion=<m>`
-  or `cache:cache=<n>,prompt=<m>` joined by `;`. The value holds token counts only. Plan 50-23
-  extended the check to the four bespoke adapters (see *Changed*). Additive: one new public
-  constant.
+**Phase 42 — Mid-Run Halt & SSE Terminal Status**
 
-- **Per-model parameter support (PARITY-02; Phase 50 plan 50-02; ADR-0061).** `paladin-ports`
-  gains `ModelProfile`, `ParamSupport` (`Range`, `Fixed`, `NotSent`), `StopSupport` and
-  `SamplingParam` in `output::model_profile` (re-exported from `output::llm_port`), and
-  `LlmPort::model_profile(&self, model: &str) -> Option<ModelProfile>`, a defaulted method that
-  returns `None`, so every existing implementor compiles unchanged and `ProviderCapabilities` is
-  untouched. `ParamSupport::admits` is the single admission rule (inclusive range, exact `Fixed`
-  equality, `NaN` never admitted, no clamping), and `ModelProfile::new()` is fail closed.
-  `PricingLlmAdapter`, `CadenceLlmAdapter` and `FallbackLlmAdapter` forward `model_profile`
-  (the fallback chain reports the intersection of its hops' profiles), so the policy cannot be
-  silently disabled by the decorators every server-built agent is wrapped in. ADR-0061 amends
-  ADR-0004. Additive only: no `MIGRATION.md` row and no allowlist entry.
+- Mid-run allowance halts on the engine path (ALLOW-03; plan 42-02, ADR-0057): `WarEngine` consults a new `SpendGuard` output port (`paladin-ports`) at every superstep boundary, and the `Treasurer` answers through the same ceiling evaluation admission uses, so an allowance exhausted in flight halts the run at its next boundary with its last checkpoint kept: recorded `halted`, no error, a `WaypointStatus::Halted` Waypoint, no node of that superstep runs. Overshoot is at most one top-level superstep's spend, including any nested `Battalion` run.
+- `RunOutcome::Halted` carries a typed `HaltCause` (caller cancel, in-process token, or `Spend(HaltReason)`); `RunWorkerPool::with_treasurer` attaches the guard per run for every run that records a submitter. New public surface: `SpendGuard`, `SpendDecision`, `NeverHalts` (ports), `HaltReason` and `AllowanceRefusal::details_json` (core), `HaltCause` and `WarEngine::with_spend_guard` (battalion), `RunWorkerPool::with_treasurer`, `Treasurer::spend_guard` and `TreasurerSpendGuard` (facade); see `MIGRATION.md` §10.2.
+- Persisted halt reason (plan 42-03): migration `013_add_run_halt_reason.sql` (both backends) adds one nullable `runs.halt_reason` column (`NULL` for every legacy row); a spend-halted run's `GET /v1/runs/{id}` and `GET /v1/runs` rows carry `halt_reason` (the halted ceiling's figures, the same keys as the `429 allowance_exhausted` `details`, or `{"reason":"ledger_unavailable"}`) and `final_waypoint_id`, with `error` still `null`; the `halted` run webhook gains the same optional `halt_reason` key, other events and the signature unchanged.
+- SSE terminal status names the halt reason (plan 42-05): `TraceEvent::RunFinished` gains `halt_reason: Option<HaltReason>` (skipped when `None`; stored `run_traces` rows without it read back as `None`); the `done` event of `GET /v1/runs/{id}/stream` for a spend-halted run carries `halt_reason` on the live, degraded and replay paths; a ledger-unavailable halt is a `done` with `{"reason":"ledger_unavailable"}`, never an `error`. See `MIGRATION.md` §10.2 and §10.6.
+- Resumable by fork (plan 42-04): a halted run resumes by forking from its `final_waypoint_id` (`POST /v1/threads/{id}/fork`); the fork re-runs admission, so it is refused `429 allowance_exhausted` with `Retry-After` while the window is exhausted and, once it resets, continues from the Halted Waypoint without re-running a completed superstep. No new public API.
+- A halt rung for the operator notice path (plan 42-10): migration `014_add_treasury_notice_kind.sql` (both backends) adds `treasury_notices.notice_kind` (`'warning'` or `'halt'`, default `'warning'`, so every legacy row stays a warning); a second halt notice for the same identity is `AlreadyRecorded`. `NoticeKind` is new, and `NoticeRecord` and `AllowanceNotice` gain a `kind` field (a struct literal must add `kind: NoticeKind::Warning`). `RunEventKind` gains `AllowanceHalted` (`allowance_halted`), an operator-only event signed with the operator notice secret like `allowance_warning`; callers cannot subscribe to it. See `MIGRATION.md` §10.2 and §10.4.
+- Mid-run allowance notices (plan 42-11): a run that crosses `warn_at` warns at its first superstep boundary past the threshold (one `allowance_warning` trace event and one operator delivery, once per window), and a spend halt sends the operator one `allowance_halted` delivery per scope, limit, window and ceiling; a `ledger_unavailable` halt notifies nobody, and claims never change the guard's decision. Enable on every replica before relying on it: an older build cannot parse `allowance_halted`. See `MIGRATION.md` §10.6.
+- The halt reason in the heralds and a vocabulary guard (plan 42-12): a Treasurer-halted run renders one halt line in the markdown, JSON and table heralds (for a ledger outage, `⛔ halted: allowance could not be evaluated (ledger unavailable)`); it names the scope kind, the figures and the window end, never a tenant id, a key name or a key value. New public surface: `HaltReason::herald_line`, `HALT_REASON_METADATA_KEY`, `ExecutionMetadata::with_halt_reason` and `ExecutionMetadata::halt_reason_display` (core). `tests/treasurer_vocabulary_guard.rs` keeps `Treasurer` a framework-only word (ALLOW-05, ADR-0050). The three known windows the Phase 42 entry leaves open are under Known limitations.
+- A per-run token budget derived from the remaining allowance (ALLOW-05; plan 42-07, ADR-0057): the `Treasurer` turns what is left of a principal's tightest allowance ceiling into a token count for the agent loop (`floor(remaining * 1_000_000 / dearest price)`, computed in `i128` and saturated to `u32`; `Treasurer::with_pricing`, `Treasurer::derive_budget`, the new defaulted `AllowanceAdmissionPort::admit_for_model`). A free model gets no budget, a zero figure is refused like an exhausted allowance, and a principal with a ceiling calling a model with no price row is refused with the new `AdmissionError::ModelUnpriced`.
+- The one existing `TokenBudget` cutoff enforces the tighter of the operator's figure and the derived one; when the allowance binds, including a tie, the run ends with the new `StopReason::AllowanceHalted` (stop reason `allowance_halted`; neither successful nor a failure) after the response that crossed it, keeping that response and the truncation notice. `ModelCallLimit`, `ToolCallLimit` and the Commissary are unchanged. See `MIGRATION.md` §10.2.
+- The HTTP agent routes stop on the allowance (plan 42-08): `POST /v1/agents/{id}/execute`, `execute/stream` and `jobs` admit with the agent's model and hand the derived budget to the run; a call whose derived budget is crossed answers `200` with `stop_reason: "allowance_halted"` and a `halt_reason` object (`ExecuteResponse.halt_reason`), keeping the partial output. A true streamed `execute/stream` call is one provider call and is not cut mid-flight; its `done` stays `{ "done": true, "usage" }` byte for byte unless the final chunk's `total_tokens` strictly exceeds the derived figure.
+- Plan 42-08 also refuses, on all three routes and before the agent runs, a principal with an allowance ceiling calling an agent whose model has no `treasurer.pricing` row (`422 model_unpriced`, `ApiError::model_unpriced`), and a derived budget of zero (`429 allowance_exhausted`). The frozen v0.9 golden gate carries a fourth sanctioned exception for the two additive wire changes, and `openapi.json` is regenerated; see `MIGRATION.md` §10.2 and §10.6.
+- Agent-kind runs stop on the allowance (plan 42-09): a run of an agent-kind assistant (`Runnable::Agent`) is bounded by the caller's allowance. `POST /v1/runs` admits it with the agent's model, so an unpriced model under a ceiling answers `422 model_unpriced` (the new `RunSubmissionError::ModelUnpriced { model }`) and an allowance too small for one token answers `429 allowance_exhausted`, before any run row.
+- Agent-kind runs end after the response that crosses the derived budget, recorded `halted` (it was `completed`, unbounded, before) with `error: null` and the partial output kept; a zero or exhausted figure at dispatch, or an unreadable ledger (`ledger_unavailable`), records the same halt without calling the model; a model that lost its price row records `failed` naming the model. Agent-kind runs have no checkpoint: resume by a fresh `POST /v1/runs` (recorded in `.planning/WINDOWS.md`).
 
-- **The wire-time sampling filter, the model registry core and their three metadata keys
-  (PARITY-02, PARITY-04, PARITY-05; Phase 50 plan 50-03; ADR-0061).** `paladin-llm` gains
-  `sampling` and `registry`. `sampling::apply` is the one filter every request builder calls: a
-  set parameter reaches the wire only when the target model's `ModelProfile` admits it, and every
-  other set value is omitted, never clamped, defaulted or swapped. Every omission is visible: one
-  `warn!` (target `paladin::sampling`) per adapter instance per (model, parameter), and
-  `paladin.params_omitted` (the omitted names, comma-separated, in fixed order) on every buffered
-  `LlmResponse` from a request that omitted something; the key is absent when nothing was.
-  `paladin.response_format_adjusted` (`json_object` or `omitted`) records a `response_format` the
-  profile could not honour, and `paladin.unprofiled_model` (the model id) records a model that
-  has neither a seeded entry nor an override and so ran on the adapter-wide fallback profile
-  (never a refusal). `registry::ModelOverride` (`deny_unknown_fields`, validated: finite,
-  ordered, non-zero, maximum output inside the window) is the per-model operator statement, laid
-  over the seeded entry field by field. Streamed calls warned only at this plan; owner reading
-  R-1 (option-b, plan 50-18, below) then carried the keys onto the stream's terminal chunk.
-  Additive: no `MIGRATION.md` row and no allowlist entry here; plan 50-05 writes the row for the
-  whole policy.
+**Phase 41 — Admission-Time Allowance Enforcement**
 
-- **Consumer-surface muster and library-consumer upgrade note (ADOPT-04, ADOPT-05; Phase 49 plans
-  49-01, 49-02).** `tests/consumer_surface_muster.rs`, a compile-only integration test declared as
-  `[[test]] consumer_surface_muster` with `required-features = ["llm-anthropic", "llm-deepseek"]`,
-  imports every path and pins every signature, struct shape and trait that the downstream consumer
-  takes from Paladin, so a change that breaks that surface fails `make check`, `make lint` and CI
-  before a consumer bump finds it. `make check-consumer-surface` runs it and is not part of
-  `check-gates`. MIGRATION.md section 10.8 gains `### Library consumers: v0.10.1 → v0.11.0`, with
-  the no-total-only-`TokenUsage` pitfall and an eleven-item break list, each item pointing at its
-  existing §10.2 row. No library API, §10.2 row or semver-checks allowlist entry changes.
-- **Rate pacing, the Cadence (PACE-02; Phase 43 plan 43-01).** A new `CadencePort` output port
-  (`paladin-ports`) with an in-process adapter, `InMemoryCadence` (`paladin-storage`), and a
-  `CadenceLlmAdapter` decorator (`paladin-llm`) composed as `Pricing(Cadence(provider))` on every
-  agent the server builds from configuration or provisions at runtime. A provider 429 gates later
-  calls to that provider and model for an exponential back-off with full jitter (500 ms to 30 s);
-  the decorator never retries. Pacing is on by default and configured under `treasurer.cadence`
-  (`enabled: false` restores the previous behaviour). The OpenAI adapter now surfaces its first
-  429 instead of retrying it inside its own loop. New public surface: `CadencePort`, `CadenceKey`,
-  `GateReading`, `CadenceError`, `CadencePolicy` (ports), `InMemoryCadence` (storage),
-  `CadenceLlmAdapter`, `CadenceSettings`, `CadenceWiring`, `with_cadence` (llm), `CadenceConfig`,
-  `CadenceBackend`, `build_cadence`, `compose_llm` and `TreasurerConfig.cadence` (facade).
-  Plan 43-05 hardens it: streaming calls (`generate_stream`) are paced exactly like buffered
-  ones (a 429 as the call's error or as the stream's first item opens the gate and the stream's
-  items are still delivered unchanged); the callers one gate releases are spread by up to
-  `min(wait / 10, 1 s)` so they do not all send in the same instant, never below a provider's
-  explicit delay; `InMemoryCadence` holds at most `DEFAULT_KEY_CAPACITY` (4096) keys,
-  configurable with `InMemoryCadence::with_capacity`, evicting idle entries first and warning
-  once under `paladin::cadence` when a live entry must go; and a shared contract suite,
-  `paladin_storage::cadence::contract_tests`, holds every adapter to the same pacing rules.
-  `rand` is now a required dependency of `paladin-llm`.
-  Plan 43-06 makes fallback chains pace first and hop last: `FallbackLlmAdapter::with_cadence`
-  wraps every hop in the Cadence decorator, and a 429 on a hop is then retried on the same provider
-  after its gate, for up to `treasurer.cadence.fallback_pace_budget_secs` (default 60), before the
-  chain hops. A 5xx, timeout or network error still hops at once, and a chain built without
-  `with_cadence` is unchanged. `ModelFallbackMiddleware::paced` builds a paced middleware chain,
-  and `AgentRuntimeDeps.cadence` (an in-process wiring by default) paces every config-built
-  `model_fallback` chain; set it to `None` to opt out.
-  Plan 43-07 shares pacing across a worker fleet through Redis (PACE-03): `RedisCadence` and
-  `RedisCadenceConfig` in `paladin-storage`, behind the new `redis-cadence` Cargo feature (also a
-  `paladin-ai` passthrough, in neither `default` nor `full`). A 429 recorded by one worker gates
-  every worker on the same Redis server for that provider and model. Each operation is one
-  atomic Lua script that reads the Redis server's own clock and returns relative waits, so clock
-  skew between workers cannot shorten or lengthen a wait; the connection is lazy with explicit
-  timeouts so a dead server errors instead of hanging, and the URL's password is redacted in
-  `Debug` and in every error. Every key carries a TTL and reads create none. A CI job,
-  `redis-cadence-integration`, runs the live suite and fails if it was skipped.
-  Plan 43-08 makes a Redis outage a degradation, never a failure (PACE-05): `ResilientCadence`
-  in `paladin-storage` serves from the shared backend while it answers and, on the first error or
-  timeout, from an in-process fallback built with the new `InMemoryCadence::with_multiplier`
-  (delays multiplied, default 2.0), so a 429 recorded during the outage still gates its key. It
-  warns once per outage and logs one line on recovery under `paladin::cadence`, probes the backend
-  at most every `DEFAULT_PROBE_INTERVAL` (5 s) without making concurrent callers wait, and honours
-  locally recorded gates after recovery.
-  Plan 43-09 finishes the operator surface (PACE-02, PACE-03, PACE-05): `treasurer.cadence.backend`
-  accepts `{ redis: { url_env: NAME } }`, naming the environment variable that holds the Redis URL
-  (validated at boot; the URL itself is never stored, logged or serialised), and builds
-  `ResilientCadence` over `RedisCadence` without connecting, so a worker boots while Redis is down.
-  On a binary built without `redis-cadence` that backend is a boot error naming the feature. Seven
-  scalar keys gain `APP_TREASURER_CADENCE_*` environment overrides. The run engine's own port is now
-  paced, and `paladin-server` builds one wiring shared by the resident agents, the runtime
-  provisioner and the run engine, so a 429 seen through any of them delays the next call through the
-  others (new: `build_agent_registry_with_cadence`, `paladin_port_from_settings_with_cadence`,
-  `build_run_api_with_cadence`, `FacadeProvisioner::with_cadence`; the existing entry points keep
-  their signatures and stay paced). Documented under Treasurer rate pacing in the configuration
-  guide and Fleet-wide pacing with Redis in the HTTP service host topology page.
+- Facade re-export of the allowance module (plan 41-09, D-20): the `paladin` facade re-exports `paladin::core::platform::container::allowance` (`AllowanceRefusal`, `AllowanceWarning`, `AllowanceNotice`, `Admission`, `NoticeRecord`, `NoticeOutcome`, `crosses_warn_threshold`, ...), so a facade user needs no direct `paladin-core` dependency; ADR-0056 records the admission model.
+- Per-API-key rolling-window allowances, refused at admission (ALLOW-01, ALLOW-02; plan 41-01): a `treasurer.allowance.api_keys.<name>: { period, amount }` config subtree (`period` as `<integer><m|h|d>` from `1m` to `366d`; omitted, it is inert) is checked by the new `Treasurer` service (`AllowanceAdmissionPort`, `paladin-ports`) against the new defaulted `TreasuryLedgerPort::balance` read, overridden by the in-memory and SQLite adapters.
+- An exhausted caller is refused by `POST /v1/runs` with `429 allowance_exhausted` (`error.details`: `scope`, `kind`, `balance`, `ceiling`, `window_start`, `window_end`) and a `Retry-After` from the ledger's own clock, before any run is persisted; a request with no principal, or a principal with no allowance entry, is never gated. Windows are tumbling and aligned to the UTC epoch, so a tenant can spend up to twice an allowance across one boundary, by design. New public surface: `RunSubmissionService::with_treasurer`, `RunSubmissionError::AllowanceExhausted`, `ApiError::allowance_exhausted`; see `MIGRATION.md` §10.2 and §10.6.
+- Plan 41-03 completes the operator grammar: `treasurer.allowance` also takes `tenants.<id>` entries, an optional `lifetime` cap, per-entry and global `warn_at` (default `80`), and an optional operator `webhook { url, secret }` target (the secret is redacted from `Debug` and `Serialize`; supply it with `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET`, since a `${VAR}` placeholder in YAML is not expanded). `paladin-server` refuses to boot, naming the path, when an allowance entry is set while `run_store.backend` is `disabled` or names an API key or tenant the authentication configuration does not know; `build_run_api` returns the one `Treasurer` as `RunApiHandles.treasurer`.
+- Plan 41-04 closes the coverage: the same admission check also gates `POST /v1/threads/{id}/fork` and the three HTTP agent routes that start spend (`POST /v1/agents/{id}/execute`, `/execute/stream` and `/jobs`); an `Admin` principal is bound like any other, and a failing allowance check answers `500` and runs nothing. The `429` is published on all five operations in `crates/paladin-web/openapi.json`, and the frozen v0.9 golden gate carries a third sanctioned exception that removes only that entry from the three agent operations.
+- Plan 41-05, schedule-fired runs: `POST /v1/schedules` records the creating principal's tenant id and API key name (migration `010`), every fired run is attributed to that creator, and a tick whose creator's allowance is exhausted is skipped (`SkipReason::AllowanceExhausted`, counted in `skipped_ticks`). A schedule created before this release has no recorded creator and keeps firing unattributed and ungated; the creator is never exposed in the schedule responses.
+- Plan 41-06, warn-threshold notice store: a balance that reaches `warn_at` percent of a ceiling on an admitted request claims one durable notice per scope, limit, window and ceiling (new `treasury_notices` table, migration `011`; new `TreasuryNoticePort`; `Treasurer::with_notices`). The store enforces once-per-window, so it holds across replicas; raising a ceiling re-arms the notice, and a notice-store failure never blocks or fails the run.
+- Plan 41-07, trace event and herald line: each won notice becomes exactly one `TraceEvent::AllowanceWarning` (never a tenant id or key name) on the admitted run's own trace stream, emitted on its first dispatch before `RunStarted`; the markdown, JSON and table heralds render one allowance line. New public items: `RunWorkerPool::with_treasury_notices`, `RunScope::with_allowance_warnings`, `ExecutionMetadata::with_allowance_warnings` and `allowance_warning_display`, `AllowanceWarning::herald_line`. Upgrade every replica before setting `warn_at`: an older build reads the new `run_traces` record kind as unknown. Migration `012` adds a tenant-wide `treasury_ledger (tenant_id, attributed_at)` index.
+- Plan 41-08, operator webhook: with `treasurer.allowance.webhook` configured, every notice an admission wins is delivered once to the operator URL through the durable webhook queue with the new `RunEventKind::AllowanceWarning` (`RunEventKind` is now `#[non_exhaustive]` and gains `as_str`), signed `X-Paladin-Signature: sha256=<hex>` with the operator secret (held on the delivery service, never on the row) and carrying `X-Paladin-Event: allowance_warning`. The twelve-key `AllowanceWarningPayload` never carries run input, a key value or a secret; a caller cannot subscribe a webhook to `allowance_warning`; `paladin-server` SSRF-checks the URL at boot (a private target needs `webhooks.allow_private: true`).
+- **Enable the webhook only after every replica runs this build:** an older replica rejects the unknown `allowance_warning` row for its whole delivery batch. Omitting `webhook` disables only this leg.
 
-  Plan 43-10 adds the stampede lock primitives (PACE-04) to `CadencePort`: `try_lock` (set-if-absent
-  with expiry, one holder, not re-entrant) and `unlock` (owner-only), with `LockKey` and
-  `FencingToken`. Tokens increase strictly per key and carry their source: `Distributed` from Redis
-  (an `INCR` counter that outlives the lock by at least ten times and at least an hour), `Local`
-  from one process; the two are never compared. `ResilientCadence` fails the lock open onto the
-  in-process lock during an outage, so tasks in one worker still coalesce and no lock error can fail
-  a run. `NodeCachePort` gains one defaulted method, `put_fenced`, that delegates to `put`, so every
-  implementor is unchanged; `RedisNodeCache` overrides it with an atomic script that ignores a
-  lower distributed token, so a stale lock holder's late write cannot overwrite a newer entry. The
-  `WarEngine::with_cadence(port, lock_ttl)` (plan 43-11) puts the lock around the node cache's
-  miss-to-store window: with a node cache attached, concurrent identical cache misses execute a
-  cache-policy node once and the other dispatches serve the stored delta as a cache hit. The winner
-  stores through `put_fenced` and releases the lock on every exit, a waiter whose holder released
-  without writing takes over within one ~100 ms poll, and a lock error, an elapsed `lock_ttl` or a
-  cancelled run never fails a node.
+**Phase 38 — Design Seams & Pricing/Cost Producer**
 
-  Plan 43-12 records every provider header name and error code the parser depends on against the
-  provider's own documentation (Anthropic fetched and quoted, OpenAI confirmed by the operator), and
-  ADR-0058 (`.planning/decisions/0058-rate-pacing-cadence.md`) records the design, including the
-  places the plans read a locked decision. The `RateLimitExceeded` examples in the provider
-  contribution guides now show the real struct variant.
+- Operator-configured treasurer price table, wired into both production run paths (PRICE-01, PRICE-03; plan 38-03): a per-model price table as decimal strings per 1M tokens under `treasurer.pricing`, validated at boot with a path-precise error naming the offending model and axis by a hand-rolled exact-integer parser (no `rust_decimal`, no new dependency) that rejects negative, malformed, too-fine (>9 decimal places) and overflowing prices. Omitting the section changes nothing (an empty table in `"USD"`); only `treasurer.currency` has an env override (`APP_TREASURER_CURRENCY`). `build_agent_registry`, `FacadeProvisioner` and `paladin_port_from_settings` wrap their resolved `LlmPort` with `paladin_llm::pricing::with_pricing` before any call. Purely additive.
+- Treasurer cost arithmetic and the streamed cost producer (PRICE-02, PRICE-03; plan 38-02): `paladin-core::platform::container::cost` adds `Cost` (`i64` nano-unit amount plus a validated `CurrencyCode`), `PriceRow`/`PriceTable`, the pure `cost_of_call` and `CostTally` (unpriced poisons the run total, never a partial sum); every intermediate product is computed in `i128`, rounded half-up once per call and saturates into `i64`, with no floating point. `PricingLlmAdapter` prices a streamed call's terminal chunk from its own usage, with a warn-once log line per unpriced model.
+- `StreamingResponse` and `ChunkMetadata` gain an additive `Option<Cost>` field (both `#[non_exhaustive]`); `PaladinExecutionService::execute_stream` builds a real `ExecutionMetadata` on every final streamed chunk, and `MarkdownHerald::finalize_stream` renders `0.0450 USD` instead of a hard-coded `$` prefix. Purely additive.
+- ADR-0052 and ADR-0053 (PRICE-02, PRICE-03; plan 38-01): metering lives in the `PricingLlmAdapter` decorator at the `LlmPort` boundary on both run paths, with the halt raised at the `WarEngine` superstep boundary and the agent loop's existing `TokenBudget` cutoff; the treasury ledger is append-only with the balance derived on read, `reserve`/`settle`/`release` row kinds and a `(run_id, superstep, attempt)` settlement idempotency key.
+- Cost priced on the non-streaming `LlmPort::generate` path (PRICE-03; plan 38-04): `LlmResponse` gains an additive `cost: Option<Cost>` field after `usage`; `PricingLlmAdapter::generate` prices each response from its own served model and usage, surviving a `FallbackLlmAdapter` hop to a differently-named model, via the `price_or_warn(table, model, usage)` helper shared with the streaming path (D-08).
+- JSON and table heralds render cost and currency (PRICE-03; plan 38-05): `JsonHerald::finalize_stream` emits a `currency` field beside `cost_estimate` (`null` for both when unpriced); `TableHerald::finalize_stream` renders the run's real `ExecutionMetadata` in place of four hard-coded placeholder rows.
+- Cost carried on the trace stream and summed per run, on both run paths (PRICE-03; plans 38-06, 38-07): `TraceEvent::NodeFinished`/`RunFinished` gain additive `cost: Option<Cost>` fields; `TraceDispatcher::total_cost()` folds every priced node synchronously inside `emit()` under the `CostTally` rule (one unpriced call poisons the run total, never a partial sum); `PaladinResult` gains an additive `cost: Option<Cost>` field, so `RunFinished.cost` is a real end-to-end figure on both paths, never a fabricated zero. See `MIGRATION.md` §10.2.
+- `ExecutionMetadata::from_run_finished(record, model_used)` and `HeraldTraceSink`, the engine-path cost producer (PRICE-03; plan 38-08): the sink hands a real `ExecutionMetadata` built from a completed run's `TraceEvent::RunFinished` to an operator-configured `Herald`'s `finalize_stream` on every engine run, via `RunWorkerPool::with_herald` and `settings.herald`.
 
-  **Known limitations.** Pacing is reactive and bounded, not a guarantee that a provider never
-  refuses a call. (1) The Redis namespace is the fixed `paladin:cadence`, with no configuration key
-  for it in `treasurer.cadence`, so two independent fleets that point at one Redis server share
-  pacing state for the same provider and model. (2) During a Redis outage a worker paces from its
-  own `429`s only, with delays multiplied by `degraded_multiplier`; it cannot see other workers'
-  refusals, a gate written to Redis before the outage is invisible until recovery, and recovery is
-  detected within one probe interval (5 s) without copying local gates back. (3) Gemini's
-  body-level `RetryInfo` retry delay is not parsed; a Gemini 429 uses `Retry-After` when present and
-  the back-off estimate otherwise. (4) CLI one-shot commands are outside the composition roots that
-  install pacing (the agent host, the runtime provisioner and the run engine's port), so they are
-  not paced. (5) A `FallbackLlmAdapter` built by hand and never given `with_cadence` keeps hopping
-  immediately on a 429. (6) The stampede lock is not renewed: `lock_ttl_secs` must exceed the p99
-  node duration including retries, and the server attaches no node cache today, so it attaches no
-  lock.
-- **Provider retry delay on a 429 (PACE-01, PACE-02; Phase 43 plan 43-02).**
-  `LlmError::RateLimitExceeded` now carries the provider's own retry delay and a rate-limit header
-  snapshot, read through `LlmError::retry_after()` and `LlmError::rate_limit_hints()`; the new
-  `RateLimitHints`, `RateLimitDimension`, `RateLimitDimensionKind` and `RetryDelaySource` types
-  (`paladin-ports`) hold parsed numbers and durations only, never a raw header string. A delay is
-  never guessed: when the provider gives nothing parseable `retry_after()` is `None`. The Cadence
-  honours an explicit delay as a minimum before the next send (jitter only adds), bounds a delay
-  derived from a reset header to the back-off cap, and surfaces a delay beyond
-  `treasurer.cadence.max_wait_secs` immediately as a typed `RateLimitExceeded` instead of holding a
-  worker for it (D-06); that refusal calls no provider and never escalates the shared streak. The
-  429 `Display` text and its `Transient` classification are unchanged.
-- **Provider rate-limit headers on a 429 (PACE-01; Phase 43 plan 43-03).** A shared, un-gated parser,
-  `paladin_llm::rate_limit_headers` (`hints_from_headers`, `parse_retry_after`, `parse_go_duration`,
-  `RateLimitHeaderFamily`), turns a provider's 429 headers into the `RateLimitHints` carried on
-  `LlmError::RateLimitExceeded`: `Retry-After` in delta-seconds or any of the three HTTP-date forms,
-  `retry-after-ms`, OpenAI's `x-ratelimit-*` limit, remaining and Go-style reset values, and
-  Anthropic's `anthropic-ratelimit-*` values with RFC 3339 resets measured from the response `Date`.
-  The OpenAI and Anthropic adapters read them before the body is consumed, on both the buffered and
-  streaming paths, so the Cadence waits for the provider's own number. Parsing is panic-free and
-  bounded, every delay is clamped to 24 hours, and no raw header value reaches an error or a log
-  line. `map_http_status_with_hints` carries the hints through the shared status mapping
-  (`map_http_status` is unchanged). `httpdate` is now a direct dependency of `paladin-llm`.
-- **Mid-run allowance halts on the engine path (ALLOW-03; Phase 42 plan 42-02, ADR-0057).** The
-  `WarEngine` now consults a new `SpendGuard` output port (`paladin-ports`) at every superstep
-  boundary, beside the existing cancellation token and probe. The `Treasurer` answers it through
-  the same ceiling evaluation admission uses, so an allowance exhausted while a run is in flight
-  halts the run at its next boundary with its last checkpoint kept: the run is recorded `halted`
-  with no error and a `WaypointStatus::Halted` Waypoint whose vanguard is the boundary's, and no
-  node of that superstep runs. Overshoot is at most one top-level superstep's spend, including
-  any nested `Battalion` run that superstep contains. `RunOutcome::Halted`
-  carries a typed `HaltCause` (caller cancel, in-process token, or `Spend(HaltReason)`), the
-  worker maps a spend halt to `halted` whatever its cancel and shutdown flags say, and
-  `RunWorkerPool::with_treasurer` attaches the guard per run for every run that records a
-  submitter -- a run with no submitter gets no guard and no ledger read. `build_run_api` builds
-  the Treasurer before the worker pool and shares one instance with the submission service. New
-  public surface: `SpendGuard`, `SpendDecision`, `NeverHalts` (ports), `HaltReason` and
-  `AllowanceRefusal::details_json` (core), `HaltCause` and `WarEngine::with_spend_guard`
-  (battalion), `RunWorkerPool::with_treasurer`, `Treasurer::spend_guard` and `TreasurerSpendGuard`
-  (facade); see `MIGRATION.md` §10.2. The paragraphs that follow are the rest of the Phase 42
-  entry, one per plan; the three known windows it leaves open are under *Known limitations*.
+**Phase 39 — Spend Ledger**
 
-  **Persisted halt reason (plan 42-03).** Migration `013_add_run_halt_reason.sql` (both
-  backends) adds one nullable `runs.halt_reason` column (`TEXT` on SQLite, `JSONB` on PostgreSQL;
-  `NULL` for every legacy row), carried by `Run.halt_reason` and `RunOutcomeRecord.halt_reason`
-  on the in-memory, SQLite and PostgreSQL run adapters. A spend-halted run's `GET /v1/runs/{id}`
-  and `GET /v1/runs` rows now carry `halt_reason` (an object tagged by `reason`: the halted
-  ceiling's figures, the same keys as the `429 allowance_exhausted` `details`, or
-  `{"reason":"ledger_unavailable"}`) and `final_waypoint_id` (the Halted Waypoint, the fork
-  point), with `error` still `null`. The worker writes the outcome before flipping a halting
-  run's status, so no reader sees `halted` without its reason, and the caller's `halted` run
-  webhook gains the same optional `halt_reason` key (other events and the signature are
-  unchanged). `ApiError::allowance_exhausted` and `halt_reason` share one builder,
-  `AllowanceRefusal::details_json`.
+- `TreasuryLedgerPort`, the durable spend ledger on three adapters behind one contract suite (LEDGR-01; plans 39-01, 39-02, 39-03): `paladin-ports::output::treasury_ledger_port` adds `TreasuryLedgerPort` (`reserve`/`settle`/`release`/`spend`/`store_now`) and `TreasuryLedgerError`; `InMemoryTreasuryLedger`, `SqliteTreasuryLedger` and `PostgresTreasuryLedger` (`paladin-storage::treasury`) all pass one shared contract suite unmodified, including 16 concurrent reserves against a ceiling of 15 admitting exactly 15 and refusing 1 (LEDGR-02).
+- Migration `007_create_treasury_ledger_table` is append-only, with `i64` nano-unit amounts with an ISO 4217 currency code, a partial unique settlement index on the settlement key (LEDGR-03) and a `model_breakdown` column (D-02), so `spend`'s per-model view is identical across all three adapters. Production writers stamp the documented `LedgerScope::unattributed()` sentinel scope until Phase 40 replaces its source (D-01).
+- Race-proof `reserve` and idempotent `settle`/`release`, serialized per scope (LEDGR-02, LEDGR-03; plans 39-02, 39-03): SQLite opens each reserving transaction with BEGIN IMMEDIATE; Postgres takes a transaction-scoped advisory lock keyed on the scope; the in-memory adapter holds one `tokio::sync::Mutex`; all three admit a hold only when `balance + hold <= ceiling`, refusing with a typed `TreasuryLedgerError::Refused { balance, hold, ceiling }`. A duplicate settlement key is a success (`SettleOutcome::AlreadySettled`), never an error.
+- `paladin-cli treasury spend`, queryable spend with no server (LEDGR-04; plan 39-01): a new `treasury` subcommand group reads the configured `RunStoreConfig` store directly: `--since`/`--until` (RFC 3339, default the last 24 hours), `--group-by tenant|api-key|run|model` (default `tenant`), optional `--tenant`/`--api-key`/`--run` filters and `--format table|json`; amounts print as four decimals plus the currency code (`0.0450 USD`), and a window spanning two currencies prints one row per currency, never combined.
+- Production settle-only writers fill the ledger on both run paths (LEDGR-03, LEDGR-04; plans 39-04, 39-05, 39-07): `WarEngine::with_treasury_ledger(ledger, SettlementContext)` settles exactly one aggregated row per superstep attempt, awaited at the superstep boundary, including nested Battalion child runs and Aegis-retried nodes (only the eventual successful attempt contributes); `RunWorkerPool::with_treasury_ledger` attaches it per run. `PaladinExecutionService::with_treasury_ledger` and the new `AgentLoopSettlement` enum (`EveryCall`/`PlatformRunsOnly`) settle every priced agent-loop model call exactly once, and `PlatformRunsOnly` keeps the run engine's shared agent service from double-charging a node the engine already settled. A ledger failure is logged and never fails, retries or halts a run (the ledger is observational until Phase 41).
+- `RunScope::with_run_id` and the production ledger composition points (LEDGR-04; plans 39-05, 39-07): `RunScope` gains an additive run id and a with_run_id builder; `build_agent_registry_with_ledger` and `FacadeProvisioner::with_treasury_ledger`/`paladin_port_from_settings_with_ledger` are the two production installation points; the existing ledger-less functions keep their signatures. `build_treasury_ledger(&RunStoreConfig)` builds the ledger from the same backend selection the run repository uses.
 
-  **SSE terminal status names the halt reason (plan 42-05).** `TraceEvent::RunFinished` gains
-  `halt_reason: Option<HaltReason>` (serde default, skipped when `None`), filled by the engine from
-  `HaltCause::Spend` at every emit site; stored `run_traces` rows without it read back as `None`.
-  The `done` event of `GET /v1/runs/{id}/stream` for a spend-halted run now carries `halt_reason`,
-  the same object `GET /v1/runs/{id}` returns, on the live, degraded and replay paths; a
-  ledger-unavailable halt is a `done` with `{"reason":"ledger_unavailable"}`, never an `error`; a
-  halt with no reason keeps today's payload. A replayed stream takes its terminal status and reason
-  from the run row (skipping a persisted `RunFinished` while the row is not terminal). See
-  `MIGRATION.md` §10.2 and §10.6.
+**Phase 40 — Tenant Identity & Run-Read Scoping**
 
-  **Resumable by fork (plan 42-04).** A halted run resumes by forking from its
-  `final_waypoint_id` (`POST /v1/threads/{id}/fork`): the fork re-runs admission, so it is refused
-  `429 allowance_exhausted` with `Retry-After` while the window is exhausted and, once the window
-  resets (or the ledger reads again after a `ledger_unavailable` halt), continues from the Halted
-  Waypoint without re-running a completed superstep. Documented in `platform-api.md`; no new
-  public API. The fail-closed boundary log line now also names the scope kinds that could not be
-  evaluated.
+- Tenant identity (TENANT-01; plans 40-01, 40-03; ADR-0054): `Principal` (`paladin-web`) gains a required `tenant_id: TenantId`, looked up from operator configuration inside `authenticate()` and nowhere else; no request header, query parameter or body field can name a tenant. `TenantId`/`TenantIdError` is the validated identifier (non-empty, no whitespace, printable ASCII, at most 128 bytes).
+- The key-to-tenant mapping is `http.auth.api_keys[].tenant` (required on every key) and `http.auth.bearer_token.tenant` (required when bearer auth is enabled); `AuthConfig::validate` checks both at boot and also rejects an empty key value, an invalid or duplicate key `name` and a duplicate key value, naming keys by `name` and never printing a secret. There is no implicit default tenant. See `MIGRATION.md` §10.2, §10.5 and §10.8 step 3.
+- Run attribution (TENANT-02; plans 40-01, 40-02, 40-04, 40-05): every run records the submitting tenant and API key, stamped by RunSubmissionService submit and fork from the caller's `PrincipalRef` and persisted in the nullable `runs.tenant_id`/`runs.api_key_id` columns (migration `008`, `RUN_SCHEMA_VERSION` unchanged); `GET /runs/{run_id}` and `GET /runs` surface it as `RunResponse.submitted_by` (`null` for an unattributed run; never the key value, never the role).
+- Ledger settlements carry the submitting tenant and API key (`LedgerScope::from_attribution`); the HTTP agent-execute routes settle under the calling principal through the new defaulted `PaladinExecutorPort::execute_scoped` and `StreamingExecutorPort::execute_stream_scoped` (every existing implementor compiles unchanged). The Phase 39 `unattributed` sentinel is written only where no principal exists (schedule-fired runs, same-process embedders).
+- Tenant-scoped run reads with an Admin bypass (PLAT-07; plans 40-01, 40-02, 40-05; ADR-0054): `RunReadScope { All, Tenant(TenantId) }` is the one visibility rule: a principal sees a run iff the run's recorded tenant is its own, or its role is `Admin` (an unattributed run is visible to Admin only). It applies inside every `RunRepositoryPort::list` adapter, and `load_visible_run` gates every `/runs/{run_id}*` route. Another tenant's run answers the byte-identical `404 unknown run` a missing run does, never `403`. Closes `WINDOWS.md` row 32 (WR-03).
 
-  **A halt rung for the operator notice path (plan 42-10).** Migration
-  `014_add_treasury_notice_kind.sql` (both backends) adds `treasury_notices.notice_kind`
-  (`'warning'` or `'halt'`, default `'warning'`, so every legacy row stays a warning) and rebuilds
-  the once-per-window index with the kind appended: a warning and a halt notice for one scope,
-  limit, window and ceiling are both recordable, a second halt notice for that identity is
-  `AlreadyRecorded`, and raising the ceiling re-arms both. `TreasuryNoticePort::notices_for_run`
-  still returns warnings only. `NoticeKind` is new, and `NoticeRecord` and `AllowanceNotice` gain a
-  `kind` field (a struct literal must add `kind: NoticeKind::Warning`). `RunEventKind` gains
-  `AllowanceHalted` (`allowance_halted`), an operator-only event: the durable webhook path stores
-  and reads it back, signs it with the operator notice secret exactly like `allowance_warning`,
-  and shapes its payload with the same twelve keys; callers still cannot subscribe to it. See
-  `MIGRATION.md` §10.2 and §10.4.
+**Phase 45 — RustFS Swap & Platform/Observability Deviations**
 
-  **Mid-run allowance notices (plan 42-11).** The boundary guard now tells the operator about
-  allowance pressure as it happens. A run that crosses `warn_at` while running warns at its first
-  superstep boundary past the threshold (one `allowance_warning` trace event on that run's own
-  stream and one operator `allowance_warning` delivery, once per window), and a spend halt sends
-  the operator one `allowance_halted` delivery per scope, limit, window and ceiling, with the
-  warning's twelve keys and `event` set to `allowance_halted`. A `ledger_unavailable` halt
-  notifies nobody. Claims go through the Phase 41 notice store and webhook queue, never a second
-  channel, and never change the guard's decision. Enable on every replica before relying on it:
-  an older build cannot parse `allowance_halted`. No public Rust item is added. See `MIGRATION.md`
-  §10.6.
-
-  **The halt reason in the heralds, and a vocabulary guard (plan 42-12).** A run the Treasurer
-  halted now renders one halt line in the markdown, JSON and table heralds, beside the allowance
-  line: `⛔ halted: allowance exhausted — 25.0000 of 25.0000 USD (api_key, window resets
-  2026-10-06T00:00:00Z)` for a window ceiling, `(tenant, lifetime cap)` for a lifetime one, and
-  `⛔ halted: allowance could not be evaluated (ledger unavailable)` for a ledger outage. The line
-  names the scope kind, the figures and the window end, never a tenant id, a key name or a key
-  value; a run without a halt reason renders exactly as before. New public surface:
-  `HaltReason::herald_line`, `HALT_REASON_METADATA_KEY`, `ExecutionMetadata::with_halt_reason` and
-  `ExecutionMetadata::halt_reason_display` (core); the engine-path herald sink folds the reason in
-  from the run's own `RunFinished`. `tests/treasurer_vocabulary_guard.rs` keeps `Treasurer` a
-  framework-only word (ALLOW-05, ADR-0050): it fails on the word under `examples/`, `benches/`
-  or any fixture tree, and on the downstream fixture term outside its guardrail-documenting files,
-  and it proves it can fail by scanning a planted temporary tree first. See `MIGRATION.md` §10.2.
-
-- **A per-run token budget derived from the remaining allowance (ALLOW-05; Phase 42 plan 42-07,
-  ADR-0057).** The `Treasurer` can now turn what is left of a principal's tightest allowance
-  ceiling into a token count for the agent loop: `floor(remaining * 1_000_000 / dearest price)`,
-  where the dearest price is the largest of the model's five `treasurer.pricing` axes, computed
-  in `i128` and saturated to `u32` (`Treasurer::with_pricing`, `Treasurer::derive_budget`, and the
-  new defaulted `AllowanceAdmissionPort::admit_for_model`). A free model gets no budget, a zero
-  figure is refused like an exhausted allowance, and a principal with a ceiling calling a model
-  with no price row is refused with the new `AdmissionError::ModelUnpriced`. The one existing
-  `TokenBudget` cutoff now enforces the tighter of the operator's figure and the per-run derived
-  one, read from the call's `RunScope` (`derived_token_budget`) through `ModelCallContext`; when
-  the allowance binds, including a tie, the run ends with the new
-  `StopReason::AllowanceHalted` (stop reason `allowance_halted`; neither successful nor a
-  failure) after the response that crossed it, keeping that response and the truncation notice.
-  `ModelCallLimit`, `ToolCallLimit` and the Commissary are unchanged. Installing the cutoff on
-  every per-agent service and the HTTP and worker wiring land in plans 42-08 and 42-09; see
-  `MIGRATION.md` §10.2.
-
-  **The HTTP agent routes stop on the allowance (plan 42-08).** Every per-agent service now
-  installs the one `TokenBudget`, `build_run_api` prices the `Treasurer` from `treasurer.pricing`,
-  and `POST /v1/agents/{id}/execute`, `execute/stream` and `jobs` admit with the agent's model and
-  hand the derived budget to the run. A call whose derived budget is crossed answers `200` with
-  `stop_reason: "allowance_halted"` and a `halt_reason` object (`ExecuteResponse.halt_reason`, the
-  same object `GET /v1/runs/{id}` returns, built by `HaltReason::wire_json`), keeping the partial
-  output; the job result and the `done` of a buffered `execute/stream` (an agent with no streaming
-  backend) carry the same. A true streamed `execute/stream` call is one provider call and is not
-  cut mid-flight: its `done` stays `{ "done": true, "usage" }` byte for byte unless the final
-  chunk's `total_tokens` strictly exceeds the derived figure, in which case it also carries an
-  informational `halt_reason` reporting the crossing. A principal with an allowance ceiling
-  calling an agent whose model has no `treasurer.pricing` row is refused `422 model_unpriced`
-  (`ApiError::model_unpriced`, `details.model`, no `Retry-After`) before the agent runs on all
-  three routes; a derived budget of zero is refused `429 allowance_exhausted`. The frozen v0.9
-  golden gate carries a fourth sanctioned exception for the two additive wire changes, and
-  `openapi.json` is regenerated; see `MIGRATION.md` §10.2 and §10.6.
-
-  **Agent-kind runs stop on the allowance (plan 42-09).** A run of an agent-kind assistant
-  (`Runnable::Agent`) is now bounded by the caller's allowance. `POST /v1/runs` admits it with the
-  agent's model, so an unpriced model under a ceiling answers `422 model_unpriced` (the new
-  `RunSubmissionError::ModelUnpriced { model }`, mapped by `map_submission_error`) and an
-  allowance too small for one token answers `429 allowance_exhausted`, before any run row. The
-  worker re-derives the budget at dispatch and the run ends after the response that crosses it,
-  recorded `halted` (it was `completed`, unbounded, before) with the `allowance_exhausted`
-  `halt_reason`, `error: null` and the partial output kept; the SSE `done` and the `halted`
-  webhook carry the reason. A zero or exhausted figure at dispatch, or an unreadable ledger
-  (`ledger_unavailable`), records the same halt without calling the model; a model that lost its
-  price row records `failed` naming the model. The shared run-engine service installs the
-  `TokenBudget` in Treasurer-only mode, so no engine node is ever capped. Agent-kind runs have no
-  checkpoint: resume by a fresh `POST /v1/runs` (recorded in `.planning/WINDOWS.md`). A
-  schedule-fired run refused as unpriced is logged and counted as a submission error, never an
-  allowance skip. `openapi.json` is regenerated (the `422` on `POST /runs`); see `MIGRATION.md`
-  §10.2 and §10.6.
-
-- **Facade re-export of the allowance module (Phase 41 plan 41-09, D-20).** The `paladin` facade now
-  re-exports `paladin::core::platform::container::allowance` (`AllowanceRefusal`, `AllowanceWarning`,
-  `AllowanceNotice`, `Admission`, `NoticeRecord`, `NoticeOutcome`, `crosses_warn_threshold`, ...), beside
-  `container::principal` and `container::treasury_ledger`, so a facade user needs no direct
-  `paladin-core` dependency to name them. `.project/current-exports.txt` is refreshed; ADR-0056
-  records the admission model and `MIGRATION.md` §10.2 carries one consolidated new-types row per crate.
-
-- **Per-API-key rolling-window allowances, refused at admission (ALLOW-01, ALLOW-02; Phase 41
-  plan 41-01).** A new `treasurer.allowance.api_keys.<name>: { period, amount }` config subtree
-  (`period` as `<integer><m|h|d>` from `1m` to `366d`, `amount` a decimal string in whole
-  currency units; omitted, it is inert) is checked at admission by the new `Treasurer` service
-  (`AllowanceAdmissionPort`, `paladin-ports`) against the spend ledger's new
-  `TreasuryLedgerPort::balance` read -- a defaulted method, overridden by the in-memory and
-  SQLite adapters. An exhausted caller is refused by `POST /v1/runs` with
-  `429 allowance_exhausted` (`error.details`: `scope`, `kind`, `balance`, `ceiling`,
-  `window_start`, `window_end`) and a `Retry-After` computed from the ledger's own clock, before
-  any run is persisted; a request with no principal, or a principal with no allowance entry, is
-  never gated. Windows are tumbling and aligned to the UTC epoch, so a tenant can spend up to
-  twice an allowance across one boundary, by design. `RunSubmissionService::with_treasurer`,
-  `RunSubmissionError::AllowanceExhausted` and `ApiError::allowance_exhausted` are the new
-  public surface; see `MIGRATION.md` §10.2 and §10.6. Later Phase 41 plans extend this entry.
-  **Plan 41-03 completes the operator grammar:** `treasurer.allowance` now also takes
-  `tenants.<id>` entries, an optional `lifetime` cap and per-entry `warn_at`, a global `warn_at`
-  (default `80`), and an optional operator `webhook { url, secret }` target (the secret is
-  redacted from `Debug` and `Serialize`; supply it with `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET`,
-  since a `${VAR}` placeholder in YAML is not expanded). `paladin-server` now refuses to boot,
-  naming the path, when an allowance entry is set while `run_store.backend` is `disabled` or
-  names an API key or tenant the authentication configuration does not know. `build_run_api`
-  builds the one `Treasurer` over the run store's ledger and returns it as
-  `RunApiHandles.treasurer`; `paladin_web::agent_auth::OPEN_ACCESS_PRINCIPAL_ID` names the
-  open-access principal.
-  **Plan 41-04 closes the coverage:** the same admission check now also gates
-  `POST /v1/threads/{id}/fork` and the three HTTP agent routes that start spend --
-  `POST /v1/agents/{id}/execute`, `/execute/stream` (a plain JSON `429` before any stream opens)
-  and `/jobs` (refused before a job id is issued) -- so a caller refused at `POST /v1/runs`
-  cannot spend the same allowance through another route. An `Admin` principal is bound like any
-  other, and a failing allowance check answers `500` and runs nothing. `AgentApiState` gains
-  `treasurer` and `with_treasurer`, and `paladin-server` hands it the Treasurer `build_run_api`
-  built. The `429` is published on all five operations in `crates/paladin-web/openapi.json`; the
-  frozen v0.9 golden gate carries a third sanctioned exception that removes only that `429`
-  entry from the three agent operations.
-  **Plan 41-05 brings schedule-fired runs under allowances:** `POST /v1/schedules` records the
-  creating principal's tenant id and API key name on the schedule (migration `010` on SQLite and
-  PostgreSQL), every fired run is attributed to that creator, and a tick whose creator's
-  allowance is exhausted is skipped (`SkipReason::AllowanceExhausted`, counted in
-  `skipped_ticks`) instead of spending. A schedule created before this release has no recorded
-  creator and keeps firing unattributed and ungated; the creator is never exposed in the
-  schedule responses, and the invocation role check is unchanged at fire time.
-  **Plan 41-06 adds the warn-threshold notice store:** a balance that reaches `warn_at` percent of
-  a ceiling on an admitted request now claims one durable notice per scope, limit, window and
-  ceiling (new `treasury_notices` table, migration `011` on SQLite and PostgreSQL; new
-  `TreasuryNoticePort`; `Treasurer::with_notices`). The once-per-window rule is enforced by the
-  store, not by process memory, so it holds across replicas; raising a ceiling re-arms the
-  notice, and a notice-store failure never blocks or fails the run. The notice carries the
-  admitting run's id, and a run that is admitted but never persisted gives its notice back. The
-  trace event, herald line and operator webhook that observe the notice follow in later entries.
-  **Plan 41-07 adds the trace event and the herald line:** each won notice becomes exactly one
-  new `TraceEvent::AllowanceWarning` (scope kind, limit kind, balance, ceiling, window bounds and
-  `warn_at`; never a tenant id or key name) on the admitted run's own trace stream, emitted by the
-  run worker on the run's first dispatch before `RunStarted` (graph runs and agent-kind runs alike;
-  a redelivery or an input resume emits nothing) so its `seq` never collides. The markdown, JSON
-  and table heralds render one allowance line (`⚠ allowance: 82% of 25.0000 USD (api_key, window
-  resets 2026-10-03T00:00:00Z)`, or `... (tenant, lifetime cap)`) through the shared
-  `ExecutionMetadata::allowance_warning_display`; a run without a warning renders exactly as
-  before. On the HTTP agent routes the warning travels in the new `RunScope::allowance_warnings`
-  and is emitted once by `PaladinExecutionService`, and the streamed final chunk's metadata
-  carries the same line. New public items: `RunWorkerPool::with_treasury_notices`,
-  `RunScope::with_allowance_warnings`, `ExecutionMetadata::with_allowance_warnings` and
-  `allowance_warning_display`, `AllowanceWarning::herald_line`. Upgrade every replica before
-  setting `warn_at`: an older build reads the new `run_traces` record kind as unknown.
-  Migration `012` adds a tenant-wide `treasury_ledger (tenant_id, attributed_at)` index for the
-  admission balance read.
-  **Plan 41-08 adds the operator webhook:** with `treasurer.allowance.webhook` configured, every
-  notice an admission wins is delivered once to the operator URL through the existing durable
-  webhook queue -- a `webhook_deliveries` row with the new `RunEventKind::AllowanceWarning`
-  (`RunEventKind` is now `#[non_exhaustive]` and gains `as_str`), signed
-  `X-Paladin-Signature: sha256=<hex>` with the operator secret (held on the delivery service,
-  never on the row) and carrying `X-Paladin-Event: allowance_warning`. The twelve-key payload
-  (`AllowanceWarningPayload`: `event`, `scope`, `kind`, `balance`, `ceiling`, `window_start`,
-  `window_end`, `warn_at`, `run_id`, `timestamp`, `tenant_id`, `api_key_id`) never carries run
-  input, a key value or a secret. The row is not listed under the admitting run's
-  `GET /v1/runs/{id}/webhook-deliveries`, and a caller still cannot subscribe a webhook to
-  `allowance_warning`. `paladin-server` SSRF-checks the URL at boot (a private target needs
-  `webhooks.allow_private: true`). New public items: `OperatorNoticeTarget`,
-  `OPERATOR_NOTICE_THREAD_ID`, `Treasurer::with_operator_webhook`,
-  `WebhookDeliveryService::with_operator_notice_secret`, `AllowanceWarningPayload`. **Enable the
-  webhook only after every replica runs this build:** an older replica rejects the unknown
-  `allowance_warning` row for its whole delivery batch. Omitting `webhook` disables only this leg.
-
-- **Operator-configured treasurer price table, wired into both production run paths (PRICE-01,
-  PRICE-03; Phase 38 plan 38-03).** A new `treasurer:` config section (`Settings.treasurer:
-  TreasurerConfig`, `Settings::get_treasurer_config`) lets an operator write a per-model price
-  table as decimal strings per 1M tokens (`treasurer.pricing.<model>.{prompt,completion,
-  cache_read,cache_write,reasoning}`), validated at boot with a path-precise error naming the
-  offending model and axis — a hand-rolled exact-integer parser (no `rust_decimal`, no `f32`/
-  `f64`, no new dependency) rejects negative, malformed, too-fine (>9 decimal places) and
-  overflowing prices. Omitting the section changes nothing: the default is an empty table in
-  `"USD"`, and `paladin-server` boots identically to a config with no `treasurer:` key. Only
-  `treasurer.currency` has an env override (`APP_TREASURER_CURRENCY`); the `pricing` map is
-  config-file only. `build_agent_registry`, `FacadeProvisioner` (`POST /agents`, new
-  `with_treasurer` builder) and `paladin_port_from_settings` (the run engine) all build this
-  table and wrap their resolved `LlmPort` with `paladin_llm::pricing::with_pricing` before any
-  call is made; an invalid price aborts each build path — and stops `paladin-server` at boot,
-  before any agent or provider is constructed — with an error naming `treasurer.pricing`.
-  `paladin_core::platform::container::cost` is now re-exported from the facade's `core::platform`
-  container list. Purely additive — no `MIGRATION.md` §10.2 row (D-00g).
-
-- **Treasurer cost arithmetic and the streamed cost producer (PRICE-02, PRICE-03; Phase 38 plan
-  38-02).** `paladin-core::platform::container::cost` adds `Cost` (`i64` nano-unit amount plus a
-  validated `CurrencyCode`), `PriceRow`/`PriceTable` (nano-units per 1M tokens, keyed by bare
-  model name), the pure `cost_of_call` function, and `CostTally` (the single "unpriced poisons
-  the run total, never a partial sum" implementation both the engine and agent loop will share).
-  Every intermediate product is computed in `i128`, rounded half-up exactly once per call, and
-  saturates into `i64` — no floating point anywhere in the module. `paladin-llm::pricing` adds
-  `PricingLlmAdapter`, a `FallbackLlmAdapter`-shaped decorator that prices a streamed call's
-  terminal chunk from its own usage, with a process-wide, capacity-bounded warn-once log line
-  per unpriced model name. `StreamingResponse` (`paladin-ports`) and `ChunkMetadata`
-  (`paladin-ports`) both gain an additive `Option<Cost>` field (both `#[non_exhaustive]`, so no
-  downstream struct literal breaks), and `ChunkMetadata` additionally gains an
-  `Option<ExecutionMetadata>` `execution` field. `ExecutionMetadataBuilder::cost` is the one
-  display-edge conversion from the authoritative nanos figure to `ExecutionMetadata`'s `f64`
-  `cost_estimate`; `ExecutionMetadata::cost_currency`/`cost_display` read the currency back.
-  `PaladinExecutionService::execute_stream` now builds a real `ExecutionMetadata` on every final
-  streamed chunk (priced or not) and exposes it through the new
-  `PaladinExecutionService::finalize_stream_output`, mirroring `format_result` for the streaming
-  path. `MarkdownHerald::finalize_stream` renders `0.0450 USD` instead of a hard-coded `$` prefix.
-  Purely additive — no `MIGRATION.md` §10.2 row (D-00g).
-
-- **ADR-0052/ADR-0053 — Treasurer attachment point and ledger balance model (PRICE-02, PRICE-03;
-  Phase 38 plan 38-01).** Two accepted ADRs, recorded before any pricing code landed: metering
-  lives in the `PricingLlmAdapter` decorator at the `LlmPort` boundary on both run paths, with the
-  halt raised at the `WarEngine` superstep boundary and the agent loop's existing `TokenBudget`
-  cutoff (ADR-0052); the treasury ledger Phase 39 implements is append-only with the balance
-  derived on read, `reserve`/`settle`/`release` row kinds, `i64` nano-unit amounts and a
-  `(run_id, superstep, attempt)` settlement idempotency key at superstep-aggregate granularity
-  (ADR-0053).
-
-- **Cost priced on the non-streaming `LlmPort::generate` path (PRICE-03; Phase 38 plan 38-04).**
-  `LlmResponse` (`paladin-ports`) gains an additive `cost: Option<Cost>` field, positioned directly
-  after `usage`; `PricingLlmAdapter::generate` prices each response from its own served model and
-  usage — surviving a `FallbackLlmAdapter` hop to a differently-named model — via a
-  `price_or_warn(table, model, usage)` helper shared with the streaming path, so the pricing/
-  warn-once rule (D-08) cannot diverge between the two. See `MIGRATION.md` §10.2.
-
-- **JSON and table heralds render cost and currency (PRICE-03; Phase 38 plan 38-05).**
-  `JsonHerald::finalize_stream` emits a `currency` field beside `cost_estimate` (`null` for both
-  when unpriced); `TableHerald::finalize_stream` renders the run's real `ExecutionMetadata`
-  (model, duration, prompt/completion tokens plus any reported cache/reasoning sub-counts, total,
-  errors, and a currency-coded `Cost` row only when priced) in place of four hard-coded
-  placeholder rows.
-
-- **Cost carried on the trace stream and summed per run, on both run paths (PRICE-03; Phase 38
-  plans 38-06, 38-07).** `TraceEvent::NodeFinished`/`RunFinished` (`paladin-core`) gain additive
-  `cost: Option<Cost>` fields; `TraceDispatcher::total_cost()` folds every priced node
-  synchronously inside `emit()` itself — never the async consumer — the same "one unpriced call
-  poisons the run total, never a partial sum" rule `CostTally` already enforces, and all five
-  `WarEngine` `RunFinished` emission sites populate `cost: trace.total_cost()`. `PaladinResult`
-  (`paladin-core`) gains an additive `cost: Option<Cost>` field; the agent loop's per-run
-  `CostTally` sums each model call's cost beside its usage, and the engine's `NodeDispatchResult`
-  bridges each Paladin attempt's own real cost into that attempt's `NodeFinished.cost`, so
-  `RunFinished.cost` is a real, end-to-end figure on both run paths — never a fabricated zero when
-  any call was unpriced. See `MIGRATION.md` §10.2.
-
-- **`ExecutionMetadata::from_run_finished` and `HeraldTraceSink` — the engine-path cost producer
-  (PRICE-03; Phase 38 plan 38-08).** `ExecutionMetadata::from_run_finished(record, model_used)`
-  builds a real `ExecutionMetadata` from a completed run's `TraceEvent::RunFinished`; the new
-  `HeraldTraceSink` (`src/infrastructure/telemetry/herald_sink.rs`) hands it to an
-  operator-configured `Herald`'s `finalize_stream` on every engine run, wired in via
-  `RunWorkerPool::with_herald` and `build_run_api`'s `settings.herald` config
-  (`Settings::create_default_herald`). The `cost_estimate`/`total_cost()` rustdoc reserved-note
-  on `ExecutionMetadata` now reads "produced by the Treasurer" instead of "no in-tree producer
-  yet," on both run paths.
-
-- **`TreasuryLedgerPort` — the durable spend ledger, on three adapters behind one contract suite
-  (LEDGR-01; Phase 39 plans 39-01, 39-02, 39-03).** `paladin-ports::output::treasury_ledger_port`
-  adds `TreasuryLedgerPort` (`reserve`/`settle`/`release`/`spend`/`store_now`) and
-  `TreasuryLedgerError`, mirroring `RunRepositoryPort`'s house shape (X-06). `InMemoryTreasuryLedger`,
-  `SqliteTreasuryLedger` and `PostgresTreasuryLedger` (`paladin-storage::treasury`) all pass one
-  shared, generic-async-function contract suite unmodified — including the phase's first red test,
-  16 concurrent reserves against a ceiling of 15 admitting exactly 15 and refusing 1 (LEDGR-02) on
-  every adapter. A new `007_create_treasury_ledger_table` migration (`crates/paladin-storage/
-  migrations/{sqlite,postgres}`) is append-only: signed contributions (`reserve` `+hold`, `settle`
-  `actual − hold` or `actual` when unreserved, `release` `-hold`), `i64` nano-unit amounts with an
-  ISO 4217 currency code, a partial unique settlement index on `(run_id, superstep, attempt) WHERE
-  kind = 'settle'` (LEDGR-03), and a `model_breakdown` column (D-02) folded in Rust so `spend`'s
-  per-model view is identical across all three adapters. Every row carries `tenant_id`/`api_key_id`;
-  production writers stamp the documented `LedgerScope::unattributed()` sentinel scope until Phase
-  40 replaces its source (D-01).
-- **Race-proof `reserve` and idempotent `settle`/`release`, serialized per scope (LEDGR-02,
-  LEDGR-03; Phase 39 plans 39-02, 39-03).** SQLite opens each reserving transaction with `BEGIN
-  IMMEDIATE`; Postgres takes a transaction-scoped `pg_advisory_xact_lock` keyed on the scope before
-  any balance `SUM`; the in-memory adapter holds one `tokio::sync::Mutex` across the whole method
-  body — all three admit a hold only when `balance + hold <= ceiling`, refusing with a typed
-  `TreasuryLedgerError::Refused { balance, hold, ceiling }` otherwise. A duplicate settlement key is
-  a success (`SettleOutcome::AlreadySettled`), never an error, store-enforced by the same partial
-  unique index plus `INSERT ... ON CONFLICT DO NOTHING` on every adapter.
-- **`paladin-cli treasury spend` — queryable spend with no server (LEDGR-04; Phase 39 plan
-  39-01).** A new `treasury` subcommand group reads the configured `RunStoreConfig` store directly
-  (mirroring `run export`): `--since`/`--until` (RFC 3339, default the last 24 hours),
-  `--group-by tenant|api-key|run|model` (default `tenant`), optional `--tenant`/`--api-key`/`--run`
-  filters, and `--format table|json`. Amounts print as four decimals plus the currency code
-  (`0.0450 USD`); a window spanning two currencies prints one row per currency, never combined.
-- **Production settle-only writers fill the ledger on both run paths (LEDGR-03, LEDGR-04; Phase 39
-  plans 39-04, 39-05, 39-07).** `WarEngine::with_treasury_ledger(ledger, SettlementContext)`
-  settles exactly one aggregated row per superstep attempt, synchronously and awaited at the
-  superstep boundary — never through the drop-oldest trace channel — including nested Battalion
-  child runs (rolled into the parent superstep) and Aegis-retried nodes (only the eventual
-  successful attempt contributes); `RunWorkerPool::with_treasury_ledger` attaches it per run keyed
-  by the run's real, persisted `(run_id, superstep, attempt)` (D-07: `attempt` is `Run.attempt`,
-  bumped on redelivery/resume, never re-invented). `PaladinExecutionService::with_treasury_ledger`
-  and the new `AgentLoopSettlement` enum (`EveryCall`/`PlatformRunsOnly`) settle every priced
-  agent-loop model call, buffered or streamed, exactly once — `PlatformRunsOnly` is the mechanism
-  that keeps the run engine's shared agent service from ever double-charging a node already settled
-  by the engine's own superstep writer. A ledger failure is logged and never fails, retries or
-  halts a run (the ledger is observational until Phase 41).
-- **`RunScope::with_run_id` and the production ledger composition points (LEDGR-04; Phase 39 plans
-  39-05, 39-07).** `RunScope` (already `#[non_exhaustive]`) gains an additive `run_id:
-  Option<RunId>` field and `with_run_id` builder, carrying the Platform API run id into the agent
-  loop's settle writer for an agent-kind run. `build_agent_registry_with_ledger` and
-  `FacadeProvisioner::with_treasury_ledger`/`paladin_port_from_settings_with_ledger` are the two
-  production installation points for HTTP agents and the run engine's shared execution service,
-  respectively; both existing ledger-less functions keep their signatures, delegating with `None`.
-  `build_treasury_ledger(&RunStoreConfig)` builds the ledger from the same backend selection the
-  run repository already uses (`Disabled` → `None`, `Sqlite`/`Postgres` → the matching adapter),
-  shared by `build_run_api` and `paladin-server.rs`'s boot path.
-
-- **Tenant identity: every authenticated principal carries a server-derived tenant (TENANT-01;
-  Phase 40 plans 40-01, 40-03; ADR-0054).** `Principal` (`paladin-web`) gains a required
-  `tenant_id: TenantId`, looked up from operator configuration inside `authenticate()` and nowhere
-  else — no request header, query parameter or body field can name a tenant, and a caller presenting
-  key A cannot obtain tenant B by any request-side means. `TenantId`/`TenantIdError`
-  (`paladin_core::platform::container::principal`, a new module re-exported from the facade as
-  `core::platform::container::principal`) is the validated identifier (non-empty, no whitespace,
-  printable ASCII, at most 128 bytes). The key-to-tenant mapping is the new
-  `http.auth.api_keys[].tenant` (required on every key) and `http.auth.bearer_token.tenant`
-  (required when bearer auth is enabled); the new `AuthConfig::validate` checks both at boot and
-  additionally rejects an empty key value, an invalid or duplicate key `name` and a duplicate key
-  value, naming keys by `name` and never printing a secret. There is no implicit default tenant.
-  See `MIGRATION.md` §10.2, §10.5 and §10.8 step 3.
-
-- **Run attribution: every run and every ledger settlement records the principal that caused it
-  (TENANT-02; Phase 40 plans 40-01, 40-02, 40-04, 40-05).** `Run.submitted_by:
-  Option<RunAttribution { tenant_id, api_key_id }>` is stamped by `RunSubmissionService::submit`/
-  `fork` from the caller's `PrincipalRef` and persisted in the new nullable `runs.tenant_id`/
-  `runs.api_key_id` columns (migration `008` on SQLite and PostgreSQL, `RUN_SCHEMA_VERSION`
-  unchanged) under the `idx_runs_tenant_submitted` index; `GET /runs/{run_id}` and `GET /runs`
-  surface it as `RunResponse.submitted_by` (`null` for an unattributed run; never the key value,
-  never the role). Ledger settlements now carry the submitting tenant and API key:
-  `LedgerScope::from_attribution` is the one core mapping, `RunScope.ledger_scope`/
-  `RunScope::with_ledger_scope` carry it into the agent loop, the worker derives both the engine
-  `SettlementContext.scope` and the agent-kind scope from `run.submitted_by`, and the HTTP
-  agent-execute routes settle under the calling principal through the new defaulted
-  `PaladinExecutorPort::execute_scoped`/`StreamingExecutorPort::execute_stream_scoped` (every
-  existing implementor compiles unchanged). The Phase 39 `unattributed` sentinel is written only
-  where no principal exists (schedule-fired runs, same-process embedders).
-
-- **Tenant-scoped run reads with an Admin bypass (PLAT-07; Phase 40 plans 40-01, 40-02, 40-05;
-  ADR-0054).** `RunReadScope { All, Tenant(TenantId) }` is the one shared visibility rule: a
-  principal sees a run iff the run's recorded tenant is its own, or its role is `Admin` (an
-  unattributed run is visible to Admin only). `RunQuery.scope` applies it inside every
-  `RunRepositoryPort::list` adapter (`WHERE tenant_id = ?`, so scoped pages and cursors stay a
-  correct keyset walk, composing with the `thread_id`/`assistant_id`/`status` filters), and the
-  controller helper `load_visible_run` gates every `/runs/{run_id}*` route — `GET /runs/{run_id}`,
-  `/stream`, `/webhook-deliveries` and `POST /runs/{run_id}/cancel`. Another tenant's run answers
-  the byte-identical `404 unknown run` a missing run does, never `403`. A route-matrix test and the
-  end-to-end `tenant_scoped_run_read_tracer` pin the behaviour. Closes `WINDOWS.md` row 32
-  (WR-03); ADR-0054 records the model.
-
-- The `AdvancedFileStoragePort` multipart trio is implemented on `MinioAdapter` behind an opaque,
-  self-describing upload-id token that is re-validated on every decode, and the `FileStoragePort`
-  contract suite gained multipart, ETag and exercised-presigned-URL cases, taking it to 11 cases
-  (STORE-02; Phase 45 plan 45-01).
-
-- **The dated per-model registry is seeded from a live probe (PARITY-04; Phase 50 plan 50-06;
-  D-05/D-08).** `paladin-llm` gains one dated table per vendor (Anthropic, OpenAI, DeepSeek, Kimi,
-  Qwen, Grok, Gemini, Ollama) whose every value traces to the operator's live seed probe of
-  2026-10-15, and every adapter resolves its models through its own table: a listed model gets
-  its measured temperature, `top_p`, penalty, stop, JSON-format and window facts and its
-  `verified_on` date; any other model still runs on the adapter-wide fallback, visibly
-  unprofiled. A model, field or vendor the probe did not evidence is left out (Ollama's table is
-  empty because the probe skipped it). New public constants `ANTHROPIC_DEFAULT_MODEL` and
-  `DEEPSEEK_DEFAULT_MODEL` give the two adapters whose defaults were inline strings the same
-  named default the other adapters already had.
-
-- **The Commissary and the HistoryTrimmer ration against the model's own window (PARITY-04;
-  Phase 50 plan 50-07; ADR-0061, D-05).** `paladin_llm::window::effective_capabilities(port,
-  model)` (also re-exported from the facade) returns the port's `ProviderCapabilities` with
-  `max_context_tokens` replaced by the model profile's `context_window` when it has one, and
-  `Commissary::for_model(port, model, counter, plan)` builds a Commissary over it, so `kimi-k3` is
-  rationed against its seeded 1,048,576-token window instead of the adapter-wide 262,144. The
-  `HistoryTrimmer` resolves its limit through the same function: its config table still wins, its
-  `Default` policy still applies when nothing declares a window, and no `WindowSource` variant was
-  added. `Commissary::new` and `Commissary::from_port` are unchanged, and a Commissary resolves
-  its window once, so a different model needs a new one.
-
-- **Configuration knobs on every adapter config (PARITY-03; Phase 50 plan 50-08; D-12).** Each of
-  the nine `paladin-llm` adapter configs (`OpenAIConfig`, `AnthropicConfig`, `DeepSeekConfig`,
-  `GeminiConfig`, `KimiConfig`, `QwenConfig`, `GrokConfig`, `OllamaConfig`,
-  `OpenAiCompatibleConfig`) now carries `max_tokens` (the default output budget sent when a
-  request sets none; Anthropic keeps its required `u32`, OpenAI's `new` and `from_env` keep
-  `Some(4096)`), `max_retries`, `context_window` (an adapter-wide window override) and
-  `model_overrides` (a `BTreeMap<String, ModelOverride>`, the per-model override), each read by its
-  adapter, with the `#[must_use]` builders `with_max_tokens`, `with_max_retries`,
-  `with_context_window` and `with_model_overrides`. A configured `max_tokens` passes through the
-  same maximum-output check as a request's own value; an invalid override or a window below a
-  model's maximum output fails adapter construction with an error naming the provider and the
-  model. The configs that hold a key (all but `OllamaConfig`) now print it as `<redacted>` from
-  `Debug`. Every existing `new`, `from_env` and `from_parts` signature is unchanged; harmonising
-  the drifted `new` argument lists is a later, separately registered break
-  (`.planning/todos/pending/2026-10-16-harmonise-llm-config-new-signatures.md`).
-
-- **Config-driven provider construction (PARITY-03; Phase 50 plan 50-09; D-12, D-13).**
-  `LlmProviderFactory::create_from_config(&LlmConfig, provider, model)` builds any of the nine
-  adapters from its `llm.<provider>` block, and `LlmProviderFactory::is_configured(Option<&LlmConfig>,
-  provider)` reports whether a provider is available by its block or its environment (a provider
-  configured purely in YAML is available, unlike `list_available_providers`). The block gains
-  three keys -- `max_tokens`, `context_window` and `models.<model-id>` (the per-model override,
-  the same shape as `ModelOverride`) -- all optional and skipped when empty, so every existing
-  YAML file loads to the same values. Each input is taken from the most specific statement that
-  sets it, field by field: the per-agent model, then the block, then the provider's legacy
-  environment variables (exactly the ones its `from_env` reads), then the adapter's compiled
-  default; an environment variable never overrides a value written in the block. A model that is
-  a seeded (or overridden) reasoning model gets a 300 s timeout when neither the block nor the
-  environment sets one. `api_key` may be empty (the provider's variable fills it) or an exact
-  `${NAME}` placeholder naming the variable that holds it; `abc${X}` and `$X` are used literally
-  and an unset placeholder variable is a construction error, never sent to the vendor. Every
-  error names the provider and the model (`provider 'kimi' (model 'kimi-k3'): ...`) and the
-  variable it tried, never a key value, and a malformed model id (empty, whitespace or control
-  characters, `..`, `?`, `#`, `%`, a leading `/`, over 256 characters) is refused before any
-  adapter is built. `LlmProviderFactory::create(name)` goes through the same layering with no
-  block.
-
-- **The facade exports all nine adapter/config pairs and the `llm:` config types (PARITY-03;
-  Phase 50 plan 50-10; D-14, D-00f).** `paladin` re-exports `KimiAdapter`/`KimiConfig`,
-  `QwenAdapter`/`QwenConfig`, `GrokAdapter`/`GrokConfig`, `GeminiAdapter`/`GeminiConfig`,
-  `OllamaAdapter`/`OllamaConfig` and `OpenAiCompatibleAdapter`/`OpenAiCompatibleConfig`, each behind
-  its existing `llm-*` feature (`llm-kimi`, `llm-qwen`, `llm-grok`, `llm-gemini`, `llm-ollama`,
-  `llm-openai-compatible`), and `LlmConfig`, `LlmProviderConfig` and `ModelOverride`
-  unconditionally, so a consumer can build an `LlmConfig` and call
-  `LlmProviderFactory::create_from_config` without a second path dependency. ADR-0046's default
-  features are unchanged (`llm-openai`, `llm-anthropic`, `llm-deepseek`); naming a feature is what
-  compiles its adapter in. `FacadeProvisioner::with_llm_config` carries the operator's `llm:`
-  section to runtime-provisioned agents (`from_settings` sets it). `config.example.yml` documents
-  `max_tokens`, `context_window` and a `models:` override, and uses the adapters' current default
-  models. The public-API baseline (`.project/current-exports.txt`) gains `LlmConfig`,
-  `LlmProviderConfig` and `ModelOverride` (the feature-gated pairs are outside the default-feature
-  baseline).
-
-- **Typed reasoning text on the streaming delta, and a constructor for `LlmResponse` (PARITY-05;
-  Phase 50 plan 50-11; D-11).** `StreamingResponse` gains `reasoning: Option<String>` (additive:
-  the struct is `#[non_exhaustive]`) and the chainable `StreamingResponse::with_reasoning`, the
-  vendor's reasoning text for that chunk, concatenated in wire order by the caller. `LlmResponse`
-  gains `LlmResponse::new(request_id, model, content, finish_reason, usage)`, which leaves the
-  other fields neutral, so a caller that uses it is insulated from the next added field, and the
-  chainable `LlmResponse::with_reasoning`. Both `with_reasoning` methods store `None` for text
-  that is empty after trimming. Reasoning is a typed field, never `metadata`. Adapters start
-  filling the fields in plans 50-12 and 50-13.
-
-- **`LlmError::Refusal`, reasoning text and cache-write tokens (PARITY-05; Phase 50 plan 50-12;
-  D-09, D-11, D-11a).** `LlmError` gains `Refusal { provider, model, detail }`: a vendor's own
-  refusal, permanent (never retried), distinct from a `ContentFilter` finish and from an empty
-  answer. `detail` is the vendor text with credentials removed first and then bounded to 512
-  characters. The Kimi, Qwen, Grok, Ollama and generic OpenAI-compatible presets and OpenAI
-  report it (OpenAI's `content: null` plus `refusal` shape was a parse error before). The compat
-  presets and DeepSeek now fill `LlmResponse.reasoning` and each streamed
-  `StreamingResponse.reasoning` from `reasoning_content`, and the compat presets map
-  `prompt_tokens_details.cache_write_tokens` into `TokenUsage.cache_write_tokens`. The match arms
-  every `LlmError` classifier needs (`transience`, `typed_origin`, `llm_error_class`,
-  `classify_fetch_failure`) name the new variant. `MIGRATION.md` 10.1 M-B-16.
-- **A fallback chain can send each hop its own model (PARITY-06; Phase 50 plan 50-14; D-15, D-10,
-  D-00h).** `FallbackStep { port, model }` (`FallbackStep::new`) and
-  `FallbackLlmAdapter::from_steps(Vec<FallbackStep>)` build a chain whose every hop is sent its
-  own model: before each hop the request's `model` is rewritten to the step's, on `generate` and
-  `generate_stream`, and that model (not the request's) is what the hop is paced under, so a 429
-  on hop 1 gates `(hop-1 provider, hop-1 model)` only. An Anthropic then Kimi chain no longer
-  sends `claude-*` to Moonshot. `FallbackLlmAdapter::new` is unchanged. Every served response
-  records the model the serving hop was sent under `paladin.served_model`
-  (`SERVED_MODEL_METADATA_KEY`) beside `paladin.served_by`, on `new` chains too.
-  `FallbackLlmAdapter::hop_on_refusal(bool)` (default `false`) is the explicit opt-in to trying
-  the next step when a hop answers `LlmError::Refusal`; every other permanent error still stops
-  the chain. `FallbackChainError::EmptyStepModel { index }` rejects an empty step model at
-  construction. The `paladin` facade re-exports `FallbackLlmAdapter`, `FallbackStep`,
-  `FallbackChainError`, `SERVED_BY_METADATA_KEY` and `SERVED_MODEL_METADATA_KEY`.
-- **`agent_runtime.model_fallback.steps` (PARITY-06; Phase 50 plan 50-14; D-15, RESEARCH Open
-  Question 7).** The configuration path now sends each fallback hop its own model too:
-  `steps: [{provider, model}]` is resolved through `LlmProviderFactory::create_from_config`
-  against the new `AgentRuntimeDeps.llm_config` and built with the new
-  `ModelFallbackMiddleware::from_steps` / `paced_steps`. Names only, never a credential. It is
-  mutually exclusive with `providers` (a validation error naming both keys); a `providers`-only
-  configuration builds exactly as before. `MIGRATION.md` 10.5.
-- **`PaladinResult.run_metadata` carries the run's `paladin.*` visibility keys (PARITY-02; Phase 50
-  plan 50-18; ADR-0061 (h), owner reading R-1 = `option-b`).** `PaladinResult` gains
-  `run_metadata: BTreeMap<String, String>`, directly after `served_by`: the `paladin.*` keys every
-  model call of the run stamped on its response (`paladin.params_omitted`,
-  `paladin.unprofiled_model`, `paladin.response_format_adjusted`, `paladin.served_model`), so an
-  omitted `auto_temperature`, an unprofiled model or a fallback hop is visible on the result
-  without scraping logs. `paladin.params_omitted` and `paladin.unprofiled_model` hold the
-  de-duplicated union of their comma-separated items in first-seen order; every other key holds
-  the last call's value; `paladin.served_by` keeps its own field and is not repeated; a key
-  without the `paladin.` prefix is never copied. Empty when no call stamped anything and then
-  absent from the serialised JSON (`#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]`),
-  so a payload written before this field existed is byte-identical. `paladin-web`'s
-  `ExecuteResponse` is not extended.
-- **Streamed calls carry the same visibility keys on their terminal chunk (PARITY-02; Phase 50
-  plan 50-18; ADR-0061 (h), owner reading R-1 = `option-b`).** `StreamingResponse` gains
-  `metadata: HashMap<String, String>` (additive: the struct is `#[non_exhaustive]`; empty and then
-  absent from the serialised JSON) and the chainable `StreamingResponse::with_metadata(key,
-  value)`. The compat engine (so Kimi, Qwen, Grok, Ollama and the generic OpenAI-compatible
-  adapter), OpenAI, DeepSeek, Anthropic and Gemini stamp, on the terminal chunk only, the keys
-  their buffered path stamps (`paladin.params_omitted`, `paladin.unprofiled_model`,
-  `paladin.response_format_adjusted`); an `Err` terminal item (refusal, empty completion) carries
-  none, and the `warn!` behaviour is unchanged. A `FallbackLlmAdapter` stream names the serving
-  hop on its terminal chunk with `paladin.served_by` and `paladin.served_model`, as `generate`
-  does on its response. `ChunkMetadata` (the final `PaladinStreamChunk` of a streamed
-  `PaladinExecutionService` run) gains `run_metadata: BTreeMap<String, String>` and
-  `ChunkMetadata::with_run_metadata`, populated by the same merge rule as
-  `PaladinResult.run_metadata` (and, having no `served_by` field, carrying `paladin.served_by`
-  too). The SSE `done` event of `paladin-web` is not extended.
-
-- **The Switching providers page, its drift test, the widened live smoke and the 17-case
-  conformance suite (PARITY-07, PARITY-01, PARITY-08; Phase 50 plans 50-01, 50-04, 50-15, 50-16).**
-  `docs/src/user-guides/switching-providers.md` explains the configuration-only swap, the library
-  path, the ADR-0061 parameter policy and its metadata keys, the window precedence, the 300 s
-  reasoning default, fallback chains, and carries a per-provider and per-model behaviour table and
-  a response-mapping table for all nine providers; the registry test
-  `switching_providers_page_lists_every_seeded_model` fails when the page and the seeded tables
-  disagree. `tests/provider_swap_matrix.rs` runs one agent definition against all nine providers
-  built from an `llm.<provider>` block (50 cases, none ignored). The shared conformance suite grew
-  from ten to seventeen cases and now measures all nine adapters, Anthropic included (capability
-  declarations match the wire, response format reaches the wire, empty stop completion buffered
-  and streamed, typed refusal, usage fields, unsupported parameters omitted and recorded). The
-  `live_vendor_smoke` example covers all nine providers, credential-gated (`SKIPPED` for an absent
-  credential, never a pass), with `--probe`, `--models` and `--dry-run`. Test and example surface
-  only; no public API change.
+- The `AdvancedFileStoragePort` multipart trio is implemented on `MinioAdapter` behind an opaque, self-describing upload-id token re-validated on every decode, and the `FileStoragePort` contract suite gains multipart, ETag and exercised-presigned-URL cases, taking it to 11 cases (STORE-02; plan 45-01).
 
 ### Changed
 

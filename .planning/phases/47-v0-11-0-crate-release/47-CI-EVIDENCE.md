@@ -278,6 +278,104 @@ Body content checked by `grep` on the read-back text: the heading `v0.11.0 — T
 
 **The earlier push run on `d900b21b` was cancelled, not failed.** `ci.yml` push run `40228639490` (head `d900b21b73ba5a06ab9a57c43d6e66d3d4f792cb`, created 2026-10-25T19:59:42Z) reads `status: completed`, `conclusion: cancelled`, updated 2026-10-25T21:04:48Z: the workflow's concurrency group (`cancel-in-progress` off `main`) cancelled it when the push of SHA-A0 landed. Its `Unit Tests (stable)`, `Unit Tests (beta)`, `Semver Checks (vs v0.9.0)`, `MSRV (Rust 1.88)` and `License & Dependency Policy` jobs had concluded `success` before the cancellation (plan 47-04 rows cite them); those are mid-plan observations on a different head and are **not** the proof of record. The proof of record is the runs on SHA-A0 above, read once by plan 47-06.
 
+### Plan 47-06 — every run on SHA-A0 (read 2026-10-25T23:10Z)
+
+**Pre-reads (before anything below was recorded).** `git fetch origin`; `git rev-parse origin/claude/laughing-dirac-e0h2ax` printed `d4e66b47628559b175f1958b4f5267058096dd7f` (= SHA-A0); `gh api repos/DF3NDR/paladin-dev-env/branches/main --jq .commit.sha` printed `df24689c3d1fd52b0e730105c15b22c2c4ad1404` (D-02: `main` unmoved); `GET /pulls/59` printed `head.sha` `d4e66b47628559b175f1958b4f5267058096dd7f`, `state` `open`, `mergeable_state` `blocked`. The local branch is three docs commits ahead of `origin` (`2d76e0cc`, `0a4e64e7`, `a8afb720`, all plan 47-05's, unpushed by design).
+
+**Every workflow run on SHA-A0**, once, via `gh api "repos/DF3NDR/paladin-dev-env/actions/runs?head_sha=d4e66b47628559b175f1958b4f5267058096dd7f&per_page=100"`: 9 runs, all `status: completed`, all `run_attempt` 1 (nothing was re-run, re-dispatched or cancelled by this plan; D-00i, D-00j). **7 `success`, 2 `failure`**: the two `failure` rows are both `pre-commit`, and `pre-commit run --all-files` is a **required** context (tally below).
+
+| Workflow | Run ID (URL) | Event | Conclusion | Created / last update (UTC) | Attempt |
+|---|---|---|---|---|---|
+| `ci.yml` | [40233738810](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40233738810) | `push` | `success` | 21:04:25 / 22:57:58 | 1 |
+| `ci.yml` | [40233745953](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40233745953) | `pull_request` | `success` | 21:04:30 / 23:04:55 | 1 |
+| `codeql.yml` | [40233738867](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40233738867) | `push` | `success` | 21:04:25 / 21:17:29 | 1 |
+| `codeql.yml` | [40233746019](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40233746019) | `pull_request` | `success` | 21:04:30 / 21:21:57 | 1 |
+| `pre-commit` | [40233738812](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40233738812) | `push` | `failure` | 21:04:25 / 21:10:11 | 1 |
+| `pre-commit` | [40233745937](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40233745937) | `pull_request` | `failure` | 21:04:30 / 21:12:46 | 1 |
+| `feature-flags.yml` | [40233738811](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40233738811) | `push` | `success` | 21:04:25 / 21:16:32 | 1 |
+| `feature-flags.yml` | [40233745927](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40233745927) | `pull_request` | `success` | 21:04:30 / 21:30:42 | 1 |
+| `Docs` | [40233746031](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40233746031) | `pull_request` | `success` | 21:04:30 / 21:16:28 | 1 |
+
+`ci.yml` jobs per run, from `gh api repos/DF3NDR/paladin-dev-env/actions/runs/<id>/jobs --paginate` (PR run `40233745953`: 39 jobs, `total_count` 39; push run `40233738810`: 39 jobs, `total_count` 39). Conclusions: PR run 37 `success` and 2 `skipped` (`End-to-End Tests`, `Publish Dry Run`); push run 36 `success` and 3 `skipped` (those two and `Benchmark Regression Signal (Non-Blocking)`); no `failure`, no `cancelled`.
+
+| Job | PR run job id | PR conclusion | push run job id | push conclusion |
+|---|---|---|---|---|
+| API Surface Tracking | 121290924875 | `success` | 121290851163 | `success` |
+| Benchmark Compile Check | 121290925008 | `success` | 121290851675 | `success` |
+| Benchmark Regression Signal (Non-Blocking) | 121290924872 | `success` | 121290852880 | `skipped` |
+| CLI Snapshot Tests | 121290924795 | `success` | 121290851612 | `success` |
+| Code Quality | 121290924938 | `success` | 121290851489 | `success` |
+| Consumer-Surface Muster | 121290924739 | `success` | 121290851406 | `success` |
+| Coverage | 121290924766 | `success` | 121290851599 | `success` |
+| Crate Isolation (paladin-ai) | 121290924916 | `success` | 121290851510 | `success` |
+| Crate Isolation (paladin-ai-core) | 121290925049 | `success` | 121290851517 | `success` |
+| Crate Isolation (paladin-battalion) | 121290924896 | `success` | 121290851413 | `success` |
+| Crate Isolation (paladin-content) | 121290925034 | `success` | 121290851462 | `success` |
+| Crate Isolation (paladin-llm) | 121290925058 | `success` | 121290851292 | `success` |
+| Crate Isolation (paladin-memory) | 121290924873 | `success` | 121290851426 | `success` |
+| Crate Isolation (paladin-notifications) | 121290924936 | `success` | 121290851511 | `success` |
+| Crate Isolation (paladin-ports) | 121290924977 | `success` | 121290851354 | `success` |
+| Crate Isolation (paladin-storage) | 121290925256 | `success` | 121290851470 | `success` |
+| Crate Isolation (paladin-web) | 121290924945 | `success` | 121290851538 | `success` |
+| Docker Build | 121297224341 | `success` | 121296447119 | `success` |
+| Docker Integration Tests | 121290924772 | `success` | 121290851572 | `success` |
+| E2E Platform API (PRD 06 acceptance-1 lifecycle + SHIP-02 boot proof) | 121290924867 | `success` | 121290851325 | `success` |
+| End-to-End Tests | 121298528477 | `skipped` | 121296653665 | `skipped` |
+| Example Muster (Feature Matrix) | 121297224366 | `success` | 121293745928 | `success` |
+| Generated SDK Clients (Python + TypeScript) smoke | 121290925016 | `success` | 121290851366 | `success` |
+| Integration Tests | 121290925041 | `success` | 121290851363 | `success` |
+| Kubernetes Smoke Test | 121317355941 | `success` | 121316124835 | `success` |
+| License & Dependency Policy | 121290924574 | `success` | 121290851549 | `success` |
+| MSRV (Rust 1.88) | 121290925039 | `success` | 121290851357 | `success` |
+| OSV Scanner | 121290924791 | `success` | 121290851513 | `success` |
+| Ollama Integration Tests (live server) | 121290925046 | `success` | 121290851587 | `success` |
+| Postgres Storage Contract Suites (live server) | 121290924831 | `success` | 121290851379 | `success` |
+| Publish Dry Run | 121297225326 | `skipped` | 121296448144 | `skipped` |
+| Redis Cadence Contract Suite (live server) | 121290924941 | `success` | 121290851931 | `success` |
+| Redis Node Cache Contract Suite (live server) | 121290924845 | `success` | 121290851542 | `success` |
+| Redis Run Queue Contract Suite (live server) | 121290924898 | `success` | 121290851626 | `success` |
+| Security Audit | 121290924882 | `success` | 121290851423 | `success` |
+| Semver Checks (vs v0.9.0) | 121290924820 | `success` | 121290851454 | `success` |
+| Unit Tests (beta) | 121290925014 | `success` | 121290851551 | `success` |
+| Unit Tests (stable) | 121290925044 | `success` | 121290851499 | `success` |
+| Workflow Lint | 121290924809 | `success` | 121290851516 | `success` |
+
+`End-to-End Tests` and `Publish Dry Run` appear as `skipped` on both events (conditional jobs that do not run off `main`; D-14), named as skipped and not as passed. `Benchmark Regression Signal (Non-Blocking)` is `skipped` on the push run only.
+
+**The other workflows' jobs** (same `runs/<id>/jobs --paginate` read): `codeql.yml` push 40233738867 and pull_request 40233746019 each carry one job, `CodeQL Analysis (Rust)` (ids 121290757056 and 121290778898), both `success`. `feature-flags.yml` push 40233738811 and pull_request 40233745927 each carry 20 jobs (`LLM Registry Unit Tests (llm-all)`, 16 `Build & Test (<feature>)` jobs, `CLI Isolation (library without cli feature)`, `OTel Feature (otel)`, `Feature Matrix Summary`), all 20 `success` in both. `Docs` 40233746031 carries `Build MDBook` (121290778560, `success`) and `Deploy to GitHub Pages` (121293680076, `skipped`). `pre-commit` push 40233738812 and pull_request 40233745937 each carry one job, `pre-commit run --all-files`, **`failure`**:
+
+| Run | Job | Job id (URL) | Job conclusion | Failing step |
+|---|---|---|---|---|
+| push 40233738812 | `pre-commit run --all-files` | [121290756636](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40233738812/job/121290756636) | `failure` | step 7 `Run pre-commit` (`failure`; steps 1-6 `success`) |
+| pull_request 40233745937 | `pre-commit run --all-files` | [121290778127](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40233745937/job/121290778127) | `failure` | step 7 `Run pre-commit` (`failure`; steps 1-6 `success`) |
+
+**License & Dependency Policy steps** (PR run job `121290924574`; the push run job `121290851549` reads identically), every step `success`, the publish-order gate on its own row:
+
+| Step | Conclusion |
+|---|---|
+| 5 Check per-crate changelogs | `success` |
+| 6 Check crates.io package names | `success` |
+| 7 Check advisory exception register | `success` |
+| 8 Check workflow files for inline advisory suppressions | `success` |
+| 9 Check workflow trigger policy | `success` |
+| 10 Check CodeQL dismissal register | `success` |
+| **11 Check publish order** | **`success`** (PR run job 121290924574 and push run job 121290851549; the gate executed pre-merge on this head, re-seal row 8's CI twin; the step's printed line is not readable here, the log host being blocked, so the proof is the step's own conclusion) |
+| 12 Check core/ports dependency allowlist (ADR-0015) | `success` |
+| 13 Run shell-guard regression tests | `success` |
+| 16 Run cargo-deny check | `success` |
+
+**Required-context tally, derived from the live ruleset, not assumed.** `gh api repos/DF3NDR/paladin-dev-env/rulesets/20868126` (`Protect main branch`, `enforcement` `active`, `strict_required_status_checks_policy` `true`) lists **44** required contexts (counted from the JSON, not carried from any document). The check runs on SHA-A0 were read with `gh api "repos/DF3NDR/paladin-dev-env/commits/d4e66b47628559b175f1958b4f5267058096dd7f/check-runs?per_page=100&page=<n>"` (`total_count` 128, read in two pages because `--paginate` follows a `repositories/<id>` link this proxy refuses) and every required name was matched against them:
+
+- **Absent from the runs: none.** All 44 required names appear (43 of them twice, once per event; `Build MDBook` once, the `Docs` workflow being pull-request-only).
+- **42 concluded `success`** on every row they have.
+- **1 concluded `skipped`: `End-to-End Tests`** (both rows). Recorded as skipped, not as a pass: the conditional job did not execute; it is the same shape as the v0.10.1 record, and a skipped required job satisfies the ruleset.
+- **1 concluded `failure`: `pre-commit run --all-files`** (both rows: check runs 121290756636 on the push event and 121290778127 on the pull_request event). **A required context is red on SHA-A0.** D-00j applies; see the Findings entry "Plan 47-06: pre-commit red on SHA-A0".
+- `MSRV (Rust 1.88)`, `Semver Checks (vs v0.9.0)`, `Consumer-Surface Muster`, `E2E Platform API ...` and `Docker Build` are not among the 44 and are all `success` here. The advisory `CodeQL` results check (app `github-advanced-security`, check run 121293439567) is `failure`, also not required; see the Findings entry "Plan 47-06: the advisory `CodeQL` results check".
+
+**`Coverage` job.** PR run job 121290924766: `success` (completed 21:30:47Z; steps `Measure coverage`, `Coverage summary`, `Upload coverage summary`, `Upload coverage to Codecov` all `success`). Push run job 121290851599: `success` (completed 21:34:35Z, same steps). The `Measure coverage` step runs `scripts/coverage.sh`, whose `cargo llvm-cov` call carries `--fail-under-lines "$FLOOR"` with `FLOOR="${COVERAGE_FLOOR:-82}"` (`scripts/coverage.sh` lines 35 and 102), so a `success` conclusion means the measured line coverage was at or above 82 percent **if** `COVERAGE_FLOOR` was unset; that inference is not a figure. **The `Lines:` figure is unreadable from this sandbox.** Sources tried, each by one read, nothing re-run: (1) the job log, `gh api repos/DF3NDR/paladin-dev-env/actions/jobs/121290924766/logs`: redirected to the Azure blob host `productionresultssa12.blob.core.windows.net`, answered `Forbidden`; (2) the `coverage-summary` artifact, PR run artifact 12615295044 (1122584 bytes, not expired) and push run artifact 12615515178: `gh api repos/DF3NDR/paladin-dev-env/actions/artifacts/12615295044/zip` redirected to the same blob host and failed (empty file); (3) the check-run output of the `Coverage` job: `title`, `summary` and `text` all `null`, and its two annotations are the Node.js 20 deprecation warning and the `ubuntu-latest` migration notice, no figure; (4) commit statuses on SHA-A0: `total_count` 0 (no Codecov status); (5) PR #59 comments: one, from `socket-security[bot]`, no coverage figure. **No source was readable. Figure unreadable from this sandbox (blob host blocked); the job concluded `success` under `--fail-under-lines`; figure requested from the maintainer at the tick checkpoint (the `Lines:` line of the `Coverage` summary, job 121290924766).** No figure is expected, carried forward or inferred here (D-00e).
+
+**Resulting position.** Seven of the nine runs and 42 of 44 required contexts are green, one required context skipped by design, and **one required context (`pre-commit run --all-files`) is red on the candidate head**. Per the plan's step 6 and D-00j, the plan stops at a blocking checkpoint here: nothing is fixed, nothing is re-run, and nothing is pushed. This record and the audit's CI-twin pointers are committed locally only.
+
 ---
 
 ### CI-evidence-only entries (D-12)
@@ -285,8 +383,11 @@ Body content checked by `grep` on the read-back text: the heading `v0.11.0 — T
 Three gates are not signed rows of the audit and have no local twin in this sandbox. Each is **to be read from the PR run on SHA-A0 in plan 47-06**; nothing is recorded here as measured.
 
 - **`API Surface Tracking`** (`make api-surface`; job `API Surface Tracking`): expected signal is that the committed API-surface baseline does not move after the version bump (the bump commit changes no public item; MIGRATION section 10 stays frozen at `e28e43b5`, Findings entry D-00n). The push run 40228639490 on head `d900b21b` shows the job `success` at 2026-10-25T20:09:39Z; that is a mid-plan observation, not the 47-06 reading, and the final reading comes from the run on SHA-A0.
+  **Plan 47-06 reading (SHA-A0):** PR run 40233745953 job 121290924875 `success` (21:31:55Z), push run 40233738810 job 121290851163 `success`; steps `Check API surface changes` and `Check deprecation warnings` `success`, `Generate API diff on failure` `skipped`. The committed API-surface baseline did not move.
 - **`Consumer-Surface Muster`** (`make check-consumer-surface`, the Phase 49 muster; job `Consumer-Surface Muster`): to be read from the PR run on SHA-A0 in plan 47-06. The push run 40228639490 shows it `success` at 2026-10-25T20:13:33Z (mid-plan observation only).
+  **Plan 47-06 reading (SHA-A0):** PR run job 121290924739 `success` (21:19:48Z), push run job 121290851406 `success`; step 5 `Consumer-surface muster (make check-consumer-surface)` `success`.
 - **`Coverage`** (the 82 percent workspace line-coverage floor, ADR-0006, D-00e; job `Coverage`): this sandbox has no Docker and cannot run `make coverage`, so no local figure exists and none is expected or carried forward. The figure is the job's own printed `Lines:` summary, read in plan 47-06; at the 20:21Z read the job was `in_progress`.
+  **Plan 47-06 reading (SHA-A0):** PR run job 121290924766 `success`, push run job 121290851599 `success`; the printed `Lines:` figure is **unreadable from this sandbox** (job log and `coverage-summary` artifact both sit on the blocked blob host; check-run output, commit statuses and PR comments carry no figure). Requested from the maintainer at the tick checkpoint; see the CI-run subsection "Plan 47-06".
 
 ## Registry verification (D-00h)
 
@@ -655,3 +756,19 @@ This is option 1 of the row-6 checkpoint, gated. Effect, exactly as decided:
 - **The earlier run was cancelled.** `ci.yml` push run `40228639490` on `d900b21b` ended `cancelled` by the concurrency group when SHA-A0 landed; its already-concluded `success` jobs are mid-plan observations, not proof of record (plan 47-06 reads the SHA-A0 runs once).
 - **PR body attribution differs from what was sent.** The stored body lacks the `🤖 Generated with [Claude Code](https://claude.com/claude-code)` line sent and ends with an appended `---` / `_Generated by [Claude Code](https://claude.ai/code)_` footer. Not authored by this plan and not re-written; owner: none, informational (the maintainer may edit the footer by hand if the exact line matters).
 - **PR title and body written through REST on the first attempt** (no refusal, no maintainer fallback command). The body states the audit's rows 4, 5 and 6 as CI-attributed or mixed, says CI on the pushed head had not concluded, and says the box is unticked.
+
+### 2026-10-25 — Plan 47-06: `pre-commit` red on SHA-A0 (required context; D-00j halt; cause diagnosed, nothing fixed)
+
+- **What was read.** Both `pre-commit` runs on SHA-A0 `d4e66b47628559b175f1958b4f5267058096dd7f` concluded `failure`: push run [40233738812](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40233738812) (job [121290756636](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40233738812/job/121290756636), step 7 `Run pre-commit`) and pull_request run [40233745937](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40233745937) (job [121290778127](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40233745937/job/121290778127), step 7 `Run pre-commit`). `pre-commit run --all-files` is one of the 44 required contexts of the `Protect main branch` ruleset, so this is a red required check on the candidate head. Both are recorded as `failure` in the CI-run table, never as passes.
+- **Failing output, as supplied (not read by this agent).** The job log sits on the blocked blob host. The maintainer pasted the run log to the orchestrator, which relayed it: every hook passed except `end-of-file-fixer`, which reported `Fixing .planning/phases/47-v0-11-0-crate-release/47-CI-EVIDENCE.md`, a one-line diff removing a trailing blank line at the end of that file.
+- **Independent confirmation from git (read-only).** The last bytes of `47-CI-EVIDENCE.md` at `d4e66b47` (SHA-A0) are `.` `\n` `\n` (a trailing blank line); at `2d76e0cc` and at local HEAD `a8afb720` they are `.` `\n`. Walking the file's history, the trailing blank line is absent at `c3aa399f` and present at `d900b21b`, `72af77e2` and `342aeac2`: **cause commit `d900b21b`** (`docs(47-04): record row 4 decision, row 5 attribution and the red row 6 (D-00j halt)`). **Fixing commit `2d76e0cc`** (`docs(47-05): record the push of SHA-A0 and the PR #59 retitle`) removed it incidentally while appending its own section; it is one of the three unpushed local commits. No release file was involved and no file outside `.planning/` is implicated. No local `pre-commit` binary exists in this sandbox, so the hook itself was not run here.
+- **Decision requested, not taken.** D-00j: nothing is fixed. Pushing SHA-A1 would carry `2d76e0cc`'s incidental fix to `origin` and re-run `pre-commit` on SHA-A1, which is the intended proof for the next head; whether that counts as the recorded remedy, or whether the red needs a different decision, is the maintainer's call. Not an infrastructure flake: the cause is a deterministic hook rewrite, so no re-run is justified and none was made. Owner: the maintainer (checkpoint of plan 47-06 Task 1).
+
+### 2026-10-25 — Plan 47-06: the advisory `CodeQL` results check is `failure` on SHA-A0 (not required; carried, not acted on)
+
+- Check run 121293439567 (app `github-advanced-security`, name `CodeQL`): `failure`, title `24 new alerts including 24 high severity security vulnerabilities`, 24 annotations, every one `Cleartext logging of sensitive information` across `src/config/treasurer.rs`, `src/application/services/paladin/*`, `src/bin/paladin-server.rs`, `crates/paladin-llm/src/config/layers.rs`, `crates/paladin-memory/src/*` and `examples/*`. The workflow runs `codeql.yml` (`CodeQL Analysis (Rust)`) are both `success`.
+- It is not among the 44 required contexts, and CodeQL is advisory-only in this repository (`.github/instructions/security.instructions.md`; it does not gate a merge). The same check reads `failure` with the same title on the earlier PR head `2e857c6ce7e0d9f37ff5cc74def293d2d0587756`, so it predates this phase's version bump (no file under `src/` or `crates/*/src/` changed between `SHA-PRE-BUMP` and SHA-R). Not triaged here; recorded so the maintainer reads it before ticking. Owner: the maintainer.
+
+### 2026-10-25 — Plan 47-06: the `Coverage` figure and the job logs are unreadable from this sandbox (D-00e)
+
+- The `Lines:` figure of the `Coverage` job (PR run job 121290924766, push run job 121290851599, both `success`) could not be read: job logs and the `coverage-summary` artifact (PR 12615295044, push 12615515178) are served from `productionresultssa12.blob.core.windows.net`, which this sandbox's proxy answers `Forbidden`; check-run output, annotations, commit statuses and PR comments carry no figure. Recorded as unreadable, never as an expected number, and requested from the maintainer at the tick checkpoint. The `Check publish order` step is recorded by its step conclusion for the same reason (its printed line is in the unreadable log).

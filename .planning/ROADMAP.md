@@ -813,7 +813,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 47-03-PLAN.md — Build wave, three commits: `cargo release version 0.11.0`, dated changelog stamps + release-body gate, `make openapi` regen (wave 3)
+- [x] 47-03-PLAN.md — Build wave, three commits: `cargo release version 0.11.0`, dated changelog stamps + release-body gate, `make openapi` regen (wave 3)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

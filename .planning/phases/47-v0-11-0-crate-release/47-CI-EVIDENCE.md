@@ -264,6 +264,31 @@ Plan 47-02 (B1=a). Source for every row is `git show 700a92d86f3d6b2e24bbd2c163d
 | A7 | `### Added` | 699-838 | 13 | 11846 | Phase 38, Phase 39, Phase 40, Phase 45, Phase 50 | ADR-0054 | PASS (ids, figures, code spans; other subsections untouched) |
 | A8 | `### Added` | 839-957 | 9 | 10180 | Phase 50 | ADR-0046, ADR-0061, M-B-16 | PASS (ids, figures, code spans; other subsections untouched) |
 | A9 | `### Added` | 958-989 | 2 | 2695 | Phase 50 | ADR-0061 | PASS (ids, figures, code spans; other subsections untouched) |
+| C1 | `### Changed` | 992-1129 | 11 | 11448 | Phase 46, Phase 51, Phase 50.1, Phase 50 | DR-21, M-B-11, M-B-20 | PASS (ids, figures, code spans; other subsections untouched) |
+| C2 | `### Changed` | 1130-1259 | 11 | 11239 | Phase 50, Phase 48, Phase 43, Phase 42 | ADR-0004, ADR-0060, ADR-0061, M-B-12, M-B-13, M-B-15 | PASS (ids, figures, code spans; other subsections untouched) |
+| C3 | `### Changed` | 1260-1396 | 20 | 11741 | Phase 42, Phase 41, Phase 39, Phase 38, Phase 40, Phase 45, Phase 44, Phase 50 | ADR-0055, ADR-0059, M-B-06, M-B-08, M-B-09, M-B-10, M-B-11, M-B-16 | PASS (ids, figures, code spans; other subsections untouched) |
+| C4 | `### Changed` | 1397-1419 | 2 | 1978 | Phase 50, Phase 46 | ADR-0015, M-B-17 | PASS (ids, figures, code spans; other subsections untouched) |
+
+Top-level bullet totals: `A1`-`A9` sum to 57 (the original `### Added` has 57); `C1`-`C4` sum to 44 (the original `### Changed` has 44). Condensed top-level bullets: 90 in `Added`, 49 in `Changed` (several source bullets became two or three, because each shipped capability has its own bullet).
+
+**Tightening pass (plan 47-02 Task 3).** After `Changed` was condensed the root body measured 116,534 bytes, over the 110,000 budget, so the condensed bullets of `A2`-`A8` and `C1`-`C3` were shortened (name lists, per-model enumerations and public-surface lists trimmed; the six preserved subsections were not touched) and the re-diff was re-run over every chunk, cumulatively against the original subsection. The `Re-diff` column above is the result of that final run, not of the first pass. The `Added` rewrite is in the same commit as `Changed` (its commit body says so).
+
+**B-1 measurements after condensation (commit `677b6ea3655eb11229ed44b19e334b9f12e1ec08`):**
+
+| Quantity | At `SHA-PRE-B1` | After | Check |
+|---|---|---|---|
+| root `[Unreleased]` body | 156528 bytes | **108926 bytes** | at most 110000: PASS (1074 bytes of margin) |
+| `### Added` (excluding heading) | 84557 | 46648 | smaller, figure and code-span subsets: PASS |
+| `### Changed` (excluding heading) | 36407 | 26374 | smaller, figure and code-span subsets: PASS |
+| six preserved subsections (`Breaking Changes`, `Security`, `Removed`, `Fixed`, `Known limitations`, `Documentation`) | 35445 | 35445 | `cmp` byte-identical: PASS (all six) |
+| lines at or below `## [0.10.1]` | 1852 onward | identical | `diff` empty; highest pre-image line touched by `git diff SHA-PRE-B1` is 1418 (above the heading at 1852): PASS |
+| `M-B-`/`DR-`/`ADR-` ids | 43 distinct | 43 distinct | `comm -23` of before against after is empty: PASS |
+| `###` headings inside the body | 8 | 8 | none missing: PASS |
+| `BREAKING` markers in `Changed` | 4 | 4 | the four struct-literal breaks and their migration lines are kept |
+
+`make check-changelogs`: exit 0 (11 publishable crates, all have a changelog). `make check-gates`: exit 0 after the condensation. The aim of "about 60,000 bytes" for `Added` plus `Changed` was not reached (73,022 bytes, 60 percent of the original 120,964); the hard limit is the 110,000-byte body, which holds, and tightening further would have dropped per-capability detail rather than lists.
+
+- B-1 maintainer read: requested. The figure and code-span checks above are a mechanical proxy: they catch a new number or a new identifier, not a changed meaning. That the condensed `[Unreleased]` adds no claim beyond that proxy is a judgment the maintainer confirms by reading the condensed entry against this ledger (and, where in doubt, against `git show 700a92d86f3d6b2e24bbd2c163daec7c307297e0:CHANGELOG.md`), at the latest at the 47-06 sign-off (47-06 Task 2, instructions step 2). This does not pause plan 47-02.
 
 ---
 

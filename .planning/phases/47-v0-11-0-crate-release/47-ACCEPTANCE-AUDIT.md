@@ -64,6 +64,6 @@ them. From the first gate onward D-00j was in force: any red row halts the phase
 
 **The `v0.11.0` tag may be cut once a human reads this section and the linked evidence:**
 
-- [X] **The `v0.11.0` tag may be cut** — evidence: this section in full, plus `.planning/phases/47-v0-11-0-crate-release/47-CI-EVIDENCE.md`'s complete Local sweep table and its CI-run table (including the `coverage` job this sandbox cannot measure). Unticked, as designed — this box belongs to this release alone. It is closed by a human — the maintainer, and nobody else — at this phase's own sign-off checkpoint, never by this audit or any agent, under any mode (Phase 29 D-17, Phase 37 D-00a, this phase's D-00a).
+- [x] **The `v0.11.0` tag may be cut** — evidence: this section in full, plus `.planning/phases/47-v0-11-0-crate-release/47-CI-EVIDENCE.md`'s complete Local sweep table and its CI-run table (including the `coverage` job this sandbox cannot measure). Unticked, as designed — this box belongs to this release alone. It is closed by a human — the maintainer, and nobody else — at this phase's own sign-off checkpoint, never by this audit or any agent, under any mode (Phase 29 D-17, Phase 37 D-00a, this phase's D-00a).
 
 **Restart rule.** If a red gate forces a return to the build wave, this box is not edited; a new dated section at the new head carries the box the merge waits on.

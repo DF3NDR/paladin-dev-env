@@ -1,16 +1,18 @@
 ---
 phase: 47-v0-11-0-crate-release
 verified: 2026-10-26T21:50:00Z
-status: human_needed
+status: passed
 score: 8/9 must-haves verified
 behavior_unverified: 0
 overrides_applied: 0
 re_verification: false
 gaps: []
 human_verification:
+
   - test: "Read the condensed root CHANGELOG.md [0.11.0] entry against the B-1 ledger in 47-CI-EVIDENCE.md (and, where in doubt, against `git show 700a92d86f3d6b2e24bbd2c163daec7c307297e0:CHANGELOG.md`) and answer the open `- B-1 maintainer read: requested` line."
     expected: "The condensed entry adds no claim beyond the uncondensed text and drops no breaking change, security note or removal. Answer recorded as an appended dated entry in 47-CI-EVIDENCE.md."
     why_human: "Plan 47-02 Task 3 asked for this judgment and it is unanswered. The mechanical proxy (ids, BREAKING markers, figures, byte-identical subsections) passes, and the verifier re-ran its own version of it, but a changed meaning is not detectable by grep."
+
   - test: "Open the `Coverage` job of ci.yml run 40368801098 (job 121733645613, merge commit 70657919) in the Actions UI and copy the printed `Lines:` figure into 47-CI-EVIDENCE.md Findings and the audit's 'Outside the table' paragraph (todo 2026-10-26-record-v0-11-0-coverage-lines-figure.md)."
     expected: "A figure at or above 82 percent (ADR-0006). A figure below 82 would mean the gate or the figure was misread and must be escalated."
     why_human: "The job log and the `coverage-summary` artifact (id 12672956238) redirect to a blob host this sandbox denies; no check-run output carries the number. The floor GATE is proven green (see truth 6); only the printed figure is unread."

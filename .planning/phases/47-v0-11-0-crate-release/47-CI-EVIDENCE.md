@@ -587,6 +587,94 @@ The maintainer's Task 3 reply named the first token `770657919beadbd341a72be2d01
 
 ---
 
+### Plan 47-08 — the post-merge runs on SHA-B and the `release.yml` run for the tag (read 2026-10-26T20:44Z to 20:50Z, once, not polled)
+
+**Runs on the merge commit `70657919` (SHA-B)** (`gh api "repos/DF3NDR/paladin-dev-env/actions/runs?head_sha=70657919...&per_page=100"`). Six runs, every one `completed`/`success`, `run_attempt` 1 (nothing re-run); the five on `main` are the merge's own push, the sixth is the tag's:
+
+| Workflow | Run ID (URL) | Event | Branch | Started | Concluded | Conclusion |
+|---|---|---|---|---|---|---|
+| `ci.yml` | [40368801098](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40368801098) | `push` | `main` | 2026-10-26T17:27:32Z | 2026-10-26T18:35:02Z | `success` |
+| `codeql.yml` | [40368801085](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40368801085) | `push` | `main` | 17:27:32Z | 17:45:14Z | `success` (1 job, `CodeQL Analysis (Rust)` 121733635951) |
+| `feature-flags.yml` | [40368801056](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40368801056) | `push` | `main` | 17:27:32Z | 17:46:05Z | `success` (20 jobs, all `success`) |
+| `Docs` | [40368801025](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40368801025) | `push` | `main` | 17:27:32Z | 17:34:39Z | `success` (`Build MDBook` 121733635547 and `Deploy to GitHub Pages` 121736355264, both `success`; the deploy runs on `main`) |
+| `pre-commit` | [40368801102](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40368801102) | `push` | `main` | 17:27:32Z | 17:33:37Z | `success` (1 job) |
+| `Release` (`release.yml`) | [40396108246](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40396108246) | `push` | `v0.11.0` | 2026-10-26T20:29:33Z | 2026-10-26T20:42:21Z | `success` |
+
+**`ci.yml` on SHA-B, per job (run 40368801098; 39 jobs: 38 `success`, 1 `skipped`).** `End-to-End Tests` (121746301100, `success`, 17:50:41Z to 18:02:58Z; step 6 `Run end-to-end tests` `success`) and `Publish Dry Run` (121737571718, `success`, 17:38:17Z to 17:42:09Z; step 5 `Dry run publish workspace` `success`) **executed for the first time on this tree and passed**, which closes RESEARCH Pitfall 8 / A-6: both had been `skipped` on every run off `main` until now. The one skip is `Benchmark Regression Signal (Non-Blocking)` (121733695157, `skipped`; not required, skipped on `push` by design). The last job to finish was `Kubernetes Smoke Test` (121766348293, 18:34:47Z). Every job:
+
+| Job | Job id | Conclusion |
+|---|---|---|
+| API Surface Tracking | 121733645568 | success |
+| Benchmark Compile Check | 121733646031 | success |
+| Benchmark Regression Signal (Non-Blocking) | 121733695157 | skipped |
+| CLI Snapshot Tests | 121733645422 | success |
+| Code Quality | 121733645233 | success |
+| Consumer-Surface Muster | 121733645696 | success |
+| Coverage | 121733645613 | success |
+| Crate Isolation (paladin-ai) | 121733645583 | success |
+| Crate Isolation (paladin-ai-core) | 121733645778 | success |
+| Crate Isolation (paladin-battalion) | 121733645471 | success |
+| Crate Isolation (paladin-content) | 121733645604 | success |
+| Crate Isolation (paladin-llm) | 121733645603 | success |
+| Crate Isolation (paladin-memory) | 121733645673 | success |
+| Crate Isolation (paladin-notifications) | 121733645663 | success |
+| Crate Isolation (paladin-ports) | 121733645476 | success |
+| Crate Isolation (paladin-storage) | 121733645652 | success |
+| Crate Isolation (paladin-web) | 121733645749 | success |
+| Docker Build | 121737571565 | success |
+| Docker Integration Tests | 121733645475 | success |
+| E2E Platform API (PRD 06 acceptance-1 lifecycle + SHIP-02 boot proof) | 121733645598 | success |
+| End-to-End Tests | 121746301100 | success |
+| Example Muster (Feature Matrix) | 121736863580 | success |
+| Generated SDK Clients (Python + TypeScript) smoke | 121733645764 | success |
+| Integration Tests | 121733645160 | success |
+| Kubernetes Smoke Test | 121766348293 | success |
+| License & Dependency Policy | 121733645712 | success |
+| MSRV (Rust 1.88) | 121733645700 | success |
+| OSV Scanner | 121733645221 | success |
+| Ollama Integration Tests (live server) | 121733645265 | success |
+| Postgres Storage Contract Suites (live server) | 121733644743 | success |
+| Publish Dry Run | 121737571718 | success |
+| Redis Cadence Contract Suite (live server) | 121733645083 | success |
+| Redis Node Cache Contract Suite (live server) | 121733645827 | success |
+| Redis Run Queue Contract Suite (live server) | 121733645694 | success |
+| Security Audit | 121733646375 | success |
+| Semver Checks (vs v0.9.0) | 121733645280 | success |
+| Unit Tests (beta) | 121733645595 | success |
+| Unit Tests (stable) | 121733646007 | success |
+| Workflow Lint | 121733645340 | success |
+
+**`Check publish order` step (A-SC3).** Job `License & Dependency Policy` (121733645712, `success`), step 11 `Check publish order` `success` (steps 5-10, 12 and 13 `Check per-crate changelogs`, `Check crates.io package names`, `Check advisory exception register`, `Check workflow files for inline advisory suppressions`, `Check workflow trigger policy`, `Check CodeQL dismissal register`, `Check core/ports dependency allowlist (ADR-0015)`, `Run shell-guard regression tests` also `success`; step 16 `Run cargo-deny check` `success`). **`release.yml` has no separate publish-order step; its `Pre-Publish Consistency Gate` requires this `ci.yml` run to have concluded `success` on the tagged commit**, and it did (`success`, below), so the publish-order gate is green on the release path through `ci.yml` and through the `Publish to crates.io` job's own `success`.
+
+**`release.yml` run 40396108246, per job.** Event `push`, `head_branch` `v0.11.0`, `head_sha` `70657919beadbd341a72be2d0107080017a803f0` (= SHA-B), actor and triggering actor `Am0rfu5`, `run_number` 20, `run_attempt` 1, `status` `completed`, overall conclusion `success` (jobs as read from `actions/runs/40396108246/jobs?per_page=100`; twelve jobs, the four `Build Binaries` matrix legs counted separately):
+
+| Job | Job id | Conclusion |
+|---|---|---|
+| Verify Tag From Main | 121829473092 | success |
+| Test Suite | 121829553151 | success |
+| Create Release | 121829552871 | success |
+| Pre-Publish Consistency Gate | 121829552774 | success |
+| Publish to crates.io | 121833090264 | success |
+| Finalize Release Body | 121835144307 | success |
+| Build Binaries (macos-latest, aarch64-apple-darwin, paladin-macos-arm64) | 121829671824 | success |
+| Build Binaries (ubuntu-latest, x86_64-unknown-linux-gnu, paladin-linux-amd64) | 121829671905 | success |
+| Build Binaries (macos-latest, x86_64-apple-darwin, paladin-macos-amd64) | 121829672121 | success |
+| Build Binaries (ubuntu-latest, aarch64-unknown-linux-gnu, paladin-linux-arm64) | 121829672160 | success |
+| Build and Push Docker Images | 121829671721 | success |
+| Generate SBOM | 121829671718 | success |
+
+Job graph as run (`.github/workflows/release.yml`): `Verify Tag From Main` first (20:29:36Z to 20:29:43Z; steps `Resolve release commit` and `Ensure release commit is contained in main` `success`); `Test Suite`, `Create Release` and `Pre-Publish Consistency Gate` need it (the gate's step 6 `Run pre-publish consistency gate` `success`, 20:29:47Z to 20:30:34Z); `Build and Push Docker Images`, `Build Binaries` and `Generate SBOM` need `Create Release`; `Finalize Release Body` needs `Create Release`, the Docker job, the binaries and the SBOM (20:40:30Z to 20:40:43Z); `Publish to crates.io` needs `Test Suite`, `Create Release` and `Pre-Publish Consistency Gate` (20:36:34Z to 20:42:20Z).
+
+**The `Publish to crates.io` job's conclusion, on its own: `success`** (job 121833090264, `completed_at` 2026-10-26T20:42:20Z; steps `Determine publish mode`, `Authenticate with crates.io` and `Publish crates in dependency order` all `success`, the last 20:36:55Z to 20:42:16Z). **The run's overall `success` is not publish health;** the job's conclusion is recorded separately, and neither is the proof of publication: that is the registry table (Registry verification, "Post-publish").
+
+**Publish outcome table (E-3).** `GET actions/jobs/121833090264/logs` answered `Forbidden` (the redirect to `productionresultssa10.blob.core.windows.net` is denied by this sandbox's egress policy, as for every earlier job log). **The per-crate `| Crate | Outcome |` table (`published-now` / `already-at-this-version`) is therefore unreadable here and is not transcribed.** The per-crate state comes from the registry (Registry verification, "Post-publish"); as a read-only cross-check, the crates.io `created_at` of each `0.11.0` version, taken in time order, is `paladin-ai-core`, `paladin-ports`, `paladin-herald`, `paladin-battalion`, `paladin-llm`, `paladin-memory`, `paladin-web`, `paladin-notifications`, `paladin-content`, `paladin-storage`, `paladin-eval`, `paladin-ai`, which matches the `CRATES` array of `scripts/publish-crates.sh` exactly (a derived order, labelled as such, not the job's emitted table).
+
+**GitHub Release object** (`GET releases/tags/v0.11.0`; read only, never edited): `id` 424734632, `name` `Release v0.11.0`, `tag_name` `v0.11.0`, `target_commitish` `main`, `draft` false, `prerelease` false, `published_at` 2026-10-26T20:29:52Z, **body length 109810 characters (at most 125,000: within the cap)**, the artifact marker `<!-- paladin:release-artifacts -->` is **present**, 10 assets attached. `Create Release` and `Finalize Release Body` are both `success`. This closes B-1 at run level: the condensed body (108926 bytes at the re-seal) fit the payload builder and the body carries the marker. No `gh release edit` was run; a wrong body would have been the maintainer's to correct.
+
+**Not done here, by design.** Nothing re-run, re-dispatched, cancelled, published, yanked, merged, tagged or edited; no GitHub write of any kind; no watcher (D-00i); the job log was requested once and not retried.
+
+---
+
 ### CI-evidence-only entries (D-12)
 
 Three gates are not signed rows of the audit and have no local twin in this sandbox. Each is **to be read from the PR run on SHA-A0 in plan 47-06**; nothing is recorded here as measured.

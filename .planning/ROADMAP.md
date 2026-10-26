@@ -829,11 +829,11 @@ Plans:
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
-- [ ] 47-07-PLAN.md — CI on the tick commit, registry pre-flight (0.11.0 absent), one-way decision, merge + tag hand-off runbook, hard stop (wave 7)
+- [x] 47-07-PLAN.md — CI on the tick commit, registry pre-flight (0.11.0 absent), one-way decision, merge + tag hand-off runbook, hard stop (wave 7)
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
-- [ ] 47-08-PLAN.md — Post-tag: tag ↔ merge-commit proof, `chore/47-close` cut, release-run evidence, sparse-index registry table (12 crates, Trusted Publishing) (wave 8)
+- [x] 47-08-PLAN.md — Post-tag: tag ↔ merge-commit proof, `chore/47-close` cut, release-run evidence, sparse-index registry table (12 crates, Trusted Publishing) (wave 8)
 
 **Wave 9** *(blocked on Wave 8 completion)*
 

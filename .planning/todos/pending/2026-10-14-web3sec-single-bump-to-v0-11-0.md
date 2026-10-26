@@ -93,3 +93,18 @@ v0.11.0"), frozen on 2026-10-24 by commit `fc48c010` (plan 46-11); the earlier m
 The remaining steps belong to web3sec after Phase 47: re-pin the `paladin` submodule detached on the
 `v0.11.0` tag, run the consumer's gates on the new pin, and send the return report (step 5). Status
 stays pending (D-25).
+
+## Update 2026-10-26 (Phase 47 tag cut, hand-off written)
+
+The tag is cut: `v0.11.0` on merge commit `70657919beadbd341a72be2d0107080017a803f0` (PR #59, merge commit),
+release run `40396108246` green, 12 of 12 publishable crates registry-verified on crates.io at `0.11.0` via
+Trusted Publishing (registry table in `.planning/phases/47-v0-11-0-crate-release/47-CI-EVIDENCE.md`).
+
+The outbound hand-off is `.planning/phases/47-v0-11-0-crate-release/47-HANDOFF-web3sec.md`. Its section 6 records
+that the consumer baseline in step 4 above (2,592 / 0 / 2) is web3sec's own figure and is superseded as the latest
+on record by 2,683 / 0 / 2 (web3sec's findings of 2026-10-24, `46-FEEDBACK-web3sec.md`); the consumer reports
+against its own latest pre-bump figure.
+
+The remaining steps are web3sec's: re-pin the `paladin` submodule detached on the `v0.11.0` tag, run the
+consumer's gates on the new pin, and send the return report per the hand-off's section 6. Status stays pending
+until web3sec returns (D-15).

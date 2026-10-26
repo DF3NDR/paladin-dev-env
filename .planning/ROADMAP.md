@@ -837,7 +837,7 @@ Plans:
 
 **Wave 9** *(blocked on Wave 8 completion)*
 
-- [ ] 47-09-PLAN.md — MILESTONES.md release record, SHIP-07 tick after live registry re-read, `47-HANDOFF-web3sec.md`, folded todo update (wave 9)
+- [x] 47-09-PLAN.md — MILESTONES.md release record, SHIP-07 tick after live registry re-read, `47-HANDOFF-web3sec.md`, folded todo update (wave 9)
 
 **Wave 10** *(blocked on Wave 9 completion)*
 

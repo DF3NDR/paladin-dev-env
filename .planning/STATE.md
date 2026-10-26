@@ -6,9 +6,9 @@ current_phase: 47
 current_phase_name: v0.11.0 Crate Release
 status: executing
 stopped_at: Completed 47-08-PLAN.md (chore/47-close, not pushed); next plan 47-09
-last_updated: "2026-10-26T20:51:29.809Z"
+last_updated: "2026-10-26T20:54:02.476Z"
 last_activity: 2026-10-26
-last_activity_desc: Plans 47-07 and 47-08 complete; v0.11.0 tagged, published and registry-verified; plan 47-09 next
+last_activity_desc: "Plan 47-08 complete on chore/47-close (not pushed); v0.11.0 tag equals the PR #59 merge commit, 12 of 12 crates at 0.11.0; plan 47-09 next"
 progress:
   total_phases: 15
   completed_phases: 14
@@ -654,6 +654,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 47]: 47-06: Option 1 for the pre-commit red on SHA-A0 (SHA-A1 pushed over it); accept-X for the uppercase tick; redate to 2026-10-26; the maintainer's re-confirmation SHA-A4 72e13f95 is the final head and plan 47-07 reads its checks on SHA-A4 where it says SHA-A2
 - [Phase ?]: [Phase 47] 47-07: Task 2 proceed (2026-10-26T16:49Z); Task 3 reply `tagged ...` (20:32Z) carried a 41-character first token (stray leading 7), recorded verbatim and not used; plan-text SHA-A2 read as SHA-A4 72e13f95
 - [Phase ?]: [Phase 47] 47-08: tag v0.11.0 (77a37c18) peels to merge commit 70657919 = PR #59 merge_commit_sha = origin/main, parents df24689c and SHA-A4; release.yml run 40396108246 green, publish job success; 12 of 12 crates at 0.11.0 unyanked with trustpub_data naming DF3NDR/paladin-dev-env; chore/47-close cut from the merge commit and not pushed
+- [Phase 47]: v0.11.0 released: tag `v0.11.0` on merge commit `70657919beadbd341a72be2d0107080017a803f0`, release run `40396108246`, 12/12 crates registry-verified at `0.11.0` (unyanked, sparse-index re-read 2026-10-26T20:53Z), Trusted Publishing — D-16: SHIP-07 was ticked on the live sparse-index table (12 of 12 derived crates at 0.11.0, yanked false, trustpub_data naming run 40396108246), not on the merge, the tag or the workflow log.
 
 ### Pending Todos
 

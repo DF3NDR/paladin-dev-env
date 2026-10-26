@@ -184,6 +184,7 @@
 //!     PaladinPort, PaladinResult, StopReason
 //! };
 //! use paladin_core::platform::container::paladin_error::PaladinError;
+//! use paladin_core::platform::container::transience::Transience;
 //! use std::sync::Arc;
 //! use std::time::Duration;
 //! use tokio::time::sleep;
@@ -207,7 +208,7 @@
 //!             }
 //!             Ok(result) => return Ok(result), // Accept partial results after retries
 //!             Err(e) if attempts >= max_retries => return Err(e),
-//!             Err(PaladinError::LlmError(_)) => {
+//!             Err(e) if e.transience() == Transience::Transient => {
 //!                 sleep(backoff).await;
 //!                 backoff *= 2;
 //!                 attempts += 1;
@@ -227,7 +228,7 @@
 //! | ConfigurationError | No | Fix Paladin configuration (system prompt, model, etc.) |
 //! | ExecutionError | Maybe | Check error message, retry if transient |
 //! | Timeout | Yes | Increase timeout or reduce max_loops |
-//! | LlmError | Yes | Retry with exponential backoff |
+//! | LlmFailure | Per `transience()` | Retry with exponential backoff when `Transient`; fix credentials or the request when `Permanent` |
 //! | StopWordDetected | No | This is success, check stop word in result |
 //!
 //! ## Stop Reasons
@@ -377,11 +378,15 @@
 //! - [`paladin_ports::output::arsenal_port`] - Tool execution
 //! - [`paladin_battalion::battalion`] - Multi-agent orchestration
 
+use std::collections::BTreeMap;
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
+use paladin_core::platform::container::cost::Cost;
 use paladin_core::platform::container::heartbeat::HeartbeatHandle;
+use paladin_core::platform::container::herald::ExecutionMetadata;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::run_scope::RunScope;
@@ -431,11 +436,39 @@ pub struct ChunkMetadata {
     /// (D-17) -- never a locally-computed estimate.
     #[serde(default)]
     pub usage: Option<TokenUsage>,
+
+    /// Cost of the terminal call, populated only on the final chunk when the
+    /// model had a configured price (D-09/D-10). `None` on every other
+    /// chunk, for an unpriced model, and when the terminal chunk reported no
+    /// usage at all (D-00c -- never a fabricated zero).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<Cost>,
+
+    /// The agent loop's own [`ExecutionMetadata`] for this run, populated
+    /// only on the final chunk (D-12) -- the streamed-completion producer
+    /// builds it from `execution_id`, timing, `model_used`, usage and cost,
+    /// then hands it to `Herald::finalize_stream`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<ExecutionMetadata>,
+
+    /// The `paladin.*` visibility keys the streamed call stamped on its terminal chunk
+    /// (Phase 50, ADR-0061 (h), owner reading R-1), populated only on the final chunk -- the
+    /// streamed counterpart of [`PaladinResult::run_metadata`].
+    ///
+    /// The execution service merges the provider stream's terminal-chunk metadata by the same
+    /// rule as a buffered run (`paladin.params_omitted` and `paladin.unprofiled_model` as a
+    /// de-duplicated union, every other key as the last value; keys without the `paladin.`
+    /// prefix are never copied). Unlike [`PaladinResult`], a stream chunk has no dedicated
+    /// serving-provider field, so a fallback chain's `paladin.served_by` is carried here too.
+    /// Empty when the call adjusted nothing, and absent from the serialised JSON in that case.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub run_metadata: BTreeMap<String, String>,
 }
 
 impl ChunkMetadata {
     /// Construct empty chunk metadata: no token hint, no loop count, no
-    /// usage. Chain the `with_*` builders to set any of them.
+    /// usage, no cost, no execution metadata. Chain the `with_*` builders to
+    /// set any of them.
     ///
     /// # Examples
     ///
@@ -446,12 +479,18 @@ impl ChunkMetadata {
     /// assert!(metadata.tokens.is_none());
     /// assert!(metadata.loop_count.is_none());
     /// assert!(metadata.usage.is_none());
+    /// assert!(metadata.cost.is_none());
+    /// assert!(metadata.execution.is_none());
+    /// assert!(metadata.run_metadata.is_empty());
     /// ```
     pub fn new() -> Self {
         Self {
             tokens: None,
             loop_count: None,
             usage: None,
+            cost: None,
+            execution: None,
+            run_metadata: BTreeMap::new(),
         }
     }
 
@@ -480,6 +519,71 @@ impl ChunkMetadata {
     /// ```
     pub fn with_usage(mut self, usage: TokenUsage) -> Self {
         self.usage = Some(usage);
+        self
+    }
+
+    /// Chainable: attach a priced cost to this chunk (D-09/D-10).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+    /// use paladin_ports::output::paladin_port::ChunkMetadata;
+    ///
+    /// let cost = Cost::new(22_500_000, CurrencyCode::new("USD").unwrap());
+    /// let metadata = ChunkMetadata::new().with_cost(cost.clone());
+    /// assert_eq!(metadata.cost, Some(cost));
+    /// ```
+    pub fn with_cost(mut self, cost: Cost) -> Self {
+        self.cost = Some(cost);
+        self
+    }
+
+    /// Chainable: attach the run's [`ExecutionMetadata`] to this chunk
+    /// (D-12), built by the streamed-completion producer.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use chrono::Utc;
+    /// use paladin_core::platform::container::herald::ExecutionMetadata;
+    /// use paladin_core::platform::container::token_usage::TokenUsage;
+    /// use paladin_ports::output::paladin_port::ChunkMetadata;
+    /// use uuid::Uuid;
+    ///
+    /// let execution = ExecutionMetadata::builder()
+    ///     .execution_id(Uuid::new_v4())
+    ///     .start_time(Utc::now())
+    ///     .model_used("gpt-4".to_string())
+    ///     .token_usage(TokenUsage::new(1_000, 2_000))
+    ///     .build()
+    ///     .expect("valid metadata");
+    ///
+    /// let metadata = ChunkMetadata::new().with_execution(execution);
+    /// assert!(metadata.execution.is_some());
+    /// ```
+    pub fn with_execution(mut self, execution: ExecutionMetadata) -> Self {
+        self.execution = Some(execution);
+        self
+    }
+
+    /// Chainable: attach the run's `paladin.*` visibility keys to this chunk (Phase 50,
+    /// ADR-0061 (h)), merged by the streamed-completion producer.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::collections::BTreeMap;
+    ///
+    /// use paladin_ports::output::paladin_port::ChunkMetadata;
+    ///
+    /// let keys = BTreeMap::from([("paladin.params_omitted".to_string(), "temperature".to_string())]);
+    /// let metadata = ChunkMetadata::new().with_run_metadata(keys.clone());
+    /// assert_eq!(metadata.run_metadata, keys);
+    /// ```
+    #[must_use]
+    pub fn with_run_metadata(mut self, run_metadata: BTreeMap<String, String>) -> Self {
+        self.run_metadata = run_metadata;
         self
     }
 }
@@ -756,7 +860,8 @@ pub trait PaladinPort: Send + Sync {
     /// - `PaladinError::ConfigurationError` - Invalid Paladin configuration
     /// - `PaladinError::ExecutionError` - Error during execution
     /// - `PaladinError::Timeout` - Execution exceeded timeout
-    /// - `PaladinError::LlmError` - LLM provider error
+    /// - `PaladinError::LlmFailure` - an LLM provider failure carrying its typed
+    ///   transience, status and provider
     ///
     /// # Examples
     ///
@@ -1101,10 +1206,8 @@ mod tests {
         }
 
         let port = ExecuteOnlyPort;
-        let paladin: Paladin = paladin_core::base::entity::node::Node::new(
-            PaladinData::default(),
-            Some("p".to_string()),
-        );
+        let paladin: Paladin =
+            paladin_core::base::entity::Entity::new(PaladinData::default(), Some("p".to_string()));
         let heartbeat = HeartbeatHandle::new();
 
         let direct = port.execute(&paladin, "hi").await.unwrap();
@@ -1163,10 +1266,8 @@ mod tests {
         }
 
         let port = ExecuteOnlyPort;
-        let paladin: Paladin = paladin_core::base::entity::node::Node::new(
-            PaladinData::default(),
-            Some("p".to_string()),
-        );
+        let paladin: Paladin =
+            paladin_core::base::entity::Entity::new(PaladinData::default(), Some("p".to_string()));
         let heartbeat = HeartbeatHandle::new();
 
         let observed = port
@@ -1192,12 +1293,14 @@ mod tests {
         let result = PaladinResult {
             output: "Test output".to_string(),
             usage: TokenUsage::new(100, 0),
+            cost: None,
             execution_time_ms: 500,
             loop_count: 2,
             stop_reason: StopReason::Completed,
             plan: None,
             handoff_history: Vec::new(),
             served_by: None,
+            run_metadata: std::collections::BTreeMap::new(),
         };
 
         assert_eq!(result.output, "Test output");
@@ -1264,17 +1367,57 @@ mod tests {
         assert!(metadata.tokens.is_none());
     }
 
+    /// Phase 50, owner reading R-1 (option-b): the final chunk of a streamed run carries the
+    /// run's `paladin.*` visibility keys on `ChunkMetadata.run_metadata`, the streamed
+    /// counterpart of `PaladinResult.run_metadata`.
+    #[test]
+    fn test_chunk_metadata_with_run_metadata_carries_the_visibility_keys() {
+        let keys: std::collections::BTreeMap<String, String> = [(
+            "paladin.params_omitted".to_string(),
+            "temperature".to_string(),
+        )]
+        .into_iter()
+        .collect();
+        let metadata = ChunkMetadata::new().with_run_metadata(keys.clone());
+
+        assert_eq!(metadata.run_metadata, keys);
+        assert!(ChunkMetadata::new().run_metadata.is_empty());
+    }
+
+    /// An empty `run_metadata` is absent from the serialised chunk metadata, and a document
+    /// without the key deserialises with an empty map.
+    #[test]
+    fn test_chunk_metadata_run_metadata_is_absent_when_empty_and_defaults_on_read() {
+        let json = serde_json::to_value(ChunkMetadata::new()).unwrap();
+        assert!(!json.as_object().unwrap().contains_key("run_metadata"));
+
+        let back: ChunkMetadata = serde_json::from_value(json).unwrap();
+        assert!(back.run_metadata.is_empty());
+
+        let with = ChunkMetadata::new().with_run_metadata(
+            [("paladin.served_model".to_string(), "m2".to_string())]
+                .into_iter()
+                .collect(),
+        );
+        let json = serde_json::to_value(&with).unwrap();
+        assert_eq!(json["run_metadata"]["paladin.served_model"], "m2");
+        let back: ChunkMetadata = serde_json::from_value(json).unwrap();
+        assert_eq!(back.run_metadata, with.run_metadata);
+    }
+
     #[test]
     fn test_paladin_result_serialization() {
         let result = PaladinResult {
             output: "Test".to_string(),
             usage: TokenUsage::new(50, 0),
+            cost: None,
             execution_time_ms: 250,
             loop_count: 1,
             stop_reason: StopReason::Completed,
             plan: None,
             handoff_history: Vec::new(),
             served_by: None,
+            run_metadata: std::collections::BTreeMap::new(),
         };
 
         let json = serde_json::to_string(&result).expect("Failed to serialize");
@@ -1316,12 +1459,14 @@ mod tests {
         let result = PaladinResult {
             output: "Task completed".to_string(),
             usage: TokenUsage::new(200, 0),
+            cost: None,
             execution_time_ms: 1000,
             loop_count: 3,
             stop_reason: StopReason::Completed,
             plan: Some(plan.clone()),
             handoff_history: Vec::new(),
             served_by: None,
+            run_metadata: std::collections::BTreeMap::new(),
         };
 
         assert!(result.has_plan());
@@ -1352,12 +1497,14 @@ mod tests {
         let result = PaladinResult {
             output: "All tasks completed".to_string(),
             usage: TokenUsage::new(500, 0),
+            cost: None,
             execution_time_ms: 3000,
             loop_count: 5,
             stop_reason: StopReason::Completed,
             plan: None,
             handoff_history: vec![record1, record2],
             served_by: None,
+            run_metadata: std::collections::BTreeMap::new(),
         };
 
         assert!(!result.has_plan());
@@ -1395,12 +1542,14 @@ mod tests {
         let result = PaladinResult {
             output: "Final output".to_string(),
             usage: TokenUsage::new(300, 0),
+            cost: None,
             execution_time_ms: 2000,
             loop_count: 4,
             stop_reason: StopReason::Completed,
             plan: Some(plan),
             handoff_history: vec![record],
             served_by: None,
+            run_metadata: std::collections::BTreeMap::new(),
         };
 
         // Serialize

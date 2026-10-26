@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
 use paladin_core::platform::container::battlefield::{Battlefield, FieldName, StateDelta};
+use paladin_core::platform::container::cost::Cost;
 use paladin_core::platform::container::directive::{Directive, NextStep};
 use paladin_core::platform::container::node_cache::CachedDelta;
 use paladin_core::platform::container::node_error::NodeError;
@@ -22,6 +23,10 @@ use paladin_core::platform::container::token_usage::TokenUsage;
 use paladin_core::platform::container::waypoint::{ThreadId, Waypoint, WaypointId};
 use paladin_ports::output::node_cache_port::{NodeCacheError, NodeCacheKey, NodeCachePort};
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream, StopReason};
+use paladin_ports::output::spend_scope::record_incurred_spend;
+use paladin_ports::output::structured_executor_port::{
+    Structured, StructuredExecutorPort, StructuredOptions,
+};
 use paladin_ports::output::trace_sink_port::{TraceRecord, TraceSink, TraceSinkError};
 use paladin_ports::output::waypoint_port::{
     ThreadSummary, WaypointError, WaypointPort, WaypointSummary,
@@ -479,12 +484,18 @@ pub fn shuffle_seeded<T>(items: &mut [T], seed: u64) {
 /// prove non-re-execution: a repeat of an already-completed node's name in
 /// the log after a resume is a re-execution bug, not a coincidence.
 ///
-/// The "Paladin name" key is `paladin.node.name` (`PaladinData::name`),
+/// The "Paladin name" key is `paladin.data.name` (`PaladinData::name`),
 /// matching the convention `tests/helpers/mock_paladin_port.rs`'s
 /// `FaultyPaladinPort` already established.
+/// One configured Paladin's output: the text, its reported [`TokenUsage`],
+/// and its reported [`Cost`] (D-10) -- `None` behaves exactly like a plain
+/// [`RecordingPaladinPort::set_output_with_usage`] call.
+type RecordedOutput = (String, TokenUsage, Option<Cost>);
+
 #[derive(Default)]
 pub struct RecordingPaladinPort {
-    outputs: Mutex<HashMap<String, (String, TokenUsage)>>,
+    outputs: Mutex<HashMap<String, RecordedOutput>>,
+    run_metadata: Mutex<HashMap<String, std::collections::BTreeMap<String, String>>>,
     calls: Mutex<Vec<(String, String)>>,
 }
 
@@ -524,7 +535,40 @@ impl RecordingPaladinPort {
         self.outputs
             .lock()
             .unwrap()
-            .insert(name.into(), (output.into(), usage));
+            .insert(name.into(), (output.into(), usage, None));
+    }
+
+    /// Configure the output string, reported [`TokenUsage`], AND reported
+    /// [`Cost`] a Paladin named `name` returns (D-10) -- the model for
+    /// exercising the engine's per-attempt `NodeFinished.cost` bridge.
+    /// `cost: None` behaves exactly like [`Self::set_output_with_usage`].
+    pub fn set_output_with_usage_and_cost(
+        &self,
+        name: impl Into<String>,
+        output: impl Into<String>,
+        usage: TokenUsage,
+        cost: Option<Cost>,
+    ) {
+        self.outputs
+            .lock()
+            .unwrap()
+            .insert(name.into(), (output.into(), usage, cost));
+    }
+
+    /// Configure the `PaladinResult.run_metadata` a Paladin named `name`
+    /// returns (D-11): what an adapter-stamped `paladin.reasoning_requested`
+    /// / `paladin.reasoning_effective` pair looks like after it has been
+    /// merged into the run's metadata. An unconfigured Paladin returns an
+    /// empty map.
+    pub fn set_run_metadata(
+        &self,
+        name: impl Into<String>,
+        metadata: std::collections::BTreeMap<String, String>,
+    ) {
+        self.run_metadata
+            .lock()
+            .unwrap()
+            .insert(name.into(), metadata);
     }
 
     /// The ordered call log: one `(paladin_name, input)` entry per `execute`
@@ -543,14 +587,21 @@ impl RecordingPaladinPort {
 #[async_trait]
 impl PaladinPort for RecordingPaladinPort {
     async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
-        let name = paladin.node.name.clone();
+        let name = paladin.data.name.clone();
         self.calls
             .lock()
             .unwrap()
             .push((name.clone(), input.to_string()));
 
-        let (output, usage) = self
+        let (output, usage, cost) = self
             .outputs
+            .lock()
+            .unwrap()
+            .get(&name)
+            .cloned()
+            .unwrap_or_default();
+        let run_metadata = self
+            .run_metadata
             .lock()
             .unwrap()
             .get(&name)
@@ -560,12 +611,14 @@ impl PaladinPort for RecordingPaladinPort {
         Ok(PaladinResult {
             output,
             usage,
+            cost,
             execution_time_ms: 0,
             loop_count: 1,
             stop_reason: StopReason::Completed,
             plan: None,
             handoff_history: Vec::new(),
             served_by: None,
+            run_metadata,
         })
     }
 
@@ -630,6 +683,200 @@ impl PaladinPort for FailingPaladinPort {
 
     fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
         Ok(())
+    }
+}
+
+/// What a [`SpendRecordingPaladinPort`] does once it has recorded its spend.
+#[derive(Clone, Copy)]
+pub enum AfterRecording {
+    /// Fail with the `PaladinError` the factory produces (a `fn` pointer, as
+    /// [`FailingPaladinPort`] uses, so the double stays `Send + Sync`).
+    Fail(fn() -> PaladinError),
+    /// Sleep for this long (on the paused test clock), then succeed with an
+    /// empty output -- long enough past an attempt deadline or idle window
+    /// and the engine drops the attempt mid-sleep.
+    Stall(std::time::Duration),
+    /// Succeed with a `PaladinResult` carrying the SAME usage and cost it
+    /// just recorded -- what the real service does on success, so a test can
+    /// prove a success is charged once, not once per source (T-50-29-02).
+    Succeed,
+}
+
+/// A [`PaladinPort`] test double standing in for a `PaladinExecutionService`
+/// that made and was billed for a call before its attempt ended badly
+/// (G-50-5a, plan 50-29): every `execute` first records `usage`/`cost`
+/// through [`record_incurred_spend`] -- exactly what the real service does
+/// at every fold -- then does what its [`AfterRecording`] says. Counts its
+/// calls.
+pub struct SpendRecordingPaladinPort {
+    usage: TokenUsage,
+    cost: Option<Cost>,
+    then: AfterRecording,
+    calls: AtomicUsize,
+}
+
+impl SpendRecordingPaladinPort {
+    /// Construct a port that records `usage`/`cost` on every call, then
+    /// does `then`.
+    pub fn new(usage: TokenUsage, cost: Option<Cost>, then: AfterRecording) -> Arc<Self> {
+        Arc::new(Self {
+            usage,
+            cost,
+            then,
+            calls: AtomicUsize::new(0),
+        })
+    }
+
+    /// How many times `execute` has been called.
+    pub fn call_count(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl PaladinPort for SpendRecordingPaladinPort {
+    async fn execute(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinResult, PaladinError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        record_incurred_spend(&self.usage, self.cost.as_ref());
+        match self.then {
+            AfterRecording::Fail(factory) => Err(factory()),
+            AfterRecording::Stall(for_how_long) => {
+                tokio::time::sleep(for_how_long).await;
+                Ok(PaladinResult::default())
+            }
+            AfterRecording::Succeed => Ok(PaladinResult {
+                output: "done".to_string(),
+                usage: self.usage.clone(),
+                cost: self.cost.clone(),
+                ..Default::default()
+            }),
+        }
+    }
+
+    async fn execute_stream(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinStream, PaladinError> {
+        unimplemented!("SpendRecordingPaladinPort only supports execute()")
+    }
+
+    fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+        Ok(())
+    }
+}
+
+/// How a [`SpendRecordingStructuredExecutor`] ends its structured run once
+/// every scripted call has been recorded.
+#[derive(Clone)]
+pub enum StructuredEnding {
+    /// Succeed with this value; `raw` carries the LAST call's usage and
+    /// cost only, exactly as `run_structured` returns it.
+    Succeed(serde_json::Value),
+    /// Exhaust the repair budget: `StructuredOutputInvalid { attempts }`
+    /// with `attempts` equal to the number of scripted calls.
+    Invalid,
+}
+
+/// A [`StructuredExecutorPort`] test double standing in for a
+/// `PaladinExecutionService` whose repair loop made several billed calls
+/// (G-50-5a, plan 50-29): every `execute_json_schema` plays its scripted
+/// `calls` in order -- recording each call's usage and cost through
+/// [`record_incurred_spend`] when `records` is set, as the real service does,
+/// or recording nothing (an executor that does not report) -- then ends as
+/// its [`StructuredEnding`] says.
+pub struct SpendRecordingStructuredExecutor {
+    calls: Vec<(TokenUsage, Option<Cost>)>,
+    records: bool,
+    ending: StructuredEnding,
+    raw_run_metadata: std::collections::BTreeMap<String, String>,
+}
+
+impl SpendRecordingStructuredExecutor {
+    /// Construct an executor that records every scripted call, then ends
+    /// with `ending`.
+    pub fn recording(
+        calls: Vec<(TokenUsage, Option<Cost>)>,
+        ending: StructuredEnding,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            calls,
+            records: true,
+            ending,
+            raw_run_metadata: std::collections::BTreeMap::new(),
+        })
+    }
+
+    /// Like [`Self::recording`], with the `run_metadata` the successful
+    /// run's `raw` result carries (D-11: the adapter-stamped
+    /// `paladin.reasoning_*` keys of the last call).
+    pub fn recording_with_run_metadata(
+        calls: Vec<(TokenUsage, Option<Cost>)>,
+        ending: StructuredEnding,
+        raw_run_metadata: std::collections::BTreeMap<String, String>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            calls,
+            records: true,
+            ending,
+            raw_run_metadata,
+        })
+    }
+
+    /// Construct an executor that makes the same scripted calls but records
+    /// none of them (the pre-50-29 control).
+    pub fn silent(calls: Vec<(TokenUsage, Option<Cost>)>, ending: StructuredEnding) -> Arc<Self> {
+        Arc::new(Self {
+            calls,
+            records: false,
+            ending,
+            raw_run_metadata: std::collections::BTreeMap::new(),
+        })
+    }
+}
+
+#[async_trait]
+impl StructuredExecutorPort for SpendRecordingStructuredExecutor {
+    async fn execute_json_schema(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+        _schema: &serde_json::Value,
+        _opts: &StructuredOptions,
+    ) -> Result<Structured<serde_json::Value>, PaladinError> {
+        for (usage, cost) in &self.calls {
+            if self.records {
+                record_incurred_spend(usage, cost.as_ref());
+            }
+        }
+        let attempts = self.calls.len() as u32;
+        let (last_usage, last_cost) = self
+            .calls
+            .last()
+            .cloned()
+            .unwrap_or((TokenUsage::default(), None));
+        match &self.ending {
+            StructuredEnding::Succeed(value) => Ok(Structured {
+                value: value.clone(),
+                raw: PaladinResult {
+                    output: value.to_string(),
+                    usage: last_usage,
+                    cost: last_cost,
+                    loop_count: attempts,
+                    run_metadata: self.raw_run_metadata.clone(),
+                    ..Default::default()
+                },
+            }),
+            StructuredEnding::Invalid => Err(PaladinError::StructuredOutputInvalid {
+                attempts,
+                last_error: "output did not contain a parseable JSON value".to_string(),
+                raw_output: "not json".to_string(),
+            }),
+        }
     }
 }
 
@@ -1783,4 +2030,55 @@ impl NodeCachePort for RecordingNodeCache {
         entries.retain(|key, _| !key.starts_with(prefix));
         Ok((before - entries.len()) as u64)
     }
+}
+
+// --- A minimal in-process `log::Log` capturer for the engine's unit tests
+// (moved here from `hooks.rs`'s test module so the stampede-lock tests can
+// share it: `log::set_logger` may be called only once per process, so exactly
+// one capturer may exist). Lines are keyed by OS thread id, so concurrently
+// running `#[tokio::test]`s (each its own thread under the default
+// per-test-thread `cargo test` harness, each on a current-thread runtime that
+// runs its spawned tasks on that same thread) never observe each other's
+// lines. Captures `Warn` and above from every target; a test filters by the
+// content it cares about.
+
+struct CapturingLogger;
+
+static LOGGER_INIT: std::sync::Once = std::sync::Once::new();
+static CAPTURED: Mutex<Option<CapturedWarnings>> = Mutex::new(None);
+type CapturedWarnings = HashMap<std::thread::ThreadId, Vec<String>>;
+
+impl log::Log for CapturingLogger {
+    fn enabled(&self, _metadata: &log::Metadata) -> bool {
+        true
+    }
+    fn log(&self, record: &log::Record) {
+        if record.level() <= log::Level::Warn {
+            let mut guard = CAPTURED.lock().expect("captured warnings mutex poisoned");
+            let map = guard.get_or_insert_with(HashMap::new);
+            map.entry(std::thread::current().id())
+                .or_default()
+                .push(record.args().to_string());
+        }
+    }
+    fn flush(&self) {}
+}
+
+/// Install the capturing logger (idempotent; once per process).
+pub fn install_capturing_logger() {
+    static LOGGER: CapturingLogger = CapturingLogger;
+    LOGGER_INIT.call_once(|| {
+        log::set_logger(&LOGGER).expect("install the capturing test logger");
+        log::set_max_level(log::LevelFilter::Warn);
+    });
+}
+
+/// Every warning captured on this OS thread so far.
+pub fn captured_warnings_for_this_thread() -> Vec<String> {
+    CAPTURED
+        .lock()
+        .expect("captured warnings mutex poisoned")
+        .as_ref()
+        .and_then(|m| m.get(&std::thread::current().id()).cloned())
+        .unwrap_or_default()
 }

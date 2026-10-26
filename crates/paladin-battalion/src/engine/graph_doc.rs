@@ -80,7 +80,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use paladin_core::base::entity::node::Node;
+use paladin_core::base::entity::Entity;
 use paladin_core::platform::container::aegis::{
     Aegis, CacheKeySpec, CachePolicy, ErrorHandlerSpec, RetryPolicy, RetryPredicate, TimeoutPolicy,
 };
@@ -1074,8 +1074,10 @@ fn compile_node(
                 autonomous_prompts: false,
                 agent_description: String::new(),
                 dynamic_temperature: false,
+                reasoning_effort: None,
+                reasoning_fallback: None,
             };
-            let paladin: Paladin = Node::new(data, Some(p.name.clone()));
+            let paladin: Paladin = Entity::new(data, Some(p.name.clone()));
             let input_template = InputMapping::new(p.input_template.clone());
             let output_field = parse_field_name(&p.output_field, node.id.as_str())?;
 

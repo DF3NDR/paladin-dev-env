@@ -350,13 +350,16 @@ See [Configuration](../getting-started/configuration.md) for the full schema.
 
 `PaladinError` variants from `paladin_core::platform::container::paladin_error`:
 
-| Variant | Retryable | Recovery |
-|---------|-----------|----------|
-| `ConfigurationError(String)` | No | Fix builder parameters |
-| `ExecutionError(String)` | Maybe | Check message, retry if transient |
-| `LlmError(String)` | Yes | Retry with exponential back-off |
-| `Timeout(u64)` | Yes | Increase `timeout_seconds` or reduce `max_loops` |
-| `StopWordDetected(String)` | N/A | Success — check result output |
+| Variant | Transience | Recovery |
+|---------|------------|----------|
+| `ConfigurationError(String)` | Permanent | Fix builder parameters |
+| `ExecutionError(String)` | Unknown | Inspect the message; retry only if you know it is safe |
+| `LlmFailure { transience, status, provider, message }` | As carried (e.g. a 503 is Transient, a 401 Permanent) | Retry with exponential back-off when `Transient`; fix credentials or the request when `Permanent` |
+| `Timeout(u64)` | Transient | Increase `timeout_seconds` or reduce `max_loops` |
+| `StopWordDetected(String)` | Permanent | Success — check result output |
+
+Retry decisions read `PaladinError::transience()`, never the message text: the Conclave and the
+circuit breaker act on `Transient` failures only.
 
 ---
 

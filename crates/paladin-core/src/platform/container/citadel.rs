@@ -41,58 +41,7 @@ use std::path::PathBuf;
 use uuid::Uuid;
 
 use super::garrison::GarrisonEntry;
-use super::paladin::MaxLoops;
-use crate::base::entity::node::Node;
-
-/// Type alias for Paladin using the Node pattern
-pub type Paladin = Node<PaladinData>;
-
-/// Placeholder for PaladinData - should match Epic 1 implementation
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PaladinData {
-    pub system_prompt: String,
-    pub name: String,
-    pub user_name: String,
-    pub model: String,
-    pub temperature: f32,
-    pub max_loops: MaxLoops,
-    pub stop_words: Vec<String>,
-    pub status: PaladinStatus,
-    pub vision_enabled: bool,
-    pub autonomous_planning: bool,
-    pub autonomous_prompts: bool,
-    pub agent_description: String,
-    pub dynamic_temperature: bool,
-}
-
-impl Default for PaladinData {
-    fn default() -> Self {
-        Self {
-            system_prompt: String::new(),
-            name: String::new(),
-            user_name: String::new(),
-            model: String::new(),
-            temperature: 0.7,
-            max_loops: MaxLoops::Fixed(3),
-            stop_words: Vec::new(),
-            status: PaladinStatus::Idle,
-            vision_enabled: false,
-            autonomous_planning: false,
-            autonomous_prompts: false,
-            agent_description: String::new(),
-            dynamic_temperature: false,
-        }
-    }
-}
-
-/// Status of a Paladin agent
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum PaladinStatus {
-    Idle,
-    Executing,
-    Completed,
-    Failed(String),
-}
+use super::paladin::Paladin;
 
 /// Serializable Paladin state for persistence
 ///
@@ -101,7 +50,7 @@ pub enum PaladinStatus {
 ///
 /// # Fields
 ///
-/// - `paladin`: The Paladin entity with its configuration
+/// - `paladin`: The Paladin entity (`super::paladin::Paladin`)
 /// - `garrison`: Complete conversation history as Garrison entries
 /// - `execution_history`: Record of all executions for debugging/audit
 /// - `created_at`: Timestamp when state was first created
@@ -126,7 +75,7 @@ pub enum PaladinStatus {
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PaladinState {
-    /// The Paladin entity with its configuration
+    /// The Paladin entity (`super::paladin::Paladin`)
     pub paladin: Paladin,
     /// Complete conversation history
     pub garrison: Vec<GarrisonEntry>,
@@ -376,7 +325,9 @@ pub enum StateType {
 
 #[cfg(test)]
 mod tests {
+    use super::super::paladin::{MaxLoops, PaladinData, PaladinStatus};
     use super::*;
+    use crate::base::entity::Entity;
 
     fn create_test_paladin_data() -> PaladinData {
         PaladinData {
@@ -394,7 +345,7 @@ mod tests {
     }
 
     fn create_test_paladin() -> Paladin {
-        Node::new(create_test_paladin_data(), Some("TestPaladin".to_string()))
+        Entity::new(create_test_paladin_data(), Some("TestPaladin".to_string()))
     }
 
     #[test]

@@ -24,10 +24,15 @@
 //! functional-update syntax) from outside this crate, [`RunScope::default`]
 //! plus the [`RunScope::with_vault_namespace`] builder are the only way a
 //! downstream crate ever builds one — exactly the shape that keeps working
-//! once Phase 27 adds a field.
+//! once Phase 27 adds a field. Phase 39 (39-07) added `run_id` and Phase 40
+//! (D-16) added `ledger_scope` exactly this way: each is serde-defaulted,
+//! omitted when `None`, and set only through its own `with_*` builder.
 
 use serde::{Deserialize, Serialize};
 
+use crate::platform::container::allowance::{AllowanceWarning, DerivedTokenBudget};
+use crate::platform::container::run::RunId;
+use crate::platform::container::treasury_ledger::LedgerScope;
 use crate::platform::container::vault::Namespace;
 
 /// The host-issued grant a single run carries (Doc 05 RT-04, D-21).
@@ -62,6 +67,46 @@ pub struct RunScope {
     /// scope itself carries no grant — the run may still receive one from
     /// `PaladinExecutionService::with_vault`'s own default, or none at all.
     pub vault_namespace: Option<Namespace>,
+
+    /// The Platform API run this execution belongs to, set only by the run
+    /// worker (39-07) when it dispatches an agent-kind run. `None` for
+    /// engine nodes (which settle by superstep, never by this scope) and
+    /// for plain HTTP agent calls that carry no Platform run at all. When
+    /// present, the agent loop's `AgentLoopSettlement::EveryCall`/
+    /// `PlatformRunsOnly` settle writer (D-07, 39-05) settles under this
+    /// run id rather than the service's own execution id. Omitted from the
+    /// serialized form when `None` (D-00f: additive).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<RunId>,
+
+    /// The tenant and API key id this execution's priced calls settle
+    /// under (Phase 40 D-16). Set by the run worker from the run row's
+    /// recorded submitter (`LedgerScope::from_attribution(run.submitted_by)`)
+    /// and by the HTTP agent handlers from the calling `Principal`; read by
+    /// the agent loop's settle writer in `PaladinExecutionService`. `None`
+    /// means this scope carries no attribution -- the settle writer then
+    /// stamps the [`LedgerScope::unattributed`] sentinel, the documented
+    /// value for "no principal exists" (D-10). Never the API key's secret
+    /// value. Omitted from the serialized form when `None` (additive).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ledger_scope: Option<LedgerScope>,
+
+    /// The allowance warnings an HTTP agent-route admission won (Phase 41 D-18), emitted once by
+    /// `PaladinExecutionService` through its trace emitter and folded into the streamed final
+    /// chunk's `ExecutionMetadata`. The run worker never sets this: a worker-path run's
+    /// dispatcher emits its warnings itself from the durable notice store, so the event is
+    /// emitted exactly once. Omitted from the serialized form when empty (additive).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowance_warnings: Vec<AllowanceWarning>,
+
+    /// The per-run token budget the Treasurer derived from the principal's remaining allowance
+    /// (ALLOW-05, Phase 42 D-11). Read by the agent loop's one `TokenBudget` middleware through
+    /// the per-call context -- never stored on the shared middleware -- so two concurrent runs
+    /// each carry their own figure. `None` means no Treasurer budget applies (no ceiling, a free
+    /// model, or no Treasurer attached). Omitted from the serialized form when `None`
+    /// (additive).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derived_token_budget: Option<DerivedTokenBudget>,
 }
 
 impl RunScope {
@@ -85,6 +130,114 @@ impl RunScope {
         self.vault_namespace = Some(namespace);
         self
     }
+
+    /// Builds a [`RunScope`] carrying `run_id` as the Platform API run this
+    /// execution belongs to (D-07). The only way to set `run_id` on a
+    /// `#[non_exhaustive]` struct from outside this crate.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_core::platform::container::run::RunId;
+    /// use paladin_core::platform::container::run_scope::RunScope;
+    ///
+    /// let run_id = RunId::new_v7();
+    /// let scope = RunScope::default().with_run_id(run_id.clone());
+    /// assert_eq!(scope.run_id, Some(run_id));
+    /// ```
+    #[must_use]
+    pub fn with_run_id(mut self, run_id: RunId) -> Self {
+        self.run_id = Some(run_id);
+        self
+    }
+
+    /// Builds a [`RunScope`] whose priced calls settle under `scope`
+    /// (Phase 40 D-16). The only way to set `ledger_scope` on a
+    /// `#[non_exhaustive]` struct from outside this crate.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_core::platform::container::run_scope::RunScope;
+    /// use paladin_core::platform::container::treasury_ledger::LedgerScope;
+    ///
+    /// let ledger_scope = LedgerScope::new("acme", "svc-a");
+    /// let scope = RunScope::default().with_ledger_scope(ledger_scope.clone());
+    /// assert_eq!(scope.ledger_scope, Some(ledger_scope));
+    /// ```
+    #[must_use]
+    pub fn with_ledger_scope(mut self, scope: LedgerScope) -> Self {
+        self.ledger_scope = Some(scope);
+        self
+    }
+
+    /// Builds a [`RunScope`] carrying the allowance `warnings` an admission won (Phase 41
+    /// D-18). The only way to set `allowance_warnings` on a `#[non_exhaustive]` struct from
+    /// outside this crate.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_core::platform::container::allowance::{
+    ///     AllowanceLimitKind, AllowanceScopeKind, AllowanceWarning,
+    /// };
+    /// use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+    /// use paladin_core::platform::container::run_scope::RunScope;
+    ///
+    /// let usd = CurrencyCode::new("USD")?;
+    /// let warning = AllowanceWarning {
+    ///     scope_kind: AllowanceScopeKind::Tenant,
+    ///     limit_kind: AllowanceLimitKind::Lifetime,
+    ///     balance: Cost::new(80, usd.clone()),
+    ///     ceiling: Cost::new(100, usd),
+    ///     window_start: None,
+    ///     window_end: None,
+    ///     warn_at: 80,
+    /// };
+    /// let scope = RunScope::default().with_allowance_warnings(vec![warning.clone()]);
+    /// assert_eq!(scope.allowance_warnings, vec![warning]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[must_use]
+    pub fn with_allowance_warnings(mut self, warnings: Vec<AllowanceWarning>) -> Self {
+        self.allowance_warnings = warnings;
+        self
+    }
+
+    /// Builds a [`RunScope`] carrying the Treasurer-derived per-run token `budget` (ALLOW-05,
+    /// Phase 42 D-11). The only way to set `derived_token_budget` on a `#[non_exhaustive]`
+    /// struct from outside this crate.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chrono::{TimeZone, Utc};
+    /// use paladin_core::platform::container::allowance::{
+    ///     AllowanceLimitKind, AllowanceRefusal, AllowanceScopeKind, DerivedTokenBudget,
+    /// };
+    /// use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+    /// use paladin_core::platform::container::run_scope::RunScope;
+    ///
+    /// let usd = CurrencyCode::new("USD")?;
+    /// let evaluated_at = Utc.with_ymd_and_hms(2026, 10, 3, 23, 0, 0).single().ok_or("bad instant")?;
+    /// let figures = AllowanceRefusal {
+    ///     scope_kind: AllowanceScopeKind::Tenant,
+    ///     limit_kind: AllowanceLimitKind::Lifetime,
+    ///     balance: Cost::new(100, usd.clone()),
+    ///     ceiling: Cost::new(100, usd),
+    ///     window: None,
+    ///     evaluated_at,
+    /// };
+    /// let budget = DerivedTokenBudget::new(1_000, figures);
+    /// let scope = RunScope::default().with_derived_token_budget(budget.clone());
+    /// assert_eq!(scope.derived_token_budget, Some(budget));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[must_use]
+    pub fn with_derived_token_budget(mut self, budget: DerivedTokenBudget) -> Self {
+        self.derived_token_budget = Some(budget);
+        self
+    }
 }
 
 #[cfg(test)]
@@ -100,6 +253,74 @@ mod tests {
     fn run_scope_default_is_empty() {
         let scope = RunScope::default();
         assert!(scope.vault_namespace.is_none());
+        assert!(scope.run_id.is_none());
+    }
+
+    #[test]
+    fn run_scope_allowance_warnings_default_empty_omitted_and_round_trip() {
+        use crate::platform::container::allowance::{AllowanceLimitKind, AllowanceScopeKind};
+        use crate::platform::container::cost::{Cost, CurrencyCode};
+
+        let empty = RunScope::default();
+        assert!(empty.allowance_warnings.is_empty());
+        assert!(
+            !serde_json::to_string(&empty)
+                .unwrap()
+                .contains("allowance_warnings")
+        );
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let warning = AllowanceWarning {
+            scope_kind: AllowanceScopeKind::ApiKey,
+            limit_kind: AllowanceLimitKind::Lifetime,
+            balance: Cost::new(80, usd.clone()),
+            ceiling: Cost::new(100, usd),
+            window_start: None,
+            window_end: None,
+            warn_at: 80,
+        };
+        let scope = RunScope::default().with_allowance_warnings(vec![warning]);
+        let json = serde_json::to_string(&scope).unwrap();
+        assert!(json.contains("allowance_warnings"), "{json}");
+        let back: RunScope = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, scope);
+        // A scope serialized before this field existed still deserializes.
+        let old: RunScope = serde_json::from_str("{}").unwrap();
+        assert!(old.allowance_warnings.is_empty());
+    }
+
+    #[test]
+    fn run_scope_derived_token_budget_default_none_omitted_and_round_trips() {
+        use crate::platform::container::allowance::{AllowanceLimitKind, AllowanceScopeKind};
+        use crate::platform::container::cost::{Cost, CurrencyCode};
+        use chrono::{TimeZone, Utc};
+
+        let empty = RunScope::default();
+        assert!(empty.derived_token_budget.is_none());
+        assert!(
+            !serde_json::to_string(&empty)
+                .unwrap()
+                .contains("derived_token_budget")
+        );
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let figures = crate::platform::container::allowance::AllowanceRefusal {
+            scope_kind: AllowanceScopeKind::ApiKey,
+            limit_kind: AllowanceLimitKind::Lifetime,
+            balance: Cost::new(100, usd.clone()),
+            ceiling: Cost::new(100, usd),
+            window: None,
+            evaluated_at: Utc.with_ymd_and_hms(2026, 10, 3, 23, 0, 0).unwrap(),
+        };
+        let scope =
+            RunScope::default().with_derived_token_budget(DerivedTokenBudget::new(5, figures));
+        let json = serde_json::to_string(&scope).unwrap();
+        assert!(json.contains("derived_token_budget"), "{json}");
+        let back: RunScope = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, scope);
+        // A scope serialized before this field existed still deserializes.
+        let old: RunScope = serde_json::from_str("{}").unwrap();
+        assert!(old.derived_token_budget.is_none());
     }
 
     #[test]
@@ -116,5 +337,67 @@ mod tests {
         let json = serde_json::to_string(&scope).unwrap();
         let back: RunScope = serde_json::from_str(&json).unwrap();
         assert_eq!(scope, back);
+    }
+
+    #[test]
+    fn run_scope_with_run_id_sets_the_run_id() {
+        let run_id = crate::platform::container::run::RunId::new_v7();
+        let scope = RunScope::default().with_run_id(run_id.clone());
+        assert_eq!(scope.run_id, Some(run_id));
+    }
+
+    /// A default scope serializes with no `run_id` key at all (D-00f:
+    /// additive, `skip_serializing_if`), and a scope carrying one round-trips.
+    #[test]
+    fn run_scope_run_id_omitted_when_none_and_round_trips_when_some() {
+        let empty = RunScope::default();
+        let json = serde_json::to_string(&empty).unwrap();
+        assert!(
+            !json.contains("run_id"),
+            "a None run_id must be omitted from the serialized form: {json}"
+        );
+        let back: RunScope = serde_json::from_str(&json).unwrap();
+        assert_eq!(empty, back);
+
+        let run_id = crate::platform::container::run::RunId::new_v7();
+        let scoped = RunScope::default().with_run_id(run_id.clone());
+        let json = serde_json::to_string(&scoped).unwrap();
+        assert!(json.contains("run_id"));
+        let back: RunScope = serde_json::from_str(&json).unwrap();
+        assert_eq!(scoped, back);
+    }
+
+    /// D-16: a default scope carries no ledger scope -- the settle writer
+    /// falls back to the sentinel.
+    #[test]
+    fn run_scope_default_has_no_ledger_scope() {
+        assert!(RunScope::default().ledger_scope.is_none());
+    }
+
+    #[test]
+    fn with_ledger_scope_sets_the_scope() {
+        let ledger_scope = LedgerScope::new("acme", "svc-a");
+        let scope = RunScope::default().with_ledger_scope(ledger_scope.clone());
+        assert_eq!(scope.ledger_scope, Some(ledger_scope));
+    }
+
+    /// D-00f: additive -- a `None` ledger scope is omitted from the
+    /// serialized form, and a scope carrying one round-trips.
+    #[test]
+    fn default_scope_serializes_without_a_ledger_scope_key() {
+        let empty = RunScope::default();
+        let json = serde_json::to_string(&empty).unwrap();
+        assert!(
+            !json.contains("ledger_scope"),
+            "a None ledger_scope must be omitted from the serialized form: {json}"
+        );
+        let back: RunScope = serde_json::from_str(&json).unwrap();
+        assert_eq!(empty, back);
+
+        let scoped = RunScope::default().with_ledger_scope(LedgerScope::new("acme", "svc-a"));
+        let json = serde_json::to_string(&scoped).unwrap();
+        assert!(json.contains("ledger_scope"));
+        let back: RunScope = serde_json::from_str(&json).unwrap();
+        assert_eq!(scoped, back);
     }
 }

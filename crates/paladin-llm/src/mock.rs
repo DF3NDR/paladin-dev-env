@@ -377,9 +377,11 @@ impl LlmPort for MockLlmAdapter {
                 content,
                 finish_reason,
                 usage: token_usage,
+                cost: None,
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: None,
+                reasoning: None,
             }),
             MockEntry::ToolCall { name, arguments } => Ok(LlmResponse {
                 id: Uuid::new_v4(),
@@ -388,9 +390,11 @@ impl LlmPort for MockLlmAdapter {
                 content: format!("Calling tool: {}", name),
                 finish_reason: FinishReason::FunctionCall,
                 usage: token_usage,
+                cost: None,
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: Some(FunctionCall { name, arguments }),
+                reasoning: None,
             }),
         }
     }
@@ -532,9 +536,11 @@ impl LlmPort for MultiStepMockLlmPort {
             content,
             finish_reason: FinishReason::Stop,
             usage: TokenUsage::new(10, 20),
+            cost: None,
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
+            reasoning: None,
         })
     }
 
@@ -622,9 +628,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_returns_error() {
-        let adapter = MockLlmAdapter::new().with_error(LlmError::RateLimitExceeded);
+        let adapter = MockLlmAdapter::new().with_error(LlmError::rate_limited(None));
         let result = adapter.generate(make_request()).await;
-        assert!(matches!(result, Err(LlmError::RateLimitExceeded)));
+        assert!(matches!(result, Err(LlmError::RateLimitExceeded { .. })));
     }
 
     #[tokio::test]
@@ -732,14 +738,14 @@ mod tests {
         );
         assert_eq!(cycling.call_count(), 3);
 
-        let erroring = MockLlmAdapter::new().with_error(LlmError::RateLimitExceeded);
+        let erroring = MockLlmAdapter::new().with_error(LlmError::rate_limited(None));
         assert!(matches!(
             erroring.generate(make_request()).await,
-            Err(LlmError::RateLimitExceeded)
+            Err(LlmError::RateLimitExceeded { .. })
         ));
 
         let recovering =
-            MockLlmAdapter::new().with_error_then_response(LlmError::RateLimitExceeded, "ok");
+            MockLlmAdapter::new().with_error_then_response(LlmError::rate_limited(None), "ok");
         assert!(recovering.generate(make_request()).await.is_err());
         assert_eq!(
             recovering.generate(make_request()).await.unwrap().content,

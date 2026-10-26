@@ -28,7 +28,9 @@ use chrono::{DateTime, Utc};
 use sqlx::Row;
 use sqlx::postgres::{PgPool, PgPoolOptions, PgRow};
 
+use paladin_core::platform::container::allowance::HaltReason;
 use paladin_core::platform::container::parley::ParleyResponse;
+use paladin_core::platform::container::principal::{RunAttribution, RunReadScope, TenantId};
 use paladin_core::platform::container::run::{
     AssistantRef, ForkSpec, RUN_SCHEMA_VERSION, Run, RunCursor, RunId, RunStatus, WebhookSpec,
 };
@@ -52,19 +54,22 @@ use crate::waypoint::redact::redact_database_url_password;
 const INSERT_RUN: &str = "INSERT INTO runs \
      (run_id, thread_id, assistant_id, assistant_version, status, input, submitted_at, \
       started_at, finished_at, attempt, cancel_requested, error, webhook, pending_responses, \
-      fork_from, output, final_waypoint_id, schema_version) \
+      fork_from, output, final_waypoint_id, schema_version, tenant_id, api_key_id, \
+      halt_reason) \
      VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, \
-             $15::jsonb, $16::jsonb, $17, $18)";
+             $15::jsonb, $16::jsonb, $17, $18, $19, $20, $21::jsonb)";
 
 const SELECT_RUN_BY_ID: &str = "SELECT run_id, thread_id, assistant_id, assistant_version, \
      status, input, submitted_at, started_at, finished_at, attempt, cancel_requested, error, \
-     webhook, pending_responses, fork_from, output, final_waypoint_id, schema_version \
+     webhook, pending_responses, fork_from, output, final_waypoint_id, schema_version, \
+     tenant_id, api_key_id, halt_reason \
      FROM runs WHERE run_id = $1";
 
 const SELECT_ACTIVE_RUN_FOR_THREAD: &str = "SELECT run_id, thread_id, assistant_id, \
      assistant_version, status, input, submitted_at, started_at, finished_at, attempt, \
      cancel_requested, error, webhook, pending_responses, fork_from, output, \
-     final_waypoint_id, schema_version FROM runs WHERE thread_id = $1 \
+     final_waypoint_id, schema_version, tenant_id, api_key_id, halt_reason FROM runs \
+     WHERE thread_id = $1 \
      AND status IN ('queued','running','awaiting_input') LIMIT 1";
 
 const UPDATE_REQUEST_CANCEL: &str = "UPDATE runs SET cancel_requested = TRUE WHERE run_id = $1 \
@@ -75,7 +80,8 @@ const SELECT_CANCEL_REQUESTED_FOR_ACTIVE_THREAD: &str = "SELECT cancel_requested
 
 const LIST_SELECT_PREFIX: &str = "SELECT run_id, thread_id, assistant_id, assistant_version, \
      status, input, submitted_at, started_at, finished_at, attempt, cancel_requested, error, \
-     webhook, pending_responses, fork_from, output, final_waypoint_id, schema_version \
+     webhook, pending_responses, fork_from, output, final_waypoint_id, schema_version, \
+     tenant_id, api_key_id, halt_reason \
      FROM runs WHERE 1 = 1";
 
 /// D-30: resolves and freezes `assistant_version` onto the new row from the
@@ -86,10 +92,11 @@ const LIST_SELECT_PREFIX: &str = "SELECT run_id, thread_id, assistant_id, assist
 const INSERT_RUN_WITH_LATEST: &str = "INSERT INTO runs \
      (run_id, thread_id, assistant_id, assistant_version, status, input, submitted_at, \
       started_at, finished_at, attempt, cancel_requested, error, webhook, pending_responses, \
-      fork_from, output, final_waypoint_id, schema_version) \
+      fork_from, output, final_waypoint_id, schema_version, tenant_id, api_key_id, \
+      halt_reason) \
      SELECT $1, $2, $3, a.latest, $4, $5::jsonb, $6, $7, $8, $9, $10, $11, $12::jsonb, \
-            $13::jsonb, $14::jsonb, $15::jsonb, $16, $17 \
-     FROM assistants a WHERE a.assistant_id = $18 AND a.deleted_at IS NULL";
+            $13::jsonb, $14::jsonb, $15::jsonb, $16, $17, $18, $19, $20::jsonb \
+     FROM assistants a WHERE a.assistant_id = $21 AND a.deleted_at IS NULL";
 
 const SELECT_RESOLVED_ASSISTANT_VERSION: &str =
     "SELECT assistant_version FROM runs WHERE run_id = $1";
@@ -268,6 +275,49 @@ impl PostgresRunRepository {
             });
         }
 
+        // D-09/D-10 (mirrors `sqlite.rs` 1:1): both present -> attributed;
+        // both NULL -> unattributed; one present -> a corrupt row.
+        let tenant_id_str: Option<String> = row.try_get("tenant_id").map_err(backend_err)?;
+        let api_key_id: Option<String> = row.try_get("api_key_id").map_err(backend_err)?;
+        let submitted_by = match (tenant_id_str, api_key_id) {
+            (Some(tenant_id_str), Some(api_key_id)) => {
+                let tenant_id = TenantId::new(tenant_id_str).map_err(|e| {
+                    RunRepositoryError::Serialization {
+                        message: format!("invalid tenant_id: {e}"),
+                    }
+                })?;
+                Some(RunAttribution::new(tenant_id, api_key_id))
+            }
+            (None, None) => None,
+            _ => {
+                return Err(RunRepositoryError::Serialization {
+                    message: "run row attribution is incomplete: tenant_id and api_key_id must \
+                              both be set or both be NULL"
+                        .to_string(),
+                });
+            }
+        };
+
+        // ALLOW-03 / D-06: NULL (every pre-013 row, every non-spend outcome) reads back as
+        // `None`. A stored value that is not valid `HaltReason` JSON (a variant a newer binary
+        // wrote, read by an older one, or a corrupt row) also reads back as `None`, never a
+        // panic and never an error: one unreadable reason must not take down `GET /runs`, `get`
+        // or the SSE degraded poller for every other run (T-42-11, Phase 42 review IN-6). The
+        // write side stays strict. Only the run id is logged -- the stored value and the serde
+        // message can quote it.
+        let halt_reason_value: Option<serde_json::Value> =
+            row.try_get("halt_reason").map_err(backend_err)?;
+        let halt_reason: Option<HaltReason> =
+            halt_reason_value.and_then(|value| match serde_json::from_value(value) {
+                Ok(reason) => Some(reason),
+                Err(_) => {
+                    log::error!(
+                        "run {run_id}: stored halt_reason is unreadable and is read as none"
+                    );
+                    None
+                }
+            });
+
         let mut run = Run::new(
             run_id,
             thread_id,
@@ -290,8 +340,68 @@ impl PostgresRunRepository {
         run.output = output;
         run.final_waypoint_id = final_waypoint_id;
         run.schema_version = schema_version;
+        run.submitted_by = submitted_by;
+        run.halt_reason = halt_reason;
         Ok(run)
     }
+}
+
+/// Assemble `list`'s keyset query (pure, no I/O): `LIST_SELECT_PREFIX` plus
+/// the `thread_id`/`assistant_id`/`status` filters, then the D-12 tenant
+/// scope, then the cursor clause, then `ORDER BY submitted_at DESC, run_id
+/// DESC LIMIT`. Every caller-supplied value is `push_bind`-bound (a `$N`
+/// placeholder) -- never interpolated into the SQL text (T-40-10). The scope
+/// is a predicate INSIDE this one statement, never a Rust post-filter over a
+/// fetched page, so a scoped page is exactly as full as an unscoped one and
+/// `next_cursor` keeps a correct keyset walk (T-40-09).
+fn list_query(query: &RunQuery, fetch_limit: i64) -> sqlx::QueryBuilder<'_, sqlx::Postgres> {
+    let mut builder: sqlx::QueryBuilder<sqlx::Postgres> =
+        sqlx::QueryBuilder::new(LIST_SELECT_PREFIX);
+    if let Some(thread_id) = &query.thread_id {
+        builder.push(" AND thread_id = ");
+        builder.push_bind(thread_id.as_str().to_string());
+    }
+    if let Some(assistant_id) = &query.assistant_id {
+        builder.push(" AND assistant_id = ");
+        builder.push_bind(assistant_id.clone());
+    }
+    if let Some(status) = &query.status {
+        builder.push(" AND status = ");
+        builder.push_bind(status.as_str().to_string());
+    }
+    match &query.scope {
+        RunReadScope::All => {}
+        RunReadScope::Tenant(tenant) => {
+            builder.push(" AND tenant_id = ");
+            builder.push_bind(tenant.as_str().to_string());
+        }
+    }
+    if let Some(cursor) = &query.cursor {
+        builder.push(" AND (submitted_at < ");
+        builder.push_bind(cursor.submitted_at);
+        builder.push(" OR (submitted_at = ");
+        builder.push_bind(cursor.submitted_at);
+        builder.push(" AND run_id < ");
+        builder.push_bind(cursor.run_id.as_str().to_string());
+        builder.push("))");
+    }
+    builder.push(" ORDER BY submitted_at DESC, run_id DESC LIMIT ");
+    builder.push_bind(fetch_limit);
+    builder
+}
+
+/// Serialise a run's typed halt reason to the JSON text bound to the `halt_reason` JSONB column
+/// through a `::jsonb` cast (`None` binds NULL), mirroring how `output` is bound. The stored
+/// form is `HaltReason`'s own serde form -- figures as integer nano-units plus a currency,
+/// never display strings -- and is bound as a parameter, never interpolated into SQL text
+/// (T-42-10).
+fn halt_reason_to_json(reason: Option<&HaltReason>) -> Result<Option<String>, RunRepositoryError> {
+    reason
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|e| RunRepositoryError::Serialization {
+            message: e.to_string(),
+        })
 }
 
 #[async_trait]
@@ -330,6 +440,7 @@ impl RunRepositoryPort for PostgresRunRepository {
             .map_err(|e| RunRepositoryError::Serialization {
                 message: e.to_string(),
             })?;
+        let halt_reason = halt_reason_to_json(run.halt_reason.as_ref())?;
 
         sqlx::query(INSERT_RUN)
             .bind(run.run_id.as_str())
@@ -350,6 +461,9 @@ impl RunRepositoryPort for PostgresRunRepository {
             .bind(output)
             .bind(&run.final_waypoint_id)
             .bind(&run.schema_version)
+            .bind(run.submitted_by.as_ref().map(|a| a.tenant_id.as_str()))
+            .bind(run.submitted_by.as_ref().map(|a| a.api_key_id.as_str()))
+            .bind(halt_reason)
             .execute(&self.pool)
             .await
             .map_err(|e| self.map_insert_error(e, &run.thread_id))?;
@@ -432,13 +546,16 @@ impl RunRepositoryPort for PostgresRunRepository {
                 message: e.to_string(),
             })?;
 
+        let halt_reason = halt_reason_to_json(outcome.halt_reason.as_ref())?;
+
         let result = sqlx::query(
-            "UPDATE runs SET error = $1, output = $2::jsonb, final_waypoint_id = $3 \
-             WHERE run_id = $4",
+            "UPDATE runs SET error = $1, output = $2::jsonb, final_waypoint_id = $3, \
+             halt_reason = $4::jsonb WHERE run_id = $5",
         )
         .bind(&outcome.error)
         .bind(output)
         .bind(&outcome.final_waypoint_id)
+        .bind(halt_reason)
         .bind(run_id.as_str())
         .execute(&self.pool)
         .await
@@ -461,31 +578,7 @@ impl RunRepositoryPort for PostgresRunRepository {
             effective_limit as i64 + 1
         };
 
-        let mut builder: sqlx::QueryBuilder<sqlx::Postgres> =
-            sqlx::QueryBuilder::new(LIST_SELECT_PREFIX);
-        if let Some(thread_id) = &query.thread_id {
-            builder.push(" AND thread_id = ");
-            builder.push_bind(thread_id.as_str().to_string());
-        }
-        if let Some(assistant_id) = &query.assistant_id {
-            builder.push(" AND assistant_id = ");
-            builder.push_bind(assistant_id.clone());
-        }
-        if let Some(status) = &query.status {
-            builder.push(" AND status = ");
-            builder.push_bind(status.as_str().to_string());
-        }
-        if let Some(cursor) = &query.cursor {
-            builder.push(" AND (submitted_at < ");
-            builder.push_bind(cursor.submitted_at);
-            builder.push(" OR (submitted_at = ");
-            builder.push_bind(cursor.submitted_at);
-            builder.push(" AND run_id < ");
-            builder.push_bind(cursor.run_id.as_str().to_string());
-            builder.push("))");
-        }
-        builder.push(" ORDER BY submitted_at DESC, run_id DESC LIMIT ");
-        builder.push_bind(fetch_limit);
+        let mut builder = list_query(&query, fetch_limit);
 
         let rows = builder
             .build()
@@ -686,6 +779,7 @@ impl RunRepositoryPort for PostgresRunRepository {
             .map_err(|e| RunRepositoryError::Serialization {
                 message: e.to_string(),
             })?;
+        let halt_reason = halt_reason_to_json(run.halt_reason.as_ref())?;
 
         let result = sqlx::query(INSERT_RUN_WITH_LATEST)
             .bind(run.run_id.as_str())
@@ -705,8 +799,11 @@ impl RunRepositoryPort for PostgresRunRepository {
             .bind(output)
             .bind(&run.final_waypoint_id)
             .bind(&run.schema_version)
+            .bind(run.submitted_by.as_ref().map(|a| a.tenant_id.as_str()))
+            .bind(run.submitted_by.as_ref().map(|a| a.api_key_id.as_str()))
+            .bind(halt_reason)
             .bind(&run.assistant.assistant_id)
-            // (INSERT_RUN_WITH_LATEST's trailing $18 predicate bind, unchanged)
+            // (INSERT_RUN_WITH_LATEST's trailing $21 predicate bind)
             .execute(&self.pool)
             .await
             .map_err(|e| self.map_insert_error(e, &run.thread_id))?;
@@ -761,10 +858,13 @@ mod tests {
     // (and, where relevant, `assistant_id`), so tests do not interfere with
     // each other EXCEPT `list_filters_by_thread_assistant_and_status` and
     // `list_paginates_by_submitted_at_and_run_id_with_no_overlap_or_gap`,
-    // which scope themselves via a unique `assistant_id` filter rather than
-    // requiring a literally empty table -- unlike the Waypoint suite's
-    // `list_threads` clause, no Run contract clause here asserts on a
-    // completely empty store, so `store_or_skip` does not need to truncate.
+    // which scope every one of their `list` queries by their own thread or a
+    // unique `assistant_id` rather than requiring a literally empty table --
+    // unlike the Waypoint suite's `list_threads` clause, no Run contract
+    // clause here asserts on a completely empty store, so `store_or_skip`
+    // does not need to truncate. (An unscoped `status = Running` query in
+    // the filter clause once counted the `Running` rows the Phase 42
+    // `halt_reason` clauses leave behind and went red in CI alone.)
 
     fn postgres_test_url() -> String {
         std::env::var("STORAGE_POSTGRES_TEST_URL").unwrap_or_else(|_| {
@@ -924,6 +1024,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn halt_reason_round_trips_on_record_outcome() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::halt_reason_round_trips_on_record_outcome(&store).await;
+    }
+
+    #[tokio::test]
+    async fn legacy_row_reads_back_without_a_halt_reason() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::legacy_row_reads_back_without_a_halt_reason(&store).await;
+    }
+
+    #[tokio::test]
+    async fn record_outcome_before_status_flip_is_accepted() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::record_outcome_before_status_flip_is_accepted(&store).await;
+    }
+
+    #[tokio::test]
     async fn get_on_unsupported_schema_version_fails() {
         let Some(store) = store_or_skip().await else {
             return;
@@ -1032,6 +1156,279 @@ mod tests {
     }
 
     // ── Gap-closure plan 27-20: timestamp precision contract ────────────
+    // ── Run attribution + tenant-scoped list (Phase 40, TENANT-02, PLAT-07) ──
+    //
+    // Two DB-free `#[test]`s first: they pin the SQL text itself (the
+    // attribution columns on every INSERT/SELECT constant, and the D-12
+    // scope predicate's position and bound-placeholder form in `list_query`)
+    // and therefore run in every environment, Docker or not. The six shared
+    // contract clauses and two postgres-local clauses below them are
+    // Docker-gated like everything else in this module.
+
+    #[test]
+    fn sql_constants_carry_the_halt_reason_column_as_jsonb() {
+        // Phase 42 D-06: `halt_reason` is the LAST column of both INSERTs (so the attribution
+        // and assistant-predicate placeholder numbers above never shift under it), is cast
+        // `::jsonb` on every write, and is named on every SELECT. DB-free, so it runs without
+        // a server.
+        assert!(
+            INSERT_RUN.contains("halt_reason)"),
+            "INSERT_RUN must name halt_reason as its last column: {INSERT_RUN}"
+        );
+        assert!(
+            INSERT_RUN.contains("$21::jsonb"),
+            "INSERT_RUN must bind halt_reason as $21::jsonb: {INSERT_RUN}"
+        );
+        assert!(
+            INSERT_RUN_WITH_LATEST.contains("$20::jsonb"),
+            "INSERT_RUN_WITH_LATEST must select halt_reason as $20::jsonb: {INSERT_RUN_WITH_LATEST}"
+        );
+        for constant in [
+            SELECT_RUN_BY_ID,
+            SELECT_ACTIVE_RUN_FOR_THREAD,
+            LIST_SELECT_PREFIX,
+        ] {
+            assert!(
+                constant.contains("halt_reason"),
+                "constant missing halt_reason: {constant}"
+            );
+        }
+    }
+
+    #[test]
+    fn insert_constants_carry_the_attribution_columns() {
+        assert!(
+            INSERT_RUN.contains("tenant_id, api_key_id"),
+            "INSERT_RUN must name both attribution columns: {INSERT_RUN}"
+        );
+        assert!(
+            INSERT_RUN.contains("$19, $20"),
+            "INSERT_RUN must bind the attribution as $19, $20: {INSERT_RUN}"
+        );
+        assert!(
+            INSERT_RUN_WITH_LATEST.contains("tenant_id, api_key_id"),
+            "INSERT_RUN_WITH_LATEST must name both attribution columns: {INSERT_RUN_WITH_LATEST}"
+        );
+        assert!(
+            INSERT_RUN_WITH_LATEST.contains("$17, $18, $19"),
+            "INSERT_RUN_WITH_LATEST must select the attribution as $18, $19 after $17: \
+             {INSERT_RUN_WITH_LATEST}"
+        );
+        assert!(
+            INSERT_RUN_WITH_LATEST.contains("a.assistant_id = $21"),
+            "INSERT_RUN_WITH_LATEST must end with the a.assistant_id = $21 bind: \
+             {INSERT_RUN_WITH_LATEST}"
+        );
+        for constant in [
+            SELECT_RUN_BY_ID,
+            SELECT_ACTIVE_RUN_FOR_THREAD,
+            LIST_SELECT_PREFIX,
+        ] {
+            assert!(
+                constant.contains("tenant_id") && constant.contains("api_key_id"),
+                "SELECT constant must read both attribution columns: {constant}"
+            );
+        }
+    }
+
+    #[test]
+    fn list_query_applies_the_tenant_scope_before_order_by() {
+        let tenant = TenantId::new("acme").unwrap();
+        let scoped = RunQuery {
+            status: Some(RunStatus::Queued),
+            limit: 2,
+            scope: RunReadScope::Tenant(tenant),
+            ..Default::default()
+        };
+        let sql = list_query(&scoped, 3).sql().to_string();
+        let tenant_at = sql
+            .find(" AND tenant_id = $")
+            .expect("Tenant scope pushes a bound tenant_id predicate");
+        let status_at = sql.find(" AND status = $").expect("status predicate");
+        let order_at = sql
+            .find(" ORDER BY submitted_at DESC, run_id DESC LIMIT $")
+            .expect("keyset ORDER BY ... LIMIT");
+        assert!(
+            status_at < tenant_at && tenant_at < order_at,
+            "tenant predicate must sit after the status filter and before ORDER BY: {sql}"
+        );
+        assert!(
+            !sql.contains("acme"),
+            "the tenant id must be bound, never interpolated (T-40-10): {sql}"
+        );
+
+        let unscoped = RunQuery {
+            limit: 2,
+            scope: RunReadScope::All,
+            ..Default::default()
+        };
+        let sql = list_query(&unscoped, 3).sql().to_string();
+        assert!(
+            !sql.contains("tenant_id ="),
+            "All must add no tenant predicate: {sql}"
+        );
+        assert!(sql.contains(" ORDER BY submitted_at DESC, run_id DESC LIMIT $"));
+    }
+
+    #[tokio::test]
+    async fn insert_then_get_round_trips_attribution() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::insert_then_get_round_trips_attribution(&store).await;
+    }
+
+    #[tokio::test]
+    async fn unattributed_run_round_trips_null_attribution() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::unattributed_run_round_trips_null_attribution(&store).await;
+    }
+
+    #[tokio::test]
+    async fn attribution_survives_every_status_and_attempt_update() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::attribution_survives_every_status_and_attempt_update(&store).await;
+    }
+
+    #[tokio::test]
+    async fn list_scoped_to_tenant_returns_only_that_tenants_runs() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::list_scoped_to_tenant_returns_only_that_tenants_runs(&store).await;
+    }
+
+    #[tokio::test]
+    async fn list_scoped_to_a_tenant_with_no_runs_is_an_empty_page() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::list_scoped_to_a_tenant_with_no_runs_is_an_empty_page(&store).await;
+    }
+
+    #[tokio::test]
+    async fn list_scoped_pagination_has_no_gap_or_overlap() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::list_scoped_pagination_has_no_gap_or_overlap(&store).await;
+    }
+
+    /// Postgres-local (mirrors `sqlite.rs`): the D-30 single-statement insert path
+    /// carries the attribution in the SAME `INSERT ... SELECT` as every other column
+    /// (edge TENANT-02/concurrency).
+    #[tokio::test]
+    async fn insert_with_latest_persists_attribution() {
+        use crate::assistant::contract_tests::sample_new_version;
+        use paladin_core::platform::container::assistant::AssistantId;
+        use paladin_ports::output::assistant_repository_port::AssistantRepositoryPort;
+
+        let (Some(run_store), Some(assistant_store)) =
+            (store_or_skip().await, assistant_store_or_skip().await)
+        else {
+            return;
+        };
+
+        let assistant_id =
+            AssistantId::new(format!("attr-insert-with-latest-{}", uuid::Uuid::new_v4())).unwrap();
+        assistant_store
+            .create(&assistant_id, sample_new_version("v1"))
+            .await
+            .unwrap();
+
+        let tenant = TenantId::new(format!("acme-{}", uuid::Uuid::new_v4())).unwrap();
+        let thread = ThreadId::new(format!("thread-latest-attr-{}", uuid::Uuid::new_v4())).unwrap();
+        let run = contract_tests::sample_attributed_run(
+            &thread,
+            assistant_id.as_str(),
+            contract_tests::contract_timestamp(),
+            &tenant,
+            "svc-a",
+        );
+
+        run_store.insert_with_latest(&run).await.unwrap();
+        let fetched = run_store.get(&run.run_id).await.unwrap().unwrap();
+        assert_eq!(
+            fetched.submitted_by,
+            Some(RunAttribution::new(tenant, "svc-a"))
+        );
+    }
+
+    /// Postgres-local (mirrors `sqlite.rs`): no principal means SQL NULL in both
+    /// columns -- never the ledger's unattributed sentinel string (D-09, D-10).
+    #[tokio::test]
+    async fn unattributed_run_is_stored_as_sql_null() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        let thread = ThreadId::new(format!("thread-attr-null-{}", uuid::Uuid::new_v4())).unwrap();
+        let run = contract_tests::sample_run(
+            &thread,
+            "attr-null-assistant",
+            contract_tests::contract_timestamp(),
+        );
+        assert!(run.submitted_by.is_none());
+        store.insert(&run).await.unwrap();
+
+        let row = sqlx::query(
+            "SELECT tenant_id IS NULL AND api_key_id IS NULL AS both_null FROM runs \
+             WHERE run_id = $1",
+        )
+        .bind(run.run_id.as_str())
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+        let both_null: bool = row.get("both_null");
+        assert!(
+            both_null,
+            "an unattributed run must store SQL NULL in both columns"
+        );
+    }
+
+    /// Migration 009 (phase 40 review WR-03): the schema itself refuses a
+    /// half-attributed row, so a corrupt row can never exist for `row_to_run`
+    /// to reject at read time. SQLite has no counterpart (it cannot add a
+    /// cross-column CHECK via `ALTER TABLE ADD COLUMN`) and relies on the
+    /// read-time guard alone.
+    #[tokio::test]
+    async fn migration_009_rejects_a_half_attributed_row() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        let thread = ThreadId::new(format!("thread-attr-check-{}", uuid::Uuid::new_v4())).unwrap();
+        let run = contract_tests::sample_run(
+            &thread,
+            "attr-check-assistant",
+            contract_tests::contract_timestamp(),
+        );
+        store.insert(&run).await.unwrap();
+
+        for half in [
+            "UPDATE runs SET tenant_id = 'acme' WHERE run_id = $1",
+            "UPDATE runs SET api_key_id = 'svc-a' WHERE run_id = $1",
+        ] {
+            let result = sqlx::query(half)
+                .bind(run.run_id.as_str())
+                .execute(&store.pool)
+                .await;
+            assert!(
+                result.is_err(),
+                "a half-attributed row must violate runs_attribution_all_or_none: {half}"
+            );
+        }
+
+        // Both set (fully attributed) is allowed.
+        sqlx::query("UPDATE runs SET tenant_id = 'acme', api_key_id = 'svc-a' WHERE run_id = $1")
+            .bind(run.run_id.as_str())
+            .execute(&store.pool)
+            .await
+            .expect("a fully attributed row satisfies the constraint");
+    }
+
     //
     // Deliberate, single exception to the "no extra, non-contract
     // `#[tokio::test]`s in this module" rule below: this clause pins the
@@ -1109,12 +1506,17 @@ mod tests {
     }
 
     // No extra, non-contract `#[tokio::test]`s in this module BEYOND the
-    // one immediately above (by design, and its own doc comment explains
-    // why it is the sanctioned exception): CI asserts this module's
-    // `#[tokio::test]` count equals `contract_tests`'s `pub async fn` count
-    // plus exactly one (Task 3's own acceptance criterion, amended by plan
-    // 27-20), so a password-redaction smoke test analogous to `sqlite.rs`'s
-    // and `waypoint::postgres`'s would break that assertion.
+    // one immediately above and Phase 40's two postgres-local attribution
+    // clauses (`insert_with_latest_persists_attribution`,
+    // `unattributed_run_is_stored_as_sql_null` -- each mirrors a
+    // `sqlite.rs`-local test that needs raw SQL or the sibling assistant
+    // store, which no shared contract clause can express). CI's
+    // `postgres-integration` job asserts the number of tests that actually
+    // PASSED against the live server is at least this module's declared
+    // `#[tokio::test]` count (and fails on any `SKIP:` line), so every
+    // `#[tokio::test]` added here must really run there -- a
+    // password-redaction smoke test analogous to `sqlite.rs`'s and
+    // `waypoint::postgres`'s would still be pure noise against that gate.
     // `map_insert_error`/`wrap`/`wrap_error` reuse the same
     // `redact_database_url_password` helper the Waypoint adapters already
     // prove redacts correctly (`waypoint::postgres::tests::connection_error_redacts_password_from_database_url`).

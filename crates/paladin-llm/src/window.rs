@@ -24,7 +24,7 @@
 
 use std::collections::HashMap;
 
-use paladin_ports::output::llm_port::ProviderCapabilities;
+use paladin_ports::output::llm_port::{LlmPort, ProviderCapabilities};
 use thiserror::Error;
 
 /// How [`resolve_context_window`] behaves when neither the config table nor the
@@ -185,9 +185,80 @@ pub fn resolve_context_window(
     }
 }
 
+/// The capabilities `port` has for `model`: the port's own [`ProviderCapabilities`] with
+/// `max_context_tokens` replaced by the per-model profile's `context_window` when the
+/// profile declares one (ADR-0061, D-05).
+///
+/// A port declares one adapter-wide window in [`LlmPort::get_capabilities`], but models on
+/// the same vendor differ widely (a 1M-token model next to a 128K one). The per-model
+/// registry knows the real figure, reachable through [`LlmPort::model_profile`]. Both window
+/// readers -- `Commissary::for_model` and `HistoryTrimmer` -- call this function and then
+/// hand the result to [`resolve_context_window`] unchanged, so the profile's window travels
+/// as step two of the precedence walk ([`WindowSource::ProviderCapabilities`]).
+///
+/// This is an overlay, not a new [`WindowSource`] variant: `WindowSource` is a public enum
+/// that is not `#[non_exhaustive]` and `WindowSource::ALL` is a fixed four-entry array, so a
+/// fifth variant would be a breaking change for every exhaustive `match`. The overlay keeps
+/// the precedence order and the label contract exactly as they were.
+///
+/// The profile's window is trusted as given. When the port has no profile for `model`
+/// (`model_profile` returns `None`, the trait default) or the profile's `context_window` is
+/// `None`, the port's own capabilities are returned unchanged.
+///
+/// # Examples
+///
+/// ```
+/// use paladin_llm::window::effective_capabilities;
+/// use paladin_ports::output::llm_port::{LlmPort, ModelProfile, ProviderCapabilities};
+/// # use paladin_ports::output::llm_port::{LlmError, LlmRequest, LlmResponse, StreamingResponse};
+/// # use futures::Stream;
+///
+/// struct Wide;
+///
+/// # #[async_trait::async_trait]
+/// impl LlmPort for Wide {
+/// #   async fn generate(&self, _r: LlmRequest) -> Result<LlmResponse, LlmError> {
+/// #       Err(LlmError::ProcessingError("not used".into()))
+/// #   }
+/// #   async fn generate_stream(
+/// #       &self,
+/// #       _r: LlmRequest,
+/// #   ) -> Result<Box<dyn Stream<Item = Result<StreamingResponse, LlmError>> + Send>, LlmError> {
+/// #       Err(LlmError::ProcessingError("not used".into()))
+/// #   }
+/// #   async fn validate_model(&self, _m: &str) -> Result<bool, LlmError> { Ok(true) }
+/// #   async fn get_available_models(&self) -> Result<Vec<String>, LlmError> { Ok(vec![]) }
+/// #   fn get_provider_name(&self) -> &'static str { "wide" }
+///     fn get_capabilities(&self) -> ProviderCapabilities {
+///         ProviderCapabilities { max_context_tokens: Some(131_072), ..ProviderCapabilities::default() }
+///     }
+///
+///     fn model_profile(&self, model: &str) -> Option<ModelProfile> {
+///         (model == "big").then(|| ModelProfile::new().with_context_window(1_048_576))
+///     }
+/// }
+///
+/// assert_eq!(effective_capabilities(&Wide, "big").max_context_tokens, Some(1_048_576));
+/// assert_eq!(effective_capabilities(&Wide, "small").max_context_tokens, Some(131_072));
+/// ```
+pub fn effective_capabilities(port: &dyn LlmPort, model: &str) -> ProviderCapabilities {
+    let mut capabilities = port.get_capabilities();
+    if let Some(window) = port
+        .model_profile(model)
+        .and_then(|profile| profile.context_window)
+    {
+        capabilities.max_context_tokens = Some(window);
+    }
+    capabilities
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::Stream;
+    use paladin_ports::output::llm_port::{
+        LlmError, LlmRequest, LlmResponse, ModelProfile, StreamingResponse,
+    };
 
     fn capabilities(max_context_tokens: Option<u32>) -> ProviderCapabilities {
         ProviderCapabilities {
@@ -408,5 +479,118 @@ mod tests {
             "missing required substring 'default' in {:?}",
             WindowSource::Default.as_str()
         );
+    }
+
+    /// A port with a configurable adapter-wide window and a per-model profile window,
+    /// for the [`effective_capabilities`] overlay tests.
+    struct ProfiledPort {
+        adapter_window: Option<u32>,
+        profile: Option<ModelProfile>,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmPort for ProfiledPort {
+        async fn generate(&self, _request: LlmRequest) -> Result<LlmResponse, LlmError> {
+            Err(LlmError::ProcessingError("not used".to_string()))
+        }
+
+        async fn generate_stream(
+            &self,
+            _request: LlmRequest,
+        ) -> Result<Box<dyn Stream<Item = Result<StreamingResponse, LlmError>> + Send>, LlmError>
+        {
+            Err(LlmError::ProcessingError("not used".to_string()))
+        }
+
+        async fn validate_model(&self, _model: &str) -> Result<bool, LlmError> {
+            Ok(true)
+        }
+
+        async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
+            Ok(Vec::new())
+        }
+
+        fn get_provider_name(&self) -> &'static str {
+            "profiled-test-port"
+        }
+
+        fn get_capabilities(&self) -> ProviderCapabilities {
+            capabilities(self.adapter_window)
+        }
+
+        fn model_profile(&self, model: &str) -> Option<ModelProfile> {
+            if model == "m" {
+                self.profile.clone()
+            } else {
+                None
+            }
+        }
+    }
+
+    /// D-05: the profile's window replaces the adapter-wide one; a profile with no window,
+    /// no profile at all, and an unprofiled model all leave the adapter-wide window alone.
+    #[test]
+    fn effective_capabilities_overlays_the_profile_window() {
+        let with_window = ProfiledPort {
+            adapter_window: Some(131_072),
+            profile: Some(ModelProfile::new().with_context_window(1_048_576)),
+        };
+        assert_eq!(
+            effective_capabilities(&with_window, "m").max_context_tokens,
+            Some(1_048_576)
+        );
+        // A different model id has no profile on this port: the adapter-wide figure.
+        assert_eq!(
+            effective_capabilities(&with_window, "other").max_context_tokens,
+            Some(131_072)
+        );
+
+        let profile_without_window = ProfiledPort {
+            adapter_window: Some(131_072),
+            profile: Some(ModelProfile::new()),
+        };
+        assert_eq!(
+            effective_capabilities(&profile_without_window, "m").max_context_tokens,
+            Some(131_072)
+        );
+
+        let no_profile = ProfiledPort {
+            adapter_window: Some(131_072),
+            profile: None,
+        };
+        assert_eq!(
+            effective_capabilities(&no_profile, "m").max_context_tokens,
+            Some(131_072)
+        );
+    }
+
+    /// The overlay touches only `max_context_tokens`: every other capability is the port's own,
+    /// and a profile window fills a port that declared no window at all.
+    #[test]
+    fn effective_capabilities_changes_only_the_window() {
+        let port = ProfiledPort {
+            adapter_window: None,
+            profile: Some(ModelProfile::new().with_context_window(4_096)),
+        };
+        let base = port.get_capabilities();
+        let effective = effective_capabilities(&port, "m");
+
+        assert_eq!(effective.max_context_tokens, Some(4_096));
+        assert_eq!(
+            ProviderCapabilities {
+                max_context_tokens: None,
+                ..effective
+            },
+            ProviderCapabilities {
+                max_context_tokens: None,
+                ..base
+            }
+        );
+    }
+
+    /// `WindowSource` gains no variant for the overlay: it still has exactly four.
+    #[test]
+    fn the_overlay_adds_no_window_source_variant() {
+        assert_eq!(WindowSource::ALL.len(), 4);
     }
 }

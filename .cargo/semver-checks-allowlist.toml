@@ -1,12 +1,13 @@
 # cargo-semver-checks per-item deliberate-breaking allowlist (X-10.5, D-06).
 #
-# Source of truth: `MIGRATION.md` §9.2 ("Rust API changes"). This file is the
+# Source of truth: `MIGRATION.md` §9.2 and §10.2 ("Rust API changes": the v0.10 and
+# v0.11.0 registers, both read by the gate). This file is the
 # machine-checked mirror of that table's rows marked `Deliberate-breaking? = Y`
 # -- NOT a config the `cargo semver-checks` CLI reads directly. The `semver`
 # CI job in `.github/workflows/ci.yml` runs a set-equality check between this
-# file's `[[entry]]` list and MIGRATION.md §9.2's deliberate-breaking rows, in
-# both directions: every entry here must have a matching §9.2 row, and every
-# §9.2 row marked `Y` must have a matching entry here. Neither direction may
+# file's `[[entry]]` list and MIGRATION.md §9.2's and §10.2's deliberate-breaking rows, in
+# both directions: every entry here must have a matching §9.2 or §10.2 row, and every
+# §9.2 or §10.2 row marked `Y` must have a matching entry here. Neither direction may
 # be satisfied by a blanket wildcard -- every entry names one crate and one
 # specific lint.
 #
@@ -28,7 +29,7 @@
 # Schema per entry:
 #   crate           = "<published crates.io package name>"
 #   lint            = "<cargo-semver-checks lint id being suppressed>"
-#   migration_row   = "<the MIGRATION.md §9.2 Crate/Type row this mirrors>"
+#   migration_row   = "<the MIGRATION.md §9.2 or §10.2 Crate/Type row this mirrors>"
 #   requirement_id  = "<owning requirement, e.g. FT-01>"
 #   justification   = "<one line: why this is deliberate-breaking, not a mitigation>"
 #
@@ -65,7 +66,7 @@ crate = "paladin-ai-core"
 lint = "constructible_struct_adds_field"
 migration_row = "paladin-ai-core | PaladinResult"
 requirement_id = "FT-FR-17"
-justification = "PaladinResult gained the additive served_by: Option<String> field (serving provider from the FT-05 fallback chain, D-26) with #[serde(default, skip_serializing_if)] so legacy JSON is byte-identical; the struct stays constructible and is deliberately NOT #[non_exhaustive] because cross-crate functional-update syntax is disallowed on non_exhaustive structs -- FT-FR-17's premise that Default still works under that marking does not hold -- so only full struct literals break, and every in-tree one was migrated in the same commit."
+justification = "PaladinResult gained the additive served_by: Option<String> field (serving provider from the FT-05 fallback chain, D-26) with #[serde(default, skip_serializing_if)] so legacy JSON is byte-identical; the struct stays constructible and is deliberately NOT #[non_exhaustive] because cross-crate functional-update syntax is disallowed on non_exhaustive structs -- FT-FR-17's premise that Default still works under that marking does not hold -- so only full struct literals break, and every in-tree one was migrated in the same commit. Phase 50 plan 50-18 (PARITY-02, owner reading R-1) adds the third additive field on the same struct, run_metadata: BTreeMap<String, String> (the paladin.* visibility keys of the run's model calls, ADR-0061 (h)), with #[serde(default, skip_serializing_if = \"BTreeMap::is_empty\")], the same constructible-not-non_exhaustive decision and a same-commit migration of every in-tree literal to run_metadata: BTreeMap::new(); the D-27 run with the crate-wide allows disabled reports constructible_struct_adds_field on PaladinResult.cost and PaladinResult.run_metadata, which this one entry covers (no new pair)."
 
 [[entry]]
 crate = "paladin-ports"
@@ -177,3 +178,660 @@ lint = "struct_missing"
 migration_row = "paladin-memory | TokenCounterFactory"
 requirement_id = "PRIM-03, PRIM-05"
 justification = "The legacy TokenCounterFactory struct (for_model/supported_models/is_supported) was removed outright with no #[deprecated] shim (D-09) -- zero in-tree callers. content-processing-gated identically to TokenCounter above, so CI's semver job's --default-features-only invocation cannot observe this removal either; this entry and its justification are the only record of that gap. Empirically confirmed via cargo semver-checks check-release --package paladin-memory --features content-processing --baseline-version 0.9.0 --release-type minor (struct_missing on all 3 re-export paths)."
+
+# --- Phase 38 (Design Seams & Pricing, PRICE-01..03) ------------------------
+# Entry below mirrors MIGRATION.md's `paladin-ports | LlmResponse` row (38-04; extended in 50-11).
+
+[[entry]]
+crate = "paladin-ports"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-ports | LlmResponse"
+requirement_id = "PRICE-03, PARITY-05"
+justification = "LlmResponse gained the additive cost: Option<Cost> field (D-10), priced per call by the PricingLlmAdapter decorator at the LlmPort boundary (D-09). #[serde(default, skip_serializing_if)] keeps legacy JSON byte-identical and deserialising as None (the served_by precedent, D-25); the struct stays constructible and is deliberately NOT #[non_exhaustive] for the same PaladinResult/Settings reason -- only full struct literals break, and every in-tree one (provider adapters, mocks, services, tests, benches, examples, doctests) was migrated to cost: None in the same commit. Phase 50 plan 50-11 (D-11, PARITY-05) adds the second additive field on the same struct, reasoning: Option<String>, with the same serde attributes, the same constructible-not-non_exhaustive decision and a same-commit migration of every in-tree literal to reasoning: None; the D-27 run with the crate-wide allows disabled reports constructible_struct_adds_field on LlmResponse.cost and LlmResponse.reasoning, which this one entry covers (no new pair)."
+
+# --- Phase 40 (Tenant Identity & Run-Read Scoping, TENANT-01/02, PLAT-07) ---
+# Every entry below was measured in 40-06 by the D-27 method (cargo-semver-checks
+# 0.50.0, --baseline-version 0.10.1 --release-type minor, each crate's lints table
+# temporarily disabled and restored unchanged; see 40-06-SUMMARY.md). The tool
+# reported constructible_struct_adds_field for ApiKeyConfig.tenant,
+# BearerTokenAuthConfig.tenant and AgentAuthConfig.bearer_tenant, and ONLY
+# struct_marked_non_exhaustive for Principal; it reported nothing for SubmitRun,
+# ForkRun or RunSubmissionPort (register-only, as predicted).
+# D-18/D-00c convention: an entry whose `lint` value begins "register-only"
+# records a deliberate break that `cargo semver-checks` cannot itself detect
+# (no lint in its 0.50.0 catalog models a changed field or parameter TYPE,
+# only additions/removals/count changes) -- MIGRATION.md's §10.2 row, not the
+# tool, is the control for that pair. It still names exactly one crate and
+# one type, mirroring every other entry in this file.
+
+[[entry]]
+crate = "paladin-web"
+lint = "struct_marked_non_exhaustive"
+migration_row = "paladin-web | Principal"
+requirement_id = "TENANT-01"
+justification = "Principal gained the required tenant_id: TenantId field (D-01), server-derived from AgentAuthConfig, never from the request (D-02), and is marked #[non_exhaustive] per X-10.3 option (a) (the LlmRequest/GarrisonEntry precedent, 40-01 Task 1 option-a) so the next field this type gains is non-breaking; Principal::new is the one constructor every external caller now uses. No backward-compatible mitigation exists for a required field on a struct with no Default; every in-tree literal was migrated in the same commit. This is the ONE entry for the pair: 40-01 predicted a second, constructible_struct_adds_field entry, but the 40-06 D-27 diagnostic (paladin-web lints table temporarily disabled, --baseline-version 0.10.1 --release-type minor) fires only struct_marked_non_exhaustive for Principal -- a struct marked #[non_exhaustive] in the same change is no longer exhaustively constructible, so the adds-field lint cannot fire -- and the predicted entry was removed rather than left contradicting the tool. Suppressed by the existing crate-wide allow line in crates/paladin-web/Cargo.toml."
+
+[[entry]]
+crate = "paladin-web"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-web | AgentAuthConfig"
+requirement_id = "TENANT-01"
+justification = "AgentAuthConfig gained the additive bearer_tenant: Option<TenantId> field (D-03) -- the tenant every verified bearer principal carries; while None a verified bearer token does not authenticate (fail closed). Default is unchanged (None), so functional-update sites keep compiling; not #[non_exhaustive] (X-10.3 option (b), the Settings precedent -- a Default exists); suppressed by the existing crate-wide allow line in crates/paladin-web/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-ai | ApiKeyConfig"
+requirement_id = "TENANT-01"
+justification = "ApiKeyConfig gained the required tenant: String field (#[serde(default)] so the config file still parses; enforced at boot, D-05) -- an empty or invalid value stops paladin-server with an error naming the key's name, never its secret key value. D-05 forbids an implicit default tenant, which would pool every key's spend into one scope. Suppressed by the root Cargo.toml's crate-wide allow line."
+
+[[entry]]
+crate = "paladin-ai"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-ai | BearerTokenAuthConfig"
+requirement_id = "TENANT-01"
+justification = "BearerTokenAuthConfig gained the tenant: Option<String> field (#[serde(default)], required when enabled, D-03) -- same rationale as ApiKeyConfig above. Default is unchanged; suppressed by the same root Cargo.toml allow line."
+
+[[entry]]
+crate = "paladin-ports"
+lint = "register-only (cargo-semver-checks 0.50.0 has no field- or parameter-type-change lint)"
+migration_row = "paladin-ports | SubmitRun"
+requirement_id = "TENANT-01, TENANT-02"
+justification = "SubmitRun.requested_by retyped from Option<(String, UserRole)> to Option<PrincipalRef> (D-04) -- the tenant now travels with the principal reference itself, never assembled ad hoc at the call site. SubmitRun shipped in v0.10 and is absent at the v0.9.0 baseline the CI semver job diffs against, so this register entry (not the tool) is the control per 40-CONTEXT D-18 (operator-locked)."
+
+[[entry]]
+crate = "paladin-ports"
+lint = "register-only (cargo-semver-checks 0.50.0 has no field- or parameter-type-change lint)"
+migration_row = "paladin-ports | ForkRun"
+requirement_id = "TENANT-01, TENANT-02"
+justification = "ForkRun.requested_by retyped from Option<(String, UserRole)> to Option<PrincipalRef> (D-04), identically to the SubmitRun row above and for the same reason."
+
+[[entry]]
+crate = "paladin-ports"
+lint = "register-only (cargo-semver-checks 0.50.0 has no field- or parameter-type-change lint)"
+migration_row = "paladin-ports | RunSubmissionPort"
+requirement_id = "TENANT-01, PLAT-07"
+justification = "RunSubmissionPort::cancel's requested_by parameter retyped from Option<(String, UserRole)> to Option<PrincipalRef> (D-04); every in-tree implementor and caller was migrated in the same commit. Same register-only basis as the SubmitRun/ForkRun rows above."
+
+[[entry]]
+crate = "paladin-ai"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-ai | RunApiHandles"
+requirement_id = "ALLOW-01, ALLOW-02"
+justification = "RunApiHandles gained the treasurer: Option<Arc<dyn AllowanceAdmissionPort>> field (D-06) -- the Treasurer admission port build_run_api builds when treasurer.allowance has entries, None otherwise; paladin-server hands the same port to AgentApiState (41-04). The in-tree literals are the two inside build_run_api; suppressed by the root Cargo.toml's crate-wide allow line."
+
+[[entry]]
+crate = "paladin-web"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-web | AgentApiState"
+requirement_id = "ALLOW-02"
+justification = "AgentApiState gained the treasurer: Option<Arc<dyn AllowanceAdmissionPort>> field (D-06, C1, C4) plus the with_treasurer builder -- the agent routes' admission port. AgentApiState::new sets None, so in-tree code and any caller that builds the state through new stay ungated and unchanged; paladin-server attaches the Treasurer build_run_api built so execute, execute/stream and jobs enforce the same policy over the same ledger as POST /v1/runs (D-07: a caller refused there must not spend the same allowance through an agent route). Suppressed by the existing crate-wide allow line in crates/paladin-web/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ports"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-ports | SubmitRun"
+requirement_id = "ALLOW-02"
+justification = "SubmitRun gained the attributed_to: Option<RunAttribution> field (D-08, C13) -- identity for a principal-less (schedule-fired) submission, never a role; the invocation role check still reads requested_by alone. The in-tree literals were migrated in the same commit; suppressed by the crate-wide allow line in crates/paladin-ports/Cargo.toml. Second entry for the pair: the first records the register-only Phase 40 field-type change (the ExecuteResponse two-entry precedent)."
+
+[[entry]]
+crate = "paladin-ports"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-ports | CreateRunSchedule"
+requirement_id = "ALLOW-02"
+justification = "CreateRunSchedule gained the created_by: Option<RunAttribution> field (D-08) -- the creating principal's tenant id and API key name, set by POST /v1/schedules from the authenticated principal and None for embedders. The in-tree literals were migrated in the same commit; suppressed by the crate-wide allow line in crates/paladin-ports/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "enum_marked_non_exhaustive"
+migration_row = "paladin-ai-core | RunEventKind"
+requirement_id = "ALLOW-04"
+justification = "RunEventKind gained the operator-level AllowanceWarning variant (Phase 41, D-17, C3 Option A) because webhook_deliveries.event is this enum, and is marked #[non_exhaustive] so the next event kind is not a semver-major bump. Every in-tree exhaustive match was replaced by the new RunEventKind::as_str() in the same commit; the caller-facing parsers still reject allowance_warning."
+
+# --- Phase 43 (Rate Pacing, PACE-01/02) -------------------------------------
+# Entries below mirror MIGRATION.md's `paladin-ports | LlmError` row for
+# `RateLimitExceeded` (43-02). The D-27 diagnostic (cargo-semver-checks 0.50.0 vs
+# 0.10.1, crate-wide allows disabled) fired these two lints for it; the new
+# `RateLimitHints` family fired nothing (new items in a new module).
+
+[[entry]]
+crate = "paladin-ports"
+lint = "enum_unit_variant_changed_kind"
+migration_row = "paladin-ports | LlmError"
+requirement_id = "PACE-01"
+justification = "LlmError::RateLimitExceeded changed from a unit variant to a struct variant { retry_after, hints } so a 429 carries the provider's own retry delay (and an optional header snapshot) to the Cadence decorator and to any RetryPolicy above it. Its Display text (Rate limit exceeded) and its Transient classification are unchanged; construct it with LlmError::rate_limited(..) and match it with RateLimitExceeded { .. }. Every in-tree value and pattern site migrated in the same commit series."
+
+[[entry]]
+crate = "paladin-ports"
+lint = "enum_variant_marked_non_exhaustive"
+migration_row = "paladin-ports | LlmError"
+requirement_id = "PACE-01"
+justification = "The reshaped LlmError::RateLimitExceeded variant is marked #[non_exhaustive] so a later field (a further parsed header, say) can be added without a break, in the same way the enclosing enum already is. Out-of-crate code can no longer build the variant with a literal; LlmError::rate_limited and LlmError::rate_limited_with_hints are the constructors. Phase 50 plan 50-26 (G-50-5a, PARITY-05) marks LlmError::EmptyCompletion and LlmError::Refusal #[non_exhaustive] the same way, so a later field is free; the D-27 run (cargo-semver-checks 0.50.0 vs 0.10.1, crate-wide allows disabled) reports this lint on EmptyCompletion (Refusal is new since 0.10.1), which this one entry covers (no new pair). LlmError::empty_completion and LlmError::refusal are the constructors."
+
+# --- Phase 50 plan 50-26 (G-50-5a, PARITY-05) -------------------------------
+# Mirrors the extended `paladin-ports | LlmError` 10.2 row. The D-27 run fired
+# enum_tuple_variant_changed_kind (new below) and enum_variant_marked_non_exhaustive
+# (covered above) for EmptyCompletion; Refusal and BilledUsage fired nothing.
+
+[[entry]]
+crate = "paladin-ports"
+lint = "enum_tuple_variant_changed_kind"
+migration_row = "paladin-ports | LlmError"
+requirement_id = "PARITY-05"
+justification = "LlmError::EmptyCompletion changed from the tuple variant EmptyCompletion(String) to the #[non_exhaustive] struct variant { detail, billed } so a call the vendor answered and billed but the shared guard classified as empty carries its usage (BilledUsage) out of LlmPort::generate (G-50-5a). Its Display text (Empty completion: {detail}) and its Permanent classification are unchanged; build it with LlmError::empty_completion(..), match it with EmptyCompletion { .. }, read the bill with billed_usage(). Every in-tree value and pattern site migrated in the same commit series (plans 50-25 and 50-26)."
+
+[[entry]]
+crate = "paladin-ai"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-ai | AgentRuntimeDeps"
+requirement_id = "PACE-02, PARITY-06"
+justification = "AgentRuntimeDeps gained the cadence: Option<CadenceWiring> field (D-03, 43-06) -- the Cadence wiring that paces every hop of a config-built model_fallback chain; Default carries an in-process wiring built from treasurer.cadence's defaults and None opts out. The struct stays constructible (not #[non_exhaustive]) because it implements Default and in-tree literals already use ..Default::default(); only a downstream full struct literal breaks. Found by the D-27 diagnostic at the Phase 43 closeout (43-13), which contradicted the row's earlier N; suppressed by the root Cargo.toml's crate-wide allow line. Phase 50 plan 50-14 (D-15, PARITY-06) adds the second additive field on the same struct, llm_config: Option<LlmConfig> (default None, behaves as an empty llm: section), with the same constructible-not-non_exhaustive decision and the same Default-based in-tree construction; the D-27 run with the crate-wide allow disabled reports constructible_struct_adds_field on AgentRuntimeDeps.cadence and AgentRuntimeDeps.llm_config, which this one entry covers (no new pair)."
+
+# --- Phase 44 (Legacy Clean-Break Removal, LEGACY-01..04) ---------------------
+# Entries below mirror the Phase 44 `Y` rows of MIGRATION.md section 10.2 (plan
+# 44-11). The D-27 diagnostic (cargo-semver-checks 0.50.0, the CI-pinned
+# version, against the published 0.10.1 with `--release-type minor` and
+# `--default-features`) ran once per crate with that crate's crate-wide allow
+# lines disabled; each manifest was restored byte-for-byte afterwards. Every
+# entry is a lint the tool fired for a Phase 44 item, in section 10.2 row order
+# with lint ids alphabetical inside a row. Lints it fired for earlier phases'
+# items (PaladinResult.cost, RunFinishStatus, RunEventKind, the TraceEvent
+# fields, RunOutcome::Halted.cause, the paladin-ports and paladin-ai fields)
+# belong to those phases' rows and are not repeated here. The BattalionResult
+# `node_errors` element retype fired no lint (the tool models no field type
+# change), so that row is `N` and has no entry. The paladin-ai facade's
+# re-export of the removed retry module fired nothing.
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-ai-core | BattalionConfig"
+requirement_id = "LEGACY-02"
+justification = "BattalionConfig gained the aegis: Aegis field (the one per-attempt fault-tolerance policy) in place of the three legacy fields. The field is #[serde(default)], so a v0.10 document still deserializes; a downstream full struct literal breaks. Every in-tree literal and builder call migrated to BattalionConfig::new(..).with_aegis(..) in the same commit series (44-01..44-10); suppressed by the crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "inherent_method_missing"
+migration_row = "paladin-ai-core | BattalionConfig"
+requirement_id = "LEGACY-01, LEGACY-02"
+justification = "BattalionConfig::with_timeout, with_retry_policy and with_error_strategy are removed outright (ADR-0059, no deprecated shim, D-00c): the replacement is with_aegis(Aegis { timeout, retry, on_error, .. }), which bounds and retries each attempt. Every in-tree caller (Commander, CLI, examples, doc-examples, tests) migrated in the same commit series; suppressed by the crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "struct_pub_field_missing"
+migration_row = "paladin-ai-core | BattalionConfig"
+requirement_id = "LEGACY-01, LEGACY-02"
+justification = "BattalionConfig's public fields timeout_seconds, retry_policy and error_strategy are removed (ADR-0059, D-00c); a v0.10 document carrying those keys still deserializes because serde ignores unknown keys, with aegis left at Aegis::default(). The replacement is the aegis field. Every in-tree reader migrated in the same commit series; suppressed by the crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "struct_missing"
+migration_row = "paladin-ai-core | RetryPolicy"
+requirement_id = "LEGACY-01"
+justification = "The legacy Battalion RetryPolicy struct (paladin_core::platform::container::battalion::RetryPolicy) is deleted outright (ADR-0059, D-00c); the same-named Aegis RetryPolicy in the aegis module is a different type and is unaffected. The replacement is BattalionConfig.aegis.retry, where max_attempts counts total attempts (old retries + 1). Every in-tree use migrated in the same commit series; suppressed by a new crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "enum_missing"
+migration_row = "paladin-ai-core | ErrorStrategy"
+requirement_id = "LEGACY-01"
+justification = "The legacy Battalion ErrorStrategy enum (paladin_core::platform::container::battalion::ErrorStrategy) is deleted outright (ADR-0059, D-00c); the Maneuver's own ErrorStrategy in paladin-battalion is a different type and is unaffected. The replacement is BattalionConfig.aegis.on_error (Absorb continues past a failed Paladin, None fails fast). Every in-tree use migrated in the same commit series; suppressed by a new crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "struct_missing"
+migration_row = "paladin-ai-core | NodeError"
+requirement_id = "LEGACY-01"
+justification = "The legacy Battalion NodeError summary struct (paladin_core::platform::container::battalion::NodeError, a node name plus message text) is deleted outright (ADR-0059, D-00c); the structured node_error::NodeError is a different type and is unaffected. The replacement is that structured type, now the element of BattalionResult.node_errors. Every in-tree use migrated in the same commit series (44-06, 44-10); suppressed by a new crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "enum_variant_missing"
+migration_row = "paladin-ai-core | BattalionError"
+requirement_id = "LEGACY-02"
+justification = "BattalionError::Timeout is removed (ADR-0059, D-00c): with a per-attempt bound there is no whole-Battalion timeout to report. A timed-out attempt surfaces as BattalionError::Node with a Timeout source (Formation, Campaign) or inside AggregationError (Phalanx). Every in-tree producer and match arm migrated in the same commit series; suppressed by a new crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "enum_variant_missing"
+migration_row = "paladin-ai-core | PaladinError"
+requirement_id = "LEGACY-03"
+justification = "PaladinError::LlmError(String), the stringly LLM variant, is removed (ADR-0059, D-00c); no first-party production code constructed it since Phase 25. The replacement is the structured LlmFailure variant, whose classification the engine, the Conclave and the circuit breaker read through transience(). Every in-tree site migrated in the same commit series (44-03); suppressed by a new crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "inherent_method_missing"
+migration_row = "paladin-ai-core | PaladinError"
+requirement_id = "LEGACY-03"
+justification = "PaladinError::is_retryable() and is_terminal() are removed (ADR-0059, D-00c): they decided by variant and by message substrings. The replacement is transience(), which classifies each variant once and never reads message text. Every in-tree caller (the circuit breaker, the Conclave, the eval runner) migrated in the same commit series (44-03); suppressed by the crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "inherent_method_missing"
+migration_row = "paladin-ai-core | ConclaveConfig"
+requirement_id = "LEGACY-02"
+justification = "ConclaveConfig::with_timeout is removed (ADR-0059, D-00c). The replacement is BattalionConfig.aegis.timeout, applied to every expert and aggregator attempt. Every in-tree caller (Commander bridge, CLI, examples, tests) migrated in the same commit series (44-07, 44-08, 44-10); suppressed by the crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "struct_pub_field_missing"
+migration_row = "paladin-ai-core | ConclaveConfig"
+requirement_id = "LEGACY-02"
+justification = "ConclaveConfig's public timeout_seconds field is removed (ADR-0059, D-00c); a v0.10 document carrying it still deserializes because serde ignores unknown keys. The replacement is BattalionConfig.aegis.timeout. Every in-tree reader migrated in the same commit series (44-07, 44-10); suppressed by the crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "enum_variant_missing"
+migration_row = "paladin-ai-core | ConclaveError"
+requirement_id = "LEGACY-02"
+justification = "ConclaveError::Timeout is removed (ADR-0059, D-00c): with a per-attempt bound there is no whole-Conclave timeout. A timed-out expert attempt is a retried PaladinError::Timeout and a timed-out aggregator attempt surfaces as ConclaveError::AggregatorFailed. Every in-tree producer migrated in the same commit series (44-07, 44-10); suppressed by a new crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-battalion"
+lint = "function_missing"
+migration_row = "paladin-battalion | retry"
+requirement_id = "LEGACY-01"
+justification = "paladin_battalion::retry::should_retry and calculate_retry_delay, the legacy Battalion retry helpers, are removed with their module (ADR-0059, D-00c). The replacement is the engine's backoff_delay in paladin_battalion::engine::retry, driven by BattalionConfig.aegis.retry. Every in-tree caller (the Conclave) migrated in the same commit series (44-07, 44-10); suppressed by a new crate-wide allow line in a new [package.metadata.cargo-semver-checks.lints] table in crates/paladin-battalion/Cargo.toml."
+
+[[entry]]
+crate = "paladin-battalion"
+lint = "module_missing"
+migration_row = "paladin-battalion | retry"
+requirement_id = "LEGACY-01"
+justification = "The paladin_battalion::retry module is removed (ADR-0059, D-00c), together with the facade's pub use re-export of it (paladin::application::services::battalion::retry; the cargo-semver-checks run on the paladin-ai facade fired no lint for it). paladin_battalion::engine::retry is a different module and is unaffected. Every in-tree use migrated in the same commit series (44-07, 44-10); suppressed by a new crate-wide allow line in a new [package.metadata.cargo-semver-checks.lints] table in crates/paladin-battalion/Cargo.toml."
+
+# --- Phase 48 (Base Entity Rename, ENTITY-01..05) ----------------------------
+# Entries below mirror the Phase 48 `Y` rows of MIGRATION.md section 10.2 (plan
+# 48-07). The D-27 diagnostic (cargo-semver-checks 0.50.0, the CI-pinned
+# version, against the published 0.10.1 with `--release-type minor` and
+# `--default-features`) ran once per crate with that crate's crate-wide allow
+# lines disabled; each manifest was restored byte-for-byte afterwards (checked
+# with cmp). Every entry is a lint the tool fired for a Phase 48 item, in
+# section 10.2 row order with lint ids alphabetical inside a row. Lints it fired
+# for earlier phases' items (PaladinResult.cost, RunFinishStatus, RunEventKind,
+# the TraceEvent fields, the Phase 44 Battalion and Conclave removals, and the
+# paladin-ai fields) belong to those phases' rows and are not repeated here.
+# The register-only rows have no entry because no lint models them: the citadel
+# module's removed Paladin type alias, PaladinState.paladin's type change, and
+# the paladin-ai ContentItemService signatures (the tool fired nothing for the
+# facade beyond earlier phases' fields). The five retained base items (Field,
+# CollectionType, Item, FieldVersionService, CollectionVersionService) have no
+# row and no entry because nothing about them breaks in this phase (D-05).
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "module_missing"
+migration_row = "paladin-ai-core | Node"
+requirement_id = "ENTITY-01, ENTITY-02"
+justification = "The base entity wrapper's module paladin_core::base::entity::node is removed outright (ADR-0060, no deprecated shim): the wrapper now lives at paladin_core::base::entity::Entity, re-exported from a private module. Every in-tree import migrated in the same commit series (48-04); suppressed by a new crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "struct_missing"
+migration_row = "paladin-ai-core | Node"
+requirement_id = "ENTITY-01, ENTITY-02"
+justification = "The generic base entity wrapper struct Node<T> is renamed Entity<T> with its payload field renamed from node to data (ADR-0060, clean break, no alias). NodeId, NodeSpec, StateNode and the structured NodeError are graph items and are unaffected. Every in-tree use migrated in the same commit series (48-04, 48-05); suppressed by the crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "enum_missing"
+migration_row = "paladin-ai-core | NodeVersionService"
+requirement_id = "ENTITY-03"
+justification = "The version family's enums VersioningError, ChangeType and HashAlgorithm keep their names but moved with their module to paladin_core::base::service::entity_version_service (ADR-0060, D-09), so their old import path no longer resolves. Every in-tree use migrated in the same commit series (48-03); suppressed by the crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "module_missing"
+migration_row = "paladin-ai-core | NodeVersionService"
+requirement_id = "ENTITY-03"
+justification = "The version-service module paladin_core::base::service::node_version_service is renamed paladin_core::base::service::entity_version_service (ADR-0060, D-09), with no re-export under the old path. Every in-tree import migrated in the same commit series (48-03); suppressed by a new crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "struct_missing"
+migration_row = "paladin-ai-core | NodeVersionService"
+requirement_id = "ENTITY-03"
+justification = "NodeVersion, NodeVersionMetadata, NodeVersionService and InMemoryNodeVersionRepository are renamed EntityVersion, EntityVersionMetadata, EntityVersionService and InMemoryEntityVersionRepository, and VersionHistory, VersionComparison and VersioningConfig moved with the module (ADR-0060, D-09). EntityVersion still reads the v0.10 node_id and node_data keys. Every in-tree use migrated in the same commit series (48-03); suppressed by the crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "trait_missing"
+migration_row = "paladin-ai-core | NodeVersionService"
+requirement_id = "ENTITY-03"
+justification = "The NodeVersionRepository trait is renamed EntityVersionRepository (ADR-0060, D-09), with no alias under the old name. Every in-tree implementor and consumer migrated in the same commit series (48-03); suppressed by a new crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "struct_missing"
+migration_row = "paladin-ai-core | PaladinData"
+requirement_id = "ENTITY-03"
+justification = "The citadel module's placeholder PaladinData struct is deleted outright (ADR-0060, D-10); the same-named real type in platform::container::paladin already existed, has the same 13 fields and is unaffected, so a v0.10 Citadel snapshot still loads. Every in-tree importer migrated in the same commit series (48-04); suppressed by the crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "enum_missing"
+migration_row = "paladin-ai-core | PaladinStatus"
+requirement_id = "ENTITY-03"
+justification = "The citadel module's placeholder PaladinStatus enum is deleted outright (ADR-0060, D-10); the same-named real enum in platform::container::paladin is the only one now and adds the Reasoning status, so a v0.11 snapshot taken mid-reasoning is unreadable by v0.10. Every in-tree importer migrated in the same commit series (48-04); suppressed by the crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-ai-core | ContentItem"
+requirement_id = "ENTITY-01"
+justification = "ContentItem's wrapper field is now named entity (ADR-0060, D-08), which the tool sees as a new field on a constructible struct; a downstream full struct literal breaks. The JSON key reads node or entity and writes entity. Every in-tree literal migrated in the same commit series (48-05); suppressed by the crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "struct_pub_field_missing"
+migration_row = "paladin-ai-core | ContentItem"
+requirement_id = "ENTITY-01"
+justification = "ContentItem's public field node is renamed entity (ADR-0060, D-08): the content item's payload is read as item.entity.data. The v0.10 node key is still read for stored documents. Every in-tree reader migrated in the same commit series (48-05); suppressed by the crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-ai-core | PromptItem"
+requirement_id = "ENTITY-01"
+justification = "PromptItem's wrapper field is now named entity (ADR-0060, D-08), which the tool sees as a new field on a constructible struct; a downstream full struct literal breaks. The JSON key reads node or entity and writes entity. Every in-tree literal migrated in the same commit series (48-05); suppressed by the crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "struct_pub_field_missing"
+migration_row = "paladin-ai-core | PromptItem"
+requirement_id = "ENTITY-01"
+justification = "PromptItem's public field node is renamed entity (ADR-0060, D-08): the prompt item's payload is read as item.entity.data. The v0.10 node key is still read for stored documents. Every in-tree reader migrated in the same commit series (48-05); suppressed by the crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+# --- Phase 50 (Provider Parity & Configuration-Driven Model Swap, PARITY-01..08) ---
+# Entries below mirror the Phase 50 `Y` rows of MIGRATION.md section 10.2 for
+# `paladin-llm` (plan 50-10). The D-27 diagnostic (cargo-semver-checks 0.50.0,
+# the CI-pinned version, against the published 0.10.1 with `--release-type
+# minor`) ran twice on this plan's tree -- once with `--default-features` and
+# once with all nine adapter features, since the default features hide seven of
+# the ten types -- and `paladin-llm` had no crate-wide allow lines to disable.
+# Both runs checked 196 items and fired exactly one lint, `struct_marked_non_exhaustive`,
+# on the nine adapter configs and `LlmProviderConfig` (the owner's `option-a`
+# decision at the plan 50-08 checkpoint: every existing `new`, `from_env` and
+# `from_parts` signature unchanged, a downstream struct literal no longer
+# compiles). Nothing else fired for `paladin-llm`, so there is one entry per
+# (type, lint) and no row-only register entries. Later Phase 50 plans that
+# change another published type add their own rows and entries in the same
+# commit as the change.
+
+[[entry]]
+crate = "paladin-llm"
+lint = "struct_marked_non_exhaustive"
+migration_row = "paladin-llm | OpenAIConfig"
+requirement_id = "PARITY-03"
+justification = "OpenAIConfig gained max_tokens, context_window and model_overrides (it already carried max_retries) (Phase 50, plans 50-08/50-09) and is marked #[non_exhaustive] with with_* builders (owner decision option-a) so the next field is free; only a downstream struct literal breaks, its new(..) shape changes in Phase 50.1 (SURFACE-02, the entry below). Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+[[entry]]
+crate = "paladin-llm"
+lint = "struct_marked_non_exhaustive"
+migration_row = "paladin-llm | AnthropicConfig"
+requirement_id = "PARITY-03"
+justification = "AnthropicConfig gained max_retries, context_window and model_overrides (it already carried the required max_tokens: u32) (Phase 50, plans 50-08/50-09) and is marked #[non_exhaustive] with with_* builders (owner decision option-a) so the next field is free; only a downstream struct literal breaks, its new(..) shape changes in Phase 50.1 (SURFACE-02, the entry below). Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+[[entry]]
+crate = "paladin-llm"
+lint = "struct_marked_non_exhaustive"
+migration_row = "paladin-llm | DeepSeekConfig"
+requirement_id = "PARITY-03"
+justification = "DeepSeekConfig gained max_tokens, max_retries, context_window and model_overrides (Phase 50, plans 50-08/50-09) and is marked #[non_exhaustive] with with_* builders (owner decision option-a) so the next field is free; only a downstream struct literal breaks, and its new(..) shape changes in Phase 50.1 (SURFACE-02, the entry below). Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+[[entry]]
+crate = "paladin-llm"
+lint = "struct_marked_non_exhaustive"
+migration_row = "paladin-llm | GeminiConfig"
+requirement_id = "PARITY-03"
+justification = "GeminiConfig gained max_tokens, max_retries, context_window and model_overrides (Phase 50, plans 50-08/50-09) and is marked #[non_exhaustive] with with_* builders (owner decision option-a) so the next field is free; only a downstream struct literal breaks, its new(..) shape changes in Phase 50.1 (SURFACE-02, the entry below). Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+[[entry]]
+crate = "paladin-llm"
+lint = "struct_marked_non_exhaustive"
+migration_row = "paladin-llm | KimiConfig"
+requirement_id = "PARITY-03"
+justification = "KimiConfig gained max_tokens, max_retries, context_window and model_overrides (Phase 50, plans 50-08/50-09) and is marked #[non_exhaustive] with with_* builders (owner decision option-a) so the next field is free; only a downstream struct literal breaks, its new(..) shape changes in Phase 50.1 (SURFACE-02, the entry below). Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+[[entry]]
+crate = "paladin-llm"
+lint = "struct_marked_non_exhaustive"
+migration_row = "paladin-llm | QwenConfig"
+requirement_id = "PARITY-03"
+justification = "QwenConfig gained max_tokens, max_retries, context_window and model_overrides (Phase 50, plans 50-08/50-09) and is marked #[non_exhaustive] with with_* builders (owner decision option-a) so the next field is free; only a downstream struct literal breaks, its new(..) shape changes in Phase 50.1 (SURFACE-02, the entry below). Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+[[entry]]
+crate = "paladin-llm"
+lint = "struct_marked_non_exhaustive"
+migration_row = "paladin-llm | GrokConfig"
+requirement_id = "PARITY-03"
+justification = "GrokConfig gained max_tokens, max_retries, context_window and model_overrides (Phase 50, plans 50-08/50-09) and is marked #[non_exhaustive] with with_* builders (owner decision option-a) so the next field is free; only a downstream struct literal breaks, its new(..) shape changes in Phase 50.1 (SURFACE-02, the entry below). Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+[[entry]]
+crate = "paladin-llm"
+lint = "struct_marked_non_exhaustive"
+migration_row = "paladin-llm | OllamaConfig"
+requirement_id = "PARITY-03"
+justification = "OllamaConfig gained max_tokens, max_retries, context_window and model_overrides (Phase 50, plans 50-08/50-09) and is marked #[non_exhaustive] with with_* builders (owner decision option-a) so the next field is free; only a downstream struct literal breaks, every constructor signature is unchanged. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+[[entry]]
+crate = "paladin-llm"
+lint = "struct_marked_non_exhaustive"
+migration_row = "paladin-llm | OpenAiCompatibleConfig"
+requirement_id = "PARITY-03"
+justification = "OpenAiCompatibleConfig gained max_tokens, max_retries, context_window and model_overrides (it already carried capabilities) (Phase 50, plans 50-08/50-09) and is marked #[non_exhaustive] with with_* builders (owner decision option-a) so the next field is free; only a downstream struct literal breaks, every constructor signature is unchanged. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+[[entry]]
+crate = "paladin-llm"
+lint = "struct_marked_non_exhaustive"
+migration_row = "paladin-llm | LlmProviderConfig"
+requirement_id = "PARITY-03"
+justification = "LlmProviderConfig gained max_tokens, context_window and models (Phase 50, plan 50-09) and is marked #[non_exhaustive] with new(api_key) and with_* builders (owner decision option-a) so the next field is free; only a downstream struct literal breaks, and every existing YAML file loads unchanged. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+# Plan 50-14 (D-15, PARITY-06). The D-27 diagnostic (cargo-semver-checks 0.50.0 vs the published
+# 0.10.1, `--release-type minor`, `--default-features`, each crate's crate-wide allow lines
+# disabled and restored byte-for-byte) was re-run for `paladin-ai` and `paladin-llm` on this
+# plan's tree. `paladin-ai`: 196 checks, 1 lint fired (`constructible_struct_adds_field`) on
+# `ModelFallbackConfig.steps` and `AgentRuntimeDeps.llm_config` among the earlier-phase items; the
+# `AgentRuntimeDeps` entry above was extended (not duplicated) and `ModelFallbackConfig` has its
+# own entry below. `paladin-llm`: 196 checks, 2 lints fired -- `struct_marked_non_exhaustive` on
+# the Phase 50 configs (entries above) and `enum_discriminants_undefined_non_unit_variant` on
+# `FallbackChainError`, the one new here. `FallbackStep`, `from_steps`, `hop_on_refusal`,
+# `SERVED_MODEL_METADATA_KEY`, `FallbackStepConfig`, `ModelFallbackMiddleware::from_steps` and
+# `paced_steps` fired nothing and have register-only `N` rows.
+
+[[entry]]
+crate = "paladin-ai"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-ai | ModelFallbackConfig"
+requirement_id = "PARITY-06"
+justification = "ModelFallbackConfig gained the additive steps: Vec<FallbackStepConfig> field (Phase 50, plan 50-14, D-15, #[serde(default)], empty by default) so a configuration can send each fallback hop its own model. The struct stays constructible and is deliberately NOT #[non_exhaustive] because it derives Default and in-tree literals use ..ModelFallbackConfig::default(); only a downstream full struct literal breaks. Suppressed by the root Cargo.toml's crate-wide allow line."
+
+[[entry]]
+crate = "paladin-llm"
+lint = "enum_discriminants_undefined_non_unit_variant"
+migration_row = "paladin-llm | FallbackChainError"
+requirement_id = "PARITY-06"
+justification = "FallbackChainError gained the struct variant EmptyStepModel { index } (Phase 50, plan 50-14, D-15), returned by FallbackLlmAdapter::from_steps for a step whose model is empty. The enum was already #[non_exhaustive], so a match with a wildcard arm is unaffected; its only variant was a unit variant, so the new struct variant removes its defined discriminants and a numeric cast of a variant stops compiling (nothing in the tree casts it). Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+# --- Phase 50.1 (Consumer-Surface Readiness, SURFACE-02) ---
+# Plan 50.1-02 (D-05, D-09, D-00b), measured 2026-10-20: cargo-semver-checks 0.50.0 vs the
+# published `paladin-llm` 0.10.1, `--release-type minor`, with `crates/paladin-llm/Cargo.toml`'s
+# lint table removed and restored byte-for-byte (`cmp`-verified), run with the default features
+# and again with all nine adapter features (`openai,anthropic,deepseek,kimi,qwen,grok,ollama,
+# gemini,openai-compatible`): 196 checks, 3 lints fired in both runs -- the two already allowed
+# (`struct_marked_non_exhaustive`, `enum_discriminants_undefined_non_unit_variant`) and
+# `method_parameter_count_changed`, new here, on `DeepSeekConfig::new` (3 parameters before, 2
+# now; reported on both the `deepseek::adapter` and the `deepseek` re-export path). The other
+# six types' `new` changes add their entries beside this one in plans 50.1-04, -05 and -06.
+
+[[entry]]
+crate = "paladin-llm"
+lint = "method_parameter_count_changed"
+migration_row = "paladin-llm | DeepSeekConfig"
+requirement_id = "SURFACE-02"
+justification = "DeepSeekConfig::new(api_key, base_url, model) became new(api_key, model) (Phase 50.1, plan 50.1-02, D-05): the endpoint defaults to DEEPSEEK_DEFAULT_BASE_URL and is set with the with_base_url builder, the timeout with with_timeout_seconds. A clean break with no alias (ADR-0060): new(k, url, m) becomes new(k, m).with_base_url(url); from_env() is unchanged. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+# Plan 50.1-04 Task 1 (D-05, D-09, D-00b), measured 2026-10-20: cargo-semver-checks 0.50.0 vs the
+# published `paladin-llm` 0.10.1, `--release-type minor`, with `crates/paladin-llm/Cargo.toml`'s
+# lint table removed and restored byte-for-byte (`cmp`-verified), all nine adapter features
+# (`openai,anthropic,deepseek,kimi,qwen,grok,ollama,gemini,openai-compatible`): 196 checks, 3 lints
+# fired -- the two already allowed and `method_parameter_count_changed`, which named
+# `GeminiConfig::new` (3 parameters before, 2 now; reported on both the `gemini::adapter` and the
+# `gemini` re-export path).
+
+[[entry]]
+crate = "paladin-llm"
+lint = "method_parameter_count_changed"
+migration_row = "paladin-llm | GeminiConfig"
+requirement_id = "SURFACE-02"
+justification = "GeminiConfig::new(api_key, base_url, model) became new(api_key, model) (Phase 50.1, plan 50.1-04, D-05): the endpoint defaults to GEMINI_DEFAULT_BASE_URL and is set with the with_base_url builder, the timeout with with_timeout_seconds. A clean break with no alias (ADR-0060): new(k, url, m) becomes new(k, m).with_base_url(url); from_env() is unchanged. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+# Plan 50.1-04 Task 2 (D-05, D-09, D-00b), measured 2026-10-20 after both changes: cargo-semver-checks
+# 0.50.0 vs the published `paladin-llm` 0.10.1, `--release-type minor`, with
+# `crates/paladin-llm/Cargo.toml`'s lint table removed and restored byte-for-byte (`cmp`-verified),
+# all nine adapter features: 196 checks, 3 lints fired -- the two already allowed and
+# `method_parameter_count_changed`, which named `QwenConfig::new` and `GrokConfig::new` (3 parameters
+# before, 2 now; each reported on both its `adapter` and its re-export path).
+
+[[entry]]
+crate = "paladin-llm"
+lint = "method_parameter_count_changed"
+migration_row = "paladin-llm | QwenConfig"
+requirement_id = "SURFACE-02"
+justification = "QwenConfig::new(api_key, base_url, model) became new(api_key, model) (Phase 50.1, plan 50.1-04, D-05): the endpoint defaults to QWEN_DEFAULT_BASE_URL and is set with the with_base_url builder, the timeout with with_timeout_seconds. A clean break with no alias (ADR-0060): new(k, url, m) becomes new(k, m).with_base_url(url); from_env() is unchanged. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+[[entry]]
+crate = "paladin-llm"
+lint = "method_parameter_count_changed"
+migration_row = "paladin-llm | GrokConfig"
+requirement_id = "SURFACE-02"
+justification = "GrokConfig::new(api_key, base_url, model) became new(api_key, model) (Phase 50.1, plan 50.1-04, D-05): the endpoint defaults to GROK_DEFAULT_BASE_URL and is set with the with_base_url builder, the timeout with with_timeout_seconds. A clean break with no alias (ADR-0060): new(k, url, m) becomes new(k, m).with_base_url(url); from_env() is unchanged. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+# Plan 50.1-04 Task 3 (D-05, D-09, D-00b), measured 2026-10-20: cargo-semver-checks 0.50.0 vs the
+# published `paladin-llm` 0.10.1, `--release-type minor`, with `crates/paladin-llm/Cargo.toml`'s
+# lint table removed and restored byte-for-byte (`cmp`-verified), all nine adapter features:
+# 196 checks, 3 lints fired -- the two already allowed and `method_parameter_count_changed`, which
+# named `KimiConfig::new` (3 parameters before, 2 now; reported on both the `kimi::adapter` and the
+# `kimi` re-export path).
+
+[[entry]]
+crate = "paladin-llm"
+lint = "method_parameter_count_changed"
+migration_row = "paladin-llm | KimiConfig"
+requirement_id = "SURFACE-02"
+justification = "KimiConfig::new(api_key, base_url, model) became new(api_key, model) (Phase 50.1, plan 50.1-04, D-05): the endpoint defaults to KIMI_DEFAULT_BASE_URL and is set with the with_base_url builder, the timeout with with_timeout_seconds. A clean break with no alias (ADR-0060): new(k, url, m) becomes new(k, m).with_base_url(url); from_env() is unchanged. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+# Plan 50.1-05 Task 2 (D-05, D-06, D-09, D-00b), measured 2026-10-20: cargo-semver-checks 0.50.0 vs
+# the published `paladin-llm` 0.10.1, `--release-type minor`, with `crates/paladin-llm/Cargo.toml`'s
+# lint table removed and restored byte-for-byte (`cmp`-verified), run with the default features
+# (`openai` is a default feature) and again with all nine adapter features: 196 checks, 3 lints
+# fired in both runs -- the two already allowed and `method_parameter_count_changed`, which named
+# `OpenAIConfig::new` (1 parameter before, 2 now; reported on both the `openai::adapter` and the
+# `openai` re-export path). No lint named the new public field `OpenAIConfig.model`, the new
+# constants or `with_organization`: the only lint on `OpenAIConfig` besides `new` is the
+# already-registered `struct_marked_non_exhaustive`.
+
+[[entry]]
+crate = "paladin-llm"
+lint = "method_parameter_count_changed"
+migration_row = "paladin-llm | OpenAIConfig"
+requirement_id = "SURFACE-02"
+justification = "OpenAIConfig::new(api_key) became new(api_key, model) (Phase 50.1, plan 50.1-05, D-05, D-06), and the struct gained the public field model (additive on the #[non_exhaustive] struct; no lint named it), the adapter's default model, set by new, by from_env() (OPENAI_DEFAULT_MODEL, no new variable) and by the layered path. A clean break with no alias (ADR-0060): new(k) becomes new(k, m); with the owner's proceed-as-locked answer the field changes no adapter-wide limit. The endpoint defaults to OPENAI_DEFAULT_BASE_URL and is set with the with_base_url builder, the timeout with with_timeout_seconds, the organisation with the new with_organization. from_env() reads the same variables. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+# Plan 50.1-06 Task 2 (D-05, D-07, D-09, D-00b), measured 2026-10-20: cargo-semver-checks 0.50.0 vs
+# the published `paladin-llm` 0.10.1, `--release-type minor`, with `crates/paladin-llm/Cargo.toml`'s
+# lint table removed and restored byte-for-byte (`cmp`-verified), run with the default features and
+# again with all nine adapter features: 196 checks, 3 lints fired in both runs -- the two already
+# allowed and `method_parameter_count_changed`, which named `AnthropicConfig::new` (4 parameters
+# before, 2 now; reported on both the `anthropic::adapter` and the `anthropic` re-export path). No
+# lint named the new constant `ANTHROPIC_DEFAULT_BASE_URL`: the only lint on `AnthropicConfig`
+# besides `new` is the already-registered `struct_marked_non_exhaustive`.
+
+[[entry]]
+crate = "paladin-llm"
+lint = "method_parameter_count_changed"
+migration_row = "paladin-llm | AnthropicConfig"
+requirement_id = "SURFACE-02"
+justification = "AnthropicConfig::new(api_key, base_url, model, max_tokens) became new(api_key, model) (Phase 50.1, plan 50.1-06, D-05, D-07). A clean break with no alias (ADR-0060): new(k, url, m, n) becomes new(k, m).with_base_url(url).with_max_tokens(n). The endpoint defaults to ANTHROPIC_DEFAULT_BASE_URL (the one copy, used by new, from_env() and the layered path) and is set with the with_base_url builder, the timeout with with_timeout_seconds. With the owner's compiled-default answer (plan 50.1-06 checkpoint, 2026-10-20) max_tokens is 4,096 for every model, the same value from_env() and the layered path use; the model's seeded maximum output is reachable only through with_max_tokens. from_env() reads the same variables. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+# Plan 51-04 (D-00b, REASON-02), registered 2026-10-21 in the SAME commit that adds the field;
+# measured in plan 51-14 on 2026-10-22: cargo-semver-checks 0.50.0 vs the published `paladin-llm`
+# 0.10.1, `--release-type minor`, with `crates/paladin-llm/Cargo.toml`'s lint table removed and
+# restored byte-for-byte (`cmp`-verified), run with the default features and again with the nine
+# adapter features (`openai,anthropic,deepseek,kimi,qwen,grok,ollama,gemini,openai-compatible`):
+# 196 checks, 192 pass, 4 fail, 58 skip in both runs. The four lints are the three already
+# allowed (`struct_marked_non_exhaustive`, `enum_discriminants_undefined_non_unit_variant`,
+# `method_parameter_count_changed`) and `constructible_struct_adds_field`, which is new to this
+# table and named `CompatRequestParameters.reasoning` (compat/engine.rs:182, reported twice, once
+# per path). `method_parameter_count_changed` also named `CompatRequestParameters::all` (0
+# parameters before, 1 now, on the `compat::engine` and the `compat` path), so the one MIGRATION
+# row carries two entries, one per measured lint.
+
+[[entry]]
+crate = "paladin-llm"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-llm | CompatRequestParameters"
+requirement_id = "REASON-02"
+justification = "CompatRequestParameters gained the public field reasoning: ReasoningWire and its constructor all() became all(reasoning) (Phase 51, plan 51-04, D-04, D-10). The type has no Default by design, so the reasoning wire is stated at every construction site and no preset can be built without a stated position (REASON-02). A clean break with no alias and no deprecated all() (ADR-0060): state reasoning in the literal, or pass the wire to all(..). Measured in plan 51-14 on 2026-10-22 (see the comment above this entry)."
+
+[[entry]]
+crate = "paladin-llm"
+lint = "method_parameter_count_changed"
+migration_row = "paladin-llm | CompatRequestParameters"
+requirement_id = "REASON-02"
+justification = "CompatRequestParameters::all() became all(reasoning: ReasoningWire) (Phase 51, plan 51-04, D-04, D-10): the convenience constructor takes the reasoning wire, so a preset cannot be built without stating where its vendor parses a reasoning effort (REASON-02). Measured in plan 51-14 on 2026-10-22: method_parameter_count_changed named CompatRequestParameters::all, 0 parameters before and 1 now, on both the compat::engine and the compat path. A clean break with no alias and no deprecated all() (ADR-0060): pass the wire, CompatRequestParameters::all(ReasoningWire::Unsupported) keeps today's behaviour."
+
+# Plan 51-07 (D-00b, D-00e, REASON-01), registered 2026-10-21 in the SAME commit that adds the fields;
+# measured in plan 51-14 on 2026-10-22: cargo-semver-checks 0.50.0 vs the published `paladin-ai-core`
+# 0.10.1, `--release-type minor`, with `crates/paladin-core/Cargo.toml`'s lint table removed and
+# restored byte-for-byte (`cmp`-verified) (the crate has no features, so the default run is the only
+# configuration): 196 checks, 185 pass, 11 fail, 58 skip. `constructible_struct_adds_field` named
+# `PaladinData.reasoning_effort` (paladin.rs:216) and `PaladinData.reasoning_fallback` (paladin.rs:225);
+# it is already allowed crate-wide, so the table gained no line for this entry. The other fired
+# lints name items outside Phase 51.
+# The pair `paladin-ai-core | PaladinData` already has an entry (the removed Citadel placeholder,
+# ENTITY-03); the row-level set-equality gate is deduplicated, so this is one further entry on it.
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-ai-core | PaladinData"
+requirement_id = "REASON-01"
+justification = "PaladinData gained the public fields reasoning_effort: Option<ReasoningEffort> and reasoning_fallback: Option<ReasoningFallback> (Phase 51, plan 51-07, D-00e, D-05): the agent level of the reasoning-effort precedence. The struct stays constructible and is not #[non_exhaustive], so only full struct literals break; every in-tree one named both fields in the same commit. #[serde(default, skip_serializing_if = \"Option::is_none\")] keeps stored snapshots loading and an agent that sets neither serialises byte-identically. Migration: name both fields in the literal or spread ..PaladinData::default(). Measured in plan 51-14 on 2026-10-22 (see the comment above this entry)."
+
+# Plan 51-08 (D-00b, D-00e, REASON-01), registered 2026-10-21 in the SAME commit that adds the fields;
+# measured in plan 51-14 on 2026-10-22: cargo-semver-checks 0.50.0 vs the published `paladin-ai`
+# 0.10.1, `--release-type minor`, with the root `Cargo.toml`'s lint table removed and restored
+# byte-for-byte (`cmp`-verified), run with `--default-features` (CI's own flag) and again with
+# `--default-features --features llm-all` (the nine adapter features): 196 checks, 195 pass, 1 fail,
+# 58 skip in both runs. The one lint, `constructible_struct_adds_field`, named
+# `AgentDefinition.reasoning_effort` (agents.rs:367) and `AgentDefinition.reasoning_fallback`
+# (agents.rs:374); it is already allowed crate-wide, so the table gained no line. (The tool's default
+# every-feature build of this crate fails in `paladin-memory`'s qdrant adapter against a newer
+# qdrant-client, before any check runs; it is outside this phase and not what CI runs.)
+
+[[entry]]
+crate = "paladin-ai"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-ai | AgentDefinition"
+requirement_id = "REASON-01"
+justification = "AgentDefinition gained the public fields reasoning_effort: Option<ReasoningEffort> and reasoning_fallback: Option<ReasoningFallback> (Phase 51, plan 51-08, D-00e, D-05, #[serde(default)]): the YAML keys agents[].reasoning_effort and agents[].reasoning_fallback. The struct stays constructible and is deliberately NOT #[non_exhaustive] (cross-crate functional-update syntax must keep working); only a downstream full struct literal breaks, and every in-tree literal named both fields in the same commit. Migration: add reasoning_effort: None, reasoning_fallback: None to the literal; YAML is unaffected. Measured in plan 51-14 on 2026-10-22 (see the comment above this entry)."
+
+# Plan 51-09 (D-00b, D-11, REASON-05), registered 2026-10-21 in the SAME commit that adds the fields;
+# measured in plan 51-14 on 2026-10-22 in the same `paladin-ai-core` run as the entry above:
+# `enum_struct_variant_field_added` FIRED against the published 0.10.1 and named
+# `reasoning_requested` (trace.rs:284) and `reasoning_effective` (trace.rs:291) of
+# `TraceEvent::NodeFinished`, so this entry stays `Y` and is not retired to `N/A`. The same lint also
+# named the earlier `cost` of `NodeFinished` and `RunFinished` and `halt_reason` of `RunFinished`,
+# which are not Phase 51 and keep their `N/A` rows. The lint was not allowed in the crate's table, so
+# this plan adds `enum_struct_variant_field_added = "allow"` to it. Caveat: `TraceEvent` postdates
+# the CI-pinned `v0.9.0` baseline (Phase 22), so CI's `semver` job cannot observe this break and the
+# allow is dormant there; it matters to a run against 0.10.1 and to the local set-equality check.
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "enum_struct_variant_field_added"
+migration_row = "paladin-ai-core | TraceEvent"
+requirement_id = "REASON-05"
+justification = "TraceEvent::NodeFinished gained the public struct-variant fields reasoning_requested: Option<String> and reasoning_effective: Option<String> (Phase 51, plan 51-09, D-11, D-00b): the effort one Paladin or structured-output attempt asked for and the effort it ran with, read from the attempt's own paladin.reasoning_requested / paladin.reasoning_effective response metadata. Only a constructing struct-variant literal or an exhaustive destructure breaks; every in-tree one named both fields in the same commit. #[serde(default, skip_serializing_if = \"Option::is_none\")] keeps stored run_traces rows and SSE frames loading and an event with both None serialises byte-identically. Migration: name both as None in the literal; match with `..`. Measured in plan 51-14 on 2026-10-22 (see the comment above this entry)."

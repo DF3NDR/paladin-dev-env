@@ -1,6 +1,6 @@
 [package]
 name = "paladin-ai-core"
-version = "0.10.1"
+version = "0.11.0"
 edition = "2024"
 rust-version.workspace = true
 authors = ["Am0rfu5"]
@@ -70,9 +70,78 @@ rand = { workspace = true }
 # covers this crate/type pair). Both lint ids were derived empirically via
 # `cargo semver-checks check-release --package paladin-ai-core
 # --default-features --baseline-version 0.9.0` (D-27), never guessed.
+#
+# LEGACY-01..04 (ADR-0059, D-00c, D-27, Phase 44 plan 44-11): the legacy
+# Battalion definitions were deleted outright, with no deprecated shim, and
+# the diagnostic (cargo-semver-checks 0.50.0 against the published 0.10.1,
+# `--release-type minor`, this table's allow lines disabled, restored
+# byte-for-byte) fired these lints for them. The three already-allowed lints
+# above cover the removed per-run timeout, retry and error-strategy fields and
+# their builders on the Battalion and Conclave configs (inherent_method_missing,
+# struct_pub_field_missing) and the added per-attempt policy field
+# (constructible_struct_adds_field). Three further lints are new here:
+# struct_missing (the legacy Battalion retry policy type and the legacy
+# node-error summary type), enum_missing (the legacy Battalion error-strategy
+# enum) and enum_variant_missing (the whole-run timeout variant of the
+# Battalion and Conclave error enums, and the string-carrying LLM variant of
+# the Paladin error enum). Each has a matching MIGRATION.md section 10.2 row
+# and `.cargo/semver-checks-allowlist.toml` entry, kept set-equal by CI's
+# `semver` job; every in-tree site migrated in the same commit series.
+#
+# ENTITY-01..05 (ADR-0060, D-27, Phase 48 plan 48-07, MIGRATION.md section 10.2):
+# the base entity wrapper was renamed and the citadel placeholder types were
+# unified, with no deprecated shim. The same diagnostic (cargo-semver-checks
+# 0.50.0 against the published 0.10.1, `--release-type minor`,
+# `--default-features`, this table's allow lines disabled and restored
+# byte-for-byte) fired these lints for the Phase 48 items: struct_missing and
+# module_missing (the wrapper's old struct and module, and the old
+# version-service module with its structs), enum_missing (the version family's
+# enums and the citadel module's placeholder status enum), trait_missing (the
+# old version-repository trait), struct_missing again for the citadel
+# module's placeholder data struct, and struct_pub_field_missing plus
+# constructible_struct_adds_field for the two content-wrapper fields
+# (ContentItem and PromptItem). Two lints are new here: module_missing and
+# trait_missing. The already-allowed struct_missing, enum_missing,
+# struct_pub_field_missing and constructible_struct_adds_field cover the rest.
+# Each Phase 48 lint has a matching MIGRATION.md section 10.2 row and
+# `.cargo/semver-checks-allowlist.toml` entry, kept set-equal by CI's
+# `semver` job; every in-tree site migrated in plans 48-03, 48-04 and 48-05.
+#
+# REASON-01 (D-00b, D-00e, Phase 51 plan 51-07): `PaladinData` gained the
+# per-agent `reasoning_effort` and `reasoning_fallback` fields
+# (`#[serde(default, skip_serializing_if = "Option::is_none")]`) and stays
+# constructible and NOT `#[non_exhaustive]`, so cross-crate `..Default::default()`
+# keeps working. Measured in plan 51-14 on 2026-10-22 (cargo-semver-checks 0.50.0 vs the
+# published 0.10.1, `--release-type minor`, this table removed and restored byte-for-byte,
+# `cmp`-verified): `constructible_struct_adds_field`, already allowed above, named
+# `PaladinData.reasoning_effort` and `PaladinData.reasoning_fallback`. The MIGRATION.md
+# section 10.2 row and the `.cargo/semver-checks-allowlist.toml` entry were registered in the
+# same commit as the fields; every in-tree full literal named both fields in that commit.
+#
+# REASON-05 (D-00b, D-11, Phase 51 plan 51-09): `TraceEvent::NodeFinished`
+# gained the `reasoning_requested` and `reasoning_effective` struct-variant
+# fields. Measured in plan 51-14 on 2026-10-22 in the same run: the lint
+# `enum_struct_variant_field_added`, the last line below, fired against the published 0.10.1
+# and named both fields (it also named the earlier `cost` and `halt_reason` additions, which
+# are not Phase 51), so the line was added in this plan and the break keeps its MIGRATION.md
+# section 10.2 `Y` row and `.cargo/semver-checks-allowlist.toml` entry. `TraceEvent`
+# postdates the CI-pinned v0.9.0 baseline, so CI's `semver` job cannot observe it.
+#
+# 2026-10-24 (Phase 46, D-24 / WR-05): remove the crate-wide `struct_missing`,
+# `enum_missing` and `enum_variant_missing` allows below once 0.11.0 is the
+# published semver baseline. Until then they switch those lints off for the
+# whole crate, so an accidental public removal would pass the semver gate.
+# Removing a line also removes its mirrored `.cargo/semver-checks-allowlist.toml`
+# entry (`make check-migration-allowlist`).
 [package.metadata.cargo-semver-checks.lints]
 enum_marked_non_exhaustive = "allow"
 constructible_struct_adds_field = "allow"
 inherent_method_missing = "allow"
 struct_pub_field_missing = "allow"
 struct_marked_non_exhaustive = "allow"
+struct_missing = "allow"
+enum_missing = "allow"
+enum_variant_missing = "allow"
+module_missing = "allow"
+trait_missing = "allow"
+enum_struct_variant_field_added = "allow"

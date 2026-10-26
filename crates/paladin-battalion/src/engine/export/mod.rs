@@ -19,7 +19,7 @@
 //! use paladin_battalion::engine::export::{GraphShape, to_dot, to_mermaid};
 //! use paladin_battalion::engine::graph::{EdgeSpec, EngineLimits, NodeSpec, WarGraph};
 //! use paladin_battalion::engine::InputMapping;
-//! use paladin_core::base::entity::node::Node;
+//! use paladin_core::base::entity::Entity;
 //! use paladin_core::platform::container::battlefield::{
 //!     BattlefieldSchema, DispatchRule, FieldName, FieldSpec,
 //! };
@@ -34,7 +34,7 @@
 //!     false,
 //! )]);
 //! let mut graph = WarGraph::new(schema, EngineLimits::default());
-//! let paladin = Node::new(PaladinData::default(), Some("greeter".to_string()));
+//! let paladin = Entity::new(PaladinData::default(), Some("greeter".to_string()));
 //! let id = NodeId::new("greeter");
 //! graph.add_node(
 //!     id.clone(),

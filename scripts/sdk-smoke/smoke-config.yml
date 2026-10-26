@@ -54,5 +54,6 @@ http:
       - key: "sdk-smoke-test-key"
         name: "sdk-smoke"
         role: "admin"
+        tenant: "sdk-smoke"
   docs:
     enabled: true

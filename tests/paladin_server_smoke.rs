@@ -18,6 +18,7 @@ use paladin::infrastructure::web::{
     AgentApiState, AgentAuthConfig, AgentRegistry, HttpLayersConfig, Principal, agent_router,
     with_http_layers,
 };
+use paladin_core::platform::container::principal::TenantId;
 use paladin_core::platform::container::user::UserRole;
 use paladin_ports::output::llm_port::LlmPort;
 use paladin_ports::output::paladin_executor_port::PaladinExecutorPort;
@@ -200,10 +201,11 @@ async fn server_enforces_authentication_when_enabled() {
     let mut api_keys = HashMap::new();
     api_keys.insert(
         "sk-smoke-key".to_string(),
-        Principal {
-            id: "smoke".to_string(),
-            role: UserRole::Admin,
-        },
+        Principal::new(
+            "smoke",
+            UserRole::Admin,
+            TenantId::new("smoke-tenant").unwrap(),
+        ),
     );
     let state = state_with_mock_agent("researcher")
         .await
@@ -211,6 +213,7 @@ async fn server_enforces_authentication_when_enabled() {
             enabled: true,
             api_keys,
             token_verifier: None,
+            bearer_tenant: None,
         });
     let app = with_http_layers(agent_router(state), &HttpLayersConfig::default());
 

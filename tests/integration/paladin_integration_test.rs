@@ -284,7 +284,7 @@ async fn test_concurrent_paladin_execution() {
 #[tokio::test]
 async fn test_error_propagation_across_layers() {
     // Test that errors propagate correctly from LLM through service to caller
-    let llm_port = Arc::new(MockLlmAdapter::new().with_error(LlmError::RateLimitExceeded));
+    let llm_port = Arc::new(MockLlmAdapter::new().with_error(LlmError::rate_limited(None)));
 
     let circuit_breaker = Arc::new(CircuitBreaker::new(5, 2, Duration::from_secs(30)));
     let service = PaladinExecutionService::new(llm_port.clone(), circuit_breaker, None, None);
@@ -339,12 +339,12 @@ async fn test_paladin_with_custom_configuration() {
     let paladin_result = result.unwrap();
 
     // Verify custom configuration was used
-    assert_eq!(paladin.node.name, "CodeHelper");
-    assert_eq!(paladin.node.user_name, "Developer");
-    assert_eq!(paladin.node.model, "mock-advanced-model");
-    assert_eq!(paladin.node.temperature, 0.3);
-    assert_eq!(paladin.node.max_loops, MaxLoops::Fixed(2));
-    assert_eq!(paladin.node.stop_words, vec!["END", "DONE"]);
+    assert_eq!(paladin.data.name, "CodeHelper");
+    assert_eq!(paladin.data.user_name, "Developer");
+    assert_eq!(paladin.data.model, "mock-advanced-model");
+    assert_eq!(paladin.data.temperature, 0.3);
+    assert_eq!(paladin.data.max_loops, MaxLoops::Fixed(2));
+    assert_eq!(paladin.data.stop_words, vec!["END", "DONE"]);
 
     // Verify execution result
     assert_eq!(paladin_result.output, "Custom configured response");

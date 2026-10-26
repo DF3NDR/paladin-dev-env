@@ -848,6 +848,9 @@ mod tests {
                 outcome,
                 duration_ms: 1,
                 usage: TokenUsage::new(1, 0),
+                cost: None,
+                reasoning_requested: None,
+                reasoning_effective: None,
                 cache_hit: false,
             },
         )
@@ -1313,6 +1316,8 @@ mod tests {
                 status: RunFinishStatus::Completed,
                 total_supersteps: 4,
                 usage: TokenUsage::new(5, 0),
+                cost: None,
+                halt_reason: None,
                 duration_ms: 1,
                 trace_dropped_total: 0,
             },

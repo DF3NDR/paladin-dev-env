@@ -8,13 +8,16 @@
 use async_trait::async_trait;
 use paladin::application::services::battalion::formation_service::FormationExecutionService;
 use paladin::application::services::paladin::error::PaladinError;
-use paladin::core::base::entity::node::Node;
+use paladin::core::base::entity::Entity;
+use paladin::core::platform::container::aegis::{Aegis, ErrorHandlerSpec, TimeoutPolicy};
+use paladin::core::platform::container::battalion::BattalionConfig;
 use paladin::core::platform::container::battalion::formation::Formation;
-use paladin::core::platform::container::battalion::{BattalionConfig, ErrorStrategy};
+use paladin::core::platform::container::battlefield::StateDelta;
 use paladin::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
 use paladin::core::platform::container::token_usage::TokenUsage;
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, StopReason};
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Example mock implementation of PaladinPort
 /// In a real application, this would call actual LLM APIs
@@ -23,14 +26,14 @@ struct ExamplePaladinPort;
 #[async_trait]
 impl PaladinPort for ExamplePaladinPort {
     async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
-        println!("\n🤖 {} executing...", paladin.node.name);
+        println!("\n🤖 {} executing...", paladin.data.name);
         println!("   Input: {}", input);
 
         // Simulate processing
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
         // Generate output based on Paladin role
-        let output = match paladin.node.name.as_str() {
+        let output = match paladin.data.name.as_str() {
             "Researcher" => format!(
                 "Research findings on: {}\n- Key concept identified\n- Multiple perspectives explored",
                 input
@@ -43,7 +46,7 @@ impl PaladinPort for ExamplePaladinPort {
                 "Summary: {}\n- Concise overview prepared\n- Key takeaways highlighted",
                 input
             ),
-            _ => format!("{} processed: {}", paladin.node.name, input),
+            _ => format!("{} processed: {}", paladin.data.name, input),
         };
 
         println!("   Output: {}", output);
@@ -90,7 +93,7 @@ fn create_paladin(name: &str, system_prompt: &str) -> Paladin {
         vision_enabled: false,
         ..Default::default()
     };
-    Node::new(data, Some(name.to_string()))
+    Entity::new(data, Some(name.to_string()))
 }
 
 #[tokio::main]
@@ -115,7 +118,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = BattalionConfig::new("research_pipeline")
         .with_description("Research → Analysis → Summary workflow")
-        .with_timeout(60); // 60 second timeout
+        // Each Paladin attempt is bounded at 60 seconds, not the whole pipeline
+        .with_aegis(Aegis {
+            timeout: Some(TimeoutPolicy {
+                run_timeout: Some(Duration::from_secs(60)),
+                idle_timeout: None,
+            }),
+            ..Aegis::default()
+        });
 
     let formation = Formation::new(vec![researcher, analyst, summarizer], config)?;
 
@@ -155,14 +165,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Example 3: Error Handling
     println!("\n\n⚠️  Example 3: Error Handling Strategies\n");
-    println!("Demonstrating ContinueOnError strategy...");
+    println!("Demonstrating an Absorb error handler (continue past a failed Paladin)...");
 
     let step1 = create_paladin("Step1", "First processing step");
     let step2 = create_paladin("Step2", "Second processing step");
     let step3 = create_paladin("Step3", "Final processing step");
 
-    let resilient_config = BattalionConfig::new("resilient_pipeline")
-        .with_error_strategy(ErrorStrategy::ContinueOnError);
+    // Absorbing a failure lets the pipeline continue; the next Paladin then
+    // receives an empty input in place of the failed Paladin's output.
+    let resilient_config = BattalionConfig::new("resilient_pipeline").with_aegis(Aegis {
+        on_error: Some(ErrorHandlerSpec::Absorb {
+            fallback_delta: StateDelta::new(),
+        }),
+        ..Aegis::default()
+    });
 
     let resilient_formation = Formation::new(vec![step1, step2, step3], resilient_config)?;
 
@@ -179,8 +195,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("1. Formation executes Paladins sequentially (A → B → C)");
     println!("2. Output from each Paladin becomes input for the next");
     println!("3. Shared context can be injected for all Paladins");
-    println!("4. Error strategies control failure handling");
-    println!("5. Timeout enforcement prevents runaway executions");
+    println!("4. The aegis on_error handler controls failure handling");
+    println!("5. The aegis timeout bounds each Paladin attempt and prevents runaway executions");
 
     Ok(())
 }

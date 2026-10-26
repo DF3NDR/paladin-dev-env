@@ -8,7 +8,7 @@
 //!
 //! ## Module Structure
 //!
-//! - [`base`] — Foundation primitives: `Node<T>`, `Collection`, `Field`, `Message`, `Action`, `Event`
+//! - [`base`] — Foundation primitives: `Entity<T>`, `Collection`, `Field`, `Message`, `Action`, `Event`
 //! - [`platform`] — Domain entities: `Paladin`, Battalion types, `Garrison`, `Arsenal`, `Citadel`, `Herald`, `Sanctum`
 
 #![warn(missing_docs)]

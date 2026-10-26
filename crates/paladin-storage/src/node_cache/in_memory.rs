@@ -99,6 +99,45 @@ mod tests {
     use super::*;
     use crate::node_cache::contract_tests;
 
+    /// PACE-04: the in-memory cache has no cross-worker fence to check, so the defaulted
+    /// `put_fenced` is exactly `put` -- for either token source, and a lower token still
+    /// overwrites (last write wins; the ordering guarantee is the Redis adapter's).
+    #[tokio::test]
+    async fn put_fenced_default_delegates_to_put() {
+        use paladin_ports::output::cadence_port::FencingToken;
+
+        let cache = InMemoryNodeCache::new();
+        let key = NodeCacheKey::new("fenced");
+        cache
+            .put_fenced(
+                &key,
+                &contract_tests::sample_delta(1),
+                Duration::from_secs(60),
+                &FencingToken::Distributed(9),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            cache.get(&key).await.unwrap().unwrap().delta,
+            contract_tests::sample_delta(1)
+        );
+
+        cache
+            .put_fenced(
+                &key,
+                &contract_tests::sample_delta(2),
+                Duration::from_secs(60),
+                &FencingToken::Local(1),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            cache.get(&key).await.unwrap().unwrap().delta,
+            contract_tests::sample_delta(2),
+            "the default is a plain put"
+        );
+    }
+
     // One #[tokio::test] per shared contract function, each against a fresh
     // cache, mirroring `waypoint::in_memory`'s own test module exactly.
 

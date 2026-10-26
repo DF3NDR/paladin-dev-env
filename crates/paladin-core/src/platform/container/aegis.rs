@@ -7,13 +7,13 @@
 //! them (retry: this plan; timeout: plan 25-09; `on_error`: plans 25-10/11;
 //! `cache`: plans 25-04/13).
 //!
-//! This is a distinct type family from the pre-existing v0.9
-//! `crate::platform::container::battalion::{RetryPolicy, ErrorStrategy}`
-//! (D-09, D-06): that legacy pair stays untouched under X-03, and the core
-//! prelude (`lib.rs`) re-exports [`Aegis`] and
-//! [`crate::platform::container::transience::Transience`] only -- never
-//! either `RetryPolicy` -- so no glob import can silently bind the wrong
-//! one (RESEARCH.md Pitfall 5).
+//! Besides the superstep engine, this policy family also configures the
+//! classic Battalion patterns: `BattalionConfig.aegis` carries an [`Aegis`]
+//! that Formation, Phalanx, Campaign and Conclave apply per Paladin attempt
+//! (Phase 44, ADR-0059). The core prelude (`lib.rs`) re-exports [`Aegis`] and
+//! [`crate::platform::container::transience::Transience`] only, so no glob
+//! import can silently bind a same-named type from another module
+//! (RESEARCH.md Pitfall 5).
 
 use std::time::Duration;
 

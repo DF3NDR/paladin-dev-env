@@ -16,7 +16,7 @@ mod openai_integration_tests {
         let api_key = env::var("OPENAI_API_KEY")
             .expect("OPENAI_API_KEY must be set for OpenAI integration tests");
 
-        let config = OpenAIConfig::new(api_key);
+        let config = OpenAIConfig::new(api_key, "gpt-3.5-turbo".to_string());
         OpenAIAdapter::new(config).expect("Failed to create OpenAI adapter")
     }
 

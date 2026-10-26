@@ -133,6 +133,12 @@ RUN cargo install --locked --version 1.1.2 cargo-release
 RUN cargo install --locked --version 0.19.8 cargo-deny
 RUN cargo install --locked --version 0.5.9 cargo-cyclonedx
 
+# Install cargo-semver-checks (pinned) — measures the lint ids recorded in
+# .cargo/semver-checks-allowlist.toml and MIGRATION.md §9.2 against the published
+# baseline (CI's semver job pins the same version). Added in Phase 51 so the
+# measurement survives a devcontainer rebuild.
+RUN cargo install --locked --version 0.50.0 cargo-semver-checks
+
 # Install the doc-build toolchain (pinned) — mirrors .github/workflows/docs.yml:44-54
 # exactly, so `mdbook build docs/` run in this container and in CI cannot disagree on
 # tooling. Consumer: `mdbook build docs/` (no `make` target).

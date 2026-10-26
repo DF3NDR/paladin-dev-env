@@ -177,6 +177,13 @@ pub use application::cli;
 // LLM adapter implementations (from paladin-llm crate)
 pub use paladin_llm::provider_factory::LlmProviderFactory;
 
+// Model fallback chain (Phase 50, D-15): build a chain whose hops each send their own model
+// without a second dependency on `paladin-llm`.
+pub use paladin_llm::fallback::{
+    FallbackChainError, FallbackLlmAdapter, FallbackStep, SERVED_BY_METADATA_KEY,
+    SERVED_MODEL_METADATA_KEY,
+};
+
 #[cfg(feature = "llm-openai")]
 pub use paladin_llm::openai::{OpenAIAdapter, OpenAIConfig};
 
@@ -188,6 +195,35 @@ pub use paladin_llm::anthropic::{AnthropicAdapter, AnthropicConfig};
 
 #[cfg(feature = "llm-deepseek")]
 pub use paladin_llm::deepseek::{DeepSeekAdapter, DeepSeekConfig};
+
+// The six remaining adapter/config pairs (Phase 50, D-14), each behind its own `llm-*` feature
+// exactly like the three above, so a consumer reaches all nine without a second path dependency.
+// ADR-0046's default feature set is unchanged (`llm-openai`, `llm-anthropic`, `llm-deepseek`):
+// naming one of these features is what compiles its adapter in.
+#[cfg(feature = "llm-kimi")]
+pub use paladin_llm::kimi::{KimiAdapter, KimiConfig};
+
+#[cfg(feature = "llm-qwen")]
+pub use paladin_llm::qwen::{QwenAdapter, QwenConfig};
+
+#[cfg(feature = "llm-grok")]
+pub use paladin_llm::grok::{GrokAdapter, GrokConfig};
+
+#[cfg(feature = "llm-gemini")]
+pub use paladin_llm::gemini::{GeminiAdapter, GeminiConfig};
+
+#[cfg(feature = "llm-ollama")]
+pub use paladin_llm::ollama::{OllamaAdapter, OllamaConfig};
+
+#[cfg(feature = "llm-openai-compatible")]
+pub use paladin_llm::openai_compatible::{OpenAiCompatibleAdapter, OpenAiCompatibleConfig};
+
+// The `llm:` configuration types the config-driven path takes (Phase 50, D-12): with these a
+// consumer can build an `LlmConfig`, hand it to `LlmProviderFactory::create_from_config` and
+// override a model's profile, all from the facade. Not feature-gated -- the config surface is
+// decoupled from which adapters are compiled in.
+pub use paladin_llm::config::llm::{LlmConfig, LlmProviderConfig};
+pub use paladin_llm::registry::ModelOverride;
 
 pub use paladin_llm::mock::{MockLlmAdapter, MultiStepMockLlmPort};
 
@@ -208,7 +244,7 @@ pub use paladin_llm::services::commissary::{
 // fallback walk. Facade users see one surface for window resolution.
 pub use paladin_llm::window::{
     ResolvedWindow, UnknownContextWindow, WindowFallbackPolicy, WindowSource,
-    resolve_context_window,
+    effective_capabilities, resolve_context_window,
 };
 
 // Paladin (Agent) Types

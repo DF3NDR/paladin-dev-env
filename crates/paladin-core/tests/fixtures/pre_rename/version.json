@@ -1,0 +1,35 @@
+{
+  "version_id": "b665c527-cb19-46db-ab7a-5768297eb500",
+  "node_id": "2c40a8ae-edc0-447f-b336-7ac0161f8191",
+  "version_number": 1,
+  "node_data": {
+    "content": {
+      "Text": {
+        "path": null,
+        "content": "hello",
+        "filesize": 5
+      }
+    },
+    "url": null,
+    "hash": null,
+    "source_id": null,
+    "source_url": null,
+    "description": null,
+    "tags": null,
+    "source": null,
+    "author": null,
+    "pub_date": null,
+    "mod_date": null
+  },
+  "metadata": {
+    "is_published": true,
+    "is_current": true,
+    "tags": [],
+    "change_type": "Created",
+    "content_hash": "6eff5776aa0c5448a6366f6ab7db9bd680bd258159da090446840983961dce73",
+    "size_bytes": 214
+  },
+  "created_at": "2026-10-13T19:25:41.221060675Z",
+  "created_by": "fixture",
+  "change_summary": "captured"
+}

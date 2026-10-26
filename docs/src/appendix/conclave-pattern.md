@@ -80,7 +80,9 @@ The Conclave pattern solves problems requiring **multiple expert perspectives** 
 ```rust
 use paladin::prelude::*;
 use paladin::battalion::conclave::*;
+use paladin_core::platform::container::aegis::{Aegis, TimeoutPolicy};
 use std::sync::Arc;
+use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -108,9 +110,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Synthesize the expert analyses into a comprehensive recommendation."
     )?;
 
-    // Configure Conclave
-    let config = ConclaveConfig::new("expert-panel", BattalionConfig::default())
-        .with_timeout(300)
+    // Configure Conclave: the timeout bounds each expert / aggregator attempt
+    let battalion_config = BattalionConfig::new("expert-panel").with_aegis(Aegis {
+        timeout: Some(TimeoutPolicy {
+            run_timeout: Some(Duration::from_secs(300)),
+            idle_timeout: None,
+        }),
+        ..Aegis::default()
+    });
+    let config = ConclaveConfig::new("expert-panel", battalion_config)
         .with_retry_attempts(2);
 
     // Build Conclave
@@ -152,11 +160,9 @@ pub struct ConclaveConfig {
     /// Conclave name (required)
     name: String,
 
-    /// Battalion base configuration
+    /// Battalion base configuration; `battalion_config.aegis` carries the
+    /// per-attempt timeout and the backoff shape
     battalion_config: BattalionConfig,
-
-    /// Maximum execution time (seconds)
-    timeout_seconds: u64,
 
     /// Retry attempts for failed experts (default: 2)
     max_retry_attempts: u32,
@@ -178,8 +184,8 @@ pub struct ConclaveConfig {
 ### Builder Pattern
 
 ```rust
+// `battalion_config` carries the timeout: `with_aegis(Aegis { timeout: .. })`
 let config = ConclaveConfig::new("my-conclave", battalion_config)
-    .with_timeout(600)                    // 10 minutes
     .with_retry_attempts(3)               // Retry up to 3 times
     .with_observability(ObservabilityLevel::Verbose)
     .with_expert_names(true)              // Show expert attribution
@@ -191,23 +197,40 @@ let config = ConclaveConfig::new("my-conclave", battalion_config)
 
 ### Retry Configuration
 
-Conclave uses **exponential backoff with jitter** for retries:
+The retry **count** comes from `ConclaveConfig::retry_attempts` (0-5); the backoff **shape**
+comes from `battalion_config.aegis.retry`, or `aegis::RetryPolicy::default()` when that is unset.
+Conclave uses the engine's exponential backoff with jitter (`engine::retry::backoff_delay`):
 
 ```
-Attempt 1: 1 second  ± 20% jitter
-Attempt 2: 2 seconds ± 20% jitter
-Attempt 3: 4 seconds ± 20% jitter
-Attempt 4: 8 seconds ± 20% jitter
-Attempt 5: 16 seconds ± 20% jitter
+Before retry 1: 500 ms  (+ jitter of up to one base delay)
+Before retry 2: 1 s     (+ jitter of up to one base delay)
+Before retry 3: 2 s     (+ jitter of up to one base delay)
+Before retry 4: 4 s     (+ jitter of up to one base delay)
+Before retry 5: 8 s     (+ jitter of up to one base delay)
 ```
+
+The default policy starts at 500 ms, doubles each retry and caps at 60 s; jitter adds a random
+amount of up to one base delay on top of each wait. Only **Transient** failures are retried
+(`PaladinError::transience()`), regardless of the policy's `retry_on`.
 
 Example configuration:
 
 ```rust
+let battalion_config = BattalionConfig::new("resilient").with_aegis(Aegis {
+    // Each expert / aggregator attempt gets its own 300 s bound.
+    timeout: Some(TimeoutPolicy {
+        run_timeout: Some(Duration::from_secs(300)),
+        idle_timeout: None,
+    }),
+    ..Aegis::default()
+});
 let config = ConclaveConfig::new("resilient", battalion_config)
-    .with_retry_attempts(3)  // Total 4 attempts (1 initial + 3 retries)
-    .with_timeout(300);      // Overall timeout for all attempts
+    .with_retry_attempts(3);  // Total 4 attempts (1 initial + 3 retries)
 ```
+
+The timeout is **per attempt**: there is no wall clock over the whole Conclave, so a retried
+expert can spend up to `retry_attempts + 1` times the bound. A caller that needs a whole-run
+bound wraps `Commander::execute()` (or the service call) in its own `tokio::time::timeout`.
 
 ### Observability Levels
 
@@ -315,8 +338,14 @@ let aggregator = PaladinBuilder::new(llm_port.clone())
 // Create Conclave
 let experts = vec![technical_expert, business_expert, security_expert];
 
-let config = ConclaveConfig::new("expert-panel", BattalionConfig::default())
-    .with_timeout(300)
+let battalion_config = BattalionConfig::new("expert-panel").with_aegis(Aegis {
+    timeout: Some(TimeoutPolicy {
+        run_timeout: Some(Duration::from_secs(300)), // per expert / aggregator attempt
+        idle_timeout: None,
+    }),
+    ..Aegis::default()
+});
+let config = ConclaveConfig::new("expert-panel", battalion_config)
     .with_retry_attempts(2)
     .with_observability(ObservabilityLevel::Standard);
 
@@ -427,6 +456,9 @@ retry_attempts: 2
 include_expert_names: true
 observability_level: "standard"
 ```
+
+The CLI applies every `timeout_seconds` value per attempt (each expert attempt and the
+aggregator attempt), not to the Conclave as a whole.
 
 ### External Paladin References
 
@@ -626,9 +658,9 @@ if result.status == ConclaveStatus::PartialSuccess {
 Failed experts are automatically retried:
 
 ```rust
+// `battalion_config.aegis.timeout` bounds each attempt, not the retries together
 let config = ConclaveConfig::new("resilient", battalion_config)
-    .with_retry_attempts(3)  // Retry up to 3 times
-    .with_timeout(300);      // Overall timeout includes retries
+    .with_retry_attempts(3);  // Retry up to 3 times
 ```
 
 **Retry triggers**:
@@ -640,7 +672,7 @@ let config = ConclaveConfig::new("resilient", battalion_config)
 - Authentication failures (401, 403)
 - Invalid requests (400)
 - Not found (404)
-- Exceeded overall timeout
+- Any failure that is not Transient (an `Unknown` or `Permanent` classification)
 
 ### Error Recovery
 
@@ -671,8 +703,11 @@ match service.execute(&conclave, input).await {
     Err(ConclaveError::AllExpertsFailed) => {
         log::error!("All experts failed - cannot proceed with aggregation");
     }
-    Err(ConclaveError::Timeout(secs)) => {
-        log::error!("Execution exceeded {} second timeout", secs);
+    Err(ConclaveError::AggregatorFailed(msg)) => {
+        // An aggregator attempt that exceeds the per-attempt timeout lands here.
+        // An expert attempt that times out is a Transient `PaladinError::Timeout`
+        // and is retried within `retry_attempts` before the expert counts as failed.
+        log::error!("Aggregation failed: {}", msg);
     }
     Err(e) => {
         log::error!("Unexpected error: {}", e);
@@ -885,13 +920,25 @@ let config = ConclaveConfig::new("focused", battalion_config)
 **1. Set Appropriate Timeouts**
 
 ```rust
-// Quick analysis
-let config = ConclaveConfig::new("quick", battalion_config)
-    .with_timeout(60);  // 1 minute
+// Quick analysis: 1 minute per expert / aggregator attempt
+let quick = BattalionConfig::new("quick").with_aegis(Aegis {
+    timeout: Some(TimeoutPolicy {
+        run_timeout: Some(Duration::from_secs(60)),
+        idle_timeout: None,
+    }),
+    ..Aegis::default()
+});
+let config = ConclaveConfig::new("quick", quick);
 
-// Thorough analysis
-let config = ConclaveConfig::new("thorough", battalion_config)
-    .with_timeout(600);  // 10 minutes
+// Thorough analysis: 10 minutes per attempt
+let thorough = BattalionConfig::new("thorough").with_aegis(Aegis {
+    timeout: Some(TimeoutPolicy {
+        run_timeout: Some(Duration::from_secs(600)),
+        idle_timeout: None,
+    }),
+    ..Aegis::default()
+});
+let config = ConclaveConfig::new("thorough", thorough);
 ```
 
 **2. Truncate Verbose Expert Outputs**
@@ -966,9 +1013,15 @@ println!("Total tokens used: {}", total_tokens);
 // 1. Verify API keys
 std::env::var("OPENAI_API_KEY").expect("API key not set");
 
-// 2. Increase timeout
-let config = ConclaveConfig::new("patient", battalion_config)
-    .with_timeout(600);  // Longer timeout
+// 2. Increase the per-attempt timeout
+let patient = BattalionConfig::new("patient").with_aegis(Aegis {
+    timeout: Some(TimeoutPolicy {
+        run_timeout: Some(Duration::from_secs(600)), // longer bound per attempt
+        idle_timeout: None,
+    }),
+    ..Aegis::default()
+});
+let config = ConclaveConfig::new("patient", patient);
 
 // 3. Add more retry attempts
 let config = ConclaveConfig::new("persistent", battalion_config)

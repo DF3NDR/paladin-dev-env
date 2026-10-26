@@ -1,6 +1,6 @@
 [package]
 name = "paladin-llm"
-version = "0.10.1"
+version = "0.11.0"
 edition = "2024"
 rust-version.workspace = true
 authors = ["Am0rfu5"]
@@ -17,39 +17,65 @@ doctest = false
 
 [features]
 default = ["openai", "mock"]
-openai = ["dep:reqwest", "dep:rand"]
-anthropic = ["dep:reqwest", "dep:rand"]
-deepseek = ["dep:reqwest", "dep:rand"]
-kimi = ["dep:reqwest", "dep:rand"]
-qwen = ["dep:reqwest", "dep:rand"]
-grok = ["dep:reqwest", "dep:rand"]
-ollama = ["dep:reqwest", "dep:rand"]
-openai-compatible = ["dep:reqwest", "dep:rand"]
-gemini = ["dep:reqwest", "dep:rand"]
+openai = ["dep:reqwest"]
+anthropic = ["dep:reqwest"]
+deepseek = ["dep:reqwest"]
+kimi = ["dep:reqwest"]
+qwen = ["dep:reqwest"]
+grok = ["dep:reqwest"]
+ollama = ["dep:reqwest"]
+openai-compatible = ["dep:reqwest"]
+gemini = ["dep:reqwest"]
 mock = []
 vision = ["openai", "dep:base64"]
 openai-embeddings = ["openai"]
 
 [dependencies]
-paladin-core = { package = "paladin-ai-core", version = "0.10.1", path = "../paladin-core" }
-paladin-ports = { version = "0.10.1", path = "../paladin-ports" }
+paladin-core = { package = "paladin-ai-core", version = "0.11.0", path = "../paladin-core" }
+paladin-ports = { version = "0.11.0", path = "../paladin-ports" }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+# Parses the three RFC 7231 HTTP-date forms of a `Retry-After` header (PACE-01). Already in
+# `Cargo.lock` (1.0.3) via hyper; promoted from transitive to a direct dependency.
+httpdate = "1.0"
 thiserror = { workspace = true }
 tokio = { workspace = true }
 futures = { workspace = true }
 log = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream"], optional = true }
-rand = { workspace = true, optional = true }
+# Required, not optional: the un-gated Cadence decorator (`cadence.rs`) spreads waiters released by
+# one gate with a random fraction, and it must do so in every build -- including
+# `--no-default-features`, where no provider feature pulls `rand` in (PACE-02, research
+# Pitfall 8, option a). `rand 0.8` is already a workspace dependency; no new package.
+rand = { workspace = true }
 base64 = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio-test = "0.4"
 criterion = "0.5"
 mockito = "1.7.0"
+# Parses `registry::ModelOverride` from YAML in its own tests (plan 50-03) through the same `config`
+# loader the root crate reads application settings with, so the enum map form (`{fixed: 0.95}`),
+# `deny_unknown_fields` and the `u32`-overflow behaviour are pinned through the real path
+# (`serde_yaml` would demand YAML tags for enums instead). Same `0.15` pin as the root crate;
+# already in `Cargo.lock`, so no new package.
+config = "0.15.11"
+# `test-util` gives the Cadence decorator's paused-clock tests (`start_paused`) -- a feature of the
+# already-present tokio dependency, not a new crate.
+tokio = { workspace = true, features = ["test-util"] }
+# `InMemoryCadence` for the `CadenceLlmAdapter` decorator's own unit tests (PACE-02, plan 43-01).
+# Dev-only on purpose: D-09 keeps paladin-llm free of any normal edge to paladin-storage (and the
+# Redis client). No cycle: paladin-storage depends only on paladin-core + paladin-ports.
+# Path-only, no `version =` (plan 37.1-04, same v0.10.0 release-day defect as paladin-battalion's
+# dev-dependencies): paladin-llm publishes at CRATES position 5, before paladin-storage at
+# position 10, so a versioned dev-dependency here is unresolvable against the live registry at
+# publish time. Path-only means Cargo strips this entry from the published manifest entirely,
+# imposing no ordering constraint, while local tests keep resolving it by path.
+# `check-publish-order` (SC3) gates this edge.
+paladin-storage = { path = "../paladin-storage" }
 
 [[bench]]
 name = "llm_serialization_benchmarks"
@@ -59,4 +85,66 @@ harness = false
 # Requires real credentials in the environment; never run in CI.
 [[example]]
 name = "live_vendor_smoke"
-required-features = ["kimi", "qwen", "grok", "gemini"]
+required-features = ["openai", "anthropic", "deepseek", "kimi", "qwen", "grok", "ollama", "gemini", "openai-compatible"]
+
+# X-10.6 deliberate-breaking suppression (PARITY-03, D-27, MIGRATION.md §10.2, Phase 50 plan 50-10).
+# The nine adapter configs (`OpenAIConfig`, `AnthropicConfig`, `DeepSeekConfig`, `GeminiConfig`,
+# `KimiConfig`, `QwenConfig`, `GrokConfig`, `OllamaConfig`, `OpenAiCompatibleConfig`) and the
+# `llm.<provider>` block (`LlmProviderConfig`) gained the Phase 50 knobs (`max_tokens`,
+# `max_retries`, `context_window`, `model_overrides` / `models`) and are marked
+# `#[non_exhaustive]` with `with_*` builders -- the owner's `option-a` decision at the plan 50-08
+# checkpoint -- so the next field (Phase 51's `reasoning_effort`) is free. Every existing `new`,
+# `from_env` and `from_parts` signature is unchanged; only a downstream struct literal stops
+# compiling. The D-27 diagnostic (cargo-semver-checks 0.50.0 vs the published 0.10.1,
+# `--release-type minor`, run with the default features and again with all nine adapter features;
+# this crate had no suppression to disable) fired exactly one lint,
+# `struct_marked_non_exhaustive`, on those ten items and nothing else, so it is the only line
+# below. Each type has a MIGRATION.md §10.2 row and a `.cargo/semver-checks-allowlist.toml` entry;
+# register/remove this suppression only in the same commit as those (kept set-equal by
+# `make check-migration-allowlist` and CI's `semver` job).
+#
+# PARITY-06 (D-15, MIGRATION.md §10.2, Phase 50 plan 50-14): `FallbackChainError` gained the
+# `EmptyStepModel { index }` variant for a step whose model is empty. The enum was already
+# `#[non_exhaustive]`, so the new variant is additive for every `match`; but its only variant was
+# a unit variant, so adding a struct variant removes the enum's defined discriminants and a
+# downstream numeric cast of a variant (`FallbackChainError::EmptyChain as isize`) stops
+# compiling. The D-27 diagnostic (cargo-semver-checks 0.50.0 vs 0.10.1, `--release-type minor`,
+# `--default-features`, this table removed and restored byte-for-byte) measured it as
+# `enum_discriminants_undefined_non_unit_variant`, the second line below. The rest of the plan's
+# additions to this crate (`FallbackStep`, `from_steps`, `hop_on_refusal`,
+# `SERVED_MODEL_METADATA_KEY`) fired no lint. The new line has its own `FallbackChainError` row
+# and entry, registered in the same commit as this line.
+#
+# SURFACE-02 (D-05, MIGRATION.md §10.2, Phase 50.1 plan 02): `DeepSeekConfig::new(api_key,
+# base_url, model)` became `new(api_key, model)`; the endpoint defaults to
+# `DEEPSEEK_DEFAULT_BASE_URL` and is set with `with_base_url`. The D-00b measurement
+# (cargo-semver-checks 0.50.0 vs the published 0.10.1, `--release-type minor`, run with the
+# default features and again with all nine adapter features, this table removed and restored
+# byte-for-byte) ran 196 checks and fired three lints in both runs: the two already allowed
+# above, and `method_parameter_count_changed`, the third line below, on
+# `paladin_llm::deepseek::DeepSeekConfig::new` and its `deepseek::adapter` path, three
+# parameters before and two now. It has a `DeepSeekConfig` SURFACE-02 row and entry, registered
+# in the same commit as this line. Plan 50.1-04 re-measured the same way for each of
+# `GeminiConfig`, `QwenConfig`, `GrokConfig` and `KimiConfig` (`new` three parameters before, two
+# now) and the same lint named each one, so each has its own SURFACE-02 row and entry under this
+# line. Plan 50.1-05 measured `OpenAIConfig::new` the same way (`new(api_key)` became
+# `new(api_key, model)`, one parameter before and two now, same lint, default features and all nine
+# adapter features agreeing; no lint named the new `model` field), so it has its own entry too; Plan
+# 50.1-06 measured `AnthropicConfig::new` the same way (`new(api_key, base_url, model, max_tokens)`
+# became `new(api_key, model)`, four parameters before and two now, same lint, default features and
+# all nine adapter features agreeing), so it has its own entry beside them.
+#
+# REASON-02 (D-00b, MIGRATION.md §10.2, Phase 51 plan 51-04, measured in plan 51-14 on 2026-10-22):
+# `CompatRequestParameters` gained the public field `reasoning: ReasoningWire` and `all()` became
+# `all(reasoning)`. The measurement (cargo-semver-checks 0.50.0 vs the published 0.10.1,
+# `--release-type minor`, default features and the nine adapter features, this table removed and
+# restored byte-for-byte, `cmp`-verified) ran 196 checks and fired four lints in both runs: the
+# three above, and `constructible_struct_adds_field`, the fourth line below, on
+# `CompatRequestParameters.reasoning`. `method_parameter_count_changed` also named
+# `CompatRequestParameters::all` (0 parameters before, 1 now). Both lints are mirrored by
+# `CompatRequestParameters` entries in `.cargo/semver-checks-allowlist.toml`.
+[package.metadata.cargo-semver-checks.lints]
+struct_marked_non_exhaustive = "allow"
+enum_discriminants_undefined_non_unit_variant = "allow"
+method_parameter_count_changed = "allow"
+constructible_struct_adds_field = "allow"

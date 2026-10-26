@@ -34,10 +34,14 @@ use futures::Stream;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use paladin_core::platform::container::allowance::{Admission, DerivedTokenBudget, HaltReason};
 use paladin_core::platform::container::execution_result::{PaladinResult, StopReason};
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
+use paladin_core::platform::container::principal::PrincipalRef;
+use paladin_core::platform::container::run_scope::RunScope;
 use paladin_core::platform::container::token_usage::TokenUsage;
+use paladin_ports::input::allowance_admission_port::{AdmissionError, AllowanceAdmissionPort};
 use paladin_ports::output::paladin_port::{PaladinStream, PaladinStreamChunk};
 
 use utoipa_axum::router::OpenApiRouter;
@@ -47,6 +51,7 @@ use crate::agent_auth::{Principal, authorize_invoke, require_admin};
 use crate::agent_registry::{AgentEntry, AgentProvisioner, AgentRegistry, AgentSpec};
 use crate::error::{ApiError, ApiErrorBody};
 use crate::job_store::{JobRecord, JobStore};
+use crate::run_controller::CostDto;
 use crate::timeout::{TimeoutPolicy, resolve_timeout};
 
 /// Shared state for the agent routes.
@@ -67,6 +72,9 @@ pub struct AgentApiState {
     pub jobs: Arc<JobStore>,
     /// Authentication configuration (disabled = open; see `agent_auth`).
     pub auth: crate::agent_auth::AgentAuthConfig,
+    /// The Treasurer's admission port (D-06, C1); `None` -- no allowances configured -- leaves
+    /// every route ungated.
+    pub treasurer: Option<Arc<dyn AllowanceAdmissionPort>>,
 }
 
 impl AgentApiState {
@@ -79,6 +87,7 @@ impl AgentApiState {
             timeouts: TimeoutPolicy::default(),
             jobs: Arc::new(JobStore::default()),
             auth: crate::agent_auth::AgentAuthConfig::default(),
+            treasurer: None,
         }
     }
 
@@ -97,6 +106,17 @@ impl AgentApiState {
     /// Set the authentication configuration.
     pub fn with_auth(mut self, auth: crate::agent_auth::AgentAuthConfig) -> Self {
         self.auth = auth;
+        self
+    }
+
+    /// Attach the Treasurer's admission port (D-06, C1, C4).
+    ///
+    /// The agent routes settle spend under the calling principal (Phase 40 D-16), so a caller
+    /// refused at `POST /v1/runs` must not be able to spend the same allowance here (D-07):
+    /// `execute`, `execute/stream` and `jobs` each ask this port before any work starts. A
+    /// state built without it leaves every agent route ungated.
+    pub fn with_treasurer(mut self, treasurer: Arc<dyn AllowanceAdmissionPort>) -> Self {
+        self.treasurer = Some(treasurer);
         self
     }
 }
@@ -160,6 +180,12 @@ impl From<TokenUsage> for TokenUsageResponse {
 /// [`PaladinResult`]. The `stop_reason` is rendered as a stable lowercase label
 /// (`"completed"`, `"max_loops"`, `"stop_word"`, `"timeout"`) rather than the raw
 /// serde enum shape, so the wire contract is stable.
+// Phase 42 (plain comment, not rustdoc: utoipa copies this type's doc comment into the schema
+// `description`, which the frozen v0.9 golden gate compares): `stop_reason` also takes
+// `"call_limit"`, `"token_budget"` and `"allowance_halted"`, and this DTO is also the `done`
+// event's data on the buffered fallback of `POST /agents/{id}/execute/stream` (an agent with no
+// streaming backend), so `halt_reason` reaches a buffered stream's terminal event through this
+// one field.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct ExecuteResponse {
     /// The generated output text.
@@ -173,16 +199,37 @@ pub struct ExecuteResponse {
     pub loop_count: u32,
     /// Why execution stopped, as a stable label.
     pub stop_reason: String,
+    /// This call's currency cost, from [`PaladinResult::cost`] (D-10, LEDGR-04). `null`
+    /// when any model call in the run was unpriced or no pricing is configured --
+    /// never a zero stand-in (D-00c).
+    pub cost: Option<CostDto>,
+    /// Why the allowance ended this call, present only when `stop_reason` is
+    /// `"allowance_halted"` (Phase 42, D-12): the same object `GET /runs/{id}` reports as
+    /// `halt_reason` -- `reason: "allowance_exhausted"` plus the binding ceiling's `scope`,
+    /// `kind`, `balance`, `ceiling`, `window_start` and `window_end`. The key is absent for
+    /// every other stop reason, so a response that was not halted is byte-identical to before.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Object>)]
+    pub halt_reason: Option<serde_json::Value>,
 }
 
 impl From<PaladinResult> for ExecuteResponse {
     fn from(result: PaladinResult) -> Self {
+        // D-12: built by the ONE wire builder every surface shares, never a second object.
+        let halt_reason = match &result.stop_reason {
+            StopReason::AllowanceHalted(refusal) => {
+                Some(HaltReason::AllowanceExhausted(refusal.clone()).wire_json())
+            }
+            _ => None,
+        };
         Self {
             output: result.output,
             usage: TokenUsageResponse::from(result.usage),
+            cost: result.cost.as_ref().map(CostDto::from),
             execution_time_ms: result.execution_time_ms,
             loop_count: result.loop_count,
             stop_reason: stop_reason_label(&result.stop_reason).to_string(),
+            halt_reason,
         }
     }
 }
@@ -196,6 +243,7 @@ fn stop_reason_label(reason: &StopReason) -> &'static str {
         StopReason::Timeout => "timeout",
         StopReason::CallLimit => "call_limit",
         StopReason::TokenBudget => "token_budget",
+        StopReason::AllowanceHalted(_) => "allowance_halted",
         _ => "unknown",
     }
 }
@@ -227,9 +275,9 @@ impl AgentSummary {
     pub fn from_agent(id: impl Into<String>, paladin: &Paladin) -> Self {
         Self {
             id: id.into(),
-            name: paladin.node.name.clone(),
-            model: paladin.node.model.clone(),
-            description: prompt_preview(&paladin.node.system_prompt),
+            name: paladin.data.name.clone(),
+            model: paladin.data.model.clone(),
+            description: prompt_preview(&paladin.data.system_prompt),
         }
     }
 }
@@ -265,6 +313,60 @@ pub(crate) fn ok_body<T: Serialize>(value: &T) -> JsonValue {
     Json(serde_json::to_value(value).unwrap_or(serde_json::Value::Null))
 }
 
+// --- Allowance admission ----------------------------------------------------
+
+/// Ask the Treasurer whether `principal` may start spend on `model` (D-06, D-07, D-10, C4).
+///
+/// The one gate shared by `execute`, `execute/stream` and `jobs`. `model` is the REGISTERED
+/// agent's model (`entry.paladin.data.model`), never anything from the request:
+///
+/// - no Treasurer attached (no allowances configured) -> `Ok(Admission::none())`;
+/// - the principal is mapped to its [`RunAttribution`](paladin_core::platform::container::principal::RunAttribution)
+///   only -- the role never reaches the Treasurer, so an `Admin` is bound exactly like a
+///   `User` (D-09);
+/// - an admission is confirmed immediately: unlike a run submission there is no row whose
+///   insert could still fail after the check (RESEARCH Pattern 3), so confirm follows admit
+///   back to back;
+/// - a refusal (including a derived budget of zero) becomes `429 allowance_exhausted`
+///   ([`ApiError::allowance_exhausted`]);
+/// - a ceilinged principal calling a model with no `treasurer.pricing` row becomes
+///   `422 model_unpriced` ([`ApiError::model_unpriced`]) before the agent runs -- spend that
+///   cannot be metered cannot be bounded (D-10);
+/// - any other error fails closed with a generic `500` (D-10). The detail is logged
+///   server-side and carries no key value; the response carries none of it (T-41-21).
+async fn admit_principal(
+    state: &AgentApiState,
+    principal: &Principal,
+    model: &str,
+) -> Result<Admission, ApiError> {
+    let Some(treasurer) = &state.treasurer else {
+        return Ok(Admission::none());
+    };
+    let subject = PrincipalRef::from(principal).attribution();
+    match treasurer.admit_for_model(&subject, None, model).await {
+        Ok(admission) => {
+            treasurer.confirm(&admission).await;
+            Ok(admission)
+        }
+        Err(AdmissionError::Refused(refusal)) => Err(ApiError::allowance_exhausted(&refusal)),
+        Err(AdmissionError::ModelUnpriced { model }) => Err(ApiError::model_unpriced(&model)),
+        Err(error) => {
+            log::error!("agent route allowance check failed: {error}");
+            Err(ApiError::internal("allowance check failed"))
+        }
+    }
+}
+
+/// The attributed [`RunScope`] every agent route starts from (D-16, D-18): spend attributed to
+/// the authenticated caller (built from the `Principal` only, never the request body) and the
+/// warnings the admission won. Each route then adds the admission's derived token budget
+/// (`with_derived_token_budget`, D-13) when there is one.
+fn attributed_scope(principal: &Principal, admission: &Admission) -> RunScope {
+    RunScope::default()
+        .with_ledger_scope(principal.ledger_scope())
+        .with_allowance_warnings(admission.warnings().cloned().collect())
+}
+
 // --- Handlers ---------------------------------------------------------------
 
 /// `POST /agents/{id}/execute` — look the agent up by id and run it.
@@ -286,11 +388,19 @@ pub(crate) fn ok_body<T: Serialize>(value: &T) -> JsonValue {
         (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
         (status = 403, description = "Role not permitted for this agent", body = ApiErrorBody),
         (status = 404, description = "Unknown agent", body = ApiErrorBody),
+        (status = 422, description = "Unpriced model under an allowance (code model_unpriced): the caller has a configured allowance ceiling and the agent's model has no `treasurer.pricing` row, so its spend cannot be metered; `details.model` names the model; no Retry-After", body = ApiErrorBody),
+        (status = 429, description = "Allowance exhausted (code allowance_exhausted): the caller's tenant or API-key allowance is spent; Retry-After carries the seconds until the window resets and is omitted for a lifetime cap", body = ApiErrorBody),
         (status = 502, description = "Upstream execution failure", body = ApiErrorBody),
         (status = 504, description = "Execution timed out", body = ApiErrorBody),
     ),
     security(("api_key" = []), ("bearer_token" = [])),
 )]
+// Allowance (Phase 41, D-06, D-07, D-10): an exhausted caller is answered `429
+// allowance_exhausted` (with `Retry-After` for a window ceiling) and a failing allowance check
+// `500`, in both cases before the agent is invoked. This is a plain comment, not rustdoc, on
+// purpose: utoipa copies a handler's doc comment into the operation `description`, and the
+// frozen v0.9 golden gate (`tests/openapi_golden_v0_9.rs`) compares that text -- the published
+// contract for the refusal is the `429` response entry on the `utoipa::path` above.
 pub async fn execute_agent(
     State(state): State<AgentApiState>,
     Extension(principal): Extension<Principal>,
@@ -306,9 +416,21 @@ pub async fn execute_agent(
     let timeout = resolve_timeout(request.timeout_seconds, entry.timeout_secs, &state.timeouts)
         .map_err(|_| ApiError::bad_request("timeout_seconds must be a positive integer"))?;
 
+    // D-06/D-07: an exhausted (or unverifiable) caller is refused before any work starts, and
+    // D-10: so is a ceilinged caller of an unpriced model.
+    let admission = admit_principal(&state, &principal, &entry.paladin.data.model).await?;
+
+    // D-16: spend is attributed to the authenticated caller -- the scope is
+    // built from the `Principal` only, never from the request body. D-18: the
+    // warnings this admission won ride the scope so the execution service emits
+    // them once. D-13: so does the derived token budget (the agent loop's cutoff).
+    let mut scope = attributed_scope(&principal, &admission);
+    if let Some(b) = admission.derived_budget() {
+        scope = scope.with_derived_token_budget(b.clone());
+    }
     let run = entry
         .executor
-        .execute(entry.paladin.as_ref(), &request.input);
+        .execute_scoped(entry.paladin.as_ref(), &request.input, &scope);
     match tokio::time::timeout(timeout, run).await {
         Ok(Ok(result)) => Ok((StatusCode::OK, ok_body(&ExecuteResponse::from(result)))),
         Ok(Err(error)) => Err(ApiError::bad_gateway(error.to_string())),
@@ -489,17 +611,35 @@ type SseEventStream = Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Sen
 /// carries `usage` (D-18/D-24) whenever the final chunk's metadata reports it --
 /// `null` when the provider's stream ended without reporting usage (D-17: never a
 /// fabricated estimate).
-fn chunk_to_event(item: Result<PaladinStreamChunk, PaladinError>) -> Event {
+///
+/// `derived` is the per-run token budget the admission derived (D-12, option-b): when the
+/// final chunk's reported `total_tokens` is strictly greater than its `max_tokens` -- the same
+/// strict test `TokenBudget` applies -- the `done` data additionally carries an informational
+/// `halt_reason` built by [`HaltReason::wire_json`]. It reports a crossing, not a halt: a true
+/// stream is one provider call the server never cuts, so the call has already finished. A
+/// stream that did not cross (or reported no usage) is byte-identical to the shape without it.
+fn chunk_to_event(
+    item: Result<PaladinStreamChunk, PaladinError>,
+    derived: Option<&DerivedTokenBudget>,
+) -> Event {
     match item {
         Ok(chunk) if chunk.is_final => {
-            let usage = chunk
+            let reported = chunk
                 .metadata
                 .as_ref()
-                .and_then(|metadata| metadata.usage.clone())
-                .map(TokenUsageResponse::from);
-            Event::default()
-                .event("done")
-                .data(json!({ "done": true, "usage": usage }).to_string())
+                .and_then(|metadata| metadata.usage.clone());
+            let crossed = match (derived, &reported) {
+                (Some(budget), Some(usage)) if usage.total_tokens > budget.max_tokens => {
+                    Some(HaltReason::AllowanceExhausted(budget.halt_figures.clone()).wire_json())
+                }
+                _ => None,
+            };
+            let usage = reported.map(TokenUsageResponse::from);
+            let mut done = json!({ "done": true, "usage": usage });
+            if let (Some(halt_reason), Some(object)) = (crossed, done.as_object_mut()) {
+                object.insert("halt_reason".to_string(), halt_reason);
+            }
+            Event::default().event("done").data(done.to_string())
         }
         Ok(chunk) => Event::default()
             .event("chunk")
@@ -516,10 +656,12 @@ fn chunk_to_event(item: Result<PaladinStreamChunk, PaladinError>) -> Event {
 ///
 /// Races each chunk against a single deadline: on the deadline it yields a terminal
 /// `error` event and stops (dropping the receiver, which cancels the producer). On a
-/// final chunk or channel close it stops normally.
+/// final chunk or channel close it stops normally. `derived` is handed to
+/// [`chunk_to_event`] for the terminal `done` (the informational crossing report).
 fn timed_event_stream(
     rx: PaladinStream,
     timeout: Duration,
+    derived: Option<DerivedTokenBudget>,
 ) -> impl Stream<Item = Result<Event, Infallible>> + Send {
     async_stream::stream! {
         let sleep = tokio::time::sleep(timeout);
@@ -536,7 +678,7 @@ fn timed_event_stream(
                 item = rx.recv() => match item {
                     Some(result) => {
                         let is_final = matches!(&result, Ok(chunk) if chunk.is_final);
-                        yield Ok(chunk_to_event(result));
+                        yield Ok(chunk_to_event(result, derived.as_ref()));
                         if is_final {
                             break;
                         }
@@ -572,11 +714,16 @@ fn timed_event_stream(
         (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
         (status = 403, description = "Role not permitted for this agent", body = ApiErrorBody),
         (status = 404, description = "Unknown agent", body = ApiErrorBody),
+        (status = 422, description = "Unpriced model under an allowance (code model_unpriced): the caller has a configured allowance ceiling and the agent's model has no `treasurer.pricing` row, so its spend cannot be metered; `details.model` names the model; no Retry-After", body = ApiErrorBody),
+        (status = 429, description = "Allowance exhausted (code allowance_exhausted): the caller's tenant or API-key allowance is spent; Retry-After carries the seconds until the window resets and is omitted for a lifetime cap", body = ApiErrorBody),
         (status = 502, description = "Upstream execution failure", body = ApiErrorBody),
         (status = 504, description = "Execution timed out", body = ApiErrorBody),
     ),
     security(("api_key" = []), ("bearer_token" = [])),
 )]
+// Allowance (Phase 41): a refusal is a plain JSON `429 allowance_exhausted` (with `Retry-After`
+// for a window ceiling) returned BEFORE any stream opens; a failing allowance check is a `500`.
+// Neither invokes the agent. Plain comment, not rustdoc -- see `execute_agent` (golden gate).
 pub async fn execute_agent_stream(
     State(state): State<AgentApiState>,
     Extension(principal): Extension<Principal>,
@@ -599,14 +746,33 @@ pub async fn execute_agent_stream(
             }
         };
 
+    // D-06/D-07: refuse before either the streaming or the buffered branch starts work.
+    let admission = match admit_principal(&state, &principal, &entry.paladin.data.model).await {
+        Ok(admission) => admission,
+        Err(error) => return error.into_response(),
+    };
+
+    // D-16: spend is attributed to the authenticated caller on both the
+    // streamed and the buffered-fallback branch below. D-18: the streamed final
+    // chunk's metadata carries the warnings this admission won. D-13: the derived token
+    // budget rides the scope on both branches; only the buffered branch's loop enforces it
+    // (a true stream is one provider call with no `after_model`, G2), so the true stream's
+    // `done` reports a crossing below instead (option-b, ADR-0057 group e).
+    let mut scope = attributed_scope(&principal, &admission);
+    let derived_budget = admission.derived_budget().cloned();
+    if let Some(b) = &derived_budget {
+        scope = scope.with_derived_token_budget(b.clone());
+    }
+
     // Real token streaming when the agent has a streaming-capable executor.
     if let Some(streamer) = entry.streamer.clone() {
         return match streamer
-            .execute_stream(entry.paladin.as_ref(), &request.input)
+            .execute_stream_scoped(entry.paladin.as_ref(), &request.input, &scope)
             .await
         {
             Ok(rx) => {
-                let boxed: SseEventStream = Box::pin(timed_event_stream(rx, timeout));
+                let boxed: SseEventStream =
+                    Box::pin(timed_event_stream(rx, timeout, derived_budget));
                 Sse::new(boxed).into_response()
             }
             Err(error) => ApiError::bad_gateway(error.to_string()).into_response(),
@@ -616,7 +782,7 @@ pub async fn execute_agent_stream(
     // Fallback (no streaming backend): run buffered under the timeout, then frame as SSE.
     let run = entry
         .executor
-        .execute(entry.paladin.as_ref(), &request.input);
+        .execute_scoped(entry.paladin.as_ref(), &request.input, &scope);
     match tokio::time::timeout(timeout, run).await {
         Ok(Ok(result)) => {
             let response = ExecuteResponse::from(result);
@@ -658,9 +824,14 @@ pub async fn execute_agent_stream(
         (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
         (status = 403, description = "Role not permitted for this agent", body = ApiErrorBody),
         (status = 404, description = "Unknown agent", body = ApiErrorBody),
+        (status = 422, description = "Unpriced model under an allowance (code model_unpriced): the caller has a configured allowance ceiling and the agent's model has no `treasurer.pricing` row, so its spend cannot be metered; `details.model` names the model; no Retry-After", body = ApiErrorBody),
+        (status = 429, description = "Allowance exhausted (code allowance_exhausted): the caller's tenant or API-key allowance is spent; Retry-After carries the seconds until the window resets and is omitted for a lifetime cap", body = ApiErrorBody),
     ),
     security(("api_key" = []), ("bearer_token" = [])),
 )]
+// Allowance (Phase 41, C4): a refusal (`429 allowance_exhausted`) or a failing check (`500`) is
+// answered synchronously BEFORE `jobs.create()` and the spawn, so the caller is never handed a
+// job id for work that would later fail. Plain comment, not rustdoc -- see `execute_agent`.
 pub async fn enqueue_job(
     State(state): State<AgentApiState>,
     Extension(principal): Extension<Principal>,
@@ -676,14 +847,26 @@ pub async fn enqueue_job(
     let timeout = resolve_timeout(request.timeout_seconds, entry.timeout_secs, &state.timeouts)
         .map_err(|_| ApiError::bad_request("timeout_seconds must be a positive integer"))?;
 
+    // C4: refuse before `jobs.create()` and before the spawn -- never a job id for refused work.
+    let admission = admit_principal(&state, &principal, &entry.paladin.data.model).await?;
+
     let job_id = state.jobs.create();
     let jobs = Arc::clone(&state.jobs);
     let jid = job_id.clone();
     let agent_id = id.clone();
+    // D-16: resolved from the authenticated caller before the spawn and moved
+    // in, so the detached job settles under the submitting principal. D-18: the
+    // warnings this admission won ride along, and (D-13) so does the derived token budget, so
+    // the job's result records `allowance_halted` and its `halt_reason` through the same
+    // `ExecuteResponse` serialization.
+    let mut scope = attributed_scope(&principal, &admission);
+    if let Some(b) = admission.derived_budget() {
+        scope = scope.with_derived_token_budget(b.clone());
+    }
     tokio::spawn(async move {
         let run = entry
             .executor
-            .execute(entry.paladin.as_ref(), &request.input);
+            .execute_scoped(entry.paladin.as_ref(), &request.input, &scope);
         match tokio::time::timeout(timeout, run).await {
             Ok(Ok(result)) => {
                 let value = serde_json::to_value(ExecuteResponse::from(result))
@@ -813,18 +996,20 @@ mod tests {
 
     /// An admin `Principal` extension for direct handler calls (passes all authz checks).
     fn admin() -> Extension<Principal> {
-        Extension(Principal {
-            id: "test-admin".to_string(),
-            role: UserRole::Admin,
-        })
+        Extension(Principal::new(
+            "test-admin",
+            UserRole::Admin,
+            paladin_core::platform::container::principal::TenantId::new("test-tenant").unwrap(),
+        ))
     }
 
     /// A non-admin (`User`) `Principal` extension for authz tests.
     fn user() -> Extension<Principal> {
-        Extension(Principal {
-            id: "test-user".to_string(),
-            role: UserRole::User,
-        })
+        Extension(Principal::new(
+            "test-user",
+            UserRole::User,
+            paladin_core::platform::container::principal::TenantId::new("test-tenant").unwrap(),
+        ))
     }
 
     /// Configurable in-test executor: succeeds with a fixed output, fails, or stalls
@@ -972,6 +1157,736 @@ mod tests {
             });
             Ok(rx)
         }
+    }
+
+    // --- 40-04 (D-16, HTTP path): every agent handler hands the executor the
+    // calling principal's ledger scope ------------------------------------
+
+    use paladin_core::platform::container::principal::TenantId;
+    use paladin_core::platform::container::run_scope::RunScope;
+    use paladin_core::platform::container::treasury_ledger::LedgerScope;
+    use std::sync::Mutex;
+
+    /// A buffered executor that records the [`RunScope`] handed to
+    /// `execute_scoped`, then answers like `MockExecutor::Succeeds`.
+    #[derive(Default)]
+    struct ScopeRecordingExecutor {
+        recorded: Mutex<Option<RunScope>>,
+    }
+
+    impl ScopeRecordingExecutor {
+        fn recorded_scope(&self) -> Option<RunScope> {
+            self.recorded.lock().expect("mutex poisoned").clone()
+        }
+    }
+
+    #[async_trait]
+    impl PaladinExecutorPort for ScopeRecordingExecutor {
+        async fn execute(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+        ) -> Result<PaladinResult, PaladinError> {
+            Ok(PaladinResult::new(
+                "scoped".to_string(),
+                TokenUsage::new(5, 0),
+                10,
+                1,
+                StopReason::Completed,
+            ))
+        }
+
+        async fn execute_scoped(
+            &self,
+            paladin: &Paladin,
+            input: &str,
+            scope: &RunScope,
+        ) -> Result<PaladinResult, PaladinError> {
+            *self.recorded.lock().expect("mutex poisoned") = Some(scope.clone());
+            self.execute(paladin, input).await
+        }
+    }
+
+    /// A streamer that records the [`RunScope`] handed to
+    /// `execute_stream_scoped`, then emits one final chunk.
+    #[derive(Default)]
+    struct ScopeRecordingStreamer {
+        recorded: Mutex<Option<RunScope>>,
+    }
+
+    impl ScopeRecordingStreamer {
+        fn recorded_scope(&self) -> Option<RunScope> {
+            self.recorded.lock().expect("mutex poisoned").clone()
+        }
+    }
+
+    #[async_trait]
+    impl StreamingExecutorPort for ScopeRecordingStreamer {
+        async fn execute_stream(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+        ) -> Result<PaladinStream, PaladinError> {
+            let (tx, rx) = tokio::sync::mpsc::channel(1);
+            tokio::spawn(async move {
+                let _ = tx
+                    .send(Ok(PaladinStreamChunk {
+                        text: "scoped".to_string(),
+                        is_final: true,
+                        metadata: None,
+                    }))
+                    .await;
+            });
+            Ok(rx)
+        }
+
+        async fn execute_stream_scoped(
+            &self,
+            paladin: &Paladin,
+            input: &str,
+            scope: &RunScope,
+        ) -> Result<PaladinStream, PaladinError> {
+            *self.recorded.lock().expect("mutex poisoned") = Some(scope.clone());
+            self.execute_stream(paladin, input).await
+        }
+    }
+
+    /// The `svc-a` key of tenant `acme` -- the calling principal every
+    /// attribution test below expects to see on the ledger scope.
+    fn svc_a_of_acme() -> Extension<Principal> {
+        Extension(Principal::new(
+            "svc-a",
+            UserRole::User,
+            TenantId::new("acme").unwrap(),
+        ))
+    }
+
+    fn acme_svc_a_scope() -> LedgerScope {
+        LedgerScope::new("acme", "svc-a")
+    }
+
+    fn execute_request(input: &str) -> Json<ExecuteRequest> {
+        Json(ExecuteRequest {
+            input: input.to_string(),
+            timeout_seconds: None,
+        })
+    }
+
+    /// State holding agent `id` backed by a scope-recording executor and,
+    /// when `streaming`, a scope-recording streamer; returns both handles.
+    fn state_with_scope_recording_agent(
+        id: &str,
+        streaming: bool,
+    ) -> (
+        AgentApiState,
+        Arc<ScopeRecordingExecutor>,
+        Arc<ScopeRecordingStreamer>,
+    ) {
+        let executor = Arc::new(ScopeRecordingExecutor::default());
+        let streamer = Arc::new(ScopeRecordingStreamer::default());
+        let registry = AgentRegistry::new();
+        let executor_port: Arc<dyn PaladinExecutorPort> = executor.clone();
+        let streamer_port: Option<Arc<dyn StreamingExecutorPort>> = if streaming {
+            Some(streamer.clone())
+        } else {
+            None
+        };
+        registry.insert_with_streaming(id, test_agent(id), executor_port, streamer_port);
+        (AgentApiState::new(Arc::new(registry)), executor, streamer)
+    }
+
+    /// T-40-16: `POST /agents/{id}/execute` hands the executor a scope whose
+    /// `ledger_scope` is exactly the authenticated principal's `(tenant, id)`
+    /// -- built from the `Principal`, never from the request body.
+    #[tokio::test]
+    async fn execute_agent_attributes_spend_to_the_callers_principal() {
+        let (state, executor, _) = state_with_scope_recording_agent("a", false);
+
+        let (status, _) = execute_agent(
+            State(state),
+            svc_a_of_acme(),
+            Path("a".to_string()),
+            execute_request("hi"),
+        )
+        .await
+        .expect("execute succeeds");
+        assert_eq!(status, StatusCode::OK);
+
+        let scope = executor
+            .recorded_scope()
+            .expect("execute_scoped must have been called");
+        assert_eq!(scope.ledger_scope, Some(acme_svc_a_scope()));
+        assert!(
+            scope.run_id.is_none(),
+            "a plain agent call carries no Platform run"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_agent_stream_attributes_spend_to_the_callers_principal() {
+        let (state, executor, streamer) = state_with_scope_recording_agent("s", true);
+
+        let response = execute_agent_stream(
+            State(state),
+            svc_a_of_acme(),
+            Path("s".to_string()),
+            execute_request("hi"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let scope = streamer
+            .recorded_scope()
+            .expect("execute_stream_scoped must have been called");
+        assert_eq!(scope.ledger_scope, Some(acme_svc_a_scope()));
+        assert!(
+            executor.recorded_scope().is_none(),
+            "the buffered executor is not consulted when a streamer exists"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_agent_stream_fallback_attributes_spend_to_the_callers_principal() {
+        let (state, executor, streamer) = state_with_scope_recording_agent("f", false);
+
+        let response = execute_agent_stream(
+            State(state),
+            svc_a_of_acme(),
+            Path("f".to_string()),
+            execute_request("hi"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let scope = executor
+            .recorded_scope()
+            .expect("the buffered fallback must call execute_scoped");
+        assert_eq!(scope.ledger_scope, Some(acme_svc_a_scope()));
+        assert!(streamer.recorded_scope().is_none());
+    }
+
+    #[tokio::test]
+    async fn enqueue_job_attributes_spend_to_the_callers_principal() {
+        let (state, executor, _) = state_with_scope_recording_agent("j", false);
+
+        let (status, _) = enqueue_job(
+            State(state),
+            svc_a_of_acme(),
+            Path("j".to_string()),
+            execute_request("hi"),
+        )
+        .await
+        .expect("enqueue succeeds");
+        assert_eq!(status, StatusCode::ACCEPTED);
+
+        // The spawned task runs off the handler's future; wait for it.
+        let mut recorded = None;
+        for _ in 0..200 {
+            recorded = executor.recorded_scope();
+            if recorded.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let scope = recorded.expect("the spawned job must call execute_scoped");
+        assert_eq!(scope.ledger_scope, Some(acme_svc_a_scope()));
+    }
+
+    // --- 41-07 (D-18): the warnings an admission won ride the RunScope ------
+
+    /// Admits every call and wins one allowance notice (a warn threshold was crossed).
+    struct WarningAdmission;
+
+    fn won_notice() -> AllowanceNotice {
+        use paladin_core::platform::container::allowance::{
+            AllowanceLimitKind, AllowanceScopeKind, AllowanceWarning,
+        };
+        use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+
+        let usd = CurrencyCode::new("USD").expect("USD is a valid currency code");
+        AllowanceNotice {
+            notice_id: "notice-1".to_string(),
+            tenant_id: "acme".to_string(),
+            api_key_id: Some("svc-a".to_string()),
+            warning: AllowanceWarning {
+                scope_kind: AllowanceScopeKind::ApiKey,
+                limit_kind: AllowanceLimitKind::Lifetime,
+                balance: Cost::new(80, usd.clone()),
+                ceiling: Cost::new(100, usd),
+                window_start: None,
+                window_end: None,
+                warn_at: 80,
+            },
+            run_id: None,
+            recorded_at: chrono::Utc::now(),
+            kind: Default::default(),
+        }
+    }
+
+    #[async_trait]
+    impl AllowanceAdmissionPort for WarningAdmission {
+        async fn admit(
+            &self,
+            _subject: &RunAttribution,
+            _run_id: Option<&RunId>,
+        ) -> Result<Admission, AdmissionError> {
+            Ok(Admission::none().with_notice(won_notice()))
+        }
+        async fn confirm(&self, _admission: &Admission) {}
+        async fn abandon(&self, _admission: &Admission) {}
+    }
+
+    fn expected_warnings() -> Vec<paladin_core::platform::container::allowance::AllowanceWarning> {
+        vec![won_notice().warning]
+    }
+
+    #[tokio::test]
+    async fn execute_agent_threads_the_won_warning_into_the_run_scope() {
+        let (state, executor, _) = state_with_scope_recording_agent("w", false);
+        let state = state.with_treasurer(Arc::new(WarningAdmission));
+
+        let (status, _) = execute_agent(
+            State(state),
+            svc_a_of_acme(),
+            Path("w".to_string()),
+            execute_request("hi"),
+        )
+        .await
+        .expect("execute succeeds");
+        assert_eq!(status, StatusCode::OK);
+
+        let scope = executor
+            .recorded_scope()
+            .expect("execute_scoped was called");
+        assert_eq!(scope.allowance_warnings, expected_warnings());
+    }
+
+    #[tokio::test]
+    async fn execute_agent_stream_threads_the_won_warning_into_the_run_scope() {
+        let (state, _, streamer) = state_with_scope_recording_agent("w", true);
+        let state = state.with_treasurer(Arc::new(WarningAdmission));
+
+        let response = execute_agent_stream(
+            State(state),
+            svc_a_of_acme(),
+            Path("w".to_string()),
+            execute_request("hi"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let scope = streamer
+            .recorded_scope()
+            .expect("execute_stream_scoped was called");
+        assert_eq!(scope.allowance_warnings, expected_warnings());
+    }
+
+    #[tokio::test]
+    async fn enqueue_job_threads_the_won_warning_into_the_run_scope() {
+        let (state, executor, _) = state_with_scope_recording_agent("w", false);
+        let state = state.with_treasurer(Arc::new(WarningAdmission));
+
+        let (status, _) = enqueue_job(
+            State(state),
+            svc_a_of_acme(),
+            Path("w".to_string()),
+            execute_request("hi"),
+        )
+        .await
+        .expect("enqueue succeeds");
+        assert_eq!(status, StatusCode::ACCEPTED);
+
+        let mut recorded = None;
+        for _ in 0..200 {
+            recorded = executor.recorded_scope();
+            if recorded.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let scope = recorded.expect("the spawned job must call execute_scoped");
+        assert_eq!(scope.allowance_warnings, expected_warnings());
+    }
+
+    /// No Treasurer (or no warning won): the scope carries no warning, exactly as before.
+    #[tokio::test]
+    async fn execute_agent_without_a_won_warning_leaves_the_scope_warning_free() {
+        let (state, executor, _) = state_with_scope_recording_agent("w", false);
+
+        let (status, _) = execute_agent(
+            State(state),
+            svc_a_of_acme(),
+            Path("w".to_string()),
+            execute_request("hi"),
+        )
+        .await
+        .expect("execute succeeds");
+        assert_eq!(status, StatusCode::OK);
+
+        let scope = executor
+            .recorded_scope()
+            .expect("execute_scoped was called");
+        assert!(scope.allowance_warnings.is_empty());
+    }
+
+    /// D-03/D-16: with auth disabled the middleware attaches the open-access
+    /// principal, so spend settles under `(open-access, anonymous)` -- a real
+    /// principal, never the unattributed sentinel.
+    #[tokio::test]
+    async fn open_access_execute_attributes_spend_to_the_open_access_tenant() {
+        let (state, executor, _) = state_with_scope_recording_agent("o", false);
+        // `AgentApiState::new` carries the default (disabled) auth config.
+        let app = agent_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/agents/o/execute")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"input":"hi"}"#))
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let scope = executor
+            .recorded_scope()
+            .expect("execute_scoped must have been called");
+        let ledger_scope = scope
+            .ledger_scope
+            .expect("open access still carries a scope");
+        assert_eq!(
+            ledger_scope,
+            LedgerScope::new(TenantId::OPEN_ACCESS, "anonymous")
+        );
+        assert!(!ledger_scope.is_unattributed());
+    }
+
+    // --- 41-04 (D-06, D-07, D-10, C4): the three HTTP agent routes that start
+    // spend are gated by one admission helper -----------------------------
+
+    use paladin_core::platform::container::allowance::{
+        AllowanceLimitKind, AllowanceNotice, AllowanceRefusal,
+    };
+    use paladin_core::platform::container::principal::RunAttribution;
+    use paladin_core::platform::container::run::RunId;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// An executor that counts every call (buffered or scoped) and answers like
+    /// `MockExecutor::Succeeds`; a refused caller must leave the count at zero.
+    #[derive(Default)]
+    struct CountingExecutor {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl PaladinExecutorPort for CountingExecutor {
+        async fn execute(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+        ) -> Result<PaladinResult, PaladinError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(PaladinResult::new(
+                "counted".to_string(),
+                TokenUsage::new(5, 0),
+                10,
+                1,
+                StopReason::Completed,
+            ))
+        }
+    }
+
+    /// A streamer that counts every call and emits one final chunk.
+    #[derive(Default)]
+    struct CountingStreamer {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl StreamingExecutorPort for CountingStreamer {
+        async fn execute_stream(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+        ) -> Result<PaladinStream, PaladinError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let (tx, rx) = tokio::sync::mpsc::channel(1);
+            tokio::spawn(async move {
+                let _ = tx
+                    .send(Ok(PaladinStreamChunk {
+                        text: "counted".to_string(),
+                        is_final: true,
+                        metadata: None,
+                    }))
+                    .await;
+            });
+            Ok(rx)
+        }
+    }
+
+    fn window_refusal() -> AllowanceRefusal {
+        use chrono::TimeZone;
+        use paladin_core::platform::container::allowance::AllowanceScopeKind;
+        use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+        let usd = CurrencyCode::new("USD").expect("USD");
+        let at = |day, hour| {
+            chrono::Utc
+                .with_ymd_and_hms(2026, 10, day, hour, 0, 0)
+                .single()
+                .expect("instant")
+        };
+        AllowanceRefusal {
+            scope_kind: AllowanceScopeKind::ApiKey,
+            limit_kind: AllowanceLimitKind::Window,
+            balance: Cost::new(2_500_000_000, usd.clone()),
+            ceiling: Cost::new(2_500_000_000, usd),
+            window: Some((at(3, 0), at(4, 0))),
+            evaluated_at: at(3, 23),
+        }
+    }
+
+    /// Admits are refused with a window `allowance_exhausted`.
+    struct RefusingAdmission;
+
+    #[async_trait]
+    impl AllowanceAdmissionPort for RefusingAdmission {
+        async fn admit(
+            &self,
+            _subject: &RunAttribution,
+            _run_id: Option<&RunId>,
+        ) -> Result<Admission, AdmissionError> {
+            Err(AdmissionError::Refused(window_refusal()))
+        }
+        async fn confirm(&self, _admission: &Admission) {}
+        async fn abandon(&self, _admission: &Admission) {}
+    }
+
+    /// The allowance check itself fails (a ledger outage): fail closed (D-10).
+    struct FailingAdmission;
+
+    #[async_trait]
+    impl AllowanceAdmissionPort for FailingAdmission {
+        async fn admit(
+            &self,
+            _subject: &RunAttribution,
+            _run_id: Option<&RunId>,
+        ) -> Result<Admission, AdmissionError> {
+            Err(AdmissionError::Backend {
+                message: "ledger unreachable: secret-detail".to_string(),
+            })
+        }
+        async fn confirm(&self, _admission: &Admission) {}
+        async fn abandon(&self, _admission: &Admission) {}
+    }
+
+    /// Admits every call and records each `admit` subject / run id and each
+    /// `confirm` / `abandon`.
+    #[derive(Default)]
+    struct RecordingAdmission {
+        admits: Mutex<Vec<(RunAttribution, Option<RunId>)>>,
+        confirms: AtomicUsize,
+        abandons: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl AllowanceAdmissionPort for RecordingAdmission {
+        async fn admit(
+            &self,
+            subject: &RunAttribution,
+            run_id: Option<&RunId>,
+        ) -> Result<Admission, AdmissionError> {
+            self.admits
+                .lock()
+                .expect("mutex poisoned")
+                .push((subject.clone(), run_id.cloned()));
+            Ok(Admission::none())
+        }
+        async fn confirm(&self, _admission: &Admission) {
+            self.confirms.fetch_add(1, Ordering::SeqCst);
+        }
+        async fn abandon(&self, _admission: &Admission) {
+            self.abandons.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// State holding agent `id` backed by a counting executor (and, when `streaming`,
+    /// a counting streamer), gated by `treasurer`.
+    fn gated_state(
+        id: &str,
+        streaming: bool,
+        treasurer: Arc<dyn AllowanceAdmissionPort>,
+    ) -> (AgentApiState, Arc<CountingExecutor>, Arc<CountingStreamer>) {
+        let executor = Arc::new(CountingExecutor::default());
+        let streamer = Arc::new(CountingStreamer::default());
+        let registry = AgentRegistry::new();
+        let executor_port: Arc<dyn PaladinExecutorPort> = executor.clone();
+        let streamer_port: Option<Arc<dyn StreamingExecutorPort>> = if streaming {
+            Some(streamer.clone())
+        } else {
+            None
+        };
+        registry.insert_with_streaming(id, test_agent(id), executor_port, streamer_port);
+        let state = AgentApiState::new(Arc::new(registry)).with_treasurer(treasurer);
+        (state, executor, streamer)
+    }
+
+    #[tokio::test]
+    async fn execute_refused_by_the_treasurer_is_429_and_never_executes() {
+        let (state, executor, _) = gated_state("a", false, Arc::new(RefusingAdmission));
+
+        let err = execute_agent(
+            State(state),
+            svc_a_of_acme(),
+            Path("a".to_string()),
+            execute_request("hi"),
+        )
+        .await
+        .expect_err("an exhausted caller is refused");
+
+        assert_eq!(err.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(err.retry_after(), Some(3_600));
+        assert_eq!(err.to_body()["error"]["code"], "allowance_exhausted");
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn stream_refused_by_the_treasurer_is_429_and_never_executes() {
+        for streaming in [true, false] {
+            let (state, executor, streamer) =
+                gated_state("s", streaming, Arc::new(RefusingAdmission));
+
+            let response = execute_agent_stream(
+                State(state),
+                svc_a_of_acme(),
+                Path("s".to_string()),
+                execute_request("hi"),
+            )
+            .await;
+
+            assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+            assert_eq!(
+                response
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok()),
+                Some("3600")
+            );
+            let content_type = response
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default()
+                .to_string();
+            assert!(
+                content_type.starts_with("application/json"),
+                "a refusal is a plain JSON response, never an SSE stream: {content_type}"
+            );
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("body reads");
+            let body: serde_json::Value = serde_json::from_slice(&bytes).expect("json body");
+            assert_eq!(body["error"]["code"], "allowance_exhausted");
+            assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+            assert_eq!(streamer.calls.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn jobs_refused_by_the_treasurer_is_429_without_a_job() {
+        let (state, executor, _) = gated_state("j", false, Arc::new(RefusingAdmission));
+        let jobs = Arc::clone(&state.jobs);
+
+        let err = enqueue_job(
+            State(state),
+            svc_a_of_acme(),
+            Path("j".to_string()),
+            execute_request("hi"),
+        )
+        .await
+        .expect_err("an exhausted caller is refused");
+
+        assert_eq!(err.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(err.to_body()["error"]["code"], "allowance_exhausted");
+        assert!(
+            err.to_body().to_string().find("job_id").is_none(),
+            "a refused caller is never handed a job id"
+        );
+        assert!(jobs.is_empty(), "no job is created for refused work");
+        // Give a (wrongly) spawned task the chance to run before asserting.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn agent_routes_fail_closed_when_the_allowance_check_fails() {
+        let (state, executor, streamer) = gated_state("f", true, Arc::new(FailingAdmission));
+        let jobs = Arc::clone(&state.jobs);
+
+        let err = execute_agent(
+            State(state.clone()),
+            svc_a_of_acme(),
+            Path("f".to_string()),
+            execute_request("hi"),
+        )
+        .await
+        .expect_err("fail closed");
+        assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        // T-41-21: the backend detail never reaches the client.
+        assert!(!err.to_body().to_string().contains("secret-detail"));
+
+        let response = execute_agent_stream(
+            State(state.clone()),
+            svc_a_of_acme(),
+            Path("f".to_string()),
+            execute_request("hi"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let err = enqueue_job(
+            State(state),
+            svc_a_of_acme(),
+            Path("f".to_string()),
+            execute_request("hi"),
+        )
+        .await
+        .expect_err("fail closed");
+        assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        assert!(jobs.is_empty());
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(streamer.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn admitted_agent_call_passes_the_callers_attribution_and_confirms() {
+        let recording = Arc::new(RecordingAdmission::default());
+        let (state, executor, _) = gated_state("ok", false, recording.clone());
+
+        let (status, _) = execute_agent(
+            State(state),
+            svc_a_of_acme(),
+            Path("ok".to_string()),
+            execute_request("hi"),
+        )
+        .await
+        .expect("an admitted caller runs");
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+        let admits = recording.admits.lock().expect("mutex poisoned");
+        assert_eq!(admits.len(), 1);
+        assert_eq!(
+            admits[0].0,
+            RunAttribution::new(TenantId::new("acme").unwrap(), "svc-a")
+        );
+        assert_eq!(admits[0].1, None, "the agent path has no run id");
+        assert_eq!(recording.confirms.load(Ordering::SeqCst), 1);
+        assert_eq!(recording.abandons.load(Ordering::SeqCst), 0);
     }
 
     fn state_with_streaming_usage_agent(
@@ -1884,6 +2799,11 @@ mod tests {
         // snake_case labels, not the wildcard's generic string.
         assert_eq!(stop_reason_label(&StopReason::CallLimit), "call_limit");
         assert_eq!(stop_reason_label(&StopReason::TokenBudget), "token_budget");
+        // Phase 42 D-12: the allowance halt is labelled, never the wildcard's "unknown".
+        assert_eq!(
+            stop_reason_label(&StopReason::AllowanceHalted(halt_figures())),
+            "allowance_halted"
+        );
     }
 
     #[test]
@@ -1911,5 +2831,546 @@ mod tests {
         let preview = prompt_preview(&long);
         assert_eq!(preview.chars().count(), DESCRIPTION_PREVIEW_LEN + 1); // +1 for the ellipsis
         assert!(preview.ends_with('…'));
+    }
+
+    /// D-10, T-38-23: Phase 38 deferred exposing `PaladinResult.cost` on this response
+    /// to "Phase 39 LEDGR-04" by name (its own regression test asserted the opposite --
+    /// `execute_response_carries_no_cost_field`). Phase 39 D-10 is that phase: a priced
+    /// result's serialized `ExecuteResponse` now carries `cost` as a `CostDto`.
+    #[test]
+    fn execute_response_carries_cost_when_priced() {
+        use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let mut result = PaladinResult::new(
+            "priced output".to_string(),
+            TokenUsage::new(10, 5),
+            42,
+            1,
+            StopReason::Completed,
+        );
+        result.cost = Some(Cost::new(1_500_000, usd));
+
+        let response = ExecuteResponse::from(result);
+
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["cost"]["nanos"], 1_500_000);
+        assert_eq!(json["cost"]["currency"], "USD");
+        assert_eq!(json["cost"]["display"], "0.0015 USD");
+    }
+
+    /// D-10: an unpriced `PaladinResult` (`cost: None`) serializes `cost` as `null` --
+    /// never a zero stand-in (D-00c).
+    #[test]
+    fn execute_response_cost_is_null_when_unpriced() {
+        let result = PaladinResult::new(
+            "unpriced output".to_string(),
+            TokenUsage::new(10, 5),
+            42,
+            1,
+            StopReason::Completed,
+        );
+        assert!(result.cost.is_none());
+
+        let response = ExecuteResponse::from(result);
+
+        let json = serde_json::to_value(&response).unwrap();
+        assert!(json["cost"].is_null());
+    }
+    // --- Phase 42 (42-08): the derived budget, allowance_halted and model_unpriced -----------
+
+    use paladin_core::platform::container::allowance::AllowanceScopeKind;
+    use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+
+    /// A binding-ceiling refusal: the figures a derived budget reports when it ends a run.
+    fn halt_figures() -> AllowanceRefusal {
+        use chrono::{TimeZone, Utc};
+        let usd = CurrencyCode::new("USD").expect("USD is a valid currency code");
+        AllowanceRefusal {
+            scope_kind: AllowanceScopeKind::ApiKey,
+            limit_kind: AllowanceLimitKind::Lifetime,
+            balance: Cost::new(5_000, usd.clone()),
+            ceiling: Cost::new(5_000, usd),
+            window: None,
+            evaluated_at: Utc
+                .with_ymd_and_hms(2026, 10, 6, 12, 0, 0)
+                .single()
+                .expect("valid instant"),
+        }
+    }
+
+    fn derived(max_tokens: u32) -> DerivedTokenBudget {
+        DerivedTokenBudget::new(max_tokens, halt_figures())
+    }
+
+    /// The `data:` payload of the SSE event named `event` in `body`.
+    fn sse_data(body: &str, event: &str) -> String {
+        let marker = format!("event: {event}\n");
+        let start = body
+            .find(&marker)
+            .unwrap_or_else(|| panic!("no `{event}` event in: {body}"));
+        body[start + marker.len()..]
+            .lines()
+            .find_map(|line| line.strip_prefix("data:"))
+            .unwrap_or_else(|| panic!("no data line after `{event}` in: {body}"))
+            .trim()
+            .to_string()
+    }
+
+    /// An admission port that knows models: it derives `budget` for every priced model, refuses
+    /// as unpriced when `unpriced`, and records the model each `admit_for_model` was asked about.
+    #[derive(Default)]
+    struct ModelAwareAdmission {
+        budget: Option<DerivedTokenBudget>,
+        unpriced: bool,
+        seen_models: Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl AllowanceAdmissionPort for ModelAwareAdmission {
+        async fn admit(
+            &self,
+            _subject: &RunAttribution,
+            _run_id: Option<&RunId>,
+        ) -> Result<Admission, AdmissionError> {
+            Ok(Admission::none())
+        }
+        async fn admit_for_model(
+            &self,
+            _subject: &RunAttribution,
+            _run_id: Option<&RunId>,
+            model: &str,
+        ) -> Result<Admission, AdmissionError> {
+            self.seen_models
+                .lock()
+                .expect("mutex poisoned")
+                .push(model.to_string());
+            if self.unpriced {
+                return Err(AdmissionError::ModelUnpriced {
+                    model: model.to_string(),
+                });
+            }
+            Ok(match &self.budget {
+                Some(budget) => Admission::none().with_derived_budget(budget.clone()),
+                None => Admission::none(),
+            })
+        }
+        async fn confirm(&self, _admission: &Admission) {}
+        async fn abandon(&self, _admission: &Admission) {}
+    }
+
+    /// A buffered executor whose result is a fixed `AllowanceHalted` stop with partial output.
+    struct HaltedExecutor;
+
+    #[async_trait]
+    impl PaladinExecutorPort for HaltedExecutor {
+        async fn execute(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+        ) -> Result<PaladinResult, PaladinError> {
+            Ok(PaladinResult::new(
+                "partial answer".to_string(),
+                TokenUsage::new(150, 60),
+                10,
+                2,
+                StopReason::AllowanceHalted(halt_figures()),
+            ))
+        }
+    }
+
+    #[test]
+    fn stop_reason_label_names_the_allowance_halt() {
+        assert_eq!(
+            stop_reason_label(&StopReason::AllowanceHalted(halt_figures())),
+            "allowance_halted"
+        );
+    }
+
+    /// D-12: `halt_reason` is the one `wire_json` object for an allowance halt and the key is
+    /// absent for every other stop reason, so a non-halt response is byte-identical to before.
+    #[test]
+    fn execute_response_carries_halt_reason_only_on_allowance_halted() {
+        let halted = ExecuteResponse::from(PaladinResult::new(
+            "partial".to_string(),
+            TokenUsage::new(10, 5),
+            1,
+            1,
+            StopReason::AllowanceHalted(halt_figures()),
+        ));
+        assert_eq!(halted.stop_reason, "allowance_halted");
+        assert_eq!(
+            halted.halt_reason,
+            Some(HaltReason::AllowanceExhausted(halt_figures()).wire_json())
+        );
+        let json = serde_json::to_value(&halted).expect("serializes");
+        assert_eq!(json["halt_reason"]["reason"], "allowance_exhausted");
+
+        for stop in [
+            StopReason::Completed,
+            StopReason::MaxLoops,
+            StopReason::Timeout,
+            StopReason::CallLimit,
+            StopReason::TokenBudget,
+        ] {
+            let response = ExecuteResponse::from(PaladinResult::new(
+                "out".to_string(),
+                TokenUsage::new(1, 1),
+                1,
+                1,
+                stop,
+            ));
+            assert!(response.halt_reason.is_none());
+            let wire = serde_json::to_string(&response).expect("serializes");
+            assert!(
+                !wire.contains("halt_reason"),
+                "a non-halt response must not carry the key: {wire}"
+            );
+        }
+    }
+
+    /// D-10: a ceilinged principal calling an unpriced model is refused `422 model_unpriced`
+    /// on all three routes, before the agent runs, with the model named and no `Retry-After`.
+    #[tokio::test]
+    async fn unpriced_model_is_refused_422_on_execute_stream_and_jobs() {
+        let admission = Arc::new(ModelAwareAdmission {
+            unpriced: true,
+            ..Default::default()
+        });
+        for streaming in [true, false] {
+            let (state, executor, streamer) = gated_state("u", streaming, admission.clone());
+
+            let err = execute_agent(
+                State(state.clone()),
+                svc_a_of_acme(),
+                Path("u".to_string()),
+                execute_request("hi"),
+            )
+            .await
+            .expect_err("an unpriced model is refused");
+            assert_eq!(err.status(), StatusCode::UNPROCESSABLE_ENTITY);
+            assert_eq!(err.retry_after(), None);
+            let body = err.to_body();
+            assert_eq!(body["error"]["code"], "model_unpriced");
+            assert_eq!(body["error"]["details"]["model"], "gpt-4");
+
+            let response = execute_agent_stream(
+                State(state.clone()),
+                svc_a_of_acme(),
+                Path("u".to_string()),
+                execute_request("hi"),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+            assert!(response.headers().get("retry-after").is_none());
+            let raw = read_body(response).await;
+            let body: serde_json::Value = serde_json::from_str(&raw).expect("json body");
+            assert_eq!(body["error"]["code"], "model_unpriced");
+            assert_eq!(body["error"]["details"]["model"], "gpt-4");
+            assert!(!raw.contains("svc-a"), "no key id in the body: {raw}");
+            assert!(!raw.contains("acme"), "no tenant in the body: {raw}");
+
+            let jobs = Arc::clone(&state.jobs);
+            let err = enqueue_job(
+                State(state),
+                svc_a_of_acme(),
+                Path("u".to_string()),
+                execute_request("hi"),
+            )
+            .await
+            .expect_err("an unpriced model is refused");
+            assert_eq!(err.status(), StatusCode::UNPROCESSABLE_ENTITY);
+            assert_eq!(err.to_body()["error"]["code"], "model_unpriced");
+            assert!(jobs.is_empty(), "no job for refused work");
+
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+            assert_eq!(streamer.calls.load(Ordering::SeqCst), 0);
+        }
+        let seen = admission.seen_models.lock().expect("mutex poisoned");
+        assert!(
+            seen.iter().all(|model| model == "gpt-4"),
+            "admission is asked about the registered agent's model: {seen:?}"
+        );
+        assert_eq!(seen.len(), 6, "three routes x two registrations");
+    }
+
+    /// D-13: execute, the true stream, the buffered fallback and jobs each hand the executor a
+    /// `RunScope` whose derived budget equals the admission's.
+    #[tokio::test]
+    async fn every_agent_route_carries_the_derived_budget_on_its_run_scope() {
+        let admission = || {
+            Arc::new(ModelAwareAdmission {
+                budget: Some(derived(1_234)),
+                ..Default::default()
+            })
+        };
+
+        let (state, executor, _) = state_with_scope_recording_agent("d", false);
+        let state = state.with_treasurer(admission());
+        let _ = execute_agent(
+            State(state.clone()),
+            svc_a_of_acme(),
+            Path("d".to_string()),
+            execute_request("hi"),
+        )
+        .await
+        .expect("execute succeeds");
+        let scope = executor.recorded_scope().expect("execute_scoped called");
+        assert_eq!(scope.derived_token_budget, Some(derived(1_234)));
+
+        // The buffered fallback of execute/stream (no streamer on this agent).
+        let (state, executor, _) = state_with_scope_recording_agent("d", false);
+        let state = state.with_treasurer(admission());
+        let response = execute_agent_stream(
+            State(state.clone()),
+            svc_a_of_acme(),
+            Path("d".to_string()),
+            execute_request("hi"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let scope = executor.recorded_scope().expect("execute_scoped called");
+        assert_eq!(scope.derived_token_budget, Some(derived(1_234)));
+
+        // The true stream.
+        let (state, _, streamer) = state_with_scope_recording_agent("d", true);
+        let state = state.with_treasurer(admission());
+        let response = execute_agent_stream(
+            State(state.clone()),
+            svc_a_of_acme(),
+            Path("d".to_string()),
+            execute_request("hi"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let scope = streamer
+            .recorded_scope()
+            .expect("execute_stream_scoped called");
+        assert_eq!(scope.derived_token_budget, Some(derived(1_234)));
+
+        // Jobs.
+        let (state, executor, _) = state_with_scope_recording_agent("d", false);
+        let state = state.with_treasurer(admission());
+        let _ = enqueue_job(
+            State(state),
+            svc_a_of_acme(),
+            Path("d".to_string()),
+            execute_request("hi"),
+        )
+        .await
+        .expect("enqueue succeeds");
+        let mut recorded = None;
+        for _ in 0..200 {
+            recorded = executor.recorded_scope();
+            if recorded.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let scope = recorded.expect("the spawned job must call execute_scoped");
+        assert_eq!(scope.derived_token_budget, Some(derived(1_234)));
+    }
+
+    /// An admission that derives nothing leaves the scope's budget unset (a principal with no
+    /// ceiling is unaffected).
+    #[tokio::test]
+    async fn no_derived_budget_leaves_the_run_scope_budget_unset() {
+        let (state, executor, _) = state_with_scope_recording_agent("n", false);
+        let state = state.with_treasurer(Arc::new(ModelAwareAdmission::default()));
+        let _ = execute_agent(
+            State(state),
+            svc_a_of_acme(),
+            Path("n".to_string()),
+            execute_request("hi"),
+        )
+        .await
+        .expect("execute succeeds");
+        let scope = executor.recorded_scope().expect("execute_scoped called");
+        assert!(scope.derived_token_budget.is_none());
+    }
+
+    fn state_with_halted_agent(id: &str, streaming: bool) -> AgentApiState {
+        let registry = AgentRegistry::new();
+        let streamer: Option<Arc<dyn StreamingExecutorPort>> = if streaming {
+            Some(Arc::new(MockStreamer { chunks: vec![] }))
+        } else {
+            None
+        };
+        registry.insert_with_streaming(id, test_agent(id), Arc::new(HaltedExecutor), streamer);
+        AgentApiState::new(Arc::new(registry))
+    }
+
+    /// `POST /agents/{id}/execute` answers 200 with the halt label and the `wire_json` object.
+    #[tokio::test]
+    async fn execute_answers_allowance_halted_with_the_halt_reason() {
+        let state = state_with_halted_agent("h", false);
+        let (status, body) = execute_agent(
+            State(state),
+            svc_a_of_acme(),
+            Path("h".to_string()),
+            execute_request("hi"),
+        )
+        .await
+        .expect("a halted call still answers 200");
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.0["stop_reason"], "allowance_halted");
+        assert_eq!(body.0["output"], "partial answer");
+        assert_eq!(
+            body.0["halt_reason"],
+            HaltReason::AllowanceExhausted(halt_figures()).wire_json()
+        );
+    }
+
+    /// D-12 stream clause, buffered fallback: the `done` event IS the serialized
+    /// `ExecuteResponse`, so it carries the halt label and the same `halt_reason` object; a
+    /// non-halt fallback `done` carries no `halt_reason` key and is byte-identical to before.
+    #[tokio::test]
+    async fn execute_stream_buffered_fallback_done_carries_the_halt_reason() {
+        let state = state_with_halted_agent("h", false);
+        let response = execute_agent_stream(
+            State(state),
+            svc_a_of_acme(),
+            Path("h".to_string()),
+            execute_request("hi"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = read_body(response).await;
+        let done: serde_json::Value =
+            serde_json::from_str(&sse_data(&body, "done")).expect("done data is JSON");
+        assert_eq!(done["stop_reason"], "allowance_halted");
+        assert_eq!(done["output"], "partial answer");
+        assert_eq!(
+            done["halt_reason"],
+            HaltReason::AllowanceExhausted(halt_figures()).wire_json()
+        );
+
+        // A non-halt buffered fallback: no halt_reason key at all.
+        let state = state_with_agent("c", MockExecutor::Succeeds("buffered".to_string()));
+        let response = execute_agent_stream(
+            State(state),
+            svc_a_of_acme(),
+            Path("c".to_string()),
+            execute_request("hi"),
+        )
+        .await;
+        let body = read_body(response).await;
+        let data = sse_data(&body, "done");
+        assert!(!data.contains("halt_reason"), "{data}");
+        assert!(
+            data.ends_with(r#""stop_reason":"completed","cost":null}"#),
+            "the non-halt done keeps its exact shape: {data}"
+        );
+    }
+
+    /// `POST /agents/{id}/jobs` records the halt on the job result.
+    #[tokio::test]
+    async fn jobs_record_allowance_halted_on_the_job_result() {
+        let state = state_with_halted_agent("h", false);
+        let jobs = Arc::clone(&state.jobs);
+        let (status, body) = enqueue_job(
+            State(state),
+            svc_a_of_acme(),
+            Path("h".to_string()),
+            execute_request("hi"),
+        )
+        .await
+        .expect("enqueue succeeds");
+        assert_eq!(status, StatusCode::ACCEPTED);
+        let job_id = body.0["job_id"].as_str().expect("job id").to_string();
+
+        let mut record = None;
+        for _ in 0..200 {
+            let current = serde_json::to_value(jobs.get(&job_id).expect("job exists"))
+                .expect("job serializes");
+            if current["result"].is_object() {
+                record = Some(current);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let record = record.expect("the job completes");
+        assert_eq!(record["result"]["stop_reason"], "allowance_halted");
+        assert_eq!(
+            record["result"]["halt_reason"],
+            HaltReason::AllowanceExhausted(halt_figures()).wire_json()
+        );
+    }
+
+    fn streaming_state_with_budget(
+        usage: Option<TokenUsage>,
+        budget: Option<DerivedTokenBudget>,
+    ) -> AgentApiState {
+        let state = state_with_streaming_usage_agent("t", "streamed", usage);
+        match budget {
+            Some(budget) => state.with_treasurer(Arc::new(ModelAwareAdmission {
+                budget: Some(budget),
+                ..Default::default()
+            })),
+            None => state,
+        }
+    }
+
+    async fn stream_done_data(state: AgentApiState) -> String {
+        let response = execute_agent_stream(
+            State(state),
+            svc_a_of_acme(),
+            Path("t".to_string()),
+            execute_request("hi"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        sse_data(&read_body(response).await, "done")
+    }
+
+    /// Option-b, no crossing: usage at or below the derived figure (the test is strict `>`)
+    /// leaves the true stream's `done` byte-identical to a stream with no budget at all.
+    #[tokio::test]
+    async fn execute_stream_true_stream_done_is_byte_identical_without_a_crossing() {
+        let usage = TokenUsage::new(11, 4); // total 15
+        let baseline =
+            stream_done_data(streaming_state_with_budget(Some(usage.clone()), None)).await;
+        assert!(
+            baseline.starts_with(r#"{"done":true,"usage":"#),
+            "{baseline}"
+        );
+        assert!(!baseline.contains("halt_reason"));
+
+        // Well under the figure, and exactly at it (strict `>`: a tie does not cross).
+        for max_tokens in [1_000, 15] {
+            let with_budget = stream_done_data(streaming_state_with_budget(
+                Some(usage.clone()),
+                Some(derived(max_tokens)),
+            ))
+            .await;
+            assert_eq!(with_budget, baseline, "max_tokens {max_tokens}");
+        }
+
+        // No reported usage is never a crossing (D-17: nothing is fabricated).
+        let no_usage = stream_done_data(streaming_state_with_budget(None, Some(derived(1)))).await;
+        assert!(!no_usage.contains("halt_reason"), "{no_usage}");
+    }
+
+    /// Option-b, crossing: a terminal chunk whose total tokens exceed the derived figure adds
+    /// the informational `halt_reason` (the one `wire_json`) beside `done` and `usage`; the
+    /// stream is not cut and the rest of the shape is unchanged.
+    #[tokio::test]
+    async fn execute_stream_true_stream_done_carries_halt_reason_when_usage_crossed() {
+        let usage = TokenUsage::new(11, 4); // total 15 > 14
+        let data =
+            stream_done_data(streaming_state_with_budget(Some(usage), Some(derived(14)))).await;
+        let done: serde_json::Value = serde_json::from_str(&data).expect("done data is JSON");
+        assert_eq!(done["done"], true);
+        assert_eq!(done["usage"]["total_tokens"], 15);
+        assert_eq!(
+            done["halt_reason"],
+            HaltReason::AllowanceExhausted(halt_figures()).wire_json()
+        );
+        assert_eq!(done["halt_reason"]["reason"], "allowance_exhausted");
+        assert!(
+            done.get("stop_reason").is_none(),
+            "a true stream names no stop reason"
+        );
     }
 }

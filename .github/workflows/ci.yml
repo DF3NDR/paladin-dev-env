@@ -160,6 +160,12 @@ jobs:
       - name: Check publish order
         run: ./scripts/check-publish-order.sh
 
+      # Phase 46 D-21 (CURR-25): pins paladin-core / paladin-ports
+      # [dependencies] to ADR-0015's measured sets. CI runs each gate script
+      # itself and does not call `make check-gates`, so the gate needs its own step.
+      - name: Check core/ports dependency allowlist (ADR-0015)
+        run: ./scripts/check-dependency-allowlist.sh
+
       # Closes a pre-existing gap (D-09b, plan 15.1-09): the sibling
       # check-workflow-suppressions_test.sh regression harness has existed
       # since Phase 12 but was wired only into `make test-shell-guards`,
@@ -224,8 +230,10 @@ jobs:
       # types as `-> Self` and turned this required check red on a
       # documentation-only commit. scripts/extract-public-api.sh reads this
       # variable and passes it to cargo as `+<toolchain>`; the install step
-      # below uses the same variable, so there is one literal to move. Move
-      # it together with a regenerated .project/current-exports.txt.
+      # below uses the same variable. The Makefile's PUBLIC_API_TOOLCHAIN
+      # default (`make api-surface` / `make api-surface-update`) carries the
+      # same literal so a local run renders the baseline the way CI does.
+      # Move both together with a regenerated .project/current-exports.txt.
       PUBLIC_API_TOOLCHAIN: nightly-2026-09-20
     steps:
       - name: Checkout code
@@ -394,13 +402,13 @@ jobs:
 
       # X-10.5 set-equality gate: every allowlist entry in
       # .cargo/semver-checks-allowlist.toml must correspond to a MIGRATION.md
-      # §9.2 row marked deliberate-breaking (`Y`), and every such row must
+      # §9.2 or §10.2 row marked deliberate-breaking (`Y`), and every such row must
       # have a matching allowlist entry. Reads both files directly -- a
       # missing file fails this step rather than silently treating either
       # side as an empty set.
       #
       # ROW-LEVEL (D-04): the comparison is the SET of `crate | type` PAIRS,
-      # not just crate names -- a §9.2 row and an allowlist entry naming
+      # not just crate names -- a §9.2 or §10.2 row and an allowlist entry naming
       # DIFFERENT types under the SAME crate must fail. The set is a
       # DEDUPLICATED set, never a row count against an entry count:
       # `paladin-ai | Settings` is deliberately marked `Y` on two separate
@@ -408,14 +416,17 @@ jobs:
       # `trace`/`web_server` fields, Phase 28) that both legitimately mirror
       # the SAME allowlist entry -- they must collapse to one set member, not
       # report a false 10-rows-vs-9-entries mismatch.
-      - name: Verify allowlist is set-equal to the MIGRATION.md §9.2 register
+      - name: Verify allowlist is set-equal to the MIGRATION.md §9.2 and §10.2 registers
         run: |
           set -euo pipefail
           test -f .cargo/semver-checks-allowlist.toml
           test -f MIGRATION.md
 
-          # Register side: scoped to the §9.2 section only, so a "Y"
-          # elsewhere in the document can't leak in. Data rows are selected
+          # Register side: scoped to the §9.2 and §10.2 sections only
+          # (MIGRATION.md is a two-part guide: §10.2 is the v0.11 register, §9.2
+          # the v0.10 one, both read so a deliberate break cannot hide under a
+          # heading the window does not read), so a "Y" elsewhere in the
+          # document can't leak in. Data rows are selected
           # by a leading pipe immediately followed by a backtick, which
           # excludes the table header and its `---` separator row. Field 2
           # is the crate (trimmed of spaces/tabs/backticks); field 3's FIRST
@@ -424,7 +435,7 @@ jobs:
           # The deliberate-breaking marker is located by scanning fields 6
           # through NF (never a fixed column) for a trimmed value that is
           # exactly "Y" or begins with "Y" followed by a space, em dash or
-          # hyphen: one §9.2 row's Mitigation cell contains a literal `|`
+          # hyphen: one register row's Mitigation cell contains a literal `|`
           # inside a backticked span, which under naive `-F'|'` splitting
           # shifts that row's marker one field to the right -- scanning the
           # range instead of a fixed column is what keeps that row from
@@ -436,7 +447,7 @@ jobs:
           # (a real error). Under `set -euo pipefail` a bare no-match grep
           # kills the step before it prints anything, which is exactly how
           # this step failed on its first-ever run.
-          awk '/^## 9\.2 /{flag=1; next} /^## 9\.3 /{flag=0} flag' MIGRATION.md \
+          awk '/^## (9|10)\.2 /{flag=1; next} /^## (9|10)\.3 /{flag=0} flag' MIGRATION.md \
             | { grep -E '^\| `' || test $? -eq 1; } \
             | awk -F'|' '{
                 crate=$2; gsub(/^[ \t`]+|[ \t`]+$/, "", crate);
@@ -467,16 +478,16 @@ jobs:
               }' \
             | sort -u > /tmp/allowlist-pairs.txt
 
-          echo "MIGRATION.md §9.2 deliberate-breaking crate|type pairs:"
+          echo "MIGRATION.md §9.2 and §10.2 deliberate-breaking crate|type pairs:"
           cat /tmp/migration-deliberate-pairs.txt
           echo "Allowlist crate|type pairs:"
           cat /tmp/allowlist-pairs.txt
 
           if ! diff -u /tmp/migration-deliberate-pairs.txt /tmp/allowlist-pairs.txt; then
-            echo "::error::Allowlist and MIGRATION.md §9.2 deliberate-breaking crate|type pairs are not set-equal (see diff above)."
+            echo "::error::Allowlist and MIGRATION.md §9.2 and §10.2 deliberate-breaking crate|type pairs are not set-equal (see diff above)."
             exit 1
           fi
-          echo "Allowlist is set-equal to the MIGRATION.md §9.2 deliberate-breaking register (crate|type pairs)."
+          echo "Allowlist is set-equal to the MIGRATION.md §9.2 and §10.2 deliberate-breaking registers (crate|type pairs)."
 
       # D-01: MIGRATION.md's §9 sections previously carried a placeholder
       # marker naming the requirement or phase that owned closing it -- every
@@ -692,33 +703,26 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
-      minio:
-        # Pinned rather than floating: Docker Hub deleted the community MinIO
-        # repositories on 2026-09-12 and MinIO no longer publishes
-        # community-edition images. quay.io still serves this last
-        # known-good community release and no newer community tag will ever
-        # appear. Server manifest digest:
-        # sha256:cf3dadcfa1fb0324f43958bad1abba986d53c4ecc04d4d50b46c7dcda28bd3cd
-        # Long-term replacement tracked in
-        # .planning/todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md
-        image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
+      rustfs:
+        # Pinned rather than floating: the community MinIO images are gone (Docker Hub
+        # deleted them on 2026-09-12, quay.io locked anonymous pulls on 2026-09-24).
+        # RustFS is Apache-2.0 and multi-arch. Manifest-list digest:
+        # sha256:8cc9801755448b71a786705ce76692c77e14936cccd87cf2fc31842e58f4d1ff
+        # A re-pin is a deliberate commit, never automatic (Phase 45 D-03).
+        # No `command:` key: the image entrypoint appends /data itself.
+        image: rustfs/rustfs:1.0.0
         ports:
           - 9010:9000
-          - 9011:9001
         env:
-          MINIO_ROOT_USER: testuser
-          MINIO_ROOT_PASSWORD: testpass123
+          RUSTFS_ACCESS_KEY: testuser
+          RUSTFS_SECRET_KEY: testpass123
+          RUSTFS_CONSOLE_ENABLE: "false"
         options: >-
-          --health-cmd "curl -f http://localhost:9000/minio/health/live"
-          --health-interval 30s
-          --health-timeout 20s
-          --health-retries 3
-        # MinIO requires an explicit command argument to start as a server
-        # (matches integration-tests.yml's identical MinIO block); actionlint
-        # flags `command` as an unrecognized `services` key against its
-        # strict schema, but GitHub Actions applies it at runtime. See
-        # .github/actionlint.yaml for the narrowly-scoped suppression.
-        command: server /data --console-address ":9001"
+          --health-cmd "curl -f http://localhost:9000/health/ready"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+          --health-start-period 5s
 
     steps:
       - name: Checkout code
@@ -732,31 +736,6 @@ jobs:
         with:
           cache-on-failure: true
 
-      # MinIO retired its community binary downloads; its former community download host
-      # answered HTTP 410 Gone for the mc binary on 2026-09-13. The binary is now fetched
-      # from the archived github.com/minio/mc repository's release assets (assets on
-      # archived repositories remain downloadable), pinned to the same release the quay.io
-      # client image from quick task 260913-15w already carries. The checksum is the one
-      # published as that release's own .sha256sum asset. Long-term replacement tracked in .planning/todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md
-      - name: Install MinIO Client
-        run: |
-          set -euo pipefail
-          MC_RELEASE="RELEASE.2025-08-13T08-35-41Z"
-          MC_SHA256="01f866e9c5f9b87c2b09116fa5d7c06695b106242d829a8bb32990c00312e891"
-          # Retry transient CDN/5xx errors (a 504 here killed a whole run on 2026-09-14).
-          curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o mc \
-            "https://github.com/minio/mc/releases/download/${MC_RELEASE}/mc.linux-amd64.${MC_RELEASE}"
-          echo "${MC_SHA256}  mc" | sha256sum -c -
-          chmod +x mc
-          sudo mv mc /usr/local/bin/mc
-
-      - name: Setup MinIO buckets
-        run: |
-          mc alias set testminio http://localhost:9010 testuser testpass123
-          mc mb testminio/test-bucket --ignore-existing
-          mc mb testminio/integration-tests --ignore-existing
-          echo "MinIO buckets created successfully"
-
       - name: Wait for services
         run: |
           echo "Waiting for Redis..."
@@ -768,10 +747,10 @@ jobs:
             sleep 1
           done
 
-          echo "Waiting for MinIO..."
+          echo "Waiting for RustFS..."
           for _ in {1..30}; do
-            if curl -f http://localhost:9010/minio/health/live; then
-              echo "MinIO is ready"
+            if curl -f http://localhost:9010/health/ready; then
+              echo "RustFS is ready"
               break
             fi
             sleep 1
@@ -790,8 +769,51 @@ jobs:
           echo "Running Redis integration tests..."
           cargo test redis_queue_integration_tests --release -- --ignored --nocapture
 
-          echo "Running file storage integration tests..."
-          cargo test file_storage_integration_tests --release -- --ignored --nocapture
+      # The FileStoragePort contract suite is gated behind `s3-storage`; without that
+      # feature `cargo test file_storage_integration_tests` matches zero tests and
+      # reports success (Phase 45 RESEARCH Pitfall 2). Two steps, so the suite cannot
+      # pass vacuously: the first proves the cases are compiled in, the second runs them
+      # against the RustFS service container above and checks the passed count. The
+      # buckets are created by `MinioAdapter::new` itself (no client bootstrap).
+      - name: Assert the file storage contract suite is compiled in
+        env:
+          USE_EXTERNAL_TEST_SERVICES: "true"
+          TEST_REDIS_HOST: localhost
+          TEST_REDIS_PORT: 6380
+          TEST_MINIO_ENDPOINT: localhost:9010
+          TEST_MINIO_ACCESS_KEY: testuser
+          TEST_MINIO_SECRET_KEY: testpass123
+          RUST_LOG: info
+        run: |
+          LIST=$(cargo test --test lib --features integration-tests,s3-storage -- --list --ignored)
+          COUNT=$(printf '%s\n' "${LIST}" | grep -c 'file_storage_integration_tests::.*: test$' || true)
+          echo "file storage contract suite cases compiled in: ${COUNT}"
+          if [ "${COUNT}" -lt 11 ]; then
+            echo "::error::expected at least 11 file_storage_integration_tests cases under --features integration-tests,s3-storage, found ${COUNT}"
+            exit 1
+          fi
+
+      - name: Run file storage contract suite (RustFS)
+        env:
+          USE_EXTERNAL_TEST_SERVICES: "true"
+          TEST_REDIS_HOST: localhost
+          TEST_REDIS_PORT: 6380
+          TEST_MINIO_ENDPOINT: localhost:9010
+          TEST_MINIO_ACCESS_KEY: testuser
+          TEST_MINIO_SECRET_KEY: testpass123
+          RUST_LOG: info
+        # Default test profile, no --release: the suite is I/O-bound, so a debug build
+        # compiles faster and matches the local simulation. It prints no presigned URL
+        # query string, so the tee'd log carries no credential.
+        run: |
+          set -o pipefail
+          cargo test --test lib --features integration-tests,s3-storage file_storage_integration_tests -- --ignored --test-threads=1 --nocapture 2>&1 | tee file-storage-suite.log
+          PASSED=$(sed -n 's/^test result: ok\. \([0-9][0-9]*\) passed.*/\1/p' file-storage-suite.log | tail -n 1)
+          echo "file storage contract suite passed: ${PASSED:-0}"
+          if [ -z "${PASSED}" ] || [ "${PASSED}" -lt 11 ]; then
+            echo "::error::expected 'test result: ok' with at least 11 passed, got '${PASSED:-none}'"
+            exit 1
+          fi
 
       # Absorbed from the now-deleted integration-tests.yml (D-09). This is the
       # broad `--workspace --features integration-tests` suite, distinct from
@@ -854,14 +876,29 @@ jobs:
 
       - name: Start infrastructure services
         run: |
-          docker compose -f docker/docker-compose.test.yml up -d redis-test minio-test minio-test-init
-          # Wait for MinIO init container to finish creating buckets
-          timeout 120 sh -c 'until docker inspect paladin-minio-test-init --format="{{.State.Status}}" 2>/dev/null | grep -q exited; do sleep 2; done'
+          # --wait blocks until both healthchecks pass; there is no bucket-init container
+          # (MinioAdapter::new creates the bucket it needs).
+          docker compose -f docker/docker-compose.test.yml up -d --wait redis-test rustfs-test
           echo "Infrastructure services ready"
 
       - name: Run integration tests in Docker
         run: |
           docker compose -f docker/docker-compose.test.yml run --no-deps --rm integration-tests
+
+      # Same vacuous-pass guard as the service-container job: the suite is gated behind
+      # `s3-storage`, and a run that executes zero cases must fail, not pass. Runs inside
+      # the compose network against `rustfs-test` / `redis-test` (see the
+      # `integration-tests` service environment).
+      - name: Run file storage contract suite in Docker
+        run: |
+          set -o pipefail
+          docker compose -f docker/docker-compose.test.yml run --no-deps --rm -T integration-tests cargo test --test lib --features integration-tests,s3-storage file_storage_integration_tests -- --ignored --test-threads=1 --nocapture 2>&1 | tee docker-file-storage-suite.log
+          PASSED=$(sed -n 's/^test result: ok\. \([0-9][0-9]*\) passed.*/\1/p' docker-file-storage-suite.log | tail -n 1)
+          echo "file storage contract suite passed: ${PASSED:-0}"
+          if [ -z "${PASSED}" ] || [ "${PASSED}" -lt 11 ]; then
+            echo "::error::expected 'test result: ok' with at least 11 passed, got '${PASSED:-none}'"
+            exit 1
+          fi
 
       - name: Collect logs on failure
         if: failure()
@@ -1201,6 +1238,92 @@ jobs:
         if: always()
         run: docker compose -f docker/docker-compose.test.yml down -v
 
+  # Redis cadence live-server integration (PACE-03, D-09). The RedisCadence suite and the
+  # two-worker fleet test self-skip -- and therefore pass -- when no server is reachable,
+  # exactly like the redis-cache-integration and redis-queue jobs above. Without this job the
+  # claim "a 429 on one worker slows every worker sharing that provider and model" would be
+  # proved in no environment at all while every CI run reported green -- the same failure
+  # shape the Postgres, Ollama, redis-cache and redis-queue jobs were each added to close.
+  #
+  # Reuses the `redis-test` service the jobs above bring up
+  # (docker/docker-compose.test.yml) rather than defining a second Redis container. Uses
+  # logical database index 2 (`redis://127.0.0.1:6380/2`) so this job's keys never share a
+  # keyspace with the redis-cache-integration (0) or redis-queue (1) jobs even if all three
+  # ever ran against the same server.
+  #
+  # The reachability assertion (`redis-cli ping`), the early-return detection step and the
+  # selected-count assertion below are what give this job its meaning -- do not remove them.
+  redis-cadence-integration:
+    name: Redis Cadence Contract Suite (live server)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: redis-cadence-integration
+
+      - name: Start redis-test and wait for healthy
+        run: |
+          docker compose -f docker/docker-compose.test.yml up -d redis-test
+          echo "Waiting for redis-test to report healthy..."
+          timeout 120 sh -c 'until docker inspect paladin-redis-test --format="{{.State.Health.Status}}" 2>/dev/null | grep -qx healthy; do sleep 3; done'
+
+      - name: Assert the live server accepts connections
+        run: docker exec paladin-redis-test redis-cli ping
+
+      - name: Run RedisCadence contract suite and the two-worker fleet test
+        run: |
+          set -o pipefail
+          # --nocapture: the self-skip path announces itself on stdout, which cargo swallows
+          # without it -- the detection step below would have nothing to read. Database
+          # index 2 (not 0 or 1, which the cache and queue jobs use). Each cargo invocation
+          # appends to the one log; the count step below sums the per-binary results.
+          CADENCE_REDIS_TEST_URL=redis://127.0.0.1:6380/2 \
+            cargo test -p paladin-storage --features redis-cadence --lib cadence::redis \
+            -- --nocapture 2>&1 | tee /tmp/redis-cadence-test.log
+          CADENCE_REDIS_TEST_URL=redis://127.0.0.1:6380/2 \
+            cargo test -p paladin-ai --features redis-cadence --lib cadence_fleet \
+            -- --nocapture 2>&1 | tee -a /tmp/redis-cadence-test.log
+
+      - name: Fail if the suite took the SKIP path
+        run: |
+          if grep -q 'SKIP:' /tmp/redis-cadence-test.log; then
+            echo "::error::the cadence Redis tests took the SKIP path — the live server was NOT exercised."
+            grep 'SKIP:' /tmp/redis-cadence-test.log
+            exit 1
+          fi
+          echo "All cadence Redis tests exercised the live server."
+
+      - name: Fail if the suite selected fewer tests than it declares
+        run: |
+          set -o pipefail
+          # Declared: every test in the storage module, plus the one fleet test in the facade.
+          # Passed: the sum over both cargo invocations in the log (each prints its own
+          # `test result: ok. N passed` line).
+          STORAGE=$(grep -cE '^\s*#\[test\]|^\s*#\[tokio::test\]' crates/paladin-storage/src/cadence/redis.rs)
+          FLEET=$(grep -c 'fn cadence_fleet_' src/infrastructure/cadence.rs)
+          EXPECTED=$((STORAGE + FLEET))
+          ACTUAL=$(grep -oP 'test result: ok\. \K[0-9]+(?= passed)' /tmp/redis-cadence-test.log | awk '{ total += $1 } END { print total + 0 }' || true)
+          echo "Declared tests: $EXPECTED (storage $STORAGE + fleet $FLEET), passed: ${ACTUAL:-0}"
+          if [ -z "$ACTUAL" ] || [ "$ACTUAL" -lt "$EXPECTED" ]; then
+            echo "::error::the cadence Redis tests selected fewer tests (${ACTUAL:-0}) than declared ($EXPECTED) -- a stale or mistyped filter would report green having run nothing."
+            exit 1
+          fi
+
+      - name: Collect logs on failure
+        if: failure()
+        run: docker compose -f docker/docker-compose.test.yml logs redis-test
+
+      - name: Stop services
+        if: always()
+        run: docker compose -f docker/docker-compose.test.yml down -v
+
   # Generated SDK clients smoke (PLAT-FR-17, D-49, 27-18): proves
   # `crates/paladin-web/openapi.json` is genuinely generatable into a working Python
   # AND TypeScript client, not just schema-valid — runs on every PR/push (no path
@@ -1404,33 +1527,26 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
-      minio:
-        # Pinned rather than floating: Docker Hub deleted the community MinIO
-        # repositories on 2026-09-12 and MinIO no longer publishes
-        # community-edition images. quay.io still serves this last
-        # known-good community release and no newer community tag will ever
-        # appear. Server manifest digest:
-        # sha256:cf3dadcfa1fb0324f43958bad1abba986d53c4ecc04d4d50b46c7dcda28bd3cd
-        # Long-term replacement tracked in
-        # .planning/todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md
-        image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
+      rustfs:
+        # Pinned rather than floating: the community MinIO images are gone (Docker Hub
+        # deleted them on 2026-09-12, quay.io locked anonymous pulls on 2026-09-24).
+        # RustFS is Apache-2.0 and multi-arch. Manifest-list digest:
+        # sha256:8cc9801755448b71a786705ce76692c77e14936cccd87cf2fc31842e58f4d1ff
+        # A re-pin is a deliberate commit, never automatic (Phase 45 D-03).
+        # No `command:` key: the image entrypoint appends /data itself.
+        image: rustfs/rustfs:1.0.0
         ports:
           - 9010:9000
-          - 9011:9001
         env:
-          MINIO_ROOT_USER: testuser
-          MINIO_ROOT_PASSWORD: testpass123
+          RUSTFS_ACCESS_KEY: testuser
+          RUSTFS_SECRET_KEY: testpass123
+          RUSTFS_CONSOLE_ENABLE: "false"
         options: >-
-          --health-cmd "curl -f http://localhost:9000/minio/health/live"
-          --health-interval 30s
-          --health-timeout 20s
-          --health-retries 3
-        # MinIO requires an explicit command argument to start as a server
-        # (matches integration-tests.yml's identical MinIO block); actionlint
-        # flags `command` as an unrecognized `services` key against its
-        # strict schema, but GitHub Actions applies it at runtime. See
-        # .github/actionlint.yaml for the narrowly-scoped suppression.
-        command: server /data --console-address ":9001"
+          --health-cmd "curl -f http://localhost:9000/health/ready"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+          --health-start-period 5s
 
     steps:
       - name: Checkout code
@@ -1451,31 +1567,6 @@ jobs:
         with:
           cache-on-failure: true
 
-      # MinIO retired its community binary downloads; its former community download host
-      # answered HTTP 410 Gone for the mc binary on 2026-09-13. The binary is now fetched
-      # from the archived github.com/minio/mc repository's release assets (assets on
-      # archived repositories remain downloadable), pinned to the same release the quay.io
-      # client image from quick task 260913-15w already carries. The checksum is the one
-      # published as that release's own .sha256sum asset. Long-term replacement tracked in .planning/todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md
-      - name: Install MinIO Client
-        run: |
-          set -euo pipefail
-          MC_RELEASE="RELEASE.2025-08-13T08-35-41Z"
-          MC_SHA256="01f866e9c5f9b87c2b09116fa5d7c06695b106242d829a8bb32990c00312e891"
-          # Retry transient CDN/5xx errors (a 504 here killed a whole run on 2026-09-14).
-          curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o mc \
-            "https://github.com/minio/mc/releases/download/${MC_RELEASE}/mc.linux-amd64.${MC_RELEASE}"
-          echo "${MC_SHA256}  mc" | sha256sum -c -
-          chmod +x mc
-          sudo mv mc /usr/local/bin/mc
-
-      - name: Setup MinIO buckets
-        run: |
-          mc alias set testminio http://localhost:9010 testuser testpass123
-          mc mb testminio/test-bucket --ignore-existing
-          mc mb testminio/integration-tests --ignore-existing
-          echo "MinIO buckets created successfully"
-
       - name: Wait for services
         run: |
           echo "Waiting for Redis..."
@@ -1487,10 +1578,10 @@ jobs:
             sleep 1
           done
 
-          echo "Waiting for MinIO..."
+          echo "Waiting for RustFS..."
           for _ in {1..30}; do
-            if curl -f http://localhost:9010/minio/health/live; then
-              echo "MinIO is ready"
+            if curl -f http://localhost:9010/health/ready; then
+              echo "RustFS is ready"
               break
             fi
             sleep 1
@@ -1614,6 +1705,42 @@ jobs:
             exit 1
           fi
           echo "cli-tests executed $executed test(s)"
+
+  # Consumer-surface muster (SURFACE-03, D-10) — a dedicated job, not a step inside
+  # another job, so a red muster is attributable at a glance in the PR checks list:
+  # "Consumer-Surface Muster" failing names the downstream-consumer contract
+  # (`tests/consumer_surface_muster.rs`) rather than surfacing as a generic compile
+  # error inside `Code Quality`. It is attribution, not a new merge gate: the muster
+  # also compiles inside the required `Code Quality` clippy step
+  # (`--all-targets --all-features`). The test target declares `required-features`, but
+  # `make check-consumer-surface` selects it with an explicit `--test`, which makes Cargo
+  # fail loudly (not skip) if those features are off. The zero-tests guard below is a
+  # backstop for the other way to run nothing: the target compiling but reporting no
+  # passed tests (an emptied target, or a changed `test result:` line).
+  consumer-surface:
+    name: Consumer-Surface Muster
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Consumer-surface muster (make check-consumer-surface)
+        shell: bash
+        run: |
+          set -o pipefail
+          make check-consumer-surface 2>&1 | tee consumer-surface-output.log
+          executed=$(grep -oE 'test result: ok\. [0-9]+ passed' consumer-surface-output.log | tail -1 | grep -oE '[0-9]+' || true)
+          if [ -z "$executed" ] || [ "$executed" -eq 0 ]; then
+            echo "::error::consumer-surface reported zero executed tests. The consumer_surface_muster target compiled but no 'test result: ok. N passed' line was found, so the target is empty or the test harness output changed."
+            exit 1
+          fi
+          echo "consumer-surface executed $executed test(s)"
 
   # Benchmark compile-check (PIPE-01) — compiles every [[bench]] target without
   # executing it: no Criterion runtime, no performance numbers, no timing
@@ -1800,23 +1927,23 @@ jobs:
             --from-literal=OPENAI_API_KEY=dummy \
             --from-literal=DEEPSEEK_API_KEY=dummy \
             --from-literal=ANTHROPIC_API_KEY=dummy \
-            --from-literal=MINIO_ROOT_USER=minioadmin \
-            --from-literal=MINIO_ROOT_PASSWORD=minioadmin \
-            --from-literal=MINIO_ACCESS_KEY=paladin \
-            --from-literal=MINIO_SECRET_KEY=paladin-secret \
+            --from-literal=RUSTFS_ACCESS_KEY=smokeadmin \
+            --from-literal=RUSTFS_SECRET_KEY=smokepass123 \
+            --from-literal=MINIO_ACCESS_KEY=smokeadmin \
+            --from-literal=MINIO_SECRET_KEY=smokepass123 \
             -n paladin
 
       - name: Apply Kubernetes manifests
         run: |
           kubectl apply -f k8s/configmap.yaml
           kubectl apply -f k8s/redis.yaml
-          kubectl apply -f k8s/minio.yaml
+          kubectl apply -f k8s/rustfs.yaml
           sleep 20
 
       - name: Wait for dependencies
         run: |
           kubectl wait --for=condition=ready pod -l app=redis -n paladin --timeout=120s
-          kubectl wait --for=condition=ready pod -l app=minio -n paladin --timeout=120s
+          kubectl wait --for=condition=ready pod -l app=rustfs -n paladin --timeout=120s
 
       - name: Build and load Docker image
         run: |
@@ -1873,8 +2000,9 @@ jobs:
           kubectl logs -l app=paladin -n paladin --tail=200 || true
           echo "=== Redis Logs ==="
           kubectl logs -l app=redis -n paladin --tail=100 || true
-          echo "=== MinIO Logs ==="
-          kubectl logs -l app=minio -n paladin --tail=100 || true
+          # RustFS logs mostly to files at `warn`, so this dump is thin.
+          echo "=== RustFS Logs ==="
+          kubectl logs -l app=rustfs -n paladin --tail=100 || true
           echo "=== Events ==="
           kubectl get events -n paladin --sort-by='.lastTimestamp'
 
@@ -1894,8 +2022,8 @@ jobs:
       - name: Create environment file
         run: |
           cat > docker/.env << 'EOF'
-          MINIO_ROOT_USER=e2euser
-          MINIO_ROOT_PASSWORD=e2epassword123
+          RUSTFS_ACCESS_KEY=e2euser
+          RUSTFS_SECRET_KEY=e2epassword123
           REDIS_PASSWORD=e2eredispass
           LLM_API_KEY=test-key
           EOF
@@ -1910,18 +2038,19 @@ jobs:
           # Check Redis
           docker compose -f docker/docker-compose.yml exec -T redis redis-cli -a "${REDIS_PASSWORD:-changeme}" --no-auth-warning ping
 
-          # Check MinIO
-          curl -f http://localhost:9000/minio/health/live
+          # Check RustFS
+          curl -f http://localhost:9000/health/ready
 
           # Check application (if health endpoint exists)
           timeout 60 bash -c 'until curl -f http://localhost:8080/health 2>/dev/null; do sleep 2; done' || echo "App health check skipped"
 
       - name: Run end-to-end tests
         run: |
-          # Run integration tests against the deployed test services (MinIO + Redis)
-          # Tests are marked #[ignore] to skip in unit-test runs; --ignored opts them in here
+          # Run the file storage contract suite against the test compose services (RustFS + Redis)
+          # Tests are marked #[ignore] to skip in unit-test runs; --ignored opts them in here.
+          # `s3-storage` is required: without it the filter matches zero tests and passes.
           docker compose -f docker/docker-compose.test.yml run --rm integration-tests \
-            cargo test file_storage_integration_tests --test lib -- --ignored --test-threads=1 --nocapture
+            cargo test --test lib --features integration-tests,s3-storage file_storage_integration_tests -- --ignored --test-threads=1 --nocapture
 
       - name: Collect logs
         if: failure()

@@ -1,7 +1,7 @@
 //! # The authoritative trace model (OBS-01; PRD 07 §2.1, D-01/D-02)
 //!
 //! [`TraceEvent`](crate::platform::container::trace::TraceEvent) is the
-//! twelve-variant, `#[non_exhaustive]` set of observability events the
+//! thirteen-variant, `#[non_exhaustive]` set of observability events the
 //! superstep engine and its below-the-engine producers (`FallbackLlmAdapter`,
 //! the facade's middleware chain, `PaladinExecutionService`) emit.
 //! [`TraceRecord`](crate::platform::container::trace::TraceRecord) is the
@@ -57,13 +57,17 @@
 //! variants carry is unchanged from the PRD's intent, only the JSON key
 //! avoids the collision. A round-trip test
 //! (`record_serializes_as_one_flat_object` and
-//! `all_twelve_event_variants_construct`'s serialization proves) would have
+//! `all_thirteen_event_variants_construct`'s serialization proves) would have
 //! caught this at once had it gone unfixed.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::platform::container::allowance::{
+    AllowanceLimitKind, AllowanceScopeKind, AllowanceWarning, HaltReason,
+};
 use crate::platform::container::battlefield::FieldName;
+use crate::platform::container::cost::Cost;
 use crate::platform::container::parley::{ParleyId, ParleyKind};
 use crate::platform::container::run::RunId;
 use crate::platform::container::token_usage::TokenUsage;
@@ -152,20 +156,27 @@ pub enum MiddlewareAction {
 
 /// The terminal status a run finished under (D-04), reported on
 /// [`TraceEvent::RunFinished`].
+///
+/// `#[non_exhaustive]` (Phase 42 D-05, ADR-0057): this set can grow, so every
+/// `match` over it outside this crate must carry a wildcard arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum RunFinishStatus {
     /// The run completed normally.
     Completed,
     /// The run failed.
     Failed,
-    /// The run was halted (e.g. a graceful-shutdown grace deadline).
+    /// The run was halted (e.g. a graceful-shutdown grace deadline, or a
+    /// Treasurer spend halt carrying a `halt_reason`).
     Halted,
+    /// A caller asked for the run to stop; recorded `Cancelled` on the run row.
+    Cancelled,
     /// The run suspended awaiting external (Parley) input.
     AwaitingInput,
 }
 
-/// One typed observability event (OBS-01, PRD 07 §2.1): the twelve-variant
+/// One typed observability event (OBS-01, PRD 07 §2.1): the thirteen-variant
 /// authoritative list every sink, the OTel exporter, the SSE bridge, the
 /// `run_traces` persistence layer, the graph inspector and the
 /// `paladin-eval` harness read.
@@ -186,6 +197,11 @@ pub enum TraceEvent {
     RunStarted {
         /// The run this start belongs to, when known (a bare engine with no
         /// Platform API run wrapping it has no run identity).
+        ///
+        /// Never serialized from here: a [`TraceRecord`] writes the run
+        /// identity once, as its own `run_id` key, and this field is read
+        /// back from that same key.
+        #[serde(default, skip_serializing)]
         run_id: Option<RunId>,
         /// The starting graph's fingerprint (`WarGraph::fingerprint`).
         graph_fingerprint: String,
@@ -246,6 +262,33 @@ pub enum TraceEvent {
         /// Token usage for this attempt (ACCT-02, D-07, D-11).
         /// `TokenUsage::default()` for a non-Paladin node or a cache hit.
         usage: TokenUsage,
+        /// This attempt's currency cost, as priced at the `LlmPort` boundary
+        /// (D-09, D-10). `None` for a non-Paladin node, a cache hit, a
+        /// failed attempt, or a Paladin attempt whose model had no
+        /// configured price row -- never a fabricated zero (D-00c).
+        /// `#[serde(default)]` so a `run_traces` row persisted before this
+        /// field existed deserializes with `cost == None`, byte-identical
+        /// to the pre-field JSON shape (the `served_by`/D-25 precedent).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cost: Option<Cost>,
+        /// The reasoning effort this attempt asked for, as its adapter
+        /// recorded it under `paladin.reasoning_requested` (D-11,
+        /// REASON-05), spelled as `ReasoningEffort`'s `Display`. Read only
+        /// from the attempt's own response metadata, never from the agent's
+        /// configured value. `None` for a non-Paladin node, a cache hit, a
+        /// failed attempt, or a run with no effort in force.
+        /// `#[serde(default)]` so a `run_traces` row persisted before this
+        /// field existed deserializes with `reasoning_requested == None`,
+        /// and a `None` emits no key (the `cost` precedent).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning_requested: Option<String>,
+        /// The reasoning effort this attempt actually ran with, as its
+        /// adapter recorded it under `paladin.reasoning_effective` (D-11,
+        /// REASON-05): equal to `reasoning_requested` unless the request's
+        /// fallback substituted a neighbouring level. `None` in the same
+        /// cases as `reasoning_requested`. Same serde treatment.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reasoning_effective: Option<String>,
         /// Whether this attempt's outcome was served from the node cache
         /// (FT-06) instead of by executing the node.
         cache_hit: bool,
@@ -301,6 +344,30 @@ pub enum TraceEvent {
         /// `TraceDispatcher` saw, exact the instant the final `emit`
         /// returns (ACCT-02, D-07, D-11).
         usage: TokenUsage,
+        /// This run's total currency cost, as folded by
+        /// `TraceDispatcher::total_cost()` through `CostTally` over every
+        /// `NodeFinished.cost` this run's `TraceDispatcher` saw (D-10,
+        /// D-11a). `None` when nothing in the run was priced or any priced
+        /// call was unpriced -- never a partial sum. `#[serde(default)]` so
+        /// a `run_traces` row persisted before this field existed
+        /// deserializes with `cost == None`, byte-identical to the
+        /// pre-field JSON shape (the `served_by`/D-25 precedent).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cost: Option<Cost>,
+        /// Why the run halted, when the engine's spend guard halted it on a
+        /// Treasurer reason (`allowance_exhausted` or `ledger_unavailable`,
+        /// D-05, D-19): the reason is named at the source, by the engine's
+        /// own terminal event. `None` for every other finish (completed,
+        /// failed, awaiting input, a caller cancel, a token halt) and for
+        /// every row persisted before this field existed.
+        /// `#[serde(default)]` so a `run_traces` row persisted before this
+        /// field existed deserializes with `halt_reason == None`, and
+        /// `skip_serializing_if` keeps a reason-less event byte-identical to
+        /// the pre-field JSON shape (the `cost` precedent). The reason
+        /// serializes as a nested object under its own key: its `reason`
+        /// tag never collides with the record's `kind` tag.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        halt_reason: Option<HaltReason>,
         /// Total wall-clock duration of this run, in milliseconds.
         duration_ms: u64,
         /// The dispatching `TraceDispatcher`'s own drop count at the moment
@@ -332,6 +399,45 @@ pub enum TraceEvent {
         /// The action taken.
         action: MiddlewareAction,
     },
+    /// A Treasurer allowance warn threshold was crossed at admission (D-18, ALLOW-04) --
+    /// emitted once per won notice on the admitted run's own stream, before `RunStarted`.
+    ///
+    /// Carries the D-13 figures, the window and the threshold only -- never a tenant id, an
+    /// API key name or an API key value.
+    AllowanceWarning {
+        /// Which identity the ceiling is held against.
+        scope_kind: AllowanceScopeKind,
+        /// Which kind of limit the ceiling is.
+        limit_kind: AllowanceLimitKind,
+        /// The balance read when the warning fired.
+        balance: Cost,
+        /// The ceiling the balance is approaching.
+        ceiling: Cost,
+        /// The window's start (inclusive); `None` for a lifetime ceiling.
+        #[serde(default)]
+        window_start: Option<DateTime<Utc>>,
+        /// The window's end (exclusive); `None` for a lifetime ceiling.
+        #[serde(default)]
+        window_end: Option<DateTime<Utc>>,
+        /// The configured warn threshold, in whole percent of the ceiling.
+        warn_at: u8,
+    },
+}
+
+impl From<AllowanceWarning> for TraceEvent {
+    /// Lift a won allowance warning into the trace model (D-18); the inverse is
+    /// [`AllowanceWarning::from_trace_event`].
+    fn from(warning: AllowanceWarning) -> Self {
+        TraceEvent::AllowanceWarning {
+            scope_kind: warning.scope_kind,
+            limit_kind: warning.limit_kind,
+            balance: warning.balance,
+            ceiling: warning.ceiling,
+            window_start: warning.window_start,
+            window_end: warning.window_end,
+            warn_at: warning.warn_at,
+        }
+    }
 }
 
 /// The envelope every [`TraceSink`](crate) actually receives (D-02): wraps
@@ -344,12 +450,18 @@ pub enum TraceEvent {
 /// SINGLE flat JSON object (never a nested `{"envelope": …, "event": {…}}`
 /// shape) — OBS-FR-04's "one line per event", with `thread_id`/`seq`/`kind`
 /// among the first keys so a log line is grep-able by any of the three.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// The run identity is written under exactly one `run_id` key. The envelope
+/// and [`TraceEvent::RunStarted`] both carry one, and a flat object naming the
+/// key twice cannot be read back, so the record writes the envelope's value
+/// (falling back to the event's when only the event knows it) and both fields
+/// are read from that one key. A record whose two sides named different runs
+/// therefore reads back naming the written one on both.
+#[derive(Debug, Clone, PartialEq)]
 pub struct TraceRecord {
     /// The thread (run) this record belongs to.
     pub thread_id: ThreadId,
     /// The Platform API run this record belongs to, when known.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<RunId>,
     /// This record's 1-based position within its dispatcher's own sequence.
     /// Strictly increasing and gapless within one run when nothing was
@@ -359,8 +471,100 @@ pub struct TraceRecord {
     /// when a sink observed it).
     pub at: DateTime<Utc>,
     /// The event itself.
-    #[serde(flatten)]
     pub event: TraceEvent,
+}
+
+/// The borrowed wire shape of a [`TraceRecord`]: the key order every sink and
+/// persisted row has always had, with the run identity under one key.
+#[derive(Serialize)]
+struct TraceRecordWire<'a> {
+    thread_id: &'a ThreadId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    run_id: Option<&'a RunId>,
+    seq: u64,
+    at: &'a DateTime<Utc>,
+    #[serde(flatten)]
+    event: &'a TraceEvent,
+}
+
+impl Serialize for TraceRecord {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let event_run_id = match &self.event {
+            TraceEvent::RunStarted { run_id, .. } => run_id.as_ref(),
+            _ => None,
+        };
+        TraceRecordWire {
+            thread_id: &self.thread_id,
+            run_id: self.run_id.as_ref().or(event_run_id),
+            seq: self.seq,
+            at: &self.at,
+            event: &self.event,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for TraceRecord {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+
+        /// Collects one flat record object, tolerating the doubled `run_id`
+        /// key rows written before the single-key shape carry: the first
+        /// non-null value is kept.
+        struct FlatRecord;
+
+        impl<'de> serde::de::Visitor<'de> for FlatRecord {
+            type Value = serde_json::Map<String, serde_json::Value>;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a flat trace record object")
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut access: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut fields = serde_json::Map::new();
+                while let Some((key, value)) = access.next_entry::<String, serde_json::Value>()? {
+                    let keeps_earlier = key == "run_id"
+                        && fields
+                            .get("run_id")
+                            .is_some_and(|earlier| !earlier.is_null());
+                    if !keeps_earlier {
+                        fields.insert(key, value);
+                    }
+                }
+                Ok(fields)
+            }
+        }
+
+        fn take<T: serde::de::DeserializeOwned, E: Error>(
+            fields: &mut serde_json::Map<String, serde_json::Value>,
+            key: &'static str,
+        ) -> Result<T, E> {
+            let value = fields.remove(key).ok_or_else(|| E::missing_field(key))?;
+            serde_json::from_value(value).map_err(E::custom)
+        }
+
+        let mut fields = deserializer.deserialize_map(FlatRecord)?;
+        let thread_id = take(&mut fields, "thread_id")?;
+        let seq = take(&mut fields, "seq")?;
+        let at = take(&mut fields, "at")?;
+        // Left in `fields`: `RunStarted` reads its own `run_id` from this key too.
+        let run_id = match fields.get("run_id") {
+            Some(value) => serde_json::from_value(value.clone()).map_err(D::Error::custom)?,
+            None => None,
+        };
+        let event =
+            serde_json::from_value(serde_json::Value::Object(fields)).map_err(D::Error::custom)?;
+        Ok(Self {
+            thread_id,
+            run_id,
+            seq,
+            at,
+            event,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -371,11 +575,70 @@ mod tests {
         ThreadId::new("t1").unwrap()
     }
 
-    /// D-02: `TraceEvent` has exactly twelve variants; this test builds one
+    fn sample_warning() -> AllowanceWarning {
+        use crate::platform::container::cost::CurrencyCode;
+        use chrono::TimeZone;
+        let usd = CurrencyCode::new("USD").unwrap();
+        AllowanceWarning {
+            scope_kind: AllowanceScopeKind::ApiKey,
+            limit_kind: AllowanceLimitKind::Window,
+            balance: Cost::new(20_500_000_000, usd.clone()),
+            ceiling: Cost::new(25_000_000_000, usd),
+            window_start: Utc.with_ymd_and_hms(2026, 10, 2, 0, 0, 0).single(),
+            window_end: Utc.with_ymd_and_hms(2026, 10, 3, 0, 0, 0).single(),
+            warn_at: 80,
+        }
+    }
+
+    /// D-18: the allowance event serializes with `kind = "allowance_warning"`, carries no
+    /// tenant or key field, and round-trips through its flattened record envelope.
+    #[test]
+    fn allowance_warning_event_round_trips_with_kind_allowance_warning() {
+        let record = TraceRecord {
+            thread_id: thread(),
+            run_id: Some(RunId::new_v7()),
+            seq: 1,
+            at: Utc::now(),
+            event: TraceEvent::from(sample_warning()),
+        };
+        let json = serde_json::to_string(&record).unwrap();
+        assert!(json.contains("\"kind\":\"allowance_warning\""), "{json}");
+        assert!(
+            !json.contains("tenant_id") && !json.contains("api_key_id"),
+            "{json}"
+        );
+        let back: TraceRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, record);
+        assert_eq!(
+            AllowanceWarning::from_trace_event(&back.event),
+            Some(sample_warning())
+        );
+    }
+
+    /// A lifetime warning (no window bounds) round-trips with the bounds absent.
+    #[test]
+    fn allowance_warning_event_without_window_bounds_defaults_to_none() {
+        let json = r#"{"kind":"allowance_warning","scope_kind":"tenant","limit_kind":"lifetime",
+            "balance":{"nanos":80,"currency":"USD"},"ceiling":{"nanos":100,"currency":"USD"},
+            "warn_at":80}"#;
+        let event: TraceEvent = serde_json::from_str(json).unwrap();
+        match event {
+            TraceEvent::AllowanceWarning {
+                window_start,
+                window_end,
+                ..
+            } => {
+                assert!(window_start.is_none() && window_end.is_none());
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    /// D-02 / D-18: `TraceEvent` has exactly thirteen variants; this test builds one
     /// of each and the `match` below (with its wildcard arm) must compile,
     /// proving `#[non_exhaustive]` discipline holds.
     #[test]
-    fn all_twelve_event_variants_construct() {
+    fn all_thirteen_event_variants_construct() {
         let events = vec![
             TraceEvent::RunStarted {
                 run_id: Some(RunId::new_v7()),
@@ -402,6 +665,9 @@ mod tests {
                 outcome: NodeOutcomeKind::Succeeded,
                 duration_ms: 5,
                 usage: TokenUsage::default(),
+                cost: None,
+                reasoning_requested: None,
+                reasoning_effective: None,
                 cache_hit: false,
             },
             TraceEvent::EdgeEvaluated {
@@ -434,6 +700,8 @@ mod tests {
                 status: RunFinishStatus::Completed,
                 total_supersteps: 1,
                 usage: TokenUsage::default(),
+                cost: None,
+                halt_reason: None,
                 duration_ms: 5,
                 trace_dropped_total: 0,
             },
@@ -446,13 +714,14 @@ mod tests {
                 name: "limit".to_string(),
                 action: MiddlewareAction::Finish,
             },
+            TraceEvent::from(sample_warning()),
         ];
-        assert_eq!(events.len(), 12);
+        assert_eq!(events.len(), 13);
         for event in &events {
             // Every match over `TraceEvent` anywhere in the WORKSPACE must
             // carry a wildcard arm (`#[non_exhaustive]` only enforces this
             // for downstream crates; within this defining crate the match
-            // below is already exhaustive over the twelve known variants,
+            // below is already exhaustive over the thirteen known variants,
             // so no wildcard arm is added here — adding one would be an
             // unreachable-pattern warning under `-D warnings`).
             let _name = match event {
@@ -468,6 +737,7 @@ mod tests {
                 TraceEvent::RunFinished { .. } => "run_finished",
                 TraceEvent::FallbackHop { .. } => "fallback_hop",
                 TraceEvent::MiddlewareEvent { .. } => "middleware_event",
+                TraceEvent::AllowanceWarning { .. } => "allowance_warning",
             };
         }
     }
@@ -549,8 +819,328 @@ mod tests {
         }
     }
 
+    /// A `run_started` record of a Platform API run names its run on both the
+    /// envelope and the event. It serializes that run under ONE `run_id` key
+    /// (a JSON object with the key twice cannot be read back) and round-trips
+    /// with both fields intact.
+    #[test]
+    fn run_started_record_serializes_one_run_id_key_and_round_trips() {
+        let run_id = RunId::new_v7();
+        let record = TraceRecord {
+            thread_id: thread(),
+            run_id: Some(run_id.clone()),
+            seq: 2,
+            at: Utc::now(),
+            event: TraceEvent::RunStarted {
+                run_id: Some(run_id),
+                graph_fingerprint: "agent".to_string(),
+            },
+        };
+        let json = serde_json::to_string(&record).unwrap();
+        assert_eq!(json.matches("\"run_id\"").count(), 1, "{json}");
+        let restored: TraceRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, record);
+    }
+
+    /// A run identity known only to the event still reaches the wire, and a
+    /// `run_started` with no run identity at all emits no `run_id` key.
+    #[test]
+    fn run_started_run_id_is_written_once_from_whichever_side_knows_it() {
+        let run_id = RunId::new_v7();
+        let mut record = TraceRecord {
+            thread_id: thread(),
+            run_id: None,
+            seq: 1,
+            at: Utc::now(),
+            event: TraceEvent::RunStarted {
+                run_id: Some(run_id.clone()),
+                graph_fingerprint: "fp".to_string(),
+            },
+        };
+        let json = serde_json::to_string(&record).unwrap();
+        assert_eq!(json.matches("\"run_id\"").count(), 1, "{json}");
+        let restored: TraceRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.run_id, Some(run_id.clone()));
+        assert!(matches!(
+            restored.event,
+            TraceEvent::RunStarted { run_id: Some(ref id), .. } if *id == run_id
+        ));
+
+        record.event = TraceEvent::RunStarted {
+            run_id: None,
+            graph_fingerprint: "fp".to_string(),
+        };
+        let json = serde_json::to_string(&record).unwrap();
+        assert!(!json.contains("\"run_id\""), "{json}");
+        let restored: TraceRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, record);
+    }
+
+    /// A `run_traces` row written before the single-key fix carries `run_id`
+    /// twice (envelope, then event). It still reads back, the non-null value
+    /// winning over a `null` twin.
+    #[test]
+    fn run_started_row_with_a_duplicate_run_id_key_still_deserializes() {
+        let run = "01a10c98-708f-70c1-bedf-6e3af0f44996";
+        let both = format!(
+            r#"{{"thread_id":"t1","run_id":"{run}","seq":2,"at":"2026-10-05T15:04:39.458831748Z","kind":"run_started","run_id":"{run}","graph_fingerprint":"agent"}}"#
+        );
+        let record: TraceRecord = serde_json::from_str(&both).unwrap();
+        assert_eq!(record.run_id.as_ref().map(RunId::as_str), Some(run));
+        assert!(matches!(
+            record.event,
+            TraceEvent::RunStarted { run_id: Some(ref id), .. } if id.as_str() == run
+        ));
+
+        let null_twin = format!(
+            r#"{{"thread_id":"t1","run_id":"{run}","seq":2,"at":"2026-10-05T15:04:39Z","kind":"run_started","run_id":null,"graph_fingerprint":"agent"}}"#
+        );
+        let record: TraceRecord = serde_json::from_str(&null_twin).unwrap();
+        assert_eq!(record.run_id.as_ref().map(RunId::as_str), Some(run));
+    }
+
     #[test]
     fn trace_schema_version_is_one() {
         assert_eq!(TRACE_SCHEMA_VERSION, "1");
+    }
+
+    /// D-10: a `run_traces` row written before `cost` existed on either
+    /// `NodeFinished` or `RunFinished` -- no `cost` key at all -- round-trips
+    /// with `cost == None` on both, byte-identical to the pre-field JSON
+    /// shape (the `served_by`/D-25 precedent).
+    #[test]
+    fn node_and_run_finished_without_cost_key_deserialize_to_none() {
+        let node_json = r#"{"thread_id":"t1","seq":1,"at":"2026-01-01T00:00:00Z","kind":"node_finished","superstep":1,"node_id":"n1","attempt":1,"outcome":"Succeeded","duration_ms":5,"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0,"cache_read_tokens":null,"cache_write_tokens":null,"reasoning_tokens":null},"cache_hit":false}"#;
+        let node_record: TraceRecord = serde_json::from_str(node_json).unwrap();
+        match node_record.event {
+            TraceEvent::NodeFinished { cost, .. } => assert_eq!(cost, None),
+            other => panic!("expected NodeFinished, got {other:?}"),
+        }
+
+        let run_json = r#"{"thread_id":"t1","seq":2,"at":"2026-01-01T00:00:00Z","kind":"run_finished","status":"completed","total_supersteps":1,"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0,"cache_read_tokens":null,"cache_write_tokens":null,"reasoning_tokens":null},"duration_ms":5,"trace_dropped_total":0}"#;
+        let run_record: TraceRecord = serde_json::from_str(run_json).unwrap();
+        match run_record.event {
+            TraceEvent::RunFinished { cost, .. } => assert_eq!(cost, None),
+            other => panic!("expected RunFinished, got {other:?}"),
+        }
+    }
+
+    /// D-11: `NodeFinished` with both reasoning fields `None` serialises
+    /// with neither key (byte-identical to the pre-field shape); a row
+    /// written before the fields existed deserialises with both `None`;
+    /// `Some` values round-trip.
+    #[test]
+    fn node_finished_reasoning_fields_are_skipped_when_none_and_default_on_read() {
+        let node_json = r#"{"thread_id":"t1","seq":1,"at":"2026-01-01T00:00:00Z","kind":"node_finished","superstep":1,"node_id":"n1","attempt":1,"outcome":"Succeeded","duration_ms":5,"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0,"cache_read_tokens":null,"cache_write_tokens":null,"reasoning_tokens":null},"cache_hit":false}"#;
+        let record: TraceRecord = serde_json::from_str(node_json).unwrap();
+        match &record.event {
+            TraceEvent::NodeFinished {
+                reasoning_requested,
+                reasoning_effective,
+                ..
+            } => {
+                assert_eq!(*reasoning_requested, None);
+                assert_eq!(*reasoning_effective, None);
+            }
+            other => panic!("expected NodeFinished, got {other:?}"),
+        }
+        let reserialised = serde_json::to_string(&record).unwrap();
+        assert!(
+            !reserialised.contains("reasoning_requested")
+                && !reserialised.contains("reasoning_effective"),
+            "a None pair must emit neither key: {reserialised}"
+        );
+
+        let set = TraceRecord {
+            event: TraceEvent::NodeFinished {
+                superstep: 1,
+                node_id: NodeId::new("n1"),
+                attempt: 1,
+                outcome: NodeOutcomeKind::Succeeded,
+                duration_ms: 5,
+                usage: TokenUsage::default(),
+                cost: None,
+                reasoning_requested: Some("high".to_string()),
+                reasoning_effective: Some("medium".to_string()),
+                cache_hit: false,
+            },
+            ..record
+        };
+        let json = serde_json::to_string(&set).unwrap();
+        assert!(json.contains(r#""reasoning_requested":"high""#), "{json}");
+        assert!(json.contains(r#""reasoning_effective":"medium""#), "{json}");
+        let back: TraceRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, set);
+    }
+
+    /// D-10: a `TraceRecord` whose `RunFinished.cost` is `Some` serializes
+    /// to one flat object containing a `cost` object with `nanos` and
+    /// `currency` -- the line `LogTraceSink` writes -- while a `None` cost
+    /// emits no `cost` key at all.
+    #[test]
+    fn priced_run_finished_serializes_cost_object() {
+        use crate::platform::container::cost::{Cost, CurrencyCode};
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let priced = TraceRecord {
+            thread_id: thread(),
+            run_id: None,
+            seq: 1,
+            at: Utc::now(),
+            event: TraceEvent::RunFinished {
+                status: RunFinishStatus::Completed,
+                total_supersteps: 1,
+                usage: TokenUsage::default(),
+                cost: Some(Cost::new(42_500, usd)),
+                halt_reason: None,
+                duration_ms: 5,
+                trace_dropped_total: 0,
+            },
+        };
+        let json = serde_json::to_string(&priced).unwrap();
+        assert!(
+            json.contains(r#""cost":{"nanos":42500,"currency":"USD"}"#),
+            "priced cost must serialize as one flat nanos/currency object: {json}"
+        );
+
+        let unpriced = TraceRecord {
+            thread_id: thread(),
+            run_id: None,
+            seq: 2,
+            at: Utc::now(),
+            event: TraceEvent::RunFinished {
+                status: RunFinishStatus::Completed,
+                total_supersteps: 1,
+                usage: TokenUsage::default(),
+                cost: None,
+                halt_reason: None,
+                duration_ms: 5,
+                trace_dropped_total: 0,
+            },
+        };
+        let unpriced_json = serde_json::to_string(&unpriced).unwrap();
+        assert!(
+            !unpriced_json.contains("\"cost\""),
+            "a None cost must emit no cost key: {unpriced_json}"
+        );
+    }
+
+    /// A `RunFinished` carrying no halt reason.
+    fn run_finished(halt_reason: Option<HaltReason>) -> TraceEvent {
+        TraceEvent::RunFinished {
+            status: RunFinishStatus::Halted,
+            total_supersteps: 2,
+            usage: TokenUsage::default(),
+            cost: None,
+            halt_reason,
+            duration_ms: 5,
+            trace_dropped_total: 0,
+        }
+    }
+
+    fn sample_halt_reason() -> HaltReason {
+        use crate::platform::container::allowance::AllowanceRefusal;
+        use crate::platform::container::cost::CurrencyCode;
+        use chrono::TimeZone;
+        let usd = CurrencyCode::new("USD").unwrap();
+        HaltReason::AllowanceExhausted(AllowanceRefusal {
+            scope_kind: AllowanceScopeKind::ApiKey,
+            limit_kind: AllowanceLimitKind::Window,
+            balance: Cost::new(25_000_000_000, usd.clone()),
+            ceiling: Cost::new(25_000_000_000, usd),
+            window: Utc
+                .with_ymd_and_hms(2026, 10, 2, 0, 0, 0)
+                .single()
+                .zip(Utc.with_ymd_and_hms(2026, 10, 3, 0, 0, 0).single()),
+            evaluated_at: Utc.with_ymd_and_hms(2026, 10, 2, 12, 0, 0).unwrap(),
+        })
+    }
+
+    /// D-05: a `RunFinished` with no halt reason serializes with no
+    /// `halt_reason` key at all -- the same bytes as before the field existed.
+    #[test]
+    fn run_finished_without_halt_reason_serializes_byte_identically() {
+        let record = TraceRecord {
+            thread_id: thread(),
+            run_id: None,
+            seq: 3,
+            at: Utc::now(),
+            event: run_finished(None),
+        };
+        let json = serde_json::to_string(&record).unwrap();
+        assert!(!json.contains("halt_reason"), "{json}");
+        assert!(json.contains(r#""kind":"run_finished""#), "{json}");
+    }
+
+    /// D-05: a literal pre-phase `run_finished` row (no `halt_reason` key)
+    /// reads back with `halt_reason == None`.
+    #[test]
+    fn legacy_run_finished_json_reads_back_with_no_halt_reason() {
+        let legacy = r#"{"thread_id":"t1","seq":2,"at":"2026-01-01T00:00:00Z","kind":"run_finished","status":"halted","total_supersteps":1,"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0,"cache_read_tokens":null,"cache_write_tokens":null,"reasoning_tokens":null},"duration_ms":5,"trace_dropped_total":0}"#;
+        let record: TraceRecord = serde_json::from_str(legacy).unwrap();
+        match record.event {
+            TraceEvent::RunFinished {
+                status,
+                halt_reason,
+                ..
+            } => {
+                assert_eq!(status, RunFinishStatus::Halted);
+                assert_eq!(halt_reason, None);
+            }
+            other => panic!("expected RunFinished, got {other:?}"),
+        }
+    }
+
+    /// D-05, G4: a `RunFinished` with status `cancelled` round-trips, and the
+    /// wire name is the snake_case `cancelled`.
+    #[test]
+    fn run_finished_cancelled_round_trips() {
+        let record = TraceRecord {
+            thread_id: thread(),
+            run_id: None,
+            seq: 4,
+            at: Utc::now(),
+            event: TraceEvent::RunFinished {
+                status: RunFinishStatus::Cancelled,
+                total_supersteps: 1,
+                usage: TokenUsage::default(),
+                cost: None,
+                halt_reason: None,
+                duration_ms: 5,
+                trace_dropped_total: 0,
+            },
+        };
+        let json = serde_json::to_string(&record).unwrap();
+        assert!(json.contains(r#""status":"cancelled""#), "{json}");
+        let back: TraceRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, record);
+    }
+
+    /// D-05 (commit bc9cdf0): a reason round-trips through the hand-written
+    /// record serde, nested under its own key -- its `reason` tag never
+    /// collides with the record's `kind` tag.
+    #[test]
+    fn trace_record_round_trips_a_halt_reason() {
+        for reason in [sample_halt_reason(), HaltReason::LedgerUnavailable] {
+            let record = TraceRecord {
+                thread_id: thread(),
+                run_id: Some(RunId::new_v7()),
+                seq: 9,
+                at: Utc::now(),
+                event: run_finished(Some(reason.clone())),
+            };
+            let json = serde_json::to_string(&record).unwrap();
+            let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+            assert_eq!(value["kind"], "run_finished", "{json}");
+            assert_eq!(value["halt_reason"]["reason"], reason.as_str(), "{json}");
+            assert!(value.get("reason").is_none(), "never flattened: {json}");
+            let back: TraceRecord = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, record);
+            assert_eq!(
+                serde_json::to_string(&back).unwrap(),
+                json,
+                "byte-identical round trip"
+            );
+        }
     }
 }

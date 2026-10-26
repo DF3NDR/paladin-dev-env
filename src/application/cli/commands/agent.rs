@@ -720,7 +720,7 @@ mod tests {
             .build()
             .await
             .expect("builder composition under test should always succeed")
-            .node
+            .data
     }
 
     #[test]
@@ -1113,12 +1113,12 @@ mod tests {
         let builder_once =
             PaladinBuilder::new(llm_port.clone()).system_prompt(&config.system_prompt);
         let builder_once = apply_autonomous_config(builder_once, &config, &args);
-        let data_once = builder_once.build().await.expect("build once").node;
+        let data_once = builder_once.build().await.expect("build once").data;
 
         let builder_twice = PaladinBuilder::new(llm_port).system_prompt(&config.system_prompt);
         let builder_twice = apply_autonomous_config(builder_twice, &config, &args);
         let builder_twice = apply_autonomous_config(builder_twice, &config, &args);
-        let data_twice = builder_twice.build().await.expect("build twice").node;
+        let data_twice = builder_twice.build().await.expect("build twice").data;
 
         assert_eq!(
             data_once.autonomous_planning,

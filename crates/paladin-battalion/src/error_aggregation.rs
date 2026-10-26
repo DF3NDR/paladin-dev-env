@@ -1,14 +1,15 @@
 //! Error Aggregation Utility
 //!
 //! Provides utilities for collecting and aggregating errors during Battalion execution,
-//! particularly for the ContinueOnError strategy.
+//! particularly for patterns that continue past a failed Paladin under
+//! `aegis.on_error = Absorb`.
 
 use paladin_core::platform::container::battalion::BattalionError;
 
 /// Aggregated error information
 ///
 /// Collects multiple errors that occurred during Battalion execution
-/// when using the ContinueOnError strategy.
+/// when a pattern continues past a failed Paladin (`aegis.on_error = Absorb`).
 #[derive(Debug, Clone)]
 pub struct AggregatedError {
     /// Individual errors collected
@@ -296,7 +297,9 @@ mod tests {
         agg.record_success();
         assert!(!agg.has_errors());
 
-        agg.add_error(BattalionError::Timeout(300));
+        agg.add_error(BattalionError::ExecutionError(
+            "Paladin never answered".to_string(),
+        ));
         assert!(agg.has_errors());
     }
 
@@ -308,7 +311,9 @@ mod tests {
         agg.add_error(BattalionError::FormationError(
             "Formation issue".to_string(),
         ));
-        agg.add_error(BattalionError::Timeout(300));
+        agg.add_error(BattalionError::ExecutionError(
+            "Paladin never answered".to_string(),
+        ));
         agg.add_error(BattalionError::ValidationError(
             "Invalid config".to_string(),
         ));
@@ -328,7 +333,9 @@ mod tests {
 
         agg.add_error(BattalionError::PaladinError("Paladin 3 failed".to_string()));
         agg.add_error(BattalionError::PaladinError("Paladin 5 failed".to_string()));
-        agg.add_error(BattalionError::Timeout(300));
+        agg.add_error(BattalionError::ExecutionError(
+            "Paladin never answered".to_string(),
+        ));
 
         assert_eq!(agg.successful_operations, 7);
         assert_eq!(agg.errors.len(), 3);

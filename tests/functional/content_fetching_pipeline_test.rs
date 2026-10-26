@@ -6,8 +6,8 @@ use uuid::Uuid;
 use paladin::application::services::content::content_fetching_service::{
     ContentFetchingService, FetchContent,
 };
-use paladin::core::base::service::node_version_service::{
-    ChangeType, InMemoryNodeVersionRepository,
+use paladin::core::base::service::entity_version_service::{
+    ChangeType, InMemoryEntityVersionRepository,
 };
 use paladin::core::platform::container::content::{ContentItem, ContentType, TextContent};
 use paladin::core::platform::manager::content_service::ContentItemService;
@@ -77,7 +77,7 @@ async fn test_content_fetching_pipeline() {
     println!("🚀 Starting end-to-end content pipeline test...");
 
     // Setup services
-    let repository = Arc::new(InMemoryNodeVersionRepository::new());
+    let repository = Arc::new(InMemoryEntityVersionRepository::new());
     let content_service = ContentItemService::new(repository.clone());
 
     let fetcher = MockContentFetcher;
@@ -278,7 +278,7 @@ async fn test_content_lifecycle_integration() {
     println!("🔄 Testing complete content lifecycle integration...");
 
     // Setup
-    let repository = Arc::new(InMemoryNodeVersionRepository::new());
+    let repository = Arc::new(InMemoryEntityVersionRepository::new());
     let content_service = ContentItemService::new(repository.clone());
 
     // Create initial content
@@ -410,7 +410,7 @@ mod performance_tests {
     async fn test_bulk_content_processing() {
         println!("⚡ Testing bulk content processing performance...");
 
-        let repository = Arc::new(InMemoryNodeVersionRepository::new());
+        let repository = Arc::new(InMemoryEntityVersionRepository::new());
         let content_service = ContentItemService::new(repository.clone());
 
         let start_time = Instant::now();

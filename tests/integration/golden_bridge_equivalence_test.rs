@@ -22,7 +22,7 @@ use paladin_battalion::engine::{
 };
 use paladin_battalion::formation_service::FormationExecutionService;
 use paladin_battalion::phalanx_service::PhalanxExecutionService;
-use paladin_core::base::entity::node::Node;
+use paladin_core::base::entity::Entity;
 use paladin_core::platform::container::battalion::campaign::{
     Campaign, CampaignEdge, EdgeCondition,
 };
@@ -47,7 +47,7 @@ fn make_paladin(name: &str) -> Paladin {
         name: name.to_string(),
         ..Default::default()
     };
-    Node::new(data, Some(name.to_string()))
+    Entity::new(data, Some(name.to_string()))
 }
 
 fn input_field() -> FieldName {

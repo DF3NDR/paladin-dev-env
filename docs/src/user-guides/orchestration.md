@@ -74,17 +74,22 @@ flowchart TD
 **Source:** `crates/paladin-battalion/src/formation_service.rs`
 
 Each Paladin's output becomes the next Paladin's input. Ideal for refinement pipelines
-(extract → analyze → write). If a stage fails, the configured `ErrorStrategy` decides whether
-the chain short-circuits (`FailFast`, the default) or continues.
+(extract → analyze → write). If a stage fails, the Battalion's Aegis `on_error` handler decides
+whether the chain short-circuits (no handler, the default) or continues (`Absorb`).
 
 ```rust
 {{#include ../../../crates/doc-examples/src/orchestration.rs:formation}}
 ```
 
-**Error handling / short-circuit:** with `ErrorStrategy::FailFast` the first failing stage stops
-the Formation and returns the error. With `ContinueOnError`, a failed stage is skipped and its
-input is passed through to the next stage. Keep chains short (≤5) for latency-sensitive paths —
-each stage is one sequential LLM round-trip.
+**Error handling / short-circuit:** with no `on_error` handler (`BattalionConfig.aegis.on_error`
+is `None`) the first failing stage stops the Formation and returns the error; a timed-out attempt
+surfaces as `BattalionError::Node` with a timeout source. With `ErrorHandlerSpec::Absorb`, the
+failure is recorded in `BattalionResult.node_errors`, counted in `paladin_failure_count`, and the
+next Paladin receives an **empty input** — the failed stage's (missing) output is not passed
+through, so design downstream prompts to cope with an empty input. See the
+[Configuration Reference](#configuration-reference) for the full policy. Keep chains short (≤5)
+for latency-sensitive paths — each stage is one sequential LLM round-trip, and each stage's
+timeout is per attempt (a ten-step Formation may run ten times the bound).
 
 ---
 
@@ -238,8 +243,8 @@ returns a `JobId` you can use to query status or cancel.
 
 The `FullQueuePort` trait composes enqueue/dequeue, batch, priority, and management operations
 (`pause_queue`, `resume_queue`, `retry_item`, `purge_failed`, `get_queue_stats`). Retry and
-timeout behavior for battalion execution is controlled by the `battalion.retry` and
-`battalion.default_timeout_seconds` configuration (see [Configuration Reference](#configuration-reference)).
+timeout behavior for battalion execution is controlled in code by `BattalionConfig.aegis`
+(see [Configuration Reference](#configuration-reference)); `config.yml` has no `battalion:` section.
 
 ```rust,ignore
 use paladin_ports::output::queue_port::{FullQueuePort, QueueStats};
@@ -283,25 +288,69 @@ combine events, triggers, and agent execution.
 Battalion execution behavior is configured programmatically through `BattalionConfig`
 (`paladin_core::platform::container::battalion::BattalionConfig`) — there is no `battalion:`
 section in `config.yml` and no `APP_BATTALION_*` environment-variable convention; `ApplicationSettings`
-does not carry a battalion field at all. Set behavior per-Battalion with the builder:
+does not carry a battalion field at all. Fault handling (retry, timeout, error handler) is one
+Aegis policy set with `with_aegis`:
 
 ```rust,ignore
-use paladin_core::platform::container::battalion::{BattalionConfig, ErrorStrategy, RetryPolicy};
+use paladin_core::platform::container::aegis::{
+    Aegis, ErrorHandlerSpec, RetryPolicy, RetryPredicate, TimeoutPolicy,
+};
+use paladin_core::platform::container::battalion::BattalionConfig;
+use paladin_core::platform::container::battlefield::StateDelta;
+use std::time::Duration;
 
-let config = BattalionConfig::new("audited_battalion")
-    .with_timeout(300)                             // seconds; matches the built-in default
-    .with_error_strategy(ErrorStrategy::FailFast)  // FailFast | ContinueOnError | RetryThenContinue
-    .with_retry_policy(RetryPolicy::default());     // max_attempts: 3, base_delay: 100ms,
-                                                     // max_delay: 10s, exponential_backoff + jitter: true
+let config = BattalionConfig::new("audited_battalion").with_aegis(Aegis {
+    // `max_attempts` counts TOTAL attempts, including the first.
+    retry: Some(RetryPolicy {
+        max_attempts: 4,
+        retry_on: RetryPredicate::TransientAndUnknown,
+        ..RetryPolicy::default()
+    }),
+    // Bounds each attempt, never the whole Battalion run.
+    timeout: Some(TimeoutPolicy {
+        run_timeout: Some(Duration::from_secs(300)),
+        idle_timeout: None,
+    }),
+    // `None` fails fast; `Absorb` continues and records `node_errors`.
+    on_error: Some(ErrorHandlerSpec::Absorb {
+        fallback_delta: StateDelta::new(),
+    }),
+    ..Aegis::default()
+});
+config.validate_aegis()?;
 ```
+
+`BattalionConfig::new` uses `Aegis::default()`, which arms no timeout, no retry and no error
+handler. Which fields each pattern honours:
+
+| Pattern | `timeout` | `retry` | `on_error` |
+|---------|-----------|---------|------------|
+| **Formation** | per attempt | yes (`retry_on` gates by transience) | `None` fails fast; `Absorb` continues with an empty input |
+| **Phalanx** | per attempt | yes | `None` fails fast; `Absorb` continues and records `node_errors` |
+| **Campaign** | per attempt | yes | ignored — no continue mode, a failing node fails the run |
+| **Conclave** | every expert and aggregator attempt | count comes from `ConclaveConfig.retry_attempts`; `retry` only shapes the backoff; Transient failures only | not read |
+| **ChainOfCommand, Grove, Council** | not bounded by `aegis` | not read | not read |
+
+`cache` is ignored by every Battalion pattern, and `validate_aegis()` rejects `Route` / `Custom`
+error handlers, `RetryPredicate::Custom` and zero durations (only `Absorb`, or no handler, is
+supported).
+
+**Timeouts are per attempt, not per run.** There is no whole-Battalion wall clock: a ten-step
+Formation may run ten times `run_timeout`, and a retried Paladin gets a fresh bound on every
+attempt. ChainOfCommand and Grove are not bounded by `aegis` at all. A caller that needs a
+whole-run bound wraps `Commander::execute()` in its own `tokio::time::timeout`;
+`CommanderBuilder`'s default is 300 s per attempt.
 
 Phalanx concurrency is set separately via `Phalanx::with_max_concurrency` (see
 [Phalanx — Parallel](#phalanx--parallel)) — it is not a `BattalionConfig` field.
 
 `BattalionResult` (returned by the Formation/Phalanx/Campaign/Commander services) exposes:
 `final_output: String`, `paladin_results: Vec<PaladinResult>`, `status: BattalionStatus`,
-`strategy_used: BattalionStrategy`, `total_tokens: u64`, `per_paladin_times`, and
-`per_paladin_tokens`. (Chain of Command returns a `DelegationResult` instead.)
+`strategy_used: BattalionStrategy`, `total_tokens: u64`, `per_paladin_times`,
+`per_paladin_tokens`, and `node_errors` — one structured entry per absorbed failure carrying the
+Paladin's name as `node_id`, the 1-indexed `attempt`, its `transience` and the typed `source`.
+(Chain of Command returns a `DelegationResult` instead.) The same policy family is described in
+[Fault Tolerance](fault-tolerance.md).
 
 ---
 

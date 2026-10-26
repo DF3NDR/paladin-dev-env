@@ -57,6 +57,7 @@ test_command "cargo-nextest" "cargo nextest --version"
 test_command "cargo-audit" "cargo audit --version"
 test_command "cargo-edit" "cargo set-version --help"
 test_command "cargo-expand" "cargo expand --version"
+test_command "cargo-semver-checks" "cargo semver-checks --version"
 test_command "sqlx-cli" "sqlx --version"
 echo ""
 
@@ -111,10 +112,10 @@ if command -v nc &> /dev/null; then
         echo -e "${YELLOW}⏭️  Redis not running (skipped)${NC}"
     fi
 
-    if docker ps | grep -q minio; then
-        test_command "MinIO connection" "nc -z minio 9000"
+    if docker ps | grep -q rustfs; then
+        test_command "RustFS connection" "nc -z rustfs 9000"
     else
-        echo -e "${YELLOW}⏭️  MinIO not running (skipped)${NC}"
+        echo -e "${YELLOW}⏭️  RustFS not running (skipped)${NC}"
     fi
 
     if docker ps | grep -q mysql; then

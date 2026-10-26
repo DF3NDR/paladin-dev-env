@@ -15,15 +15,20 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 
+use paladin_core::platform::container::allowance::{
+    AllowanceLimitKind, AllowanceRefusal, AllowanceScopeKind, HaltReason,
+};
 use paladin_core::platform::container::assistant::AssistantId;
+use paladin_core::platform::container::cost::{Cost, CurrencyCode};
 use paladin_core::platform::container::parley::{ParleyId, ParleyKind, ParleyResponse};
+use paladin_core::platform::container::principal::{RunAttribution, RunReadScope, TenantId};
 use paladin_core::platform::container::run::{
     AssistantRef, ForkSpec, Run, RunEventKind, RunId, RunStatus, WebhookSpec,
 };
 use paladin_core::platform::container::waypoint::ThreadId;
 use paladin_ports::output::assistant_repository_port::AssistantRepositoryPort;
 use paladin_ports::output::run_repository_port::{
-    RunOutcomeRecord, RunQuery, RunRepositoryError, RunRepositoryPort,
+    RunOutcomeRecord, RunPage, RunQuery, RunRepositoryError, RunRepositoryPort,
 };
 
 use crate::assistant::contract_tests::sample_new_version as sample_assistant_new_version;
@@ -410,8 +415,14 @@ pub async fn list_filters_by_thread_assistant_and_status(port: &dyn RunRepositor
     assert_eq!(by_assistant.items.len(), 1);
     assert_eq!(by_assistant.items[0].run_id, run_b.run_id);
 
+    // The status filter is asserted within this test's own threads: the Postgres suite shares
+    // one database across every contract clause (`--test-threads=1`, no truncation), and other
+    // clauses legitimately leave `Running` runs behind (`insert_running_run`), so an unscoped
+    // `status = Running` query would count their rows too. Scoping by thread keeps the
+    // assertion about the status filter itself: thread B's run is Running, thread A's is not.
     let by_status = port
         .list(RunQuery {
+            thread_id: Some(thread_b.clone()),
             status: Some(RunStatus::Running),
             ..Default::default()
         })
@@ -419,6 +430,26 @@ pub async fn list_filters_by_thread_assistant_and_status(port: &dyn RunRepositor
         .unwrap();
     assert_eq!(by_status.items.len(), 1);
     assert_eq!(by_status.items[0].run_id, run_b.run_id);
+
+    let not_running_in_b = port
+        .list(RunQuery {
+            thread_id: Some(thread_b),
+            status: Some(RunStatus::Queued),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(not_running_in_b.items.is_empty());
+
+    let running_in_a = port
+        .list(RunQuery {
+            thread_id: Some(thread_a),
+            status: Some(RunStatus::Running),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(running_in_a.items.is_empty());
 }
 
 // ── Cancellation ───────────────────────────────────────────────────────────
@@ -555,6 +586,7 @@ pub async fn record_outcome_persists_fields_without_touching_status(port: &dyn R
             error: Some("boom".to_string()),
             output: Some(serde_json::json!({ "ok": false })),
             final_waypoint_id: Some("wp-1".to_string()),
+            halt_reason: None,
         },
     )
     .await
@@ -565,6 +597,196 @@ pub async fn record_outcome_persists_fields_without_touching_status(port: &dyn R
     assert_eq!(loaded.error.as_deref(), Some("boom"));
     assert_eq!(loaded.output, Some(serde_json::json!({ "ok": false })));
     assert_eq!(loaded.final_waypoint_id.as_deref(), Some("wp-1"));
+    assert_eq!(loaded.halt_reason, None);
+}
+
+// ── Halt reason (ALLOW-03, Phase 42 D-06, G14) ─────────────────────────────
+
+/// The whole-second instant used by the halt-reason fixtures. Whole seconds are what the
+/// Treasurer stamps (`AllowanceRefusal::evaluated_at` is truncated to the second), and they
+/// round-trip exactly through every backend's JSON encoding.
+fn halt_instant(hour: u32) -> DateTime<Utc> {
+    use chrono::TimeZone;
+    Utc.with_ymd_and_hms(2026, 10, 6, hour, 0, 0)
+        .single()
+        .expect("a valid UTC instant")
+}
+
+/// A window-ceiling refusal whose ceiling is one nano-unit past a round figure, so a
+/// floating-point or display-string round trip would visibly lose it (D-00h).
+fn sample_exhausted_reason() -> HaltReason {
+    let usd = CurrencyCode::new("USD").expect("USD is a valid currency code");
+    HaltReason::AllowanceExhausted(AllowanceRefusal {
+        scope_kind: AllowanceScopeKind::ApiKey,
+        limit_kind: AllowanceLimitKind::Window,
+        balance: Cost::new(1_000_000_001, usd.clone()),
+        ceiling: Cost::new(1_000_000_001, usd),
+        window: Some((halt_instant(0), halt_instant(23))),
+        evaluated_at: halt_instant(12),
+    })
+}
+
+/// Insert a fresh `Running` run on `thread` and return it.
+async fn insert_running_run(port: &dyn RunRepositoryPort, thread: &str) -> Run {
+    let thread = ThreadId::new(thread).unwrap();
+    let run = sample_run(&thread, "assistant-a", contract_timestamp());
+    port.insert(&run).await.unwrap();
+    port.update_status(
+        &run.run_id,
+        RunStatus::Queued,
+        RunStatus::Running,
+        contract_timestamp(),
+    )
+    .await
+    .unwrap();
+    run
+}
+
+/// `record_outcome` persists a typed `halt_reason` and `get` reads the identical value back:
+/// an `AllowanceExhausted` reason round-trips its balance and ceiling as exact integer
+/// nano-units (a ceiling of `1_000_000_001` reads back as `1_000_000_001`), and a
+/// `LedgerUnavailable` reason round-trips too. `status` is untouched and `error` stays `None`
+/// (a halt is a resume point, not a failure).
+pub async fn halt_reason_round_trips_on_record_outcome(port: &dyn RunRepositoryPort) {
+    let exhausted = sample_exhausted_reason();
+    let run = insert_running_run(port, "contract-run-halt-reason-exhausted").await;
+    port.record_outcome(
+        &run.run_id,
+        RunOutcomeRecord {
+            final_waypoint_id: Some("wp-halted".to_string()),
+            halt_reason: Some(exhausted.clone()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let loaded = port.get(&run.run_id).await.unwrap().unwrap();
+    assert_eq!(loaded.halt_reason, Some(exhausted.clone()));
+    assert_eq!(loaded.error, None, "a halt never populates error");
+    assert_eq!(loaded.final_waypoint_id.as_deref(), Some("wp-halted"));
+    assert_eq!(
+        loaded.status,
+        RunStatus::Running,
+        "record_outcome never moves status"
+    );
+    match loaded.halt_reason {
+        Some(HaltReason::AllowanceExhausted(refusal)) => {
+            assert_eq!(refusal.ceiling.nanos(), 1_000_000_001);
+            assert_eq!(refusal.balance.nanos(), 1_000_000_001);
+        }
+        other => panic!("expected AllowanceExhausted, got {other:?}"),
+    }
+
+    let unavailable = insert_running_run(port, "contract-run-halt-reason-unavailable").await;
+    port.record_outcome(
+        &unavailable.run_id,
+        RunOutcomeRecord {
+            halt_reason: Some(HaltReason::LedgerUnavailable),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let loaded = port.get(&unavailable.run_id).await.unwrap().unwrap();
+    assert_eq!(loaded.halt_reason, Some(HaltReason::LedgerUnavailable));
+}
+
+/// A run that never recorded a reason (the shape of every row written before the
+/// `halt_reason` column existed) reads back `halt_reason == None` through `get`, and through
+/// `list`, both before and after an outcome without a reason is recorded.
+pub async fn legacy_row_reads_back_without_a_halt_reason(port: &dyn RunRepositoryPort) {
+    let thread = ThreadId::new("contract-run-halt-reason-legacy").unwrap();
+    let run = sample_run(&thread, "assistant-a", contract_timestamp());
+    port.insert(&run).await.unwrap();
+
+    let loaded = port.get(&run.run_id).await.unwrap().unwrap();
+    assert_eq!(loaded.halt_reason, None);
+
+    port.record_outcome(
+        &run.run_id,
+        RunOutcomeRecord {
+            output: Some(serde_json::json!({ "ok": true })),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let loaded = port.get(&run.run_id).await.unwrap().unwrap();
+    assert_eq!(loaded.halt_reason, None);
+
+    let page = port
+        .list(RunQuery {
+            thread_id: Some(thread),
+            limit: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].halt_reason, None);
+}
+
+/// Writing the outcome (with its reason) BEFORE flipping the status is accepted by every
+/// adapter: `record_outcome` has no status guard, so a `Running` run takes the reason first and
+/// the `Running -> Halted` flip second, and no reader can observe `halted` without the reason
+/// (G14, PLAT-09). The same order holds for `Cancelled`.
+pub async fn record_outcome_before_status_flip_is_accepted(port: &dyn RunRepositoryPort) {
+    let reason = sample_exhausted_reason();
+    let run = insert_running_run(port, "contract-run-outcome-before-flip").await;
+
+    port.record_outcome(
+        &run.run_id,
+        RunOutcomeRecord {
+            final_waypoint_id: Some("wp-halted".to_string()),
+            halt_reason: Some(reason.clone()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    // Between the two writes the run is still `Running` and already carries its reason.
+    let mid = port.get(&run.run_id).await.unwrap().unwrap();
+    assert_eq!(mid.status, RunStatus::Running);
+    assert_eq!(mid.halt_reason, Some(reason.clone()));
+
+    port.update_status(
+        &run.run_id,
+        RunStatus::Running,
+        RunStatus::Halted,
+        contract_timestamp(),
+    )
+    .await
+    .unwrap();
+
+    let loaded = port.get(&run.run_id).await.unwrap().unwrap();
+    assert_eq!(loaded.status, RunStatus::Halted);
+    assert_eq!(loaded.halt_reason, Some(reason));
+    assert_eq!(loaded.final_waypoint_id.as_deref(), Some("wp-halted"));
+    assert_eq!(loaded.error, None);
+
+    let cancelled = insert_running_run(port, "contract-run-outcome-before-cancel").await;
+    port.record_outcome(
+        &cancelled.run_id,
+        RunOutcomeRecord {
+            final_waypoint_id: Some("wp-cancelled".to_string()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    port.update_status(
+        &cancelled.run_id,
+        RunStatus::Running,
+        RunStatus::Cancelled,
+        contract_timestamp(),
+    )
+    .await
+    .unwrap();
+    let loaded = port.get(&cancelled.run_id).await.unwrap().unwrap();
+    assert_eq!(loaded.status, RunStatus::Cancelled);
+    assert_eq!(loaded.final_waypoint_id.as_deref(), Some("wp-cancelled"));
 }
 
 // ── Schema versioning (X-04) ────────────────────────────────────────────
@@ -786,4 +1008,427 @@ pub async fn assistant_version_freeze_at_submit(
             "run {run_id}'s resolved version {version} must exist"
         );
     }
+}
+
+// ── Run attribution and tenant-scoped listing (Phase 40, TENANT-02, PLAT-07) ─
+//
+// Every clause below scopes itself to uuid-suffixed tenant ids, thread ids and
+// `assistant_id`s, so a shared PostgreSQL database (the Docker-gated Tier 2
+// suite) cannot leak rows between clauses or between repeated runs.
+
+/// Build an attributed `Run` fixture: `sample_run` plus `submitted_by =
+/// RunAttribution { tenant, api_key_id }` (D-08/D-09). Every attribution and
+/// scoped-list clause builds its rows through this helper so all backends
+/// exercise identical inputs.
+pub fn sample_attributed_run(
+    thread: &ThreadId,
+    assistant_id: &str,
+    submitted_at: DateTime<Utc>,
+    tenant: &TenantId,
+    api_key_id: &str,
+) -> Run {
+    sample_run(thread, assistant_id, submitted_at)
+        .with_submitted_by(RunAttribution::new(tenant.clone(), api_key_id))
+}
+
+/// A fresh, per-clause unique identifier: `{prefix}-{uuid}`.
+fn unique(prefix: &str) -> String {
+    format!("{prefix}-{}", uuid::Uuid::new_v4())
+}
+
+fn unique_tenant(prefix: &str) -> TenantId {
+    TenantId::new(unique(prefix)).unwrap()
+}
+
+fn unique_thread(prefix: &str) -> ThreadId {
+    ThreadId::new(unique(prefix)).unwrap()
+}
+
+/// `insert` then `get` round-trips `submitted_by` exactly (D-09).
+pub async fn insert_then_get_round_trips_attribution(port: &dyn RunRepositoryPort) {
+    let tenant = unique_tenant("contract-attr-tenant");
+    let thread = unique_thread("contract-attr-round-trip");
+    let run = sample_attributed_run(
+        &thread,
+        "contract-attr-round-trip",
+        contract_timestamp(),
+        &tenant,
+        "svc-a",
+    );
+
+    port.insert(&run).await.unwrap();
+    let loaded = port.get(&run.run_id).await.unwrap().unwrap();
+
+    assert_eq!(
+        loaded.submitted_by,
+        Some(RunAttribution::new(tenant, "svc-a")),
+        "submitted_by must round-trip byte-for-byte"
+    );
+}
+
+/// A run submitted with no principal reads back with `submitted_by: None`
+/// (edge TENANT-02/empty, D-10) and is never listed under a `Tenant` scope.
+pub async fn unattributed_run_round_trips_null_attribution(port: &dyn RunRepositoryPort) {
+    let assistant_id = unique("contract-attr-null");
+    let thread = unique_thread("contract-attr-null");
+    let run = sample_run(&thread, &assistant_id, contract_timestamp());
+    assert!(run.submitted_by.is_none(), "fixture must be unattributed");
+
+    port.insert(&run).await.unwrap();
+    let loaded = port.get(&run.run_id).await.unwrap().unwrap();
+    assert_eq!(loaded.submitted_by, None);
+
+    let unscoped = port
+        .list(RunQuery {
+            assistant_id: Some(assistant_id.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(unscoped.items.len(), 1, "All sees the unattributed run");
+
+    let scoped = port
+        .list(RunQuery {
+            assistant_id: Some(assistant_id),
+            scope: RunReadScope::Tenant(unique_tenant("contract-attr-null-tenant")),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(
+        scoped.items.is_empty(),
+        "no Tenant scope ever lists an unattributed run"
+    );
+    assert!(scoped.next_cursor.is_none());
+}
+
+/// Attribution set at insert is never mutated: every mutating repository
+/// method leaves `submitted_by` byte-for-byte unchanged (edge
+/// TENANT-02/ordering, T-40-11).
+pub async fn attribution_survives_every_status_and_attempt_update(port: &dyn RunRepositoryPort) {
+    let tenant = unique_tenant("contract-attr-immutable-tenant");
+    let thread = unique_thread("contract-attr-immutable");
+    let run = sample_attributed_run(
+        &thread,
+        "contract-attr-immutable",
+        contract_timestamp(),
+        &tenant,
+        "svc-a",
+    );
+    let expected = run.submitted_by.clone();
+    assert!(expected.is_some());
+    port.insert(&run).await.unwrap();
+
+    async fn assert_unchanged(
+        port: &dyn RunRepositoryPort,
+        run_id: &RunId,
+        expected: &Option<RunAttribution>,
+        step: &str,
+    ) {
+        let loaded = port.get(run_id).await.unwrap().unwrap();
+        assert_eq!(
+            &loaded.submitted_by, expected,
+            "submitted_by changed after {step}"
+        );
+    }
+    let check = |step: &'static str| assert_unchanged(port, &run.run_id, &expected, step);
+
+    port.update_status(
+        &run.run_id,
+        RunStatus::Queued,
+        RunStatus::Running,
+        contract_timestamp(),
+    )
+    .await
+    .unwrap();
+    check("update_status Queued -> Running").await;
+
+    port.bump_attempt(&run.run_id).await.unwrap();
+    check("bump_attempt").await;
+
+    port.request_cancel(&run.run_id).await.unwrap();
+    check("request_cancel").await;
+
+    port.update_status(
+        &run.run_id,
+        RunStatus::Running,
+        RunStatus::AwaitingInput,
+        contract_timestamp(),
+    )
+    .await
+    .unwrap();
+    check("update_status Running -> AwaitingInput").await;
+
+    port.record_resume(&run.run_id, vec![sample_parley_response("resumer")])
+        .await
+        .unwrap();
+    check("record_resume").await;
+
+    port.clear_pending_responses(&run.run_id).await.unwrap();
+    check("clear_pending_responses").await;
+
+    port.update_status(
+        &run.run_id,
+        RunStatus::AwaitingInput,
+        RunStatus::Running,
+        contract_timestamp(),
+    )
+    .await
+    .unwrap();
+    check("update_status AwaitingInput -> Running").await;
+
+    port.record_outcome(
+        &run.run_id,
+        RunOutcomeRecord {
+            error: None,
+            output: Some(serde_json::json!({ "ok": true })),
+            final_waypoint_id: Some("wp-final".to_string()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    check("record_outcome").await;
+
+    port.update_status(
+        &run.run_id,
+        RunStatus::Running,
+        RunStatus::Completed,
+        contract_timestamp(),
+    )
+    .await
+    .unwrap();
+    check("update_status Running -> Completed").await;
+}
+
+/// `list` under `Tenant(A)` returns tenant A's runs from two different API
+/// keys (edge PLAT-07/adjacency), never tenant B's, never an unattributed
+/// run; `All` returns every one of them; `Tenant(A)` combined with B's
+/// `thread_id` is an empty page (D-14: filters compose by AND).
+pub async fn list_scoped_to_tenant_returns_only_that_tenants_runs(port: &dyn RunRepositoryPort) {
+    let assistant_id = unique("contract-scope-list");
+    let tenant_a = unique_tenant("contract-scope-a");
+    let tenant_b = unique_tenant("contract-scope-b");
+    let base = contract_timestamp();
+
+    let a1 = sample_attributed_run(
+        &unique_thread("contract-scope-a1"),
+        &assistant_id,
+        base,
+        &tenant_a,
+        "a1",
+    );
+    let a2 = sample_attributed_run(
+        &unique_thread("contract-scope-a2"),
+        &assistant_id,
+        base + chrono::Duration::seconds(1),
+        &tenant_a,
+        "a2",
+    );
+    let thread_b = unique_thread("contract-scope-b1");
+    let b1 = sample_attributed_run(
+        &thread_b,
+        &assistant_id,
+        base + chrono::Duration::seconds(2),
+        &tenant_b,
+        "b1",
+    );
+    let unattributed = sample_run(
+        &unique_thread("contract-scope-none"),
+        &assistant_id,
+        base + chrono::Duration::seconds(3),
+    );
+    for run in [&a1, &a2, &b1, &unattributed] {
+        port.insert(run).await.unwrap();
+    }
+
+    let ids =
+        |page: &RunPage| -> Vec<RunId> { page.items.iter().map(|r| r.run_id.clone()).collect() };
+
+    let scoped_a = port
+        .list(RunQuery {
+            assistant_id: Some(assistant_id.clone()),
+            scope: RunReadScope::Tenant(tenant_a.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        ids(&scoped_a),
+        vec![a2.run_id.clone(), a1.run_id.clone()],
+        "Tenant(A) sees exactly A's two runs (both keys), newest first"
+    );
+    assert!(scoped_a.next_cursor.is_none());
+    for run in &scoped_a.items {
+        assert_eq!(
+            run.submitted_by.as_ref().map(|a| &a.tenant_id),
+            Some(&tenant_a)
+        );
+    }
+
+    let scoped_b = port
+        .list(RunQuery {
+            assistant_id: Some(assistant_id.clone()),
+            scope: RunReadScope::Tenant(tenant_b.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(ids(&scoped_b), vec![b1.run_id.clone()]);
+
+    let all = port
+        .list(RunQuery {
+            assistant_id: Some(assistant_id.clone()),
+            scope: RunReadScope::All,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        ids(&all),
+        vec![
+            unattributed.run_id.clone(),
+            b1.run_id.clone(),
+            a2.run_id.clone(),
+            a1.run_id.clone(),
+        ],
+        "All sees every run including the unattributed one"
+    );
+
+    let cross = port
+        .list(RunQuery {
+            assistant_id: Some(assistant_id),
+            thread_id: Some(thread_b),
+            scope: RunReadScope::Tenant(tenant_a),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(
+        cross.items.is_empty(),
+        "another tenant's thread id under Tenant(A) is simply an empty page (D-14)"
+    );
+    assert!(cross.next_cursor.is_none());
+}
+
+/// `list` scoped to a tenant that owns no runs answers an empty page --
+/// `items == []`, `next_cursor == None` -- never an error (edge
+/// PLAT-07/empty).
+pub async fn list_scoped_to_a_tenant_with_no_runs_is_an_empty_page(port: &dyn RunRepositoryPort) {
+    let assistant_id = unique("contract-scope-empty");
+    let occupied = unique_tenant("contract-scope-empty-occupied");
+    let run = sample_attributed_run(
+        &unique_thread("contract-scope-empty"),
+        &assistant_id,
+        contract_timestamp(),
+        &occupied,
+        "svc",
+    );
+    port.insert(&run).await.unwrap();
+
+    let page = port
+        .list(RunQuery {
+            assistant_id: Some(assistant_id),
+            limit: 20,
+            scope: RunReadScope::Tenant(unique_tenant("contract-scope-empty-fresh")),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(page.items.is_empty());
+    assert!(page.next_cursor.is_none());
+}
+
+/// Paginating `Tenant(A)` at `limit: 2` over five A runs interleaved with
+/// five B runs (two A runs sharing a `submitted_at`) yields pages of sizes
+/// 2, 2, 1 in `(submitted_at DESC, run_id DESC)` order, with every non-final
+/// page exactly full, no overlap, no gap, and `next_cursor` `None` only on
+/// the last page (edge PLAT-07/ordering, T-40-09) -- which is only possible
+/// if the tenant predicate lives inside the adapter's own query rather than
+/// post-filtering a fetched page (D-12).
+pub async fn list_scoped_pagination_has_no_gap_or_overlap(port: &dyn RunRepositoryPort) {
+    let assistant_id = unique("contract-scope-paging");
+    let tenant_a = unique_tenant("contract-scope-paging-a");
+    let tenant_b = unique_tenant("contract-scope-paging-b");
+    let base = contract_timestamp();
+
+    let mut a_runs = Vec::new();
+    for i in 0..5u32 {
+        // A runs 0 and 1 share `submitted_at` to exercise the run_id tiebreak.
+        let ts = if i <= 1 {
+            base
+        } else {
+            base + chrono::Duration::seconds(i as i64 * 2)
+        };
+        let a = sample_attributed_run(
+            &unique_thread("contract-scope-paging-a"),
+            &assistant_id,
+            ts,
+            &tenant_a,
+            "a-key",
+        );
+        port.insert(&a).await.unwrap();
+        a_runs.push(a);
+
+        // A B run interleaved between every pair of A timestamps.
+        let b = sample_attributed_run(
+            &unique_thread("contract-scope-paging-b"),
+            &assistant_id,
+            ts + chrono::Duration::seconds(1),
+            &tenant_b,
+            "b-key",
+        );
+        port.insert(&b).await.unwrap();
+    }
+
+    let mut expected = a_runs.clone();
+    expected.sort_by(|x, y| {
+        y.submitted_at
+            .cmp(&x.submitted_at)
+            .then_with(|| y.run_id.as_str().cmp(x.run_id.as_str()))
+    });
+    let expected_ids: Vec<RunId> = expected.iter().map(|r| r.run_id.clone()).collect();
+
+    let limit = 2u32;
+    let mut seen = Vec::new();
+    let mut page_sizes = Vec::new();
+    let mut cursor = None;
+    for _ in 0..4 {
+        let page = port
+            .list(RunQuery {
+                assistant_id: Some(assistant_id.clone()),
+                limit,
+                cursor: cursor.clone(),
+                scope: RunReadScope::Tenant(tenant_a.clone()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        for item in &page.items {
+            assert_eq!(
+                item.submitted_by.as_ref().map(|a| &a.tenant_id),
+                Some(&tenant_a),
+                "a B row leaked into an A-scoped page"
+            );
+            assert!(
+                !seen.contains(&item.run_id),
+                "run {} appeared on more than one page (overlap)",
+                item.run_id
+            );
+            seen.push(item.run_id.clone());
+        }
+        page_sizes.push(page.items.len());
+        cursor = page.next_cursor.clone();
+        if cursor.is_none() {
+            break;
+        }
+        assert_eq!(
+            page.items.len(),
+            limit as usize,
+            "every non-final scoped page must be exactly full"
+        );
+    }
+
+    assert_eq!(page_sizes, vec![2, 2, 1], "pages of sizes 2, 2, 1");
+    assert_eq!(seen, expected_ids, "no gap: every A run seen, in order");
 }

@@ -6,7 +6,7 @@
 //! external dependencies.
 
 use paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService;
-use paladin::core::base::entity::node::Node;
+use paladin::core::base::entity::Entity;
 use paladin::core::platform::container::arsenal::ArmamentResult;
 use paladin::core::platform::container::garrison::{ConversationRole, GarrisonConfig};
 use paladin::core::platform::container::paladin::{MaxLoops, PaladinData, PaladinStatus};
@@ -24,7 +24,7 @@ use uuid::Uuid;
 use crate::helpers::{MockArsenalPort, MockLlmAdapter};
 
 /// Create a test Paladin with minimal configuration for tool integration tests
-fn create_test_paladin(max_loops: MaxLoops) -> Node<PaladinData> {
+fn create_test_paladin(max_loops: MaxLoops) -> Entity<PaladinData> {
     let paladin_data = PaladinData {
         system_prompt: "You are a helpful AI assistant with access to tools.".to_string(),
         name: "ToolTestPaladin".to_string(),
@@ -37,7 +37,7 @@ fn create_test_paladin(max_loops: MaxLoops) -> Node<PaladinData> {
         vision_enabled: false,
         ..Default::default()
     };
-    Node::new(paladin_data, None)
+    Entity::new(paladin_data, None)
 }
 
 /// Create PaladinExecutionService with CircuitBreaker wired up

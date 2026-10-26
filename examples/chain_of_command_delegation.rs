@@ -23,7 +23,7 @@ struct ExampleMockPort;
 impl PaladinPort for ExampleMockPort {
     async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
         // Simulate specialist processing based on their name
-        let output = match paladin.node.name.as_str() {
+        let output = match paladin.data.name.as_str() {
             "commander" => {
                 // Commander analyzes and selects specialists
                 if input.contains("Query the database") {
@@ -59,7 +59,7 @@ impl PaladinPort for ExampleMockPort {
                     input
                 )
             }
-            _ => format!("{} processed: {}", paladin.node.name, input),
+            _ => format!("{} processed: {}", paladin.data.name, input),
         };
 
         Ok(PaladinResult {

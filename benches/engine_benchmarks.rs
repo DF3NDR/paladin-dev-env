@@ -298,6 +298,49 @@ impl TraceSink for NoopTraceSink {
     }
 }
 
+/// A logger that formats every `Info`-or-finer record and throws the bytes
+/// away.
+///
+/// The `paladin::trace` target is only "enabled" in the operator's sense
+/// once a logger that accepts it is installed (`RUST_LOG` naming
+/// `paladin::trace`). This stand-in pays the formatting cost a real logger
+/// pays (`record.args()` is rendered into `std::io::sink()`) while keeping
+/// the bench free of any I/O, so the enabled rows measure the trace path's
+/// own cost rather than a terminal's or a file's.
+struct DiscardLogger;
+
+impl log::Log for DiscardLogger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() <= log::Level::Info
+    }
+
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            use std::io::Write;
+            let _ = write!(std::io::sink(), "{}", record.args());
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+static LOGGER: DiscardLogger = DiscardLogger;
+
+/// Installs [`DiscardLogger`] (once per process; a second call is a no-op)
+/// and sets the process-wide max level so the `paladin::trace` target is
+/// either enabled (`Info`) or disabled (`Off`).
+fn set_trace_target(enabled: bool) {
+    // `set_logger` fails once a logger is installed; that is the expected
+    // path on every call after the first, so the error is deliberately
+    // ignored.
+    let _ = log::set_logger(&LOGGER);
+    log::set_max_level(if enabled {
+        log::LevelFilter::Info
+    } else {
+        log::LevelFilter::Off
+    });
+}
+
 /// The fixed width every sink-variant case runs at: wide enough (8 nodes,
 /// the same "many nodes" case `bench_superstep_cost` already measures
 /// above) that a per-record dispatcher overhead has more than one node's
@@ -315,6 +358,16 @@ const SINK_VARIANT_WIDTH: usize = 8;
 /// baseline can be evaluated against PRD 07 acceptance 6's <=3% bar
 /// (D-37). See `.planning/phases/28-observability-tooling/28-BENCH-EVIDENCE.md`
 /// for the recorded numbers and verdict.
+///
+/// Phase 45 (OBS-05, D-18) measures each variant under two conditions on the
+/// same fixture. The rows named `engine/bench_superstep_cost_sinks_{label}`
+/// (the three Phase 28 IDs, unchanged) run with the `paladin::trace` target
+/// ENABLED -- a discarding `Info`-level logger is installed, which is the
+/// operator-visible default when `RUST_LOG` includes `paladin::trace`. The
+/// rows named `..._target_off` run with the target disabled: no output and,
+/// once the enablement guard lands, no serialisation either. Before that
+/// guard they reproduce Phase 28's condition (no logger installed,
+/// serialisation still paid, output discarded by the `log!` macro).
 fn bench_superstep_cost_sink_variants(c: &mut Criterion) {
     let rt = Runtime::new().expect("tokio runtime for async criterion benches");
     let graph = build_width_graph(SINK_VARIANT_WIDTH);
@@ -334,41 +387,57 @@ fn bench_superstep_cost_sink_variants(c: &mut Criterion) {
         ),
     ];
 
-    for (label, sink) in variants {
-        let mut engine = WarEngine::new(
-            Arc::new(UnusedPaladinPort),
-            Arc::new(InMemoryWaypointStore::new()),
-        );
-        if let Some(sink) = sink {
-            engine = engine.with_trace_sink(sink);
-        }
-
-        // The `bench_superstep_cost` substring is deliberately part of the
-        // benchmark ID (not just this Rust function's name): criterion's
-        // own CLI filter argument matches against the ID string, and this
-        // phase's own `<verify>` command
-        // (`cargo bench -- bench_superstep_cost --test`) needs this filter
-        // to actually select these three variants.
-        c.bench_function(&format!("engine/bench_superstep_cost_sinks_{label}"), |b| {
-            b.to_async(&rt).iter_batched(
-                || {
-                    ThreadId::new(format!("engine-bench-sinks-{label}-{}", Uuid::new_v4()))
-                        .expect("uuid-suffixed thread id is valid")
-                },
-                |thread| {
-                    let engine = &engine;
-                    let graph = &graph;
-                    async move {
-                        engine
-                            .start(graph, thread, StateDelta::new())
-                            .await
-                            .expect("single-superstep graph completes");
-                    }
-                },
-                BatchSize::SmallInput,
+    // Enabled condition first (the Phase 28 IDs), disabled condition second
+    // (`_target_off`). `set_trace_target` runs immediately before each
+    // `bench_function` because criterion executes them sequentially.
+    for (trace_target_enabled, suffix) in [(true, ""), (false, "_target_off")] {
+        for (label, sink) in &variants {
+            let mut engine = WarEngine::new(
+                Arc::new(UnusedPaladinPort),
+                Arc::new(InMemoryWaypointStore::new()),
             );
-        });
+            if let Some(sink) = sink {
+                engine = engine.with_trace_sink(Arc::clone(sink));
+            }
+
+            set_trace_target(trace_target_enabled);
+
+            // The `bench_superstep_cost` substring is deliberately part of
+            // the benchmark ID (not just this Rust function's name):
+            // criterion's own CLI filter argument matches against the ID
+            // string, and this phase's own `<verify>` command
+            // (`cargo bench -- bench_superstep_cost --test`) needs this
+            // filter to actually select these variants.
+            c.bench_function(
+                &format!("engine/bench_superstep_cost_sinks_{label}{suffix}"),
+                |b| {
+                    b.to_async(&rt).iter_batched(
+                        || {
+                            ThreadId::new(format!(
+                                "engine-bench-sinks-{label}{suffix}-{}",
+                                Uuid::new_v4()
+                            ))
+                            .expect("uuid-suffixed thread id is valid")
+                        },
+                        |thread| {
+                            let engine = &engine;
+                            let graph = &graph;
+                            async move {
+                                engine
+                                    .start(graph, thread, StateDelta::new())
+                                    .await
+                                    .expect("single-superstep graph completes");
+                            }
+                        },
+                        BatchSize::SmallInput,
+                    );
+                },
+            );
+        }
     }
+
+    // Leave the process the way the other groups expect it: no trace output.
+    set_trace_target(false);
 }
 
 criterion_group!(

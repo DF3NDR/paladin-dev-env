@@ -55,7 +55,7 @@ domain free of all external dependencies.
 ┌──────────────▼──────────────────────────────────▼───────────────┐
 │                   Core Domain  (paladin-ai-core)                  │
 │   Paladin · Battalion · Garrison · Arsenal · Citadel             │
-│   Herald · Sanctum · Node<T> · PaladinError · …                 │
+│   Herald · Sanctum · Entity<T> · PaladinError · …               │
 │   No I/O · No external SDK imports · Pure domain logic           │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -83,7 +83,7 @@ Pure business logic with zero external dependencies.
 ```
 crates/paladin-core/src/
 ├── base/                      # Framework primitives
-│   ├── node.rs                # Node<T> entity pattern
+│   ├── entity/wrapper.rs      # Entity<T> (re-exported as base::entity::Entity)
 │   ├── collection.rs
 │   ├── field.rs
 │   └── message.rs

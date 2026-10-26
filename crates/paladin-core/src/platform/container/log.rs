@@ -1,7 +1,7 @@
 /*
 Logging Container
 
-The Log Container is a type of Node that has a UUID with a vector of LogEntry items.
+The Log Container is a type of Entity that has a UUID with a vector of LogEntry items.
 The Log can be abstracted in the application layer so that multiple Logs may exist.
 
 By defining only the most fundamental requirements within the Core we allow the application
@@ -14,8 +14,8 @@ log message, the log level, and the timestamp when the log entry was created.
 
 The Config Service Settings requires at least one log location to be defined.
 */
+use crate::base::entity::Entity;
 use crate::base::entity::message::{Location, Message, MessagePriority};
-use crate::base::entity::node::Node;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
@@ -393,12 +393,12 @@ impl LogContainer {
     }
 }
 
-/// Type alias for Log as a Node containing LogContainer
-pub type Log = Node<LogContainer>;
+/// Type alias for Log as an Entity containing LogContainer
+pub type Log = Entity<LogContainer>;
 
 /// Extension trait for Log to add log-specific functionality
 pub trait LogExt {
-    /// Create a new log node
+    /// Create a new log entity
     fn new_log(name: String, destination: LogDestination, min_level: LogLevel) -> Self;
 
     /// Add an entry to this log
@@ -414,11 +414,11 @@ pub trait LogExt {
 impl LogExt for Log {
     fn new_log(name: String, destination: LogDestination, min_level: LogLevel) -> Self {
         let container = LogContainer::new(name.clone(), destination, min_level);
-        Node::new(container, Some(name))
+        Entity::new(container, Some(name))
     }
 
     fn add_entry(&mut self, entry: LogEntry) -> bool {
-        let result = self.node.add_entry(entry);
+        let result = self.data.add_entry(entry);
         if result {
             self.modified = Utc::now();
         }
@@ -426,11 +426,11 @@ impl LogExt for Log {
     }
 
     fn destination(&self) -> &LogDestination {
-        &self.node.destination
+        &self.data.destination
     }
 
     fn min_level(&self) -> LogLevel {
-        self.node.min_level
+        self.data.min_level
     }
 }
 
@@ -523,6 +523,6 @@ mod tests {
         let initial_modified = log.modified;
         assert!(log.add_entry(entry));
         assert!(log.modified > initial_modified);
-        assert_eq!(log.node.entry_count(), 1);
+        assert_eq!(log.data.entry_count(), 1);
     }
 }

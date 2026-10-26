@@ -5,7 +5,7 @@ This directory contains Kubernetes manifests for deploying Paladin in a producti
 ## `paladin-server` (HTTP API)
 
 The [`server/`](server/) subdirectory holds a standalone deployment of the **`paladin-server`**
-HTTP API (Milestone 12) — no Redis/MinIO required (agents are LLM + prompt only):
+HTTP API (Milestone 12) — no Redis or object store required (agents are LLM + prompt only):
 
 - [`server/configmap.yaml`](server/configmap.yaml) — the `config.yml` (`/v1` agent API, auth, docs).
 - [`server/deployment.yaml`](server/deployment.yaml) — Deployment with **liveness `/health`** +
@@ -81,18 +81,22 @@ cp k8s/secret.yaml.example k8s/secret.yaml
 kubectl apply -f k8s/secret.yaml
 ```
 
+### Renamed in Phase 45
+
+The object-store manifest formerly shipped in this directory as `minio.yaml` is now `rustfs.yaml` (ADR-0055); the store-side secret keys are now `RUSTFS_ACCESS_KEY`/`RUSTFS_SECRET_KEY`; on an existing cluster delete the old store with `kubectl delete deployment,service -n paladin -l app=minio` before applying `rustfs.yaml`.
+
 ### 3. Deploy Dependencies
 
 ```bash
 # Redis (for queue management)
 kubectl apply -f k8s/redis.yaml
 
-# MinIO (for object storage)
-kubectl apply -f k8s/minio.yaml
+# RustFS (S3-compatible object storage; single-node reference/smoke manifest, not HA)
+kubectl apply -f k8s/rustfs.yaml
 
 # Wait for dependencies to be ready
 kubectl wait --for=condition=ready pod -l app=redis -n paladin --timeout=120s
-kubectl wait --for=condition=ready pod -l app=minio -n paladin --timeout=120s
+kubectl wait --for=condition=ready pod -l app=rustfs -n paladin --timeout=120s
 ```
 
 ### 4. Deploy Paladin
@@ -276,21 +280,21 @@ kubectl edit configmap paladin-config -n paladin
 kubectl rollout restart deployment paladin -n paladin
 ```
 
-### Connection Issues to Redis/MinIO
+### Connection Issues to Redis/RustFS
 
 ```bash
 # Verify Redis is running
 kubectl get pods -l app=redis -n paladin
 kubectl logs -l app=redis -n paladin
 
-# Verify MinIO is running
-kubectl get pods -l app=minio -n paladin
-kubectl logs -l app=minio -n paladin
+# Verify RustFS is running (it logs mostly to files at `warn`, so the pod log is thin)
+kubectl get pods -l app=rustfs -n paladin
+kubectl logs -l app=rustfs -n paladin
 
 # Test connectivity from Paladin pod
 kubectl exec -it -n paladin <paladin-pod> -- sh
 # nc -zv paladin-redis 6379
-# nc -zv paladin-minio 9000
+# nc -zv paladin-rustfs 9000
 ```
 
 ### Performance Issues
@@ -397,7 +401,7 @@ spec:
     - to:
         - podSelector:
             matchLabels:
-              app: minio
+              app: rustfs
       ports:
         - protocol: TCP
           port: 9000

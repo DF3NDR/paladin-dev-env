@@ -206,7 +206,7 @@ impl ContentProcessor for BattalionContentProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::base::entity::node::Node;
+    use crate::core::base::entity::Entity;
     use crate::core::platform::container::battalion::BattalionConfig;
     use crate::core::platform::container::content::{ContentItem, ContentType, TextContent};
     use crate::core::platform::container::paladin::{Paladin, PaladinData};
@@ -274,7 +274,7 @@ mod tests {
             model: "mock".to_string(),
             ..Default::default()
         };
-        Node::new(data, Some(name.to_string()))
+        Entity::new(data, Some(name.to_string()))
     }
 
     fn text_item(body: &str) -> ContentItem {

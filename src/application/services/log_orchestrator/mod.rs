@@ -125,7 +125,7 @@ impl LogOrchestrator {
             )
             .with_max_entries(self.config.max_memory_entries);
 
-            let log = crate::core::base::entity::node::Node::new(container, Some(name.to_string()));
+            let log = crate::core::base::entity::Entity::new(container, Some(name.to_string()));
             logs.insert(destination, log);
         }
 
@@ -215,7 +215,7 @@ impl LogOrchestrator {
         let logs = self.logs.read().await;
 
         if let Some(log) = logs.get(&destination) {
-            let entries = log.node.get_entries(query.min_level);
+            let entries = log.data.get_entries(query.min_level);
             let mut filtered: Vec<LogEntry> = entries.into_iter().cloned().collect();
 
             if let Some(start) = query.start_time {
@@ -266,7 +266,7 @@ impl LogOrchestrator {
         let logs = self.logs.read().await;
 
         if let Some(log) = logs.get(&destination) {
-            let entries = log.node.get_entries(None);
+            let entries = log.data.get_entries(None);
             let mut stats = LogStats {
                 entries_written: entries.len() as u64,
                 ..Default::default()
@@ -299,7 +299,7 @@ impl LogOrchestrator {
         let mut logs = self.logs.write().await;
 
         if let Some(log) = logs.get_mut(&destination) {
-            log.node.clear();
+            log.data.clear();
         }
 
         if let Some(port) = &self.log_port {
@@ -327,7 +327,7 @@ impl LogOrchestrator {
                 let check = LogHealthCheck {
                     destination: destination.clone(),
                     healthy: true,
-                    last_write: log.node.entries.last().map(|e| e.timestamp),
+                    last_write: log.data.entries.last().map(|e| e.timestamp),
                     error_message: None,
                     response_time: Some(std::time::Duration::from_millis(1)),
                 };

@@ -5,15 +5,21 @@ All notable changes to `paladin-eval` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows lockstep workspace versioning.
 
-## [Unreleased]
+## [0.11.0] - 2026-10-26
 
-## [0.10.1] - 2026-09-20
+### Changed
+
+- Phase 42 (ALLOW-03, PLAT-09): source patterns updated for the new `TraceEvent::RunFinished.halt_reason`
+  field and the `cause` on `RunOutcome::Halted`; no public item is added or changed. An eval scenario
+  cannot yet assert `run_status: cancelled` (`RunStatusValue` has no `Cancelled` value), a deferred item.
+
+## [0.10.1] - 2026-09-21
 
 Patch release carried by the workspace-wide version bump (0.10.0 -> 0.10.1). No source
 change in this crate — see the root `CHANGELOG.md`'s `[0.10.1]` section for the two
 release-pipeline defects this patch fixes.
 
-## [0.10.0] - 2026-09-10
+## [0.10.0] - 2026-09-18
 
 ### Added
 - Initial release: the `.eval.yaml` scenario file format (`schema_version: "1"`,

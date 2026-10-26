@@ -46,7 +46,7 @@ mod tests {
                 Url::parse("https://example.com/test")
                     .map_err(|e| format!("Invalid URL: {}", e))?,
             ));
-            content_item.node.node.hash = Some("test-hash".to_string());
+            content_item.entity.data.hash = Some("test-hash".to_string());
             content_item.set_source_id(Some("test-source-id".to_string()));
             content_item.set_source_url(Some(
                 Url::parse("https://example.com/source")
@@ -58,7 +58,7 @@ mod tests {
             content_item.set_source(Some("test source".to_string()));
             content_item.set_author(Some("test author".to_string()));
             content_item.set_publication_date(Some(Utc::now()));
-            content_item.node.node.mod_date = Some(Utc::now());
+            content_item.entity.data.mod_date = Some(Utc::now());
 
             Ok(content_item)
         }

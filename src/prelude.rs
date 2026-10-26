@@ -29,6 +29,7 @@ pub use crate::{
 };
 
 // Types no longer re-exported as short-path aliases — import from crate roots directly
+pub use crate::core::platform::container::aegis::{Aegis, ErrorHandlerSpec, TimeoutPolicy};
 pub use crate::core::platform::container::arsenal::{Armament, ArsenalError};
 pub use crate::core::platform::container::battalion::campaign::Campaign;
 pub use crate::core::platform::container::battalion::chain_of_command::ChainOfCommand;
@@ -37,6 +38,10 @@ pub use crate::core::platform::container::battalion::formation::Formation;
 pub use crate::core::platform::container::battalion::grove::GroveBuilder;
 pub use crate::core::platform::container::battalion::phalanx::Phalanx;
 pub use crate::core::platform::container::battalion::{BattalionResult, BattalionStatus};
+pub use crate::core::platform::container::battlefield::StateDelta;
+pub use crate::core::platform::container::node_error::{NodeError, NodeErrorSource, TimeoutKind};
+pub use crate::core::platform::container::transience::Transience;
+pub use crate::core::platform::container::waypoint::NodeId;
 
 pub use paladin_ports::output::arsenal_port::{ArsenalPort, ArsenalRegistry};
 pub use paladin_ports::output::garrison_port::{GarrisonError, GarrisonPort};

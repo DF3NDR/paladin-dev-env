@@ -31,16 +31,16 @@ rand = "0.8"
 base64 = "0.22"
 futures = "0.3"
 regex = "1.11.1"
-paladin-core = { package = "paladin-ai-core", version = "0.10.1", path = "crates/paladin-core" }
-paladin-ports = { version = "0.10.1", path = "crates/paladin-ports" }
-paladin-battalion = { version = "0.10.1", path = "crates/paladin-battalion" }
-paladin-herald = { version = "0.10.1", path = "crates/paladin-herald" }
-paladin-llm = { version = "0.10.1", path = "crates/paladin-llm" }
-paladin-memory = { version = "0.10.1", path = "crates/paladin-memory" }
-paladin-storage = { version = "0.10.1", path = "crates/paladin-storage" }
-paladin-notifications = { version = "0.10.1", path = "crates/paladin-notifications" }
-paladin-content = { version = "0.10.1", path = "crates/paladin-content" }
-paladin-web = { version = "0.10.1", path = "crates/paladin-web" }
+paladin-core = { package = "paladin-ai-core", version = "0.11.0", path = "crates/paladin-core" }
+paladin-ports = { version = "0.11.0", path = "crates/paladin-ports" }
+paladin-battalion = { version = "0.11.0", path = "crates/paladin-battalion" }
+paladin-herald = { version = "0.11.0", path = "crates/paladin-herald" }
+paladin-llm = { version = "0.11.0", path = "crates/paladin-llm" }
+paladin-memory = { version = "0.11.0", path = "crates/paladin-memory" }
+paladin-storage = { version = "0.11.0", path = "crates/paladin-storage" }
+paladin-notifications = { version = "0.11.0", path = "crates/paladin-notifications" }
+paladin-content = { version = "0.11.0", path = "crates/paladin-content" }
+paladin-web = { version = "0.11.0", path = "crates/paladin-web" }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid", "json", "migrate", "macros"] }
 qdrant-client = { version = "1.14" }
 # croner is already resolved in Cargo.lock at 2.2.0, pulled transitively via
@@ -55,7 +55,7 @@ chrono-tz = "0.10"
 
 [package]
 name = "paladin-ai"
-version = "0.10.1"
+version = "0.11.0"
 edition = "2024"
 rust-version.workspace = true
 authors = ["Am0rfu5"]
@@ -93,6 +93,33 @@ include = [
 # Register/remove this suppression only in the same commit as the matching
 # MIGRATION.md §9.2 row and `.cargo/semver-checks-allowlist.toml` entry (kept
 # set-equal by CI's `semver` job).
+#
+# PACE-02 (MIGRATION.md §10.2, Phase 43 plan 43-06, measured at the closeout in 43-13):
+# `AgentRuntimeDeps` gained the additive `cadence: Option<CadenceWiring>` field. The D-27
+# diagnostic (cargo-semver-checks 0.50.0 vs 0.10.1, crate-wide allows disabled) fired
+# `constructible_struct_adds_field` for it, which the allow below already covers; the row is
+# therefore `Y` with a matching `.cargo/semver-checks-allowlist.toml` entry, and no new lint
+# line was needed.
+#
+# PARITY-06 (MIGRATION.md §10.2, Phase 50 plan 50-14, D-15): `ModelFallbackConfig` gained the
+# additive `steps` field (with the new `FallbackStepConfig`) and `AgentRuntimeDeps` gained
+# `llm_config: Option<LlmConfig>`. Both stay constructible (both implement `Default`; in-tree
+# literals use `..Default::default()`), and the D-27 diagnostic (0.50.0 vs 0.10.1, this table's
+# allow disabled and restored byte-for-byte) fired the already-allowed
+# `constructible_struct_adds_field` for them -- the only lint it fired for this plan -- so no
+# new line was needed. `ModelFallbackConfig` has its own row and entry; `AgentRuntimeDeps`'s
+# existing row and entry were extended, not duplicated.
+#
+# REASON-01 (MIGRATION.md §10.2, Phase 51 plan 51-08, D-00b, D-00e): `AgentDefinition` gained the
+# `#[serde(default)]` fields `reasoning_effort` and `reasoning_fallback` (the YAML keys
+# `agents[].reasoning_effort` and `agents[].reasoning_fallback`). It stays constructible and
+# NOT `#[non_exhaustive]`, so only full struct literals break; every in-tree one named both fields
+# in the same commit. Measured in plan 51-14 on 2026-10-22 (cargo-semver-checks 0.50.0 vs the
+# published `paladin-ai` 0.10.1, `--release-type minor`, `--default-features` and again with
+# `--features llm-all`, this table removed and restored byte-for-byte, `cmp`-verified):
+# `constructible_struct_adds_field`, already allowed below, named `AgentDefinition.reasoning_effort`
+# and `AgentDefinition.reasoning_fallback`, so no new line was needed. The row and entry were
+# registered in the same commit as the fields.
 [package.metadata.cargo-semver-checks.lints]
 constructible_struct_adds_field = "allow"
 
@@ -106,7 +133,7 @@ paladin-core = { workspace = true }
 paladin-ports = { workspace = true }
 paladin-battalion = { workspace = true }
 paladin-herald = { workspace = true }
-paladin-llm = { version = "0.10.1", path = "crates/paladin-llm", default-features = false, features = ["mock"] }
+paladin-llm = { version = "0.11.0", path = "crates/paladin-llm", default-features = false, features = ["mock"] }
 paladin-memory = { workspace = true, features = ["sqlite"] }
 paladin-storage = { workspace = true, features = ["sqlite"] }
 paladin-notifications = { workspace = true, optional = true }
@@ -199,7 +226,7 @@ dialoguer = { version = "0.11", optional = true }
 # (no `cli` feature) gains no edge to this crate; the `evals` `[[test]]`
 # target's OWN need for it (independent of `cli`) is the separate,
 # unconditional `[dev-dependencies]` entry below.
-paladin-eval = { version = "0.10.1", path = "crates/paladin-eval", optional = true }
+paladin-eval = { version = "0.11.0", path = "crates/paladin-eval", optional = true }
 # `paladin-cli eval run`'s own glob matching over its `<glob>` argument --
 # the SAME "0.3.4" pin `crates/paladin-eval/Cargo.toml` already resolved, so
 # this is a new EDGE on an already-resolved package, never a new package in
@@ -241,7 +268,6 @@ opentelemetry-otlp = { version = "0.32.0", default-features = false, features = 
 mockito = "1.7.0"
 tempfile = "3.0"
 testcontainers = "0.24.0"
-testcontainers-modules = { version = "0.12.1", features = ["minio"] }
 tokio-test = "0.4"
 proptest = "1.4"
 serial_test = "3.2.0"
@@ -315,7 +341,7 @@ prost = "0.14"
 # evals` must work with no `--features` at all. paladin-eval's own default
 # build depends downward only (paladin-core/ports/battalion/llm-mock/storage-
 # sqlite), never on this facade (D-27) -- this is a one-way dev-only edge.
-paladin-eval = { version = "0.10.1", path = "crates/paladin-eval" }
+paladin-eval = { version = "0.11.0", path = "crates/paladin-eval" }
 
 # Integration test configuration
 [[test]]
@@ -441,6 +467,22 @@ name = "evals"
 harness = false
 path = "tests/evals.rs"
 
+# Phase 49 (ADOPT-04): the consumer-surface muster. Compile-only; nothing in it is executed.
+# `required-features` makes an explicit `--test consumer_surface_muster` run fail loudly,
+# instead of skipping, when the consumer's two provider features are off.
+[[test]]
+name = "consumer_surface_muster"
+path = "tests/consumer_surface_muster.rs"
+required-features = ["llm-anthropic", "llm-deepseek"]
+
+# Phase 50 (PARITY-01): the provider-swap matrix. One agent definition against all nine providers,
+# switched only through an `LlmProviderConfig` block. `required-features` makes `--no-default-features`
+# fail loudly, instead of skipping, when any provider feature is off (the Phase 49 rule).
+[[test]]
+name = "provider_swap_matrix"
+path = "tests/provider_swap_matrix.rs"
+required-features = ["llm-all"]
+
 [[example]]
 name = "vision_analysis"
 path = "examples/vision_analysis.rs"
@@ -553,6 +595,12 @@ storage = ["storage-mysql", "storage-postgres"]
 # default `paladin-ai` build must gain no Redis driver beyond what `redis-queue`
 # already opts in separately.
 redis-cache = ["paladin-storage/redis-cache"]
+
+# Redis-backed `CadencePort` adapter (PACE-03, D-09): a 429 on one worker paces every worker
+# sharing the Redis server. Deliberately NOT part of `default`, `storage`, or `full`'s implicit
+# set -- see X-11.4: the default `paladin-ai` build must gain no Redis driver beyond what
+# `redis-queue` already opts in separately.
+redis-cadence = ["paladin-storage/redis-cadence"]
 
 # OTLP trace export (28-09, D-12/D-13). Deliberately NOT part of `default`
 # or `full`'s implicit set -- see X-11.4: the default `paladin-ai` build

@@ -1,4 +1,4 @@
-use crate::base::entity::node::Node;
+use crate::base::entity::Entity;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
@@ -9,12 +9,14 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ContentItem {
-    pub node: Node<ContentData>,
+    /// The wrapped entity; read under its v0.10 key `node` too, written as `entity`.
+    #[serde(alias = "node")]
+    pub entity: Entity<ContentData>,
 }
 
 impl Hash for ContentItem {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.node.hash(state);
+        self.entity.hash(state);
     }
 }
 
@@ -54,9 +56,9 @@ impl ContentItem {
             mod_date: None,
         };
 
-        let node = Node::new(content_data, None);
+        let entity = Entity::new(content_data, None);
 
-        Ok(ContentItem { node })
+        Ok(ContentItem { entity })
     }
 
     pub fn new_with_title(content: ContentType, title: String) -> Result<Self, ContentItemError> {
@@ -79,9 +81,9 @@ impl ContentItem {
             mod_date: None,
         };
 
-        let node = Node::new(content_data, Some(title));
+        let entity = Entity::new(content_data, Some(title));
 
-        Ok(ContentItem { node })
+        Ok(ContentItem { entity })
     }
 
     pub fn update_content(&mut self, new_content: ContentType) -> Result<(), ContentItemError> {
@@ -92,132 +94,132 @@ impl ContentItem {
         };
 
         // Update the content data
-        self.node.node.content = new_content;
-        self.node.node.hash = new_hash;
-        self.node.node.mod_date = Some(Utc::now());
+        self.entity.data.content = new_content;
+        self.entity.data.hash = new_hash;
+        self.entity.data.mod_date = Some(Utc::now());
 
-        // Update the node's modified timestamp
-        self.node.modified = Utc::now();
+        // Update the entity's modified timestamp
+        self.entity.modified = Utc::now();
 
         Ok(())
     }
 
     pub fn set_title(&mut self, title: Option<String>) {
-        self.node.name = title;
-        self.node.modified = Utc::now();
+        self.entity.name = title;
+        self.entity.modified = Utc::now();
     }
 
     pub fn set_description(&mut self, description: Option<String>) {
-        self.node.node.description = description;
-        self.node.modified = Utc::now();
+        self.entity.data.description = description;
+        self.entity.modified = Utc::now();
     }
 
     pub fn set_tags(&mut self, tags: Option<Vec<String>>) {
-        self.node.node.tags = tags;
-        self.node.modified = Utc::now();
+        self.entity.data.tags = tags;
+        self.entity.modified = Utc::now();
     }
 
     pub fn set_author(&mut self, author: Option<String>) {
-        self.node.node.author = author;
-        self.node.modified = Utc::now();
+        self.entity.data.author = author;
+        self.entity.modified = Utc::now();
     }
 
     pub fn set_source(&mut self, source: Option<String>) {
-        self.node.node.source = source;
-        self.node.modified = Utc::now();
+        self.entity.data.source = source;
+        self.entity.modified = Utc::now();
     }
 
     pub fn set_url(&mut self, url: Option<Url>) {
-        self.node.node.url = url;
-        self.node.modified = Utc::now();
+        self.entity.data.url = url;
+        self.entity.modified = Utc::now();
     }
 
     pub fn set_source_url(&mut self, source_url: Option<Url>) {
-        self.node.node.source_url = source_url;
-        self.node.modified = Utc::now();
+        self.entity.data.source_url = source_url;
+        self.entity.modified = Utc::now();
     }
 
     pub fn set_source_id(&mut self, source_id: Option<String>) {
-        self.node.node.source_id = source_id;
-        self.node.modified = Utc::now();
+        self.entity.data.source_id = source_id;
+        self.entity.modified = Utc::now();
     }
 
     pub fn set_publication_date(&mut self, pub_date: Option<DateTime<Utc>>) {
-        self.node.node.pub_date = pub_date;
-        self.node.modified = Utc::now();
+        self.entity.data.pub_date = pub_date;
+        self.entity.modified = Utc::now();
     }
 
     pub fn disable_versioning(&mut self) {
-        self.node.version = false;
+        self.entity.version = false;
     }
 
     pub fn enable_versioning(&mut self) {
-        self.node.version = true;
+        self.entity.version = true;
     }
 
     // Convenience getters
     pub fn uuid(&self) -> Uuid {
-        self.node.uuid
+        self.entity.uuid
     }
 
     pub fn created(&self) -> DateTime<Utc> {
-        self.node.created
+        self.entity.created
     }
 
     pub fn modified(&self) -> DateTime<Utc> {
-        self.node.modified
+        self.entity.modified
     }
 
     pub fn title(&self) -> Option<&String> {
-        self.node.name.as_ref()
+        self.entity.name.as_ref()
     }
 
     pub fn content(&self) -> &ContentType {
-        &self.node.node.content
+        &self.entity.data.content
     }
 
     pub fn content_mut(&mut self) -> &mut ContentType {
-        &mut self.node.node.content
+        &mut self.entity.data.content
     }
 
     pub fn description(&self) -> Option<&String> {
-        self.node.node.description.as_ref()
+        self.entity.data.description.as_ref()
     }
 
     pub fn tags(&self) -> Option<&Vec<String>> {
-        self.node.node.tags.as_ref()
+        self.entity.data.tags.as_ref()
     }
 
     pub fn author(&self) -> Option<&String> {
-        self.node.node.author.as_ref()
+        self.entity.data.author.as_ref()
     }
 
     pub fn source(&self) -> Option<&String> {
-        self.node.node.source.as_ref()
+        self.entity.data.source.as_ref()
     }
 
     pub fn url(&self) -> Option<&Url> {
-        self.node.node.url.as_ref()
+        self.entity.data.url.as_ref()
     }
 
     pub fn source_url(&self) -> Option<&Url> {
-        self.node.node.source_url.as_ref()
+        self.entity.data.source_url.as_ref()
     }
 
     pub fn hash(&self) -> Option<&String> {
-        self.node.node.hash.as_ref()
+        self.entity.data.hash.as_ref()
     }
 
     pub fn publication_date(&self) -> Option<DateTime<Utc>> {
-        self.node.node.pub_date
+        self.entity.data.pub_date
     }
 
     pub fn modification_date(&self) -> Option<DateTime<Utc>> {
-        self.node.node.mod_date
+        self.entity.data.mod_date
     }
 
     pub fn versioning_enabled(&self) -> bool {
-        self.node.version
+        self.entity.version
     }
 }
 

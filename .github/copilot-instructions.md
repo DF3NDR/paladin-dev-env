@@ -34,9 +34,11 @@ All multi-agent constructs follow a consistent Medieval Military naming conventi
 | **Armament** | A single tool or capability | Part of Arsenal |
 | **Citadel** | State persistence and recovery system | `core/platform/container/citadel.rs` |
 | **Commissary** | Input-side, per-call window-rationing officer | `crates/paladin-llm/src/services/commissary.rs` |
+| **Cadence** | The one who sets the marching pace: per-(provider, model) rate pacing after provider 429s, in-process or fleet-wide through Redis | `crates/paladin-llm/src/cadence.rs` |
 | **Herald** | Output formatting system | `herald.rs` |
 | **Armory** | CLI tools for development | `bin/paladin-cli.rs` |
 | **Quest** | A task or mission assigned to Paladins | Part of execution |
+| **Entity** | The base-layer wrapper every Paladin, Council, Grove, User, Log, ContentItem and PromptItem is built on (identity, timestamps, optional name, payload `data`, `version` flag). Deliberately generic, not themed; "node" is reserved for a WarGraph/Campaign vertex (ADR-0060) | `crates/paladin-core/src/base/entity/wrapper.rs` |
 
 **Always use these terms consistently in code, documentation, and comments.**
 
@@ -48,7 +50,7 @@ Pure business logic with zero external dependencies:
 ```
 core/
 ├── base/                    # Framework primitives
-│   ├── node.rs             # Node<T> pattern for entities
+│   ├── wrapper.rs          # Entity<T> wrapper (base::entity::Entity)
 │   ├── collection.rs       # Collection management
 │   ├── field.rs            # Field definitions
 │   └── message.rs          # Message types
@@ -314,9 +316,9 @@ impl PaladinBuilder {
 }
 ```
 
-### Node Pattern for Domain Entities
+### Entity Pattern for Domain Entities
 
-Follow the existing `Node<T>` pattern for domain entities:
+Follow the existing `Entity<T>` pattern for domain entities:
 
 ```rust
 /// Paladin data payload
@@ -332,8 +334,8 @@ pub struct PaladinData {
     pub status: PaladinStatus,
 }
 
-/// Paladin aggregate root using Node pattern
-pub type Paladin = Node<PaladinData>;
+/// Paladin aggregate root built on Entity
+pub type Paladin = Entity<PaladinData>;
 ```
 
 ### Service Composition

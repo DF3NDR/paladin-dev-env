@@ -72,7 +72,7 @@ Let me execute each step..."#
         .await?;
 
     println!("✅ Paladin created with autonomous planning");
-    println!("   Name: {}", paladin.node.name);
+    println!("   Name: {}", paladin.data.name);
     println!("   Planning Enabled: true (via config)");
     println!();
 

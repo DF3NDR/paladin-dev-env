@@ -48,6 +48,11 @@
 #![warn(missing_docs)]
 #![allow(rustdoc::broken_intra_doc_links)]
 
+/// Rate pacing (PACE-02, D-01/D-07/D-08): [`cadence::CadenceLlmAdapter`] decorates an
+/// `Arc<dyn LlmPort>` with a per-(provider, model) gate that a provider 429 opens, over the shared
+/// [`paladin_ports::output::cadence_port::CadencePort`]. Not feature-gated -- it needs no provider
+/// adapter itself, mirroring [`pricing`] and [`fallback`].
+pub mod cadence;
 /// Shared configuration types for LLM providers and request behavior.
 #[allow(missing_docs)]
 pub mod config;
@@ -89,13 +94,29 @@ pub mod http_status;
 /// LLM-backed content analysis service orchestration.
 #[allow(missing_docs)]
 pub mod llm_analysis_service;
+/// Treasurer per-call pricing (D-08/D-09, ADR-0052): [`pricing::PricingLlmAdapter`] decorates
+/// an `Arc<dyn LlmPort>` with cost from an operator [`paladin_core::platform::container::cost::PriceTable`].
+/// Not feature-gated — it needs no provider adapter itself, mirroring [`fallback`].
+pub mod pricing;
 /// Factory for selecting provider adapters from runtime configuration.
 #[allow(missing_docs)]
 pub mod provider_factory;
+// Documented by its own inner `//!` block (a `pub mod` carries one doc form, never both).
+pub mod rate_limit_headers;
+// Documented by its own inner `//!` block (a `pub mod` carries one doc form, never both).
+pub mod reasoning;
 /// Credential redaction shared by every provider adapter (not feature-gated
 /// — reused by the shared compatible core and by bespoke adapters alike).
 #[allow(missing_docs)]
 pub mod redaction;
+/// The per-model profile registry (ADR-0061, D-05..D-07): seeded entry, config
+/// [`registry::ModelOverride`], adapter-wide fallback, and the visible unknown-model fallback.
+/// Not feature-gated -- every adapter resolves its profile through it.
+pub mod registry;
+/// The one wire-time sampling filter every request builder calls (ADR-0061): a set parameter is
+/// sent only when the model's profile admits it, every omission is logged once and recorded under
+/// [`sampling::PARAMS_OMITTED_METADATA_KEY`]. Not feature-gated.
+pub mod sampling;
 /// Application-layer services composing this crate's ports (provider capabilities,
 /// [`paladin_ports::output::token_counter_port::TokenCounterPort`]) rather than
 /// implementing a provider adapter themselves. Houses [`services::commissary`], the
@@ -103,6 +124,66 @@ pub mod redaction;
 /// priority-ordered allocator with explicit truncation markers).
 #[allow(missing_docs)]
 pub mod services;
+/// The check every usage mapper's output passes through (G-50-5a): the vendor's own total and
+/// the containment [`paladin_core::platform::container::token_usage::TokenUsage`] promises are
+/// compared with the mapped usage, and any finding is logged once and recorded under
+/// [`usage_reconcile::USAGE_UNRECONCILED_METADATA_KEY`]. Not feature-gated.
+pub mod usage_reconcile;
+// The one user-turn text helper every provider adapter's request builder calls (PARITY-08,
+// handoff B-4). Crate-private; documented by its own inner `//!` block; compiled only when a
+// provider adapter is.
+#[cfg(any(
+    feature = "openai",
+    feature = "anthropic",
+    feature = "deepseek",
+    feature = "kimi",
+    feature = "qwen",
+    feature = "grok",
+    feature = "ollama",
+    feature = "gemini",
+    feature = "openai-compatible"
+))]
+mod turn;
+// The one rule deciding what a completion's text and finish reason mean: refusal, content filter,
+// function call, empty on any stop (PARITY-05, D-09/D-11a). Crate-private; documented by its own
+// inner `//!` block; compiled only when an adapter that calls it is.
+#[cfg(any(
+    feature = "openai",
+    feature = "anthropic",
+    feature = "gemini",
+    feature = "deepseek",
+    feature = "kimi",
+    feature = "qwen",
+    feature = "grok",
+    feature = "ollama",
+    feature = "openai-compatible"
+))]
+mod response_guards;
+// Reassembles complete SSE lines from arbitrarily split network reads so a frame that straddles
+// two reads is not dropped (CR-02). Crate-private; compiled with the adapters that stream.
+#[cfg(any(
+    feature = "openai",
+    feature = "anthropic",
+    feature = "gemini",
+    feature = "deepseek",
+    feature = "kimi",
+    feature = "qwen",
+    feature = "grok",
+    feature = "ollama",
+    feature = "openai-compatible"
+))]
+mod sse;
+// The shared saturating exponential back-off for the retrying adapters (WR-02). Crate-private.
+#[cfg(any(
+    feature = "openai",
+    feature = "deepseek",
+    feature = "kimi",
+    feature = "qwen",
+    feature = "grok",
+    feature = "ollama",
+    feature = "openai-compatible"
+))]
+mod backoff;
 /// The shared context-window precedence resolver (PRIM-04, D-01/D-02): one
 /// pure function, [`window::resolve_context_window`], that every consumer of
 /// [`paladin_ports::output::llm_port::ProviderCapabilities`] calls through
@@ -110,6 +191,10 @@ pub mod services;
 /// feature-gated — both [`services::commissary`] and the facade's
 /// `HistoryTrimmer` need it unconditionally.
 pub mod window;
+
+// Mock-endpoint plumbing shared by every adapter's wire tests; not gated on any adapter feature.
+#[cfg(test)]
+mod test_support;
 
 #[cfg(any(
     feature = "kimi",
@@ -215,17 +300,18 @@ mod capability_invariants {
         // correspondence below is checked against (D-12).
         const RESPONSE_SURFACE_SUPPORTS_FUNCTION_CALLING: bool = false;
 
-        let openai = OpenAIAdapter::new(OpenAIConfig::new("test-key".to_string())).unwrap();
+        let openai = OpenAIAdapter::new(OpenAIConfig::new(
+            "test-key".to_string(),
+            crate::openai::adapter::OPENAI_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
         let anthropic = AnthropicAdapter::new(AnthropicConfig::new(
             "sk-ant-test123".to_string(),
-            "https://api.anthropic.com/v1".to_string(),
             "claude-3-5-sonnet-20241022".to_string(),
-            4096,
         ))
         .unwrap();
         let deepseek = DeepSeekAdapter::new(DeepSeekConfig::new(
             "test-key".to_string(),
-            "https://api.deepseek.com/v1".to_string(),
             "deepseek-chat".to_string(),
         ))
         .unwrap();
@@ -265,19 +351,25 @@ mod capability_invariants {
     /// `Some((min, max))` temperature range, never silently fall back to `None` (the
     /// framework's `[0.0, 1.0]` default). Catches a future adapter reintroducing the
     /// singular global-clamp assumption the moment it lands.
+    ///
+    /// This module constructs the three adapters that need no feature beyond their own; the
+    /// six compat-era adapters (Kimi, Qwen, Grok, Gemini, Ollama, OpenAI-compatible) are
+    /// covered by `every_new_provider_declares_a_temperature_range` in
+    /// `capability_invariants_new_providers` below.
     #[test]
     fn test_every_adapter_declares_a_temperature_range() {
-        let openai = OpenAIAdapter::new(OpenAIConfig::new("test-key".to_string())).unwrap();
+        let openai = OpenAIAdapter::new(OpenAIConfig::new(
+            "test-key".to_string(),
+            crate::openai::adapter::OPENAI_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
         let anthropic = AnthropicAdapter::new(AnthropicConfig::new(
             "sk-ant-test123".to_string(),
-            "https://api.anthropic.com/v1".to_string(),
             "claude-3-5-sonnet-20241022".to_string(),
-            4096,
         ))
         .unwrap();
         let deepseek = DeepSeekAdapter::new(DeepSeekConfig::new(
             "test-key".to_string(),
-            "https://api.deepseek.com/v1".to_string(),
             "deepseek-chat".to_string(),
         ))
         .unwrap();
@@ -318,20 +410,87 @@ mod capability_invariants {
     feature = "openai-compatible"
 ))]
 mod capability_invariants_new_providers {
-    use crate::gemini::adapter::{GEMINI_DEFAULT_BASE_URL, GEMINI_DEFAULT_MODEL};
+    use crate::gemini::adapter::GEMINI_DEFAULT_MODEL;
     use crate::gemini::{GeminiAdapter, GeminiConfig};
-    use crate::grok::adapter::{GROK_DEFAULT_BASE_URL, GROK_DEFAULT_MODEL};
+    use crate::grok::adapter::GROK_DEFAULT_MODEL;
     use crate::grok::{GrokAdapter, GrokConfig};
-    use crate::kimi::adapter::{KIMI_DEFAULT_BASE_URL, KIMI_DEFAULT_MODEL};
+    use crate::kimi::adapter::KIMI_DEFAULT_MODEL;
     use crate::kimi::{KimiAdapter, KimiConfig};
     use crate::ollama::adapter::{OLLAMA_DEFAULT_BASE_URL, OLLAMA_DEFAULT_MODEL};
     use crate::ollama::{OllamaAdapter, OllamaConfig};
     use crate::openai_compatible::{
         OpenAiCompatibleAdapter, OpenAiCompatibleCapabilitiesConfig, OpenAiCompatibleConfig,
     };
-    use crate::qwen::adapter::{QWEN_DEFAULT_BASE_URL, QWEN_DEFAULT_MODEL};
+    use crate::qwen::adapter::QWEN_DEFAULT_MODEL;
     use crate::qwen::{QwenAdapter, QwenConfig};
     use paladin_ports::output::llm_port::LlmPort;
+
+    /// The temperature-range invariant for the six compat-era adapters, the counterpart of
+    /// `capability_invariants::test_every_adapter_declares_a_temperature_range` (which
+    /// constructs OpenAI, Anthropic and DeepSeek): every shipped adapter declares
+    /// `Some((min, max))`, never `None`.
+    ///
+    /// [`OpenAiCompatibleAdapter`] is the one adapter whose range is the operator's to declare
+    /// (D-04): with an empty declaration it reports `None` by design, so this test constructs it
+    /// the way an operator who declares a range does.
+    #[test]
+    fn every_new_provider_declares_a_temperature_range() {
+        let kimi = KimiAdapter::new(KimiConfig::new(
+            "test-key".to_string(),
+            KIMI_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
+        let qwen = QwenAdapter::new(QwenConfig::new(
+            "test-key".to_string(),
+            QWEN_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
+        let grok = GrokAdapter::new(GrokConfig::new(
+            "test-key".to_string(),
+            GROK_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
+        let ollama = OllamaAdapter::new(OllamaConfig::new(
+            OLLAMA_DEFAULT_BASE_URL.to_string(),
+            OLLAMA_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
+        let gemini = GeminiAdapter::new(GeminiConfig::new(
+            "test-key".to_string(),
+            GEMINI_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
+        let openai_compatible = OpenAiCompatibleAdapter::new(OpenAiCompatibleConfig::new(
+            "test-key".to_string(),
+            "http://localhost:8080".to_string(),
+            "test-model".to_string(),
+            OpenAiCompatibleCapabilitiesConfig {
+                supports_streaming: true,
+                supports_tool_calling: false,
+                supports_function_calling: false,
+                supports_vision: false,
+                supports_embeddings: false,
+                supports_system_messages: false,
+                max_context_tokens: None,
+                temperature_range: Some((0.0, 2.0)),
+            },
+        ))
+        .unwrap();
+
+        for (name, range) in [
+            ("kimi", kimi.get_capabilities().temperature_range),
+            ("qwen", qwen.get_capabilities().temperature_range),
+            ("grok", grok.get_capabilities().temperature_range),
+            ("ollama", ollama.get_capabilities().temperature_range),
+            ("gemini", gemini.get_capabilities().temperature_range),
+            (
+                "openai-compatible (declared range)",
+                openai_compatible.get_capabilities().temperature_range,
+            ),
+        ] {
+            assert!(range.is_some(), "{name} must declare a temperature_range");
+        }
+    }
 
     /// This phase's own restatement of the sibling module's success criterion 3: a
     /// test asserting the correspondence between the declared tool-calling
@@ -369,19 +528,16 @@ mod capability_invariants_new_providers {
         // these adapters make a request in this test, so the URL need not resolve.
         let kimi = KimiAdapter::new(KimiConfig::new(
             "test-key".to_string(),
-            KIMI_DEFAULT_BASE_URL.to_string(),
             KIMI_DEFAULT_MODEL.to_string(),
         ))
         .unwrap();
         let qwen = QwenAdapter::new(QwenConfig::new(
             "test-key".to_string(),
-            QWEN_DEFAULT_BASE_URL.to_string(),
             QWEN_DEFAULT_MODEL.to_string(),
         ))
         .unwrap();
         let grok = GrokAdapter::new(GrokConfig::new(
             "test-key".to_string(),
-            GROK_DEFAULT_BASE_URL.to_string(),
             GROK_DEFAULT_MODEL.to_string(),
         ))
         .unwrap();
@@ -392,7 +548,6 @@ mod capability_invariants_new_providers {
         .unwrap();
         let gemini = GeminiAdapter::new(GeminiConfig::new(
             "test-key".to_string(),
-            GEMINI_DEFAULT_BASE_URL.to_string(),
             GEMINI_DEFAULT_MODEL.to_string(),
         ))
         .unwrap();

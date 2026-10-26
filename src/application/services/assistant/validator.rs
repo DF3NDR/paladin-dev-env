@@ -13,7 +13,7 @@ use std::sync::Arc;
 use paladin_battalion::engine::WarGraph;
 use paladin_battalion::engine::graph_doc::{CompileError, WarGraphDoc};
 use paladin_battalion::engine::registries::EngineRegistries;
-use paladin_core::base::entity::node::Node;
+use paladin_core::base::entity::Entity;
 use paladin_core::platform::container::assistant::{AssistantDefinition, AssistantKind};
 use paladin_core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
 use paladin_core::platform::container::user::UserRole;
@@ -218,8 +218,10 @@ impl AssistantValidator {
             autonomous_prompts: false,
             agent_description: String::new(),
             dynamic_temperature: false,
+            reasoning_effort: None,
+            reasoning_fallback: None,
         };
-        let paladin: Paladin = Node::new(data, Some(def.name.clone()));
+        let paladin: Paladin = Entity::new(data, Some(def.name.clone()));
         Ok(Validated::Agent(Arc::new(paladin), def.allowed_roles))
     }
 

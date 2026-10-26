@@ -22,14 +22,14 @@
 //! use paladin_battalion::in_memory_registry::HashMapPaladinRegistry;
 //! use paladin_ports::output::paladin_registry::PaladinRegistry;
 //! use paladin_core::platform::container::paladin::{PaladinData, Paladin};
-//! use paladin_core::base::entity::node::Node;
+//! use paladin_core::base::entity::Entity;
 //! use std::sync::Arc;
 //!
 //! let registry = HashMapPaladinRegistry::new();
 //!
 //! // Register a Paladin
 //! let paladin_data = PaladinData::default();
-//! let paladin = Node::new(paladin_data, Some("analyzer".to_string()));
+//! let paladin = Entity::new(paladin_data, Some("analyzer".to_string()));
 //! registry.register("analyzer".to_string(), Arc::new(paladin)).unwrap();
 //!
 //! // Retrieve it
@@ -98,13 +98,13 @@ impl HashMapPaladinRegistry {
     /// use paladin_battalion::in_memory_registry::HashMapPaladinRegistry;
     /// use paladin_ports::output::paladin_registry::PaladinRegistry;
     /// use paladin_core::platform::container::paladin::{PaladinData, Paladin};
-    /// use paladin_core::base::entity::node::Node;
+    /// use paladin_core::base::entity::Entity;
     /// use std::collections::HashMap;
     /// use std::sync::Arc;
     ///
     /// let mut initial = HashMap::new();
     /// let paladin_data = PaladinData::default();
-    /// let paladin = Node::new(paladin_data, Some("analyzer".to_string()));
+    /// let paladin = Entity::new(paladin_data, Some("analyzer".to_string()));
     /// initial.insert("analyzer".to_string(), Arc::new(paladin));
     ///
     /// let registry = HashMapPaladinRegistry::from_map(initial);
@@ -128,14 +128,14 @@ impl HashMapPaladinRegistry {
     /// use paladin_battalion::in_memory_registry::HashMapPaladinRegistry;
     /// use paladin_ports::output::paladin_registry::PaladinRegistry;
     /// use paladin_core::platform::container::paladin::{PaladinData, Paladin};
-    /// use paladin_core::base::entity::node::Node;
+    /// use paladin_core::base::entity::Entity;
     /// use std::sync::Arc;
     ///
     /// let registry = HashMapPaladinRegistry::new();
     /// assert_eq!(registry.count(), 0);
     ///
     /// let paladin_data = PaladinData::default();
-    /// let paladin = Node::new(paladin_data, Some("test".to_string()));
+    /// let paladin = Entity::new(paladin_data, Some("test".to_string()));
     /// registry.register("test".to_string(), Arc::new(paladin)).unwrap();
     /// assert_eq!(registry.count(), 1);
     /// ```
@@ -154,12 +154,12 @@ impl HashMapPaladinRegistry {
     /// use paladin_battalion::in_memory_registry::HashMapPaladinRegistry;
     /// use paladin_ports::output::paladin_registry::PaladinRegistry;
     /// use paladin_core::platform::container::paladin::{PaladinData, Paladin};
-    /// use paladin_core::base::entity::node::Node;
+    /// use paladin_core::base::entity::Entity;
     /// use std::sync::Arc;
     ///
     /// let registry = HashMapPaladinRegistry::new();
     /// let paladin_data = PaladinData::default();
-    /// let paladin = Node::new(paladin_data, Some("test".to_string()));
+    /// let paladin = Entity::new(paladin_data, Some("test".to_string()));
     /// registry.register("test".to_string(), Arc::new(paladin)).unwrap();
     ///
     /// registry.clear();
@@ -226,7 +226,7 @@ impl PaladinRegistry for HashMapPaladinRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use paladin_core::base::entity::node::Node;
+    use paladin_core::base::entity::Entity;
     use paladin_core::platform::container::paladin::PaladinData;
     use std::thread;
 
@@ -236,7 +236,7 @@ mod tests {
             name: id.to_string(),
             ..Default::default()
         };
-        Node::new(data, Some(id.to_string()))
+        Entity::new(data, Some(id.to_string()))
     }
 
     #[test]

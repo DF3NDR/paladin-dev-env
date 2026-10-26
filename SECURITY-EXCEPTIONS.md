@@ -13,7 +13,7 @@ Two configuration files mirror this register mechanically, and neither is itself
 governance:
 
 - **`.cargo/audit.toml`** is the authoritative *suppression* surface for `cargo audit`. Its
-  `[advisories] ignore` array holds exactly the five `vulnerability`-class rows below, and nothing
+  `[advisories] ignore` array holds exactly the eight `vulnerability`-class rows below, and nothing
   else.
 - **`deny.toml`** mirrors `.cargo/audit.toml`'s vulnerability class exactly, and adds one
   clearly-labelled `unmaintained` class of its own. `cargo audit` does not fail a build on an
@@ -41,10 +41,10 @@ and security-advisory UI, aimed at a security researcher disclosing a *new* find
 developer auditing an *existing* suppression — is a separate deliverable for a different audience,
 and is deliberately not addressed by this file.
 
-## The eleven live suppressions
+## The fifteen live suppressions
 
-Five vulnerability-class advisories (mirrored exactly between `.cargo/audit.toml` and `deny.toml`)
-and six unmaintained-class advisories (`deny.toml` only). This is the tree-verified live set, not
+Eight vulnerability-class advisories (mirrored exactly between `.cargo/audit.toml` and `deny.toml`)
+and seven unmaintained-class advisories (`deny.toml` only). This is the tree-verified live set, not
 the fifteen the corpus's own record remembers — see the note immediately below the payload for why
 four advisories that appear in `deny.toml`'s history are absent from this register on purpose.
 
@@ -57,6 +57,14 @@ its own D-11, updating the machine-readable payload below but not this prose abo
 `deny.toml` and `.cargo/audit.toml` directly and never reads these words, and it reports "11
 register row(s) checked against 11 deny.toml and 5 .cargo/audit.toml ignore entries; all clauses
 satisfied", exit 0. Only the register's account of itself was stale.)*
+
+*(Count updated 2026-10-19 at the Phase 50 seal: three vulnerability-class rows were added for `RUSTSEC-2026-0367/0368/0369` (`zip 3.0.0`, build-dependency of `utoipa-swagger-ui` under `paladin-web`), published 2026-10-09/10 with no upstream release that reaches the patched `zip >= 9`; the rows carry the build-time-only scope and the never-calls-`extract` compensating control.)*
+
+*(Twelfth row added 2026-10-14: `RUSTSEC-2024-0449` (`unsafe-libyaml`, the parser behind
+`serde_yaml` 0.9 in `paladin-eval` and the facade's optional `cli` feature), an unmaintained-class
+advisory that newly failed CI's `License & Dependency Policy` job on every branch. The heading and
+the paragraph above were updated in the same commit, so this time the prose and the payload agree:
+12 rows, 12 `deny.toml` entries, 5 `.cargo/audit.toml` entries.)*
 
 <!-- BEGIN MACHINE-READABLE REGISTER -->
 ```toml
@@ -77,14 +85,14 @@ revisit_condition = "sqlx-mysql upgrades its transitive rsa dependency past the 
 id = "RUSTSEC-2025-0111"
 class = "vulnerability"
 crate = "tokio-tar"
-path = "tokio-tar -> testcontainers -> testcontainers-modules"
-why_present = "Transitive dependency of testcontainers-modules, used only by integration tests that provision ephemeral Docker containers."
+path = "tokio-tar -> testcontainers"
+why_present = "Transitive dependency of testcontainers, used only by integration tests that provision ephemeral Docker containers."
 why_not_fixable = "No fixed release of tokio-tar exists upstream, and testcontainers has not migrated away from the tokio-tar dependency."
 owner = "DF3NDR"
 review_date = "2026-12-31"
 scope = "dev/test dependency graph only, via testcontainers integration tests; not present in a release build"
 compensating_control = "tokio-tar's PAX header extraction runs only inside CI/test-runner processes against fixture archives this project authors itself, never against untrusted third-party archives."
-revisit_condition = "testcontainers-modules upgrades its transitive tokio-tar dependency, or drops tokio-tar entirely"
+revisit_condition = "testcontainers upgrades its transitive tokio-tar dependency, or drops tokio-tar entirely"
 
 [[exception]]
 id = "RUSTSEC-2026-0187"
@@ -124,6 +132,45 @@ review_date = "2026-12-31"
 scope = "optional s3 feature path only, via rust-s3/aws-creds in paladin-storage; absent from a default-feature build"
 compensating_control = "The namespace-allocation path only processes XML returned by a configured S3-compatible endpoint at a project-controlled hostname, never an attacker-supplied document."
 revisit_condition = "rust-s3 (or aws-creds) bumps its quick-xml dependency to >= 0.41"
+
+[[exception]]
+id = "RUSTSEC-2026-0367"
+class = "vulnerability"
+crate = "zip"
+path = "zip 3.0.0 -> utoipa-swagger-ui 9.0.2 [build-dependencies] -> paladin-web (Swagger UI bundle, `vendored` feature)"
+why_present = "utoipa-swagger-ui's build script unpacks the Swagger UI dist bundle with zip at build time so paladin-web can serve the OpenAPI UI; zip is a build-dependency only (insecure preservation of SUID/SGID bits during extraction)."
+why_not_fixable = "Every published utoipa-swagger-ui release pins zip below the patched 9.0.0: 9.0.2 requires ^3.0 and 10.0.0/10.0.1 require ^8.6 (crates.io index, checked 2026-10-19), so neither a minor nor a major bump clears the advisory, and a [patch] override cannot bridge the zip 3 -> 9 API gap."
+owner = "DF3NDR"
+review_date = "2026-12-31"
+scope = "build time only: zip runs inside utoipa-swagger-ui's build script and is linked into no shipped binary; with the `vendored` feature the archive it opens is the fixed bundle compiled into utoipa-swagger-ui-vendored, never a download or user-supplied file"
+compensating_control = "The build script never calls ZipArchive::extract or ZipStreamReader::extract, the APIs all three advisories concern; it walks entries with by_index + enclosed_name() and writes each file itself, and its only input is the crate's own embedded bundle, so no attacker-controlled archive, symlink or mode bit reaches the vulnerable code."
+revisit_condition = "utoipa-swagger-ui publishes a release that depends on zip >= 9.0.0"
+
+[[exception]]
+id = "RUSTSEC-2026-0368"
+class = "vulnerability"
+crate = "zip"
+path = "zip 3.0.0 -> utoipa-swagger-ui 9.0.2 [build-dependencies] -> paladin-web (Swagger UI bundle, `vendored` feature)"
+why_present = "utoipa-swagger-ui's build script unpacks the Swagger UI dist bundle with zip at build time so paladin-web can serve the OpenAPI UI; zip is a build-dependency only (ZipArchive::extract creates symlinks whose targets point outside the destination directory)."
+why_not_fixable = "Every published utoipa-swagger-ui release pins zip below the patched 9.0.0: 9.0.2 requires ^3.0 and 10.0.0/10.0.1 require ^8.6 (crates.io index, checked 2026-10-19), so neither a minor nor a major bump clears the advisory, and a [patch] override cannot bridge the zip 3 -> 9 API gap."
+owner = "DF3NDR"
+review_date = "2026-12-31"
+scope = "build time only: zip runs inside utoipa-swagger-ui's build script and is linked into no shipped binary; with the `vendored` feature the archive it opens is the fixed bundle compiled into utoipa-swagger-ui-vendored, never a download or user-supplied file"
+compensating_control = "The build script never calls ZipArchive::extract or ZipStreamReader::extract, the APIs all three advisories concern; it walks entries with by_index + enclosed_name() and writes each file itself, and its only input is the crate's own embedded bundle, so no attacker-controlled archive, symlink or mode bit reaches the vulnerable code."
+revisit_condition = "utoipa-swagger-ui publishes a release that depends on zip >= 9.0.0"
+
+[[exception]]
+id = "RUSTSEC-2026-0369"
+class = "vulnerability"
+crate = "zip"
+path = "zip 3.0.0 -> utoipa-swagger-ui 9.0.2 [build-dependencies] -> paladin-web (Swagger UI bundle, `vendored` feature)"
+why_present = "utoipa-swagger-ui's build script unpacks the Swagger UI dist bundle with zip at build time so paladin-web can serve the OpenAPI UI; zip is a build-dependency only (extract applies Unix permissions through symlinks without confining the target)."
+why_not_fixable = "Every published utoipa-swagger-ui release pins zip below the patched 9.0.0: 9.0.2 requires ^3.0 and 10.0.0/10.0.1 require ^8.6 (crates.io index, checked 2026-10-19), so neither a minor nor a major bump clears the advisory, and a [patch] override cannot bridge the zip 3 -> 9 API gap."
+owner = "DF3NDR"
+review_date = "2026-12-31"
+scope = "build time only: zip runs inside utoipa-swagger-ui's build script and is linked into no shipped binary; with the `vendored` feature the archive it opens is the fixed bundle compiled into utoipa-swagger-ui-vendored, never a download or user-supplied file"
+compensating_control = "The build script never calls ZipArchive::extract or ZipStreamReader::extract, the APIs all three advisories concern; it walks entries with by_index + enclosed_name() and writes each file itself, and its only input is the crate's own embedded bundle, so no attacker-controlled archive, symlink or mode bit reaches the vulnerable code."
+revisit_condition = "utoipa-swagger-ui publishes a release that depends on zip >= 9.0.0"
 
 [[exception]]
 id = "RUSTSEC-2026-0249"
@@ -202,6 +249,19 @@ review_date = "2026-12-31"
 scope = "paladin-web's compile-time OpenAPI schema generation via utoipa's derive macros"
 compensating_control = "paste is a compile-time proc-macro token-pasting helper with no runtime behaviour whatsoever; it cannot process any request-time or attacker-supplied input."
 revisit_condition = "utoipa releases a version that no longer depends on paste"
+
+[[exception]]
+id = "RUSTSEC-2024-0449"
+class = "unmaintained"
+crate = "unsafe-libyaml"
+path = "unsafe-libyaml -> serde_yaml 0.9 -> paladin-eval (scenario and graph-document YAML loaders) and the facade's optional cli feature (config loader, Paladin/Battalion templates, graph commands)"
+why_present = "serde_yaml 0.9 is the YAML (de)serializer behind paladin-eval's scenario and graph-document loaders and behind the facade's optional cli feature (config loader, Paladin and Battalion templates, graph commands); unsafe-libyaml is serde_yaml's only parser backend."
+why_not_fixable = "unsafe-libyaml's repository was archived on 2024-03-25 and serde_yaml 0.9.34 is itself published as deprecated, so there is no upgrade that drops the crate; the published serde_yaml forks carry the same c2rust-translated libyaml under other names. The advisory's own remedy is a different, safe-Rust parser (serde-saphyr), which is a migration of 53 call sites across 15 files rather than a lockfile bump; this exception defers that migration, it does not hide it."
+owner = "DF3NDR"
+review_date = "2026-12-31"
+scope = "YAML read from the local filesystem or from string literals by the CLI (off by default) and by the eval runner: operator-authored scenario, graph-document, config and template files; no network- or request-facing path in paladin-web or any LLM adapter parses YAML"
+compensating_control = "Every serde_yaml call site parses a file path the operator names on the command line, a file in the checked-in eval corpus, or a literal; paladin-web and the LLM adapters never deserialise YAML, so no attacker-supplied bytes reach the parser, and the cli feature that pulls serde_yaml into the facade is not in the default feature set."
+revisit_condition = "the workspace migrates serde_yaml to a safe-Rust YAML parser (serde-saphyr), or a maintained serde_yaml successor that does not depend on unsafe-libyaml is released"
 ```
 <!-- END MACHINE-READABLE REGISTER -->
 

@@ -11,6 +11,7 @@
 //! | `mysql`  | [`mysql_content_repository`] |
 //! | `s3`     | [`minio`] (MinIO / S3 file storage) |
 //! | `redis-queue` | [`redis`] (Redis-backed queue) |
+//! | `redis-cadence` | [`cadence::redis`] (fleet-wide rate pacing through Redis) |
 //! | `scheduler` | [`scheduler`] (`tokio-cron-scheduler`-backed `SchedulerPort`) |
 //!
 //! Enable only the backends your deployment actually uses.
@@ -28,6 +29,16 @@ pub mod waypoint;
 /// precedent); SQLite and Postgres adapters are added behind the existing
 /// `sqlite`/`postgres` features.
 pub mod run_trace;
+
+/// `CadencePort` storage adapters (PACE-02, D-07). The in-process backend is
+/// always available (no feature gate, mirroring `node_cache`); the Redis backend
+/// is added by a later Phase 43 plan behind its own feature.
+pub mod cadence;
+
+/// Redis connection-URL redaction shared by every Redis-backed adapter (the run queue and the
+/// cadence adapter). Crate-private.
+#[cfg(any(feature = "redis-queue", feature = "redis-cadence"))]
+pub(crate) mod redis_url;
 
 /// `NodeCachePort` storage adapters (Doc 04 FT-FR-18…20, D-27). The
 /// in-memory backend is always available (no feature gate, mirroring
@@ -101,3 +112,10 @@ pub mod run_schedule;
 /// D-03 precedent); SQLite and Postgres adapters are added behind the
 /// existing `sqlite`/`postgres` features.
 pub mod webhook;
+
+/// `TreasuryLedgerPort` storage adapters (LEDGR-01..04, ADR-0053). The
+/// in-memory backend is always available (no feature gate, mirroring
+/// `waypoint`'s D-01 precedent); the SQLite adapter is behind the existing
+/// `sqlite` feature; the Postgres adapter follows in 39-03 behind the
+/// existing `postgres` feature.
+pub mod treasury;

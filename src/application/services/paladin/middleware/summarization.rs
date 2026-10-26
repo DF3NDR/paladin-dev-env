@@ -231,7 +231,7 @@ impl ExecutionMiddleware for SummarizationMiddleware {
             return Ok(MiddlewareFlow::Continue);
         }
 
-        let model = cx.paladin().node.model.clone();
+        let model = cx.paladin().data.model.clone();
 
         if !self.exceeds_threshold(&cx.assembly, &model) {
             return Ok(MiddlewareFlow::Continue);
@@ -330,7 +330,7 @@ mod tests {
     use crate::application::services::paladin::paladin_execution_service::{
         PaladinExecutionService, effective_history,
     };
-    use crate::core::base::entity::node::Node;
+    use crate::core::base::entity::Entity;
     use crate::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData};
     use crate::infrastructure::resilience::circuit_breaker::CircuitBreaker;
     use paladin_llm::mock::MockLlmAdapter;
@@ -346,7 +346,7 @@ mod tests {
             max_loops: MaxLoops::Fixed(1),
             ..Default::default()
         };
-        Node::new(data, None)
+        Entity::new(data, None)
     }
 
     fn make_counter() -> Arc<dyn TokenCounterPort> {

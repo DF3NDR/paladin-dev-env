@@ -2,7 +2,7 @@
 //!
 //! Tests the ChainOfCommand struct and its behavior following TDD methodology.
 
-use paladin::core::base::entity::node::Node;
+use paladin::core::base::entity::Entity;
 use paladin::core::platform::container::battalion::chain_of_command::{
     ChainOfCommand, DelegationStrategy,
 };
@@ -23,7 +23,7 @@ fn create_test_paladin(name: &str) -> Paladin {
         vision_enabled: false,
         ..Default::default()
     };
-    Node::new(data, Some(name.to_string()))
+    Entity::new(data, Some(name.to_string()))
 }
 
 #[cfg(test)]
@@ -45,7 +45,7 @@ mod chain_of_command_construction_tests {
         let chain = result.unwrap();
         assert_eq!(chain.specialists().len(), 2);
         assert_eq!(chain.config().name, "test_chain");
-        assert_eq!(chain.commander().node.name, "Commander");
+        assert_eq!(chain.commander().data.name, "Commander");
     }
 
     #[test]
@@ -250,7 +250,7 @@ mod chain_of_command_validation_tests {
         let config = BattalionConfig::new("test_chain");
 
         let chain = ChainOfCommand::new(commander, vec![specialist], config).unwrap();
-        assert_eq!(chain.commander().node.name, "Commander");
+        assert_eq!(chain.commander().data.name, "Commander");
     }
 
     #[test]
@@ -263,8 +263,8 @@ mod chain_of_command_validation_tests {
         let chain = ChainOfCommand::new(commander, vec![specialist1, specialist2], config).unwrap();
         let specialists = chain.specialists();
         assert_eq!(specialists.len(), 2);
-        assert_eq!(specialists[0].node.name, "Specialist1");
-        assert_eq!(specialists[1].node.name, "Specialist2");
+        assert_eq!(specialists[0].data.name, "Specialist1");
+        assert_eq!(specialists[1].data.name, "Specialist2");
     }
 }
 

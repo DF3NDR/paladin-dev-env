@@ -1,0 +1,846 @@
+//! Phase 49 consumer-surface muster (ADOPT-04, handoff D-4): every path, signature, struct shape
+//! and trait a downstream library consumer takes from Paladin still resolves.
+//!
+//! The consumer (the web3sec audit workspace) depends on the `paladin` facade and on the
+//! `paladin_ports` and `paladin_memory` crates by path. Nothing in Paladin executes that surface,
+//! so a change that breaks it would otherwise be found only when the consumer bumps. This target
+//! is the check that finds it first.
+//!
+//! The rule: **compile time only.** Every pin lives in a function that nothing calls, and the one
+//! `#[test]` has a body made of comments, so `cargo test` reports a passing target exactly when
+//! every `use`, fn-pointer coercion, struct literal and trait implementation below type-checked.
+//! No pin is ever executed: nothing here spawns a process, reads the environment, opens a socket
+//! or builds an HTTP client, and every credential-shaped argument is an empty string.
+//!
+//! Strictness policy: a struct the consumer constructs is pinned by a full literal without `..`,
+//! so an additive field turns this target red on purpose. Where the consumer insulates itself
+//! with `..Default::default()`, that form is pinned as well. A trait the consumer implements is
+//! pinned by a stub that provides only the required methods and is coerced to `Arc<dyn Trait>`.
+//!
+//! Baseline: the current Paladin tree. This file is not expected to compile against the `v0.10.1`
+//! tag, which predates several of the shapes pinned here.
+//!
+//! Red-muster rule: an intended break updates the pin, its MIGRATION.md section 10.2 row and the
+//! section 10.8 library-consumer table in one commit. An unintended break is a library defect; the
+//! library is fixed, and is never shimmed, re-exported or deprecated to turn this target green.
+//!
+//! Deliberately not pinned: the consumer-owned private auth-failure helper in the MCP protocol
+//! module (it is private in Paladin and owned by the consumer), and the items removed since
+//! `v0.10.1`, which MIGRATION.md lists. Surface the consumer does not use is not frozen here.
+//!
+//! ```bash
+//! cargo test --test consumer_surface_muster
+//! ```
+// The fn-pointer pins are spelled out in full on purpose, so `type_complexity` is allowed; the
+// pins live in never-called functions, so `dead_code` is allowed.
+#![allow(dead_code, clippy::type_complexity)]
+
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use chrono::Utc;
+use uuid::Uuid;
+
+// ---- facade `paladin::` (features llm-anthropic + llm-deepseek) ----
+use paladin::application::services::battalion::phalanx_service::PhalanxExecutionService;
+use paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService;
+use paladin::core::base::entity::Entity;
+use paladin::core::platform::container::aegis::{Aegis, ErrorHandlerSpec, TimeoutPolicy};
+use paladin::core::platform::container::arsenal::{
+    Armament, ArmamentCall, ArmamentResult, ArsenalError,
+};
+use paladin::core::platform::container::battalion::{BattalionConfig, BattalionError};
+use paladin::core::platform::container::battlefield::StateDelta;
+use paladin::core::platform::container::node_error::{NodeError, NodeErrorSource, TimeoutKind};
+use paladin::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
+use paladin::core::platform::container::prompt::{
+    PromptItem, PromptParameters, PromptType, UserPrompt,
+};
+use paladin::core::platform::container::transience::Transience;
+use paladin::core::platform::container::waypoint::NodeId;
+use paladin::infrastructure::adapters::arsenal::mcp_protocol::MCPClient;
+use paladin::infrastructure::resilience::circuit_breaker::CircuitBreaker;
+use paladin::prelude::{
+    ArsenalPort, BattalionResult, LlmPort, PaladinBuilder, PaladinError, PaladinResult, Phalanx,
+    StopReason,
+};
+use paladin::{
+    AnthropicAdapter, AnthropicConfig, Commissary, CommissaryError, CommissaryPlan, Consignment,
+    ConsignmentItem, DeepSeekAdapter, DeepSeekConfig, FallbackChainError, FallbackLlmAdapter,
+    FallbackStep, LlmConfig, LlmProviderConfig, LlmProviderFactory, MockLlmAdapter, ModelOverride,
+    MultiStepMockLlmPort, Stockpile,
+};
+
+// ---- direct path dependencies ----
+use paladin_memory::token_counter::HeuristicTokenCounter;
+use paladin_ports::output::llm_port::{
+    FinishReason, LlmError, LlmRequest, LlmResponse, ProviderCapabilities, StreamingResponse,
+    TokenUsage,
+};
+use paladin_ports::output::model_profile::{ModelProfile, ParamSupport, StopSupport};
+use paladin_ports::output::paladin_port::{PaladinPort, PaladinStream};
+use paladin_ports::output::token_counter_port::TokenCounterPort;
+
+/// The facade prelude and the ports crate name ONE `LlmError`, `LlmRequest` and `LlmResponse`.
+fn prelude_and_ports_agree(
+    e: paladin::prelude::LlmError,
+    q: paladin::prelude::LlmRequest,
+    r: paladin::prelude::LlmResponse,
+) -> (LlmError, LlmRequest, LlmResponse) {
+    (e, q, r)
+}
+
+/// Phase 46 (D-04, web3sec 2026-10-24 handoff §3 item 4): `ModelProfile` through the
+/// `paladin_ports::output::llm_port::ModelProfile` re-export names the SAME type as
+/// `paladin_ports::output::model_profile::ModelProfile` (the import at the top of this file).
+/// NEVER CALLED: it only has to type-check.
+fn llm_port_model_profile_reexport_pin(
+    profile: paladin_ports::output::llm_port::ModelProfile,
+) -> ModelProfile {
+    profile
+}
+
+/// The facade prelude and the core container modules name ONE `Armament` and `BattalionConfig`.
+fn prelude_names_agree(
+    a: paladin::prelude::Armament,
+    c: paladin::prelude::BattalionConfig,
+) -> (Armament, BattalionConfig) {
+    (a, c)
+}
+
+/// B-3: `TokenUsage` has six fields and is built here with no `..`.
+fn usage_literal() -> TokenUsage {
+    TokenUsage {
+        prompt_tokens: 1,
+        completion_tokens: 2,
+        total_tokens: 3,
+        cache_read_tokens: None,
+        cache_write_tokens: None,
+        reasoning_tokens: None,
+    }
+}
+
+/// B-1: the `Commissary` constructor signatures, pinned as fn pointers and by a real call.
+fn commissary_signatures() {
+    let _new: fn(
+        String,
+        ProviderCapabilities,
+        Arc<dyn TokenCounterPort>,
+        CommissaryPlan,
+    ) -> Result<Commissary, CommissaryError> = Commissary::new;
+    let _from_port: fn(
+        &dyn LlmPort,
+        Arc<dyn TokenCounterPort>,
+        CommissaryPlan,
+    ) -> Result<Commissary, CommissaryError> = Commissary::from_port;
+    let _tokens: fn(&Commissary) -> u32 = Commissary::allotted_tokens;
+    // A `&str` literal provider: narrowing the `impl Into<String>` bound fails to compile here.
+    let counter: Arc<dyn TokenCounterPort> = Arc::new(HeuristicTokenCounter);
+    let plan = CommissaryPlan {
+        reserved_completion_tokens: 1,
+        model_hint: "m".to_string(),
+        ..Default::default()
+    };
+    let _ = Commissary::new(
+        "literal-str",
+        ProviderCapabilities::default(),
+        counter,
+        plan,
+    );
+}
+
+/// D-2: the `TokenUsage` constructors, builders and the `Add`, `AddAssign` and `Sum` impls.
+fn usage_signatures() {
+    let _new: fn(u32, u32) -> TokenUsage = TokenUsage::new;
+    let _cache_read: fn(TokenUsage, u32) -> TokenUsage = TokenUsage::with_cache_read;
+    let _cache_write: fn(TokenUsage, u32) -> TokenUsage = TokenUsage::with_cache_write;
+    let _reasoning: fn(TokenUsage, u32) -> TokenUsage = TokenUsage::with_reasoning;
+    let _result_new: fn(String, TokenUsage, u64, u32, StopReason) -> PaladinResult =
+        PaladinResult::new;
+    let _sum: TokenUsage = vec![TokenUsage::default()].into_iter().sum();
+    let mut acc = TokenUsage::default();
+    acc += TokenUsage::new(1, 2);
+    let _total = acc + usage_literal();
+    let _insulated = TokenUsage {
+        prompt_tokens: 1,
+        ..Default::default()
+    };
+}
+
+/// B-2, DR-5, DR-6: `PaladinResult` and `LlmResponse` built by full literals with no `..`.
+fn result_literals() -> (PaladinResult, LlmResponse) {
+    let result = PaladinResult {
+        output: String::new(),
+        usage: usage_literal(),
+        cost: None,
+        execution_time_ms: 0,
+        loop_count: 1,
+        stop_reason: StopReason::Completed,
+        plan: None,
+        handoff_history: Vec::new(),
+        served_by: None,
+        run_metadata: std::collections::BTreeMap::new(),
+    };
+    let response = LlmResponse {
+        id: Uuid::new_v4(),
+        request_id: Uuid::new_v4(),
+        model: String::new(),
+        content: String::new(),
+        finish_reason: FinishReason::Stop,
+        usage: usage_literal(),
+        cost: None,
+        created_at: Utc::now(),
+        metadata: HashMap::new(),
+        function_call: None,
+        reasoning: None,
+    };
+    (result, response)
+}
+
+/// The consumer-preferred insulated form: named fields plus `..Default::default()`.
+fn insulated_result_literal() -> PaladinResult {
+    PaladinResult {
+        output: String::new(),
+        usage: usage_literal(),
+        execution_time_ms: 0,
+        loop_count: 1,
+        stop_reason: StopReason::Completed,
+        ..Default::default()
+    }
+}
+
+/// DR-3: `Paladin` is `Entity<PaladinData>`; the payload has fifteen fields, all named here (the last two, `reasoning_effort` and `reasoning_fallback`, are Phase 51 additions).
+fn paladin_literal() -> Paladin {
+    let data = PaladinData {
+        system_prompt: String::new(),
+        name: String::new(),
+        user_name: String::new(),
+        model: String::new(),
+        temperature: 0.0,
+        max_loops: MaxLoops::Fixed(1),
+        stop_words: Vec::new(),
+        status: PaladinStatus::Idle,
+        vision_enabled: false,
+        autonomous_planning: false,
+        autonomous_prompts: false,
+        agent_description: String::new(),
+        dynamic_temperature: false,
+        reasoning_effort: None,
+        reasoning_fallback: None,
+    };
+    Entity::new(data, Some("n".to_string()))
+}
+
+/// DR-4: a prompt item's payload is read through `.entity.data`.
+fn prompt_signatures() {
+    let item = PromptItem::new(PromptType::User(UserPrompt {
+        query: String::new(),
+        context: None,
+    }));
+    let _req = item.map(|p| {
+        let _read: &PromptType = &p.entity.data.prompt_type;
+        LlmRequest::new("m", p)
+    });
+}
+
+// Minimal implementers: ONLY the required methods, so a new required method (E0046), a changed
+// signature (E0053) or a loss of object safety fails to compile.
+
+struct MusterLlm;
+
+#[async_trait]
+impl LlmPort for MusterLlm {
+    async fn generate(&self, _request: LlmRequest) -> Result<LlmResponse, LlmError> {
+        Ok(result_literals().1)
+    }
+    async fn generate_stream(
+        &self,
+        _request: LlmRequest,
+    ) -> Result<Box<dyn futures::Stream<Item = Result<StreamingResponse, LlmError>> + Send>, LlmError>
+    {
+        Err(LlmError::NetworkError(String::new()))
+    }
+    async fn validate_model(&self, _model: &str) -> Result<bool, LlmError> {
+        Err(LlmError::Timeout(String::new()))
+    }
+    async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
+        Ok(Vec::new())
+    }
+    fn get_provider_name(&self) -> &'static str {
+        "muster"
+    }
+    fn get_capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities::default()
+    }
+}
+
+struct MusterPaladinPort;
+
+#[async_trait]
+impl PaladinPort for MusterPaladinPort {
+    async fn execute(
+        &self,
+        paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinResult, PaladinError> {
+        let _model: &str = &paladin.data.model;
+        Ok(result_literals().0)
+    }
+    async fn execute_stream(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinStream, PaladinError> {
+        Err(PaladinError::ExecutionError(String::new()))
+    }
+    fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+        Ok(())
+    }
+}
+
+struct MusterArsenal;
+
+#[async_trait]
+impl ArsenalPort for MusterArsenal {
+    async fn list_armaments(&self) -> Vec<Armament> {
+        Vec::new()
+    }
+    async fn invoke(&self, call: ArmamentCall) -> Result<ArmamentResult, ArsenalError> {
+        Ok(ArmamentResult::success(
+            call.call_id,
+            serde_json::Value::Null,
+            0,
+        ))
+    }
+    fn validate_call(&self, _call: &ArmamentCall) -> Result<(), ArsenalError> {
+        Ok(())
+    }
+}
+
+/// Services, resilience, the MCP client and the provider adapters. NEVER CALLED: running it
+/// would spawn a process, read the environment and build HTTP clients.
+async fn service_and_adapter_signatures(args: &[String]) {
+    let llm: Arc<dyn LlmPort> = Arc::new(MusterLlm);
+    let breaker = Arc::new(CircuitBreaker::new(3, 2, Duration::from_secs(30)));
+    let arsenal: Option<Arc<dyn ArsenalPort>> = Some(Arc::new(MusterArsenal));
+    let service = PaladinExecutionService::new(llm, breaker.clone(), None, arsenal);
+    let _r: Result<PaladinResult, PaladinError> = service.execute(&paladin_literal(), "x").await;
+    let _cb: Result<u32, PaladinError> = breaker.call_async(async { Ok(1u32) }).await;
+
+    let port: Arc<dyn PaladinPort> = Arc::new(MusterPaladinPort);
+    let phalanx_service = PhalanxExecutionService::new(port);
+    let phalanx: Result<Phalanx, BattalionError> =
+        Phalanx::new(vec![paladin_literal()], BattalionConfig::new("n"));
+    if let Ok(phalanx) = phalanx {
+        let _b: Result<BattalionResult, BattalionError> =
+            phalanx_service.execute(&phalanx, "x").await;
+    }
+
+    let _c: Result<MCPClient, ArsenalError> = MCPClient::connect_stdio("cmd", args).await;
+
+    let _adapters = (
+        AnthropicAdapter::new(AnthropicConfig::new(String::new(), String::new())),
+        DeepSeekConfig::from_env().map(DeepSeekAdapter::new),
+        MockLlmAdapter::new(),
+        MultiStepMockLlmPort::new(Vec::new()),
+    );
+    let _items = (
+        Consignment::new(),
+        ConsignmentItem {
+            label: String::new(),
+            body: String::new(),
+            priority: 0,
+        },
+    );
+}
+
+/// Phase 50 (D-00i): the surfaces the consumer adopts at v0.11.0, all through the facade and
+/// `paladin_ports` paths it already uses, under the same two features (no new required feature):
+/// config-driven construction, the per-model profile, the typed refusal, per-step fallback chains,
+/// the `LlmResponse` constructor and the `AnthropicConfig` knob builders. NEVER CALLED: running
+/// it would build an adapter from the environment.
+async fn phase_50_surface(llm: Arc<dyn LlmPort>) {
+    // PARITY-03: build any adapter from an `llm.<provider>` block. `LlmProviderConfig` and the
+    // nine `*Config` types are `#[non_exhaustive]`, so every construction goes through `new(..)`
+    // and the `with_*` builders; `ModelOverride` is built by `default()` plus field assignment.
+    let mut over = ModelOverride::default();
+    over.temperature = Some(ParamSupport::Fixed(1.0));
+    over.max_output_tokens = Some(1);
+    over.reasoning = Some(true);
+    let block = LlmProviderConfig::new(String::new())
+        .with_base_url(String::new())
+        .with_default_model(String::new())
+        .with_default_temperature(1.0)
+        .with_timeout_seconds(1)
+        .with_max_retries(1)
+        .with_max_tokens(1)
+        .with_context_window(1)
+        .with_models(BTreeMap::from([("m".to_string(), over)]));
+    let config = LlmConfig {
+        anthropic: Some(block),
+        ..LlmConfig::default()
+    };
+    let _built = LlmProviderFactory::new().create_from_config(&config, "anthropic", Some("m"));
+    let _configured: bool = LlmProviderFactory::is_configured(Some(&config), "anthropic");
+
+    // PARITY-02: the per-model profile, read through `LlmPort::model_profile` (object safe).
+    let profile: Option<ModelProfile> = llm.model_profile("m");
+    // Phase 51 gap closure: LlmPort::check_reasoning (object safe, provided)
+    let _verdict: Result<(), LlmError> = llm.check_reasoning("m", None, None);
+    let built = ModelProfile::new()
+        .with_temperature(ParamSupport::Range(0.0, 1.0))
+        .with_stop_sequences(StopSupport::Supported { max: None })
+        .with_context_window(1)
+        .with_max_output_tokens(1)
+        .with_reasoning(false);
+    let _read: (ParamSupport, StopSupport, Option<u32>, bool) = (
+        built.temperature,
+        built.stop_sequences,
+        built.context_window,
+        built.reasoning,
+    );
+    let _ = profile;
+
+    // PARITY-05: a refusal is its own typed, permanent error; a match arm names its fields.
+    let _refusal = |error: &LlmError| -> Option<(String, String, String)> {
+        match error {
+            LlmError::Refusal {
+                provider,
+                model,
+                detail,
+                ..
+            } => Some((provider.clone(), model.clone(), detail.clone())),
+            _ => None,
+        }
+    };
+
+    // PARITY-05 / G-50-5a (plan 50-26): an empty completion is a `#[non_exhaustive]` struct
+    // variant matched by field, and a billed-but-failed call's usage is read through
+    // `billed_usage()` (model, usage total, cost), never by naming the variant's fields.
+    let _empty = |error: &LlmError| -> Option<String> {
+        match error {
+            LlmError::EmptyCompletion { detail, .. } => Some(detail.clone()),
+            _ => None,
+        }
+    };
+    let _billed = |error: &LlmError| -> Option<(String, u32, bool)> {
+        error.billed_usage().map(|billed| {
+            (
+                billed.model.clone(),
+                billed.usage.total_tokens,
+                billed.cost.is_some(),
+            )
+        })
+    };
+    let _built: (LlmError, LlmError) = (
+        LlmError::empty_completion("finish_reason=length"),
+        LlmError::refusal("openai", "m", "no"),
+    );
+
+    // PARITY-06: a fallback chain whose hops each send their own model.
+    let step = FallbackStep::new(llm, "m");
+    let _chain: Result<FallbackLlmAdapter, FallbackChainError> =
+        FallbackLlmAdapter::from_steps(vec![step]).map(|chain| chain.hop_on_refusal(false));
+
+    // PARITY-05 (DR-6): the constructor that names no field a later phase may add.
+    let _response: LlmResponse = LlmResponse::new(
+        Uuid::new_v4(),
+        "m",
+        "text",
+        FinishReason::Stop,
+        TokenUsage::new(1, 2),
+    )
+    .with_reasoning("thinking");
+
+    // PARITY-03 / SURFACE-02 (D-05, D-07, D-09): the `AnthropicConfig` knob set in the
+    // `new(api_key, model)` shape. The first argument is the key, never a URL; every other knob,
+    // the output budget, the retry budget, the windows, the overrides, the timeout and the
+    // endpoint, is a builder. No field is assigned.
+    let _new: fn(String, String) -> AnthropicConfig = AnthropicConfig::new;
+    let anthropic = AnthropicConfig::new(String::new(), String::new())
+        .with_max_tokens(1)
+        .with_max_retries(1)
+        .with_context_window(1)
+        .with_model_overrides(BTreeMap::new())
+        .with_timeout_seconds(1)
+        .with_base_url(String::new());
+    let _adapter = AnthropicAdapter::new(anthropic);
+}
+
+// ---- Phase 50.1 (SURFACE-01, D-04) ----
+// The Aegis family is named through the `paladin` facade alone: a consumer needs no direct
+// dependency on the core crate for DR-1, DR-2, DR-8 or DR-9. `Aegis` is the one struct built with
+// `..Aegis::default()` -- that is the consumer's own shape (it sets two of four policies).
+
+/// DR-1 / DR-8: a Battalion configured with an Aegis whose `on_error` absorbs a failure and whose
+/// `timeout` bounds a run. `ErrorHandlerSpec` is `#[non_exhaustive]` but its variants are built
+/// by name.
+fn aegis_construction_pin(d: Duration) -> BattalionConfig {
+    BattalionConfig::new("n").with_aegis(Aegis {
+        on_error: Some(ErrorHandlerSpec::Absorb {
+            fallback_delta: StateDelta::new(),
+        }),
+        timeout: Some(TimeoutPolicy {
+            run_timeout: Some(d),
+            idle_timeout: None,
+        }),
+        ..Aegis::default()
+    })
+}
+
+/// DR-2 / DR-9: read every `node_errors` entry of a result. The vector is iterated, never
+/// indexed, so the empty case type-checks the same as a populated one. `NodeErrorSource` is
+/// `#[non_exhaustive]`, so the match keeps a wildcard arm.
+fn node_error_read_pin(result: &BattalionResult) -> Vec<(String, u32, Transience, String)> {
+    result
+        .node_errors
+        .iter()
+        .map(|e| {
+            let id: &NodeId = &e.node_id;
+            let attempt: u32 = e.attempt;
+            let transience: Transience = e.transience;
+            let detail = match &e.source {
+                NodeErrorSource::Timeout(kind) => {
+                    let kind: &TimeoutKind = kind;
+                    format!("{kind}")
+                }
+                NodeErrorSource::Paladin { message, .. }
+                | NodeErrorSource::Llm { message, .. }
+                | NodeErrorSource::Function { message } => message.clone(),
+                // `NodeErrorSource` is `#[non_exhaustive]`: a consumer match needs this arm.
+                _ => String::new(),
+            };
+            (id.as_str().to_string(), attempt, transience, detail)
+        })
+        .collect()
+}
+
+/// Phase 46 (D-04, web3sec 2026-10-24 handoff §3 item 2): the three `BattalionResult` counters
+/// the consumer reads, with their exact types. Read, never constructed. NEVER CALLED.
+fn battalion_result_counts_pin(result: &BattalionResult) -> (usize, usize, &HashMap<String, u64>) {
+    (
+        result.paladin_success_count,
+        result.paladin_failure_count,
+        &result.per_paladin_times,
+    )
+}
+
+/// The prelude names and the module paths name ONE type each.
+fn prelude_aegis_names_agree() {
+    let _aegis: fn(paladin::prelude::Aegis) -> Aegis = |a| a;
+    let _handler: fn(paladin::prelude::ErrorHandlerSpec) -> ErrorHandlerSpec = |a| a;
+    let _timeout: fn(paladin::prelude::TimeoutPolicy) -> TimeoutPolicy = |a| a;
+    let _delta: fn(paladin::prelude::StateDelta) -> StateDelta = |a| a;
+    let _error: fn(paladin::prelude::NodeError) -> NodeError = |a| a;
+    let _source: fn(paladin::prelude::NodeErrorSource) -> NodeErrorSource = |a| a;
+    let _kind: fn(paladin::prelude::TimeoutKind) -> TimeoutKind = |a| a;
+    let _node_id: fn(paladin::prelude::NodeId) -> NodeId = |a| a;
+    let _transience: fn(paladin::prelude::Transience) -> Transience = |a| a;
+}
+
+/// Phase 46 (D-04, web3sec 2026-10-24 handoff §3 item 3): a `use paladin::prelude::*;` glob
+/// import site, the way the consumer imports the prelude. It lives in its own private module so
+/// the glob cannot clash with this file's explicit imports, and its only `use` is the glob. The
+/// items are named ONLY through the glob, so removing one from the prelude breaks this module,
+/// and using several of them keeps `unused_imports` from firing under `clippy -D warnings`.
+mod prelude_glob {
+    use paladin::prelude::*;
+
+    /// NEVER CALLED: it only has to type-check. Returns its inputs plus one counter read.
+    pub(super) fn prelude_glob_resolves(
+        builder: PaladinBuilder,
+        llm: std::sync::Arc<dyn LlmPort>,
+        result: &BattalionResult,
+    ) -> (PaladinBuilder, std::sync::Arc<dyn LlmPort>, usize) {
+        (builder, llm, result.paladin_success_count)
+    }
+}
+
+/// Phase 50.1 (SURFACE-02, D-05, D-09; Appendix B item 5): the `*Config::new(api_key, model)`
+/// shape and the two endpoint builders every `*Config` carries, pinned on `DeepSeekConfig`. The
+/// first argument is the key, never a URL. NEVER CALLED: building the adapter would create an
+/// HTTP client, and every credential-shaped argument is an empty string.
+fn phase_50_1_config_shapes() -> Result<DeepSeekAdapter, LlmError> {
+    let _new: fn(String, String) -> DeepSeekConfig = DeepSeekConfig::new;
+    let chained: DeepSeekConfig = DeepSeekConfig::new(String::new(), String::new())
+        .with_base_url(String::new())
+        .with_timeout_seconds(1);
+    DeepSeekAdapter::new(chained)
+}
+
+// ---- Phase 50.1 (SURFACE-03, D-11) ----
+// Two enums a consumer matches without a wildcard are pinned exhaustively. Neither enum is
+// `#[non_exhaustive]`, so a consumer's own exhaustive `match` is a supported shape; adding a
+// variant to either breaks that consumer at compile time, and the pin below turns this target
+// red first.
+
+/// D-11: deliberately exhaustive; a new variant turns this red and is a registered break with a
+/// MIGRATION.md section 10.2 row. No wildcard arm, on purpose.
+fn finish_reason_is_exhaustive(reason: &FinishReason) -> u8 {
+    match reason {
+        FinishReason::Stop => 0,
+        FinishReason::Length => 1,
+        FinishReason::ContentFilter => 2,
+        FinishReason::FunctionCall => 3,
+        FinishReason::Error(_) => 4,
+    }
+}
+
+/// D-11: deliberately exhaustive; a new variant turns this red and is a registered break with a
+/// MIGRATION.md section 10.2 row. No wildcard arm, on purpose.
+fn arsenal_error_is_exhaustive(error: &ArsenalError) -> u8 {
+    match error {
+        ArsenalError::ToolNotFound(_) => 0,
+        ArsenalError::InvalidArguments(_) => 1,
+        ArsenalError::Timeout(_) => 2,
+        ArsenalError::ProtocolError(_) => 3,
+        ArsenalError::TransportError(_) => 4,
+        ArsenalError::AuthFailed(_) => 5,
+    }
+}
+
+// ---- Phase 50.1 (SURFACE-03; handoff Appendix B items 3, 4, 6-11) ----
+// Each pin is in the shape, and through the path, the consumer uses: the `paladin` facade, the
+// `paladin_ports` crate and `paladin_memory`. Every pin lives in a never-called fn, every
+// credential- or endpoint-shaped argument is an empty string or `None`, and nothing executes.
+
+/// Appendix B item 3: a rate-limit is built by `LlmError::rate_limited(..)` and matched by
+/// `RateLimitExceeded { .. }`. `LlmError` and the variant are `#[non_exhaustive]`, so the
+/// constructor is the only way to build one and a match keeps a wildcard arm.
+fn rate_limit_pin() -> (LlmError, impl Fn(&LlmError) -> Option<&'static str>) {
+    let _limited: LlmError = LlmError::rate_limited(None);
+    let with_hint: LlmError = LlmError::rate_limited(Some(Duration::from_secs(1)));
+    let rate_limited = |error: &LlmError| -> Option<&'static str> {
+        match error {
+            LlmError::RateLimitExceeded { .. } => Some("rate limited"),
+            _ => None,
+        }
+    };
+    (with_hint, rate_limited)
+}
+
+/// Appendix B item 4: a spend cap is `UsageLimitExceeded { provider, regain_hint }` (both fields
+/// named, neither dropped by `..`) and a generic failure is `ProcessingError(..)`.
+fn usage_limit_and_processing_pin() {
+    let _usage = |error: &LlmError| -> Option<(String, Option<String>)> {
+        match error {
+            LlmError::UsageLimitExceeded {
+                provider,
+                regain_hint,
+            } => Some((provider.clone(), regain_hint.clone())),
+            _ => None,
+        }
+    };
+    let _processing = |error: &LlmError| -> Option<String> {
+        match error {
+            LlmError::ProcessingError(message) => Some(message.clone()),
+            _ => None,
+        }
+    };
+}
+
+/// Appendix B item 6: the model-aware `Commissary` constructor, `dispense` and `verify_fits`
+/// signatures, and every `Stockpile` field the consumer reads.
+fn commissary_dispense_pins() {
+    let _for_model: fn(
+        &dyn LlmPort,
+        &str,
+        Arc<dyn TokenCounterPort>,
+        CommissaryPlan,
+    ) -> Result<Commissary, CommissaryError> = Commissary::for_model;
+    let _dispense: fn(&Commissary, &str, &Consignment) -> Result<Stockpile, CommissaryError> =
+        Commissary::dispense;
+    let _verify_fits: fn(&Commissary, &str) -> Result<u32, CommissaryError> =
+        Commissary::verify_fits;
+}
+
+/// Appendix B item 6: the `Stockpile` fields are read, never constructed (the type is built only
+/// by `Commissary::dispense`).
+fn stockpile_read_pin(stockpile: &Stockpile) -> (usize, usize, u32, u32, bool) {
+    (
+        stockpile.dispensed.len(),
+        stockpile.shed.len(),
+        stockpile.prompt_tokens,
+        stockpile.allotted_tokens,
+        stockpile.exact_tally,
+    )
+}
+
+/// Phase 46 (D-04, web3sec 2026-10-24 handoff §3 item 1): `Stockpile::render` is pinned as a
+/// fn pointer, so a change to its receiver or its `String` return type turns this target red.
+/// NEVER CALLED: it only has to type-check.
+fn stockpile_render_pin() {
+    let _render: fn(&Stockpile) -> String = Stockpile::render;
+}
+
+/// Appendix B item 7: the four `MockLlmAdapter` builders, each coerced to `Arc<dyn LlmPort>`.
+fn mock_builder_pins() -> Vec<Arc<dyn LlmPort>> {
+    let one: Arc<dyn LlmPort> = Arc::new(MockLlmAdapter::new().with_response("x"));
+    let many: Arc<dyn LlmPort> =
+        Arc::new(MockLlmAdapter::new().with_responses(vec![String::new()]));
+    let failing: Arc<dyn LlmPort> =
+        Arc::new(MockLlmAdapter::new().with_error(LlmError::rate_limited(None)));
+    let slow: Arc<dyn LlmPort> =
+        Arc::new(MockLlmAdapter::new().with_delay(Duration::from_millis(1)));
+    vec![one, many, failing, slow]
+}
+
+/// Appendix B items 8 and 9, which are `async`. NEVER CALLED: connecting would open a socket.
+/// The builder's `build` is `async` and returns `Result<Paladin, PaladinError>`; the Streamable
+/// HTTP connect takes an empty URI, `None` for the bearer token and `None` for the header map,
+/// and `invoke_tool` takes a tool name and an argument map.
+async fn builder_and_mcp_http_pins(llm: Arc<dyn LlmPort>) {
+    let _built: Result<Paladin, PaladinError> = PaladinBuilder::new(Arc::clone(&llm))
+        .name("n")
+        .system_prompt("s")
+        .build()
+        .await;
+
+    // Phase 51 (D-00e, D-05): the agent's effort and fallback are chainable builder setters and
+    // are read back as public `Option` fields of the payload.
+    let with_effort: Result<Paladin, PaladinError> = PaladinBuilder::new(Arc::clone(&llm))
+        .name("n")
+        .system_prompt("s")
+        .reasoning_effort(paladin::core::platform::container::reasoning::ReasoningEffort::High)
+        .reasoning_fallback(
+            paladin::core::platform::container::reasoning::ReasoningFallback::NearestLower,
+        )
+        .build()
+        .await;
+    if let Ok(paladin) = with_effort {
+        let _read: (
+            Option<paladin::core::platform::container::reasoning::ReasoningEffort>,
+            Option<paladin::core::platform::container::reasoning::ReasoningFallback>,
+        ) = (
+            paladin.data.reasoning_effort,
+            paladin.data.reasoning_fallback,
+        );
+    }
+
+    let connected: Result<MCPClient, ArsenalError> =
+        MCPClient::connect_streamable_http("", None, None).await;
+    if let Ok(client) = connected {
+        let _value: Result<serde_json::Value, ArsenalError> =
+            client.invoke_tool("", HashMap::new()).await;
+    }
+}
+
+/// Appendix B item 10: a prompt item's parameters are read as `&PromptParameters` and replaced
+/// through `set_parameters`.
+fn prompt_parameters_pin(item: &mut PromptItem) {
+    let current: &PromptParameters = item.parameters();
+    let copy: PromptParameters = current.clone();
+    item.set_parameters(copy);
+}
+
+/// Appendix B item 11: `Armament` is built by a full four-field literal with no `..`, so an
+/// added field turns this target red on purpose.
+fn armament_literal() -> Armament {
+    Armament {
+        name: String::new(),
+        description: String::new(),
+        parameters: serde_json::Value::Null,
+        required_params: Vec::new(),
+    }
+}
+
+// ---- Phase 51 (REASON-01, REASON-02; D-00e, D-05) ----
+// The consumer (web3sec) builds adapters directly, so the request-level reasoning surface is what
+// it can reach without the agent or config layers. Every touched type is `#[non_exhaustive]`
+// and the change is additive; this pin keeps it that way.
+
+/// D-00e: the effort and fallback are set through chainable builders and read as public
+/// `Option` fields; the facade and the ports crate name ONE `ReasoningEffort` and
+/// `ReasoningFallback`; the new refusal is a `#[non_exhaustive]` struct variant matched by field
+/// followed by `..`; a profile states its effort support through `with_effort`. NEVER CALLED.
+fn phase_51_request_surface(
+    request: LlmRequest,
+    error: &LlmError,
+) -> (
+    LlmRequest,
+    Option<(String, String, String, String, String)>,
+    ModelProfile,
+) {
+    use paladin::core::platform::container::reasoning::{ReasoningEffort, ReasoningFallback};
+    use paladin_ports::output::model_profile::EffortSupport;
+
+    let _same_effort: fn(paladin_ports::output::llm_port::ReasoningEffort) -> ReasoningEffort =
+        |a| a;
+    let _same_fallback: fn(
+        paladin_ports::output::llm_port::ReasoningFallback,
+    ) -> ReasoningFallback = |a| a;
+
+    let built = request
+        .with_reasoning(ReasoningEffort::Budget(1))
+        .with_reasoning_fallback(ReasoningFallback::NearestLower);
+    let _read: (Option<ReasoningEffort>, Option<ReasoningFallback>) =
+        (built.reasoning, built.reasoning_fallback);
+
+    let refused = match error {
+        LlmError::UnsupportedParameter {
+            param,
+            value,
+            provider,
+            model,
+            reason,
+            ..
+        } => Some((
+            param.clone(),
+            value.clone(),
+            provider.clone(),
+            model.clone(),
+            reason.clone(),
+        )),
+        _ => None,
+    };
+
+    let profile = ModelProfile::new().with_effort(EffortSupport::Unmeasured);
+    (built, refused, profile)
+}
+
+// ---- Phase 51 (REASON-01, D-00e, D-05, D-10) ----
+// The provider-level default beneath a request's own effort: chainable builders on every
+// `*Config` (one macro arm) and on the `llm.<provider>` block. Both types are `#[non_exhaustive]`
+// and the change is additive.
+
+/// D-00e / D-05 / D-10: `with_reasoning_effort` and `with_reasoning_fallback` on `DeepSeekConfig`
+/// and `AnthropicConfig`, and the three builders on `LlmProviderConfig` (`with_reasoning_wire`
+/// takes the closed `ReasoningWire` enum). The fields are public `Option`s, read not assigned.
+/// NEVER CALLED: building an adapter would create an HTTP client, and every credential-shaped
+/// argument is an empty string.
+fn phase_51_provider_defaults() -> (DeepSeekConfig, AnthropicConfig, LlmProviderConfig) {
+    use paladin::core::platform::container::reasoning::{ReasoningEffort, ReasoningFallback};
+    use paladin_llm::reasoning::ReasoningWire;
+
+    let deepseek = DeepSeekConfig::new(String::new(), String::new())
+        .with_reasoning_effort(ReasoningEffort::High)
+        .with_reasoning_fallback(ReasoningFallback::NearestLower);
+    let anthropic = AnthropicConfig::new(String::new(), String::new())
+        .with_reasoning_effort(ReasoningEffort::Budget(1))
+        .with_reasoning_fallback(ReasoningFallback::Refuse);
+    let block = LlmProviderConfig::new(String::new())
+        .with_reasoning_effort(ReasoningEffort::Low)
+        .with_reasoning_fallback(ReasoningFallback::NearestHigher)
+        .with_reasoning_wire(ReasoningWire::TopLevelEffort);
+
+    let _read: (
+        Option<ReasoningEffort>,
+        Option<ReasoningFallback>,
+        Option<ReasoningWire>,
+    ) = (
+        block.reasoning_effort,
+        block.reasoning_fallback,
+        block.reasoning_wire,
+    );
+    let _config_read: (Option<ReasoningEffort>, Option<ReasoningFallback>) =
+        (deepseek.reasoning_effort, deepseek.reasoning_fallback);
+    (deepseek, anthropic, block)
+}
+
+#[test]
+fn the_consumer_surface_still_resolves() {
+    // Reaching this point means every `use`, fn-pointer, literal and trait-impl pin above
+    // type-checked. Nothing is executed here, on purpose.
+}

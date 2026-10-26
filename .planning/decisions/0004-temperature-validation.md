@@ -6,6 +6,10 @@ Accepted
 
 **Date:** 2026-07-31
 
+**Amended by ADR-0061** (2026-10-15, Phase 50 plan 50-02): parameter support is now modelled per model (`ModelProfile`), an explicit value the model cannot honour is refused by name, and an auto-selected value is omitted with a `warn!` and response metadata instead of refused -- amendment A2 below is superseded on that one point; A1, A3 and A4 stand.
+
+**Amended by ADR-0062** (2026-10-22, Phase 51): the same principle -- a value is never changed behind the caller's back -- now also governs reasoning effort, with a stricter default than ADR-0061's for sampling: an effort the target model cannot honour exactly (including any explicit effort on a model with no measured effort data) is refused before the HTTP call with `LlmError::UnsupportedParameter`, never omitted, clamped or rounded; a nearest-level substitution happens only when the caller opts in with `ReasoningFallback`, level for level. Nothing in this ADR's temperature rules changes.
+
 ## Context
 
 Should temperature validation be provider-aware, or a single global clamp? Two REQUIREMENTS.md

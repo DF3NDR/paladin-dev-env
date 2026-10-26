@@ -163,7 +163,7 @@ pub fn campaign_node_ids(campaign: &Campaign) -> HashMap<Uuid, NodeId> {
     let mut slug_counts: HashMap<String, usize> = HashMap::new();
     let mut slugs: HashMap<Uuid, String> = HashMap::new();
     for (uuid, paladin) in &entries {
-        let slug = slugify(&paladin.node.name);
+        let slug = slugify(&paladin.data.name);
         *slug_counts.entry(slug.clone()).or_insert(0) += 1;
         slugs.insert(*uuid, slug);
     }
@@ -369,7 +369,7 @@ fn fan_in_template(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use paladin_core::base::entity::node::Node;
+    use paladin_core::base::entity::Entity;
     use paladin_core::platform::container::battalion::BattalionConfig;
     use paladin_core::platform::container::battalion::campaign::{CampaignEdge, EdgeCondition};
     use paladin_core::platform::container::paladin::PaladinData;
@@ -385,7 +385,7 @@ mod tests {
             name: name.to_string(),
             ..Default::default()
         };
-        Node::new(data, Some(name.to_string()))
+        Entity::new(data, Some(name.to_string()))
     }
 
     // --- default three-field schema -------------------------------------

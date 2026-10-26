@@ -16,13 +16,21 @@ llm_api_key: "" # unused — keys come from environment variables
 # Every `api_key` below uses ${ENV_VAR} indirection naming the real variable; NEVER put a
 # literal key in this file. Only the providers you actually compiled in (via the matching
 # `llm-<provider>` Cargo feature) are usable at runtime — an unused block here is inert.
+#
+# A block drives every agent that uses its provider. Precedence, field by field: the agent's own
+# `model` (or `provider`), then the block, then the provider's own environment variables
+# (OPENAI_API_KEY, ...), then the adapter's built-in default. An exact `"${VAR}"` in `api_key` is
+# read from the variable `VAR` (an unset variable is an error naming it, never sent as the key);
+# an empty or omitted `api_key` falls back to the provider's own variable. A block's
+# `default_temperature` is passed to its agents as an explicit value, so a model that does not
+# accept it refuses the agent at startup: leave it out for models with a fixed temperature.
 llm:
   default_provider: "openai"
 
   openai:
     api_key: "${OPENAI_API_KEY}"
     base_url: "https://api.openai.com/v1"
-    default_model: "gpt-4"
+    default_model: "gpt-4o-mini"
     default_temperature: 0.7
     timeout_seconds: 300
     max_retries: 3
@@ -30,27 +38,39 @@ llm:
   anthropic:
     api_key: "${ANTHROPIC_API_KEY}"
     base_url: "https://api.anthropic.com/v1"
-    default_model: "claude-3-5-sonnet-20241022"
-    default_temperature: 0.7
+    default_model: "claude-haiku-5-5"
+    # No `default_temperature`: claude-haiku-5-5 accepts only temperature 1.0, so a block-level
+    # 0.7 would refuse every agent that uses this provider.
     timeout_seconds: 300
     max_retries: 3
 
   deepseek:
     api_key: "${DEEPSEEK_API_KEY}"
     base_url: "https://api.deepseek.com/v1"
-    default_model: "deepseek-chat"
+    default_model: "deepseek-flash"
     default_temperature: 0.7
     timeout_seconds: 300
     max_retries: 3
 
   # Kimi (Moonshot AI). Live-verified 2026-08-22 (plan 17-19, closing G-17-4b): a live
   # GET /models call and a generate() round trip both succeeded against api.moonshot.ai
-  # using the default model below. (Confirmed: model list + a completion round trip.)
+  # using kimi-k3. Since Phase 50 the block's default_model is the adapter's own current
+  # default, kimi-k2.6 (2026-10-15 probe); kimi-k3 stays available per agent.
   kimi:
     api_key: "${MOONSHOT_API_KEY}"
     base_url: "https://api.moonshot.ai/v1"
-    default_model: "kimi-k3"
+    default_model: "kimi-k2.6"
     timeout_seconds: 60
+    # Optional limits, available on every block (shown here once, commented out so this file
+    # behaves exactly as its defaults):
+    #   max_tokens: 4096        # output budget sent when a request sets none; checked against
+    #                           # the model's profiled maximum output
+    #   context_window: 262144  # adapter-wide window in tokens, replacing every compiled window
+    #                           # of this provider
+    #   models:                 # per-model profile overrides, laid over the built-in entry
+    #     kimi-k3:              # field by field; an unknown key under a model is a load error
+    #       context_window: 262144
+    #       temperature: {fixed: 1.0}   # also {range: [0.0, 1.0]} or not_sent
 
   # Qwen (Alibaba DashScope). Live-verified 2026-08-23 (plan 17-21 gap closure): a live
   # GET /models call against the endpoint below returned a 162-model catalog, including
@@ -68,7 +88,7 @@ llm:
   qwen:
     api_key: "${DASHSCOPE_API_KEY}"
     base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
-    default_model: "qwen-plus"
+    default_model: "qwen3.8-flash"
     timeout_seconds: 60
 
   # Grok (xAI). Live-verified 2026-08-22 (plan 17-18, closing G-17-4a): a live GET
@@ -77,7 +97,7 @@ llm:
   grok:
     api_key: "${XAI_API_KEY}"
     base_url: "https://api.x.ai/v1"
-    default_model: "grok-4.6"
+    default_model: "grok-4.3"
     timeout_seconds: 60
 
   # Ollama (self-hosted). Deliberately carries NO api_key field: Ollama requires no
@@ -95,11 +115,12 @@ llm:
   # Live-verified: a live GET /models call and a generate() round trip both succeeded
   # against generativelanguage.googleapis.com. default_model was refreshed from
   # gemini-2.5-flash (retired for new users) to gemini-3.6-flash on 2026-08-22, per
-  # the live catalog. (Confirmed: model list + a completion round trip.)
+  # the live catalog. (Confirmed: model list + a completion round trip.) Since Phase 50 the
+  # block's default_model is the adapter's own current default (2026-10-15 probe).
   gemini:
     api_key: "${GEMINI_API_KEY}"
     base_url: "https://generativelanguage.googleapis.com/v1beta"
-    default_model: "gemini-3.6-flash"
+    default_model: "gemini-3.5-flash-lite"
     timeout_seconds: 60
 
   # Generic operator-configured OpenAI-compatible provider — points Paladin at ANY
@@ -154,18 +175,26 @@ http:
     enabled: true
     # Static API keys (header `X-API-Key`). Put real keys in env/secrets, not in VCS.
     # `role` is `admin` or `user`; admins may register/deregister agents at runtime.
+    # `tenant` is REQUIRED on every key (Phase 40, TENANT-01): runs and spend are
+    # attributed to it, and a key reads only its own tenant's runs unless its role is
+    # admin. There is no implicit default tenant -- an empty/missing value fails boot.
     api_keys:
       - key: "${PALADIN_API_KEY_CI}" # service-to-service caller
         name: "ci-runner"
         role: "admin"
+        tenant: "platform-ops"
       - key: "${PALADIN_API_KEY_APP}"
         name: "frontend"
         role: "user"
+        tenant: "web-app"
     # Accept opaque server-issued bearer tokens via the wired AuthPort (in-process token
     # store). A random string checked against the store's own hashed records — not a
     # signed or self-describing token.
     bearer_token:
       enabled: false
+      # Required when `enabled` is true (Phase 40, TENANT-01, D-03): every verified
+      # bearer principal carries this tenant. Example:
+      # tenant: "bearer-callers"
   # Interactive API docs: serve GET /openapi.json + Swagger UI at /docs (unversioned,
   # unauthenticated — the contract is public). Set false to omit them in production.
   docs:
@@ -227,6 +256,90 @@ agent_runtime:
   vault_tools:
     enabled: false
 
+# Operator-configured per-model price table (PRICE-01, D-07). Every field below is IDENTICAL
+# to what TreasurerConfig::default() produces -- the whole `treasurer:` section may be OMITTED
+# ENTIRELY with no behavior change: a config file with no `treasurer:` key resolves to an empty
+# pricing table in "USD" and no LLM call is priced. No price ships with Paladin -- every price
+# in effect comes from the operator's own `pricing` entries below.
+#
+# Each price is a DECIMAL STRING in nano-units (1e-9) per 1,000,000 tokens -- copy a provider's
+# published price-sheet figure verbatim, e.g. "2.50" for $2.50 per 1M tokens. No scientific
+# notation, no thousands separator, no sign, at most 9 digits after the decimal point.
+#
+# `prompt` and `completion` are REQUIRED for every model row; a row missing either fails to
+# load rather than silently billing at a fallback price. `cache_read`, `cache_write` and
+# `reasoning` are OPTIONAL -- when omitted, those tokens bill at the `prompt` (cache axes) or
+# `completion` (reasoning) price, because TokenUsage already counts cache tokens inside
+# prompt_tokens and reasoning tokens inside completion_tokens. An unrecognized axis name (e.g.
+# a `cache_reads` typo) is a load error, never a silently-ignored key.
+#
+# `currency` is an ISO 4217 three-letter code, exactly three ASCII uppercase letters (e.g.
+# "USD", "EUR") -- overridable via APP_TREASURER_CURRENCY; `pricing` is config-file only, no
+# environment-variable form.
+treasurer:
+  currency: "USD"
+  pricing: {}
+  # pricing:
+  #   gpt-4:
+  #     prompt: "2.50"
+  #     completion: "10.00"
+  #     cache_read: "0.25"
+  #   claude-3-5-sonnet-20241022:
+  #     prompt: "3.00"
+  #     completion: "15.00"
+
+  # Spend allowances (ALLOW-01, Phase 41) -- OMIT `allowance:` to disable; the section is inert
+  # when absent. A request is refused with `429 allowance_exhausted` BEFORE it starts when its
+  # API key's or tenant's spend in the current window (or lifetime) has reached the ceiling.
+  #
+  # - `period` is `<integer><m|h|d>` between 1m and 366d; `amount` and `lifetime` are decimal
+  #   strings in WHOLE units of `treasurer.currency` (never a token count). `period` and `amount`
+  #   are required on every entry; `lifetime` and `warn_at` are optional.
+  # - Windows are tumbling and aligned to the UTC epoch, computed from the store clock, so spend
+  #   resets on the boundary and a scope can spend up to twice an allowance across one boundary.
+  # - `warn_at` is an integer percent 0..=100 (0 disables warnings); the global value applies to
+  #   every entry that does not set its own.
+  # - Every `api_keys.<name>` must name a key in `http.auth.api_keys` and every `tenants.<id>` a
+  #   tenant one of those keys (or `http.auth.bearer_token.tenant`) maps to, and the section
+  #   needs `run_store.backend` set -- otherwise the server REFUSES TO BOOT. A typo anywhere
+  #   under `treasurer:` is a load error. With `http.auth.enabled: false` use `api_keys.anonymous`
+  #   and `tenants.open-access`.
+  # - Admin keys are bound like any other key.
+  # - The webhook `secret` is NOT read from a `${...}` placeholder (this loader does not expand
+  #   them): set it with APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET. A private-address `url` also
+  #   needs `webhooks.allow_private: true`.
+  # allowance:
+  #   warn_at: 80
+  #   webhook:
+  #     url: "https://ops.example.com/paladin-allowance"
+  #   tenants:
+  #     acme:
+  #       period: "24h"
+  #       amount: "25.00"
+  #       lifetime: "500.00"
+  #   api_keys:
+  #     ci-runner:
+  #       period: "1h"
+  #       amount: "2.50"
+  #       warn_at: 90
+
+  # Rate pacing (Cadence, PACE-01..04, Phase 43) is ON by default when this section is omitted;
+  # these are the defaults. `enabled: false` turns it off.
+  # cadence:
+  #   enabled: true
+  #   backend: in_process
+  #   base_backoff_ms: 500
+  #   max_backoff_ms: 30000
+  #   max_wait_secs: 300
+  #   degraded_multiplier: 2.0
+  #   fallback_pace_budget_secs: 60
+  #   lock_ttl_secs: 120
+  #
+  # To share pacing state across a worker fleet instead (needs a binary built with
+  # `--features redis-cadence`), replace `backend: in_process` with the form below. The URL is
+  # read ONLY from the environment variable named by `url_env`; it never appears in this file.
+  #   backend: { redis: { url_env: PALADIN_CADENCE_REDIS_URL } }
+
 # Runtime trace pipeline configuration (X-09, D-36). Every field below is
 # written out explicitly and is IDENTICAL to what TraceConfig::default()
 # produces -- the whole `trace:` section may be OMITTED ENTIRELY with no
@@ -279,14 +392,14 @@ web_server:
 agents:
   - id: "researcher"
     provider: "openai" # optional; defaults to llm.default_provider
-    model: "gpt-4"
+    model: "gpt-4o-mini" # built with the `llm.<provider>` block above, this model
     system_prompt: "You research topics thoroughly."
     temperature: 0.7 # optional
     timeout_seconds: 120 # optional per-agent override (clamped to timeouts.max_seconds)
     # Roles permitted to invoke this agent; omit/empty ⇒ any authenticated caller.
     allowed_roles: ["admin", "user"]
   - id: "summarizer"
-    model: "gpt-4"
+    model: "gpt-4o-mini"
     system_prompt: "You write concise summaries."
     allowed_roles: ["admin"] # restricted to admins
 

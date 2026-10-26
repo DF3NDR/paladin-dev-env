@@ -5,7 +5,7 @@
 
 use async_trait::async_trait;
 use paladin::application::services::battalion::chain_of_command_service::ChainOfCommandExecutionService;
-use paladin::core::base::entity::node::Node;
+use paladin::core::base::entity::Entity;
 use paladin::core::platform::container::battalion::BattalionConfig;
 use paladin::core::platform::container::battalion::chain_of_command::{
     ChainOfCommand, DelegationStrategy,
@@ -59,16 +59,16 @@ impl PaladinPort for MockPaladinPort {
         self.execution_log
             .lock()
             .unwrap()
-            .push(paladin.node.name.clone());
+            .push(paladin.data.name.clone());
 
         // Get simulated output
         let output = self
             .outputs
             .lock()
             .unwrap()
-            .get(&paladin.node.name)
+            .get(&paladin.data.name)
             .cloned()
-            .unwrap_or_else(|| format!("{} processed: {}", paladin.node.name, input));
+            .unwrap_or_else(|| format!("{} processed: {}", paladin.data.name, input));
 
         Ok(PaladinResult {
             output,
@@ -111,7 +111,7 @@ fn create_test_paladin(name: &str) -> Paladin {
         ..Default::default()
     };
 
-    Node::new(data, Some(name.to_string()))
+    Entity::new(data, Some(name.to_string()))
 }
 
 #[tokio::test]
@@ -386,7 +386,7 @@ async fn test_concurrent_broadcasts() {
 }
 
 #[tokio::test]
-async fn test_chain_with_config_timeout() {
+async fn test_chain_with_default_config_completes() {
     let mock_port = Arc::new(MockPaladinPort::new());
 
     // Set commander output for automatic delegation
@@ -397,8 +397,8 @@ async fn test_chain_with_config_timeout() {
 
     let service = ChainOfCommandExecutionService::new(mock_port);
 
-    let mut config = BattalionConfig::new("timeout_chain");
-    config.timeout_seconds = 5; // 5 second timeout
+    // ChainOfCommand is not bounded by `aegis` (ADR-0059 (c)); the default config suffices.
+    let config = BattalionConfig::new("default_chain");
 
     let commander = create_test_paladin("Commander");
     let specialist = create_test_paladin("Specialist");
@@ -408,7 +408,7 @@ async fn test_chain_with_config_timeout() {
         .with_strategy(DelegationStrategy::Automatic);
 
     // Execute (should complete quickly with mock)
-    let result = service.execute(&chain, "test with timeout").await;
+    let result = service.execute(&chain, "test with default config").await;
 
     assert!(result.is_ok());
 }

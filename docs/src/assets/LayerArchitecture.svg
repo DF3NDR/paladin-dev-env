@@ -109,7 +109,7 @@
   <!-- Core components -->
   <rect x="270" y="640" width="140" height="80" rx="10" fill="white" fill-opacity="0.9" stroke="#D68910" stroke-width="2"/>
   <text x="340" y="665" font-family="Arial, sans-serif" font-size="14" font-weight="bold" text-anchor="middle" fill="#D68910">Entities</text>
-  <text x="340" y="685" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#555">Node</text>
+  <text x="340" y="685" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#555">Entity</text>
   <text x="340" y="700" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#555">Collection</text>
   <text x="340" y="715" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#555">Field</text>
 
@@ -124,3 +124,4 @@
   <text x="660" y="685" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#555">Version Service</text>
   <text x="660" y="700" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#555">Collection Service</text>
   <text x="660" y="715" font-family="Arial, sans-serif" font-size="11" text-anchor="middle" fill="#555">Field Service</text>
+</svg>

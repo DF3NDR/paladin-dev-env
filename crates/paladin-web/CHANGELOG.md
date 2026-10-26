@@ -5,9 +5,62 @@ All notable changes to `paladin-web` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows lockstep workspace versioning.
 
-## [Unreleased]
+## [0.11.0] - 2026-10-26
 
-## [0.10.1] - 2026-09-20
+### Added
+
+- Phase 42 (mid-run halt and terminal status, ALLOW-03, ALLOW-05, PLAT-09; ADR-0057):
+  `halt_reason` and `final_waypoint_id` on `RunResponse` (`GET /v1/runs/{id}`, `GET /v1/runs`) and
+  `halt_reason` on the `halted` run webhook; the SSE `done` event names `halt_reason` for a spend
+  halt and `status: "cancelled"` for a caller cancel on the live, degraded and replay paths;
+  `stop_reason: "allowance_halted"` and `ExecuteResponse.halt_reason` on the agent `execute`,
+  `execute/stream` and `jobs` routes; `422 model_unpriced` (`ApiError::model_unpriced`) on the
+  agent routes and `POST /v1/runs`; `RunEventKind::AllowanceHalted` as an operator-only
+  `allowance_halted` event (see `MIGRATION.md` §10.2 and §10.6).
+
+- Phase 41 (allowance admission, ALLOW-02): `429 allowance_exhausted` with a store-clock `Retry-After`
+  on `POST /v1/runs`, `POST /v1/threads/{id}/fork` and the agent `execute`, `execute/stream` and
+  `jobs` routes; `ApiError::with_retry_after` / `retry_after` / `allowance_exhausted`;
+  `AgentApiState.treasurer` / `with_treasurer`; `OPEN_ACCESS_PRINCIPAL_ID`; the `429` response in the
+  OpenAPI document (a narrow, tested exception to the frozen v0.9 golden gate).
+
+- `CostDto { nanos, currency, display }` (`run_controller.rs`) — the crate's one wire projection
+  of `paladin_core::cost::Cost`, `display` produced by `treasury_ledger::format_cost` (LEDGR-04).
+- `RunApiState.treasury_ledger`/`with_treasury_ledger`.
+
+- `Principal.tenant_id: TenantId` (required, derived from `AgentAuthConfig` inside `authenticate()`
+  and nowhere else), `Principal::new`, `Principal::read_scope`, `Principal::ledger_scope` and
+  `From<&Principal> for PrincipalRef`; `Principal` is now `#[non_exhaustive]` (TENANT-01;
+  **breaking** — see root `MIGRATION.md` §10.2).
+- `AgentAuthConfig.bearer_tenant: Option<TenantId>` — the tenant every verified bearer principal
+  carries; a verified bearer token fails closed (`401`) while it is `None` (TENANT-01).
+- `run_controller::load_visible_run` — the single-run half of the tenant read gate and the entry
+  point of every `/runs/{run_id}*` route; a hidden run is the missing-run `404`, never `403`
+  (PLAT-07).
+- `RunAttributionDto { tenant_id, api_key_id }` and `RunResponse.submitted_by:
+  Option<RunAttributionDto>` on `GET /runs/{run_id}` and `GET /runs`; `openapi.json` regenerated
+  (TENANT-02).
+
+### Changed
+
+- `RunResponse.cost: Option<CostDto>` (`GET /runs/{run_id}` and `GET /runs`) and
+  `ExecuteResponse.cost: Option<CostDto>` (`POST /agents/{id}/execute`) are both derived from
+  `TreasuryLedgerPort::spend` at read time — one query per request/page, `null` when no ledger
+  backend is configured, the run has no settled spend, or its settlements span more than one
+  currency (LEDGR-04; see root `MIGRATION.md` §10.2).
+
+- Every repository/backend failure on the `/runs` routes (`GET /runs`, `GET /runs/{run_id}`,
+  `/stream`, `/webhook-deliveries`, `POST /runs`, cancel) now renders a fixed `500 internal`
+  body (`"run store error"`); the detail is logged server-side with `log::error!` and no longer
+  echoed to the client (WR-03/WR-04).
+- `GET /runs` lists only the caller's tenant's runs (Admin: all); `GET /runs/{run_id}`, `/stream`,
+  `/webhook-deliveries` and `POST /runs/{run_id}/cancel` answer the missing-run `404` for another
+  tenant's run and `501` when no run store is configured (PLAT-07).
+- `POST /agents/{id}/execute`, `/execute/stream` and `/jobs` settle spend under the calling
+  principal's tenant and API key via `RunScope::with_ledger_scope(principal.ledger_scope())`; open
+  access settles under `(open-access, anonymous)`, never the `unattributed` sentinel (TENANT-02).
+
+## [0.10.1] - 2026-09-21
 
 Patch release carried by the workspace-wide version bump (0.10.0 -> 0.10.1). No source change in
 this crate; the committed `openapi.json` baseline's `info.version` field was regenerated
@@ -16,7 +69,7 @@ this crate; the committed `openapi.json` baseline's `info.version` field was reg
 from `CARGO_PKG_VERSION` at build time — a data-file update, not a behavior change. See the root
 `CHANGELOG.md`'s `[0.10.1]` section for the two release-pipeline defects this patch fixes.
 
-## [0.10.0] - 2026-09-10
+## [0.10.0] - 2026-09-18
 
 ### Added
 - `ThreadApiState` gained additive fields `runs: Option<Arc<dyn RunRepositoryPort>>` and

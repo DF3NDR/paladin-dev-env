@@ -62,6 +62,7 @@ use paladin_battalion::engine::registries::EngineRegistries;
 use paladin_battalion::engine::shutdown::ShutdownCoordinator;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
+use paladin_core::platform::container::principal::TenantId;
 use paladin_core::platform::container::user::UserRole;
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream};
 use paladin_ports::output::waypoint_port::WaypointPort;
@@ -210,15 +211,17 @@ fn auth_config() -> AgentAuthConfig {
     let mut api_keys = std::collections::HashMap::new();
     api_keys.insert(
         API_KEY.to_string(),
-        Principal {
-            id: "e2e-tester".to_string(),
-            role: UserRole::Admin,
-        },
+        Principal::new(
+            "e2e-tester",
+            UserRole::Admin,
+            TenantId::new("e2e-tenant").unwrap(),
+        ),
     );
     AgentAuthConfig {
         enabled: true,
         api_keys,
         token_verifier: None,
+        bearer_tenant: None,
     }
 }
 

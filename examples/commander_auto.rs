@@ -11,11 +11,13 @@
 use async_trait::async_trait;
 use paladin::application::services::battalion::commander::CommanderBuilder;
 use paladin::application::services::paladin::error::PaladinError;
-use paladin::core::base::entity::node::Node;
+use paladin::core::base::entity::Entity;
+use paladin::core::platform::container::aegis::{Aegis, TimeoutPolicy};
 use paladin::core::platform::container::battalion::{BattalionConfig, BattalionStrategy};
 use paladin::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream, StopReason};
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Mock PaladinPort for demonstration
 struct MockPaladinPort;
@@ -23,10 +25,10 @@ struct MockPaladinPort;
 #[async_trait]
 impl PaladinPort for MockPaladinPort {
     async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
-        println!("   🤖 {} processing...", paladin.node.name);
+        println!("   🤖 {} processing...", paladin.data.name);
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-        let output = format!("[{}]: {}", paladin.node.name, input);
+        let output = format!("[{}]: {}", paladin.data.name, input);
 
         Ok(PaladinResult {
             output,
@@ -52,7 +54,7 @@ impl PaladinPort for MockPaladinPort {
 }
 
 fn create_paladin(name: &str) -> Paladin {
-    Node::new(
+    Entity::new(
         PaladinData {
             system_prompt: format!("You are {}", name),
             name: name.to_string(),
@@ -80,7 +82,14 @@ async fn run_auto_example(
     println!("{}", "=".repeat(70));
 
     let paladin_port = Arc::new(MockPaladinPort);
-    let config = BattalionConfig::new("auto_example").with_timeout(30);
+    // Each Paladin attempt is bounded at 30 seconds, not the whole run.
+    let config = BattalionConfig::new("auto_example").with_aegis(Aegis {
+        timeout: Some(TimeoutPolicy {
+            run_timeout: Some(Duration::from_secs(30)),
+            idle_timeout: None,
+        }),
+        ..Aegis::default()
+    });
 
     // Build Commander with Auto strategy
     // The Commander will analyze the Paladins and select the best strategy
@@ -92,7 +101,7 @@ async fn run_auto_example(
 
     println!("\n📋 Paladins: {}", paladins.len());
     for (i, p) in paladins.iter().enumerate() {
-        println!("   {}. {}", i + 1, p.node.name);
+        println!("   {}. {}", i + 1, p.data.name);
     }
 
     println!("\n🚀 Executing with Auto mode...\n");

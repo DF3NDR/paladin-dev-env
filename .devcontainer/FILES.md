@@ -48,7 +48,7 @@ Service orchestration configuration.
 **Services:**
 - **paladin-dev**: Main development container
 - **redis**: Redis 7 for queue management
-- **minio**: S3-compatible object storage  
+- **rustfs**: S3-compatible object storage  
 - **mysql**: MySQL 8.0 database
 
 **Features:**

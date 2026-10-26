@@ -119,13 +119,16 @@ impl LlmPort for CustomLlmAdapter {
             .json(&request_body)
             .send()
             .await
-            .map_err(|e| PaladinError::LlmError(e.to_string()))?;
+            // `classify_http_error` is this adapter's own helper that turns a transport
+            // error into the typed `LlmError`; the conversion keeps its transience,
+            // status and provider on `PaladinError::LlmFailure`.
+            .map_err(|e| paladin_battalion::llm_failure::to_paladin_error(&self.classify_http_error(e)))?;
 
         // 3. Parse response
         let response_data: CustomApiResponse = response
             .json()
             .await
-            .map_err(|e| PaladinError::LlmError(e.to_string()))?;
+            .map_err(|e| paladin_battalion::llm_failure::to_paladin_error(&self.classify_http_error(e)))?;
 
         // 4. Transform to LlmResponse
         Ok(LlmResponse {
@@ -133,6 +136,7 @@ impl LlmPort for CustomLlmAdapter {
             model: response_data.model,
             usage: response_data.usage.into(),
             tool_calls: self.parse_tool_calls(&response_data),
+            reasoning: None,
         })
     }
 

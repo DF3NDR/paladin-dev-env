@@ -40,6 +40,7 @@ use paladin_core::platform::container::battlefield::{
     BATTLEFIELD_SCHEMA_VERSION, Battlefield, BattlefieldSchema, CacheMarker,
     CustomDispatchResolver, FieldName, StateDelta,
 };
+use paladin_core::platform::container::cost::Cost;
 use paladin_core::platform::container::directive::{
     Directive, MusterContext, MusterTask, NextStep,
 };
@@ -52,6 +53,9 @@ use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::parley::{
     ParleyId, ParleyKind, ParleyRequest, ParleyResponse,
 };
+use paladin_core::platform::container::reasoning::{
+    REASONING_EFFECTIVE_METADATA_KEY, REASONING_REQUESTED_METADATA_KEY,
+};
 use paladin_core::platform::container::run_scope::RunScope;
 use paladin_core::platform::container::structured::SchemaRef;
 use paladin_core::platform::container::token_usage::TokenUsage;
@@ -61,9 +65,12 @@ use paladin_core::platform::container::waypoint::{
     NodeId, NodeOutcomeKind, ThreadId, Waypoint, WaypointId, WaypointStatus,
     canonical_edge_condition,
 };
+use paladin_ports::output::cadence_port::{CadencePort, FencingToken, LockKey};
 use paladin_ports::output::cancellation_probe::CancellationProbe;
 use paladin_ports::output::node_cache_port::{NodeCacheKey, NodeCachePort};
 use paladin_ports::output::paladin_port::PaladinPort;
+use paladin_ports::output::spend_guard::{SpendDecision, SpendGuard};
+use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope, current_attempt_spend};
 use paladin_ports::output::structured_executor_port::{StructuredExecutorPort, StructuredOptions};
 use paladin_ports::output::trace_sink_port::{NodeProgressKind, TraceEvent};
 use paladin_ports::output::vault_confined::ConfinedVault;
@@ -79,7 +86,8 @@ use crate::engine::input_mapping::InputMapping;
 use crate::engine::node::{NodeContext, StateNode, StateNodeError};
 use crate::engine::registries::EngineRegistries;
 use crate::engine::retry;
-use crate::engine::{EngineError, RunOutcome, WaypointDurability};
+use crate::engine::settlement::{SettleHealth, SpendHook};
+use crate::engine::{EngineError, HaltCause, RunOutcome, WaypointDurability};
 use crate::llm_failure;
 
 /// Every parent engine resource D-21 requires forwarding into a
@@ -111,6 +119,12 @@ struct ChildEngineResources<W: WaypointPort + 'static> {
     /// a nested `NodeSpec::Battalion` child run wholesale, like the token
     /// above, so a cancelled parent thread's children observe it too.
     cancellation_probe: Option<Arc<dyn CancellationProbe>>,
+    /// THIS run's own spend guard (ALLOW-03, Phase 42 D-04) -- inherited by a
+    /// nested `NodeSpec::Battalion` child run wholesale, like the probe above,
+    /// so a child graph's own boundaries consult the SAME per-run guard (and,
+    /// through its memoised first halt, can never be passed by a later parent
+    /// boundary).
+    spend_guard: Option<Arc<dyn SpendGuard>>,
     /// THIS run's own `checkpoint_ns` (CF-FR-15, D-20) -- captured once
     /// here so a NESTED `NodeSpec::Battalion` dispatch (a grandchild, from
     /// this run's own perspective) can derive the next namespace segment
@@ -133,7 +147,9 @@ struct ChildEngineResources<W: WaypointPort + 'static> {
     /// inherited by a nested `NodeSpec::Battalion` child run wholesale,
     /// like every other engine resource, so a child graph's own
     /// `CachePolicy` nodes are served by the same backend the parent's are.
-    node_cache: Option<Arc<dyn NodeCachePort>>,
+    /// Carries the stampede lock (PACE-04, D-11) with the cache, so a nested
+    /// `Battalion` run coalesces identical misses exactly as its parent does.
+    node_cache: Option<NodeCacheWiring>,
     /// THIS engine's confined Vault handle (RT-04, D-21; plan 26-13) --
     /// inherited by a nested `NodeSpec::Battalion` child run wholesale,
     /// like every other engine resource, so a child graph's own nodes
@@ -145,6 +161,14 @@ struct ChildEngineResources<W: WaypointPort + 'static> {
     /// `output_schema` nodes dispatch through the SAME executor the
     /// parent's do.
     structured_executor: Option<Arc<dyn StructuredExecutorPort>>,
+    /// THIS run's spend hook, if any (LEDGR-03, D-08, CF-FR-16; plan
+    /// 39-04) -- inherited by a nested `NodeSpec::Battalion` child run as a
+    /// CHILD hook (`SpendHook::child`, never this same top-level/child
+    /// instance re-shared verbatim like every other resource above): the
+    /// child's own attempts fold into the PARENT superstep's accumulator,
+    /// and the child's own `settle_boundary` calls are no-ops -- only the
+    /// top-level hook this run was given ever actually settles.
+    spend: Option<SpendHook>,
 }
 
 /// One dispatched node's resolved cache binding (Doc 04 FT-FR-18, D-29;
@@ -157,6 +181,158 @@ struct NodeCacheBinding {
     policy: CachePolicy,
     cache: Arc<dyn NodeCachePort>,
     graph_fingerprint: GraphFingerprint,
+    /// The Cadence stampede lock and its TTL (PACE-04, D-11), `Some` only
+    /// when the engine was given one via `WarEngine::with_cadence`. With
+    /// `None` this node's miss path is byte-identical to the pre-lock engine:
+    /// no `try_lock`, no `unlock`, a plain `put`.
+    lock: Option<StampedeLock>,
+}
+
+/// The stampede lock an engine was configured with: the Cadence port that
+/// issues it and the TTL every acquisition asks for (PACE-04, D-11).
+pub(crate) type StampedeLock = (Arc<dyn CadencePort>, std::time::Duration);
+
+/// The node cache backend together with the optional stampede lock that
+/// guards its miss-to-put window (PACE-04, D-11). Bundled so the lock travels
+/// wherever the cache does -- the four engine start sites and a nested
+/// `Battalion` child run -- as a type change rather than a new parameter at
+/// every call site.
+#[derive(Clone)]
+pub(crate) struct NodeCacheWiring {
+    /// The node cache backend (FT-FR-18, D-29).
+    pub(crate) cache: Arc<dyn NodeCachePort>,
+    /// The stampede lock and its TTL; `None` when `with_cadence` was never
+    /// called.
+    pub(crate) lock: Option<StampedeLock>,
+}
+
+/// The base interval between a stampede-lock loser's polls (D-12, research
+/// Pattern 6). Each wait adds up to 50 % jitter so a crowd of losers does not
+/// re-read the cache and re-try the lock in lockstep, and is capped at a tenth
+/// of the lock TTL so a short TTL is still polled several times.
+pub(crate) const STAMPEDE_POLL_INTERVAL: std::time::Duration =
+    std::time::Duration::from_millis(100);
+
+/// The lock a dispatch won: released exactly once, after its attempt loop ends
+/// on any path (D-11, research Pitfall 14).
+struct HeldLock {
+    port: Arc<dyn CadencePort>,
+    key: LockKey,
+    token: FencingToken,
+}
+
+impl HeldLock {
+    /// Release the lock, only if this dispatch's token still owns it. A
+    /// release failure is logged and swallowed: the lock then simply expires by
+    /// its TTL, and a lock error must never fail a node (D-13, D-29).
+    async fn release(self, node_id: &NodeId) {
+        if let Err(err) = self.port.unlock(&self.key, &self.token).await {
+            warn!(
+                "node cache: stampede unlock failed for {node_id}: {err} -- the lock expires by \
+                 its TTL (D-13)"
+            );
+        }
+    }
+}
+
+/// What the lock phase of a cache miss decided (D-11, D-12).
+enum StampedeOutcome {
+    /// The entry appeared while waiting (or right after acquiring): serve it.
+    Served(CachedDelta),
+    /// This dispatch holds the lock and must execute, then store with the
+    /// token and release.
+    Held(HeldLock),
+    /// No lock is held and none will be: execute uncached-by-lock -- the TTL
+    /// elapsed with no entry, or `try_lock` failed. The node always executes
+    /// or is served; the lock never fails it.
+    Proceed,
+    /// The run's cancellation token fired during the wait.
+    Interrupted,
+}
+
+/// The wait between two polls: [`STAMPEDE_POLL_INTERVAL`] plus up to 50 %
+/// jitter, capped at a tenth of the lock TTL (and never zero). Synchronous so
+/// the thread-local RNG is never held across an `.await`.
+fn stampede_poll_delay(ttl: std::time::Duration) -> std::time::Duration {
+    use rand::Rng;
+    let base_millis = STAMPEDE_POLL_INTERVAL.as_millis() as u64;
+    let jitter = rand::thread_rng().gen_range(0..=base_millis / 2);
+    let wanted = std::time::Duration::from_millis(base_millis + jitter);
+    wanted
+        .min(ttl / 10)
+        .max(std::time::Duration::from_millis(1))
+}
+
+/// Coalesce identical cache misses (PACE-04, D-11, D-12): called after a miss
+/// when the binding carries a lock. Repeatedly try to take the lock; the
+/// winner returns [`StampedeOutcome::Held`] and executes; a loser sleeps one
+/// poll (cancellation-aware, like a backoff), re-reads the cache -- a hit is
+/// served -- and tries the lock again, so a holder that released without
+/// writing (a failed or non-`Edges` node) hands over within one poll rather
+/// than after the whole TTL. Past the TTL the loser stops waiting and
+/// executes itself. A winner re-reads the cache once before executing: the
+/// previous holder may have stored and released between this dispatch's
+/// first miss and its acquisition, and executing then would be the very
+/// duplicate spend the lock exists to prevent.
+async fn acquire_stampede_lock(
+    binding: &NodeCacheBinding,
+    key: &NodeCacheKey,
+    node_id: &NodeId,
+    cancellation: &Option<CancellationToken>,
+) -> StampedeOutcome {
+    let Some((port, ttl)) = &binding.lock else {
+        return StampedeOutcome::Proceed;
+    };
+    // The key is the existing node-cache key (graph fingerprint, node id,
+    // rendered input hash): no new trust is placed in it (T-43-45).
+    let lock_key = LockKey::new(format!("node-cache:{}", key.as_str()));
+    let deadline = tokio::time::Instant::now().checked_add(*ttl);
+    loop {
+        match port.try_lock(&lock_key, *ttl).await {
+            Ok(Some(token)) => {
+                let held = HeldLock {
+                    port: Arc::clone(port),
+                    key: lock_key,
+                    token,
+                };
+                if let Some(cached) = lookup_node_cache(binding, key, node_id).await {
+                    held.release(node_id).await;
+                    return StampedeOutcome::Served(cached);
+                }
+                return StampedeOutcome::Held(held);
+            }
+            Ok(None) => {}
+            Err(err) => {
+                // Names the node, never the key (it embeds a rendered-input
+                // hash) -- best-effort, D-13, D-29.
+                warn!(
+                    "node cache: stampede lock unavailable for {node_id}: {err} -- executing \
+                     without the lock (D-13)"
+                );
+                return StampedeOutcome::Proceed;
+            }
+        }
+        let wait = match deadline {
+            Some(deadline) => {
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                if remaining.is_zero() {
+                    log::debug!(
+                        "node cache: stampede wait for {node_id} reached the lock TTL -- \
+                         executing without the lock (D-12)"
+                    );
+                    return StampedeOutcome::Proceed;
+                }
+                stampede_poll_delay(*ttl).min(remaining)
+            }
+            None => stampede_poll_delay(*ttl),
+        };
+        if !retry::wait_backoff(wait, cancellation).await {
+            return StampedeOutcome::Interrupted;
+        }
+        if let Some(cached) = lookup_node_cache(binding, key, node_id).await {
+            return StampedeOutcome::Served(cached);
+        }
+    }
 }
 
 /// Compose this dispatch's cache key (D-28, `engine::cache_key`): a
@@ -257,12 +433,18 @@ async fn lookup_node_cache(
 /// the `Function`-node half of the `Deny` guarantee, since a `StateNode`'s
 /// write set is only knowable here). A backend `Err` is logged and never
 /// fails the run.
+///
+/// With `fence` (the token of a stampede lock this dispatch holds, PACE-04,
+/// D-11, D-14) the write goes through `put_fenced`, so a backend that checks
+/// fences refuses a stale holder's late write over a newer holder's entry.
+/// Without one it is a plain `put`.
 async fn store_node_cache(
     binding: &NodeCacheBinding,
     key: &NodeCacheKey,
     delta: &StateDelta,
     schema: &BattlefieldSchema,
     node_id: &NodeId,
+    fence: Option<&FencingToken>,
 ) {
     let denied: Vec<&str> = delta
         .values
@@ -281,7 +463,16 @@ async fn store_node_cache(
         );
         return;
     }
-    if let Err(err) = binding.cache.put(key, delta, binding.policy.ttl).await {
+    let stored = match fence {
+        Some(token) => {
+            binding
+                .cache
+                .put_fenced(key, delta, binding.policy.ttl, token)
+                .await
+        }
+        None => binding.cache.put(key, delta, binding.policy.ttl).await,
+    };
+    if let Err(err) = stored {
         warn!("node cache: put failed for {node_id}: {err} -- ignored, the run continues (D-29)");
     }
 }
@@ -471,9 +662,20 @@ async fn idle_or_pending(
 /// Race one attempt's execution against its [`AttemptBounds`] (D-20).
 /// `biased` toward the attempt so a result landing on the same virtual
 /// tick as a deadline is still a result. On expiry the attempt future is
-/// dropped here -- its partial work is discarded exactly as any other
-/// failed attempt's is (FT-FR-03, T-25-41) -- and the failure names the
-/// bound that fired by typed `TimeoutKind`, never by message text (T-25-42).
+/// dropped here -- its partial output is discarded exactly as any other
+/// failed attempt's is (FT-FR-03, T-25-41); the spend it recorded is still
+/// counted -- and the failure names the bound that fired by typed
+/// `TimeoutKind`, never by message text (T-25-42).
+///
+/// G-50-5a (plan 50-29): every attempt runs inside a fresh [`ATTEMPT_SPEND`]
+/// scope installed HERE, outside the attempt future, so what the attempt
+/// recorded through `record_incurred_spend` (every call its Paladin made and
+/// was billed for) outlives the future. A failed attempt that would
+/// otherwise report the neutral `(TokenUsage::default(), None)` pair reports
+/// the scope's recorded spend instead ([`with_incurred_spend`]), and a
+/// timed-out attempt -- whose future was just dropped -- reports it from the
+/// scope handle held here ([`recorded_spend`]); a success keeps its own
+/// `PaladinResult.cost` (A1-50-29, one source per outcome).
 #[allow(clippy::too_many_arguments)]
 async fn race_attempt(
     attempt: impl std::future::Future<Output = NodeDispatchResult>,
@@ -488,15 +690,59 @@ async fn race_attempt(
         Some((at, kind)) => (Some(at), kind),
         None => (None, TimeoutKind::Run),
     };
+    // A2-50-29: one fresh scope per attempt, inside the node's own spawned
+    // task -- concurrent nodes and retried attempts never share one.
+    let spend_scope = SpendScope::new();
+    let attempt = ATTEMPT_SPEND.scope(spend_scope.clone(), attempt);
     tokio::select! {
         biased;
-        result = attempt => result,
+        result = attempt => with_incurred_spend(result, &spend_scope),
+        // The attempt future is dropped on either expiry; the shared
+        // accumulator it recorded into is not (G-50-5a, plan 50-29).
         _ = deadline_or_pending(deadline) => {
-            (None, TokenUsage::default(), Err(NodeFailure::Timeout(deadline_kind)))
+            let (usage, cost) = recorded_spend(&spend_scope);
+            (
+                None,
+                usage,
+                cost,
+                Err(NodeFailure::Timeout(deadline_kind)),
+                AttemptReasoning::default(),
+            )
         }
         _ = idle_or_pending(heartbeat, bounds.idle, node_id, trace, heartbeat_last_emitted, heartbeat_interval) => {
-            (None, TokenUsage::default(), Err(NodeFailure::Timeout(TimeoutKind::Idle)))
+            let (usage, cost) = recorded_spend(&spend_scope);
+            (
+                None,
+                usage,
+                cost,
+                Err(NodeFailure::Timeout(TimeoutKind::Idle)),
+                AttemptReasoning::default(),
+            )
         }
+    }
+}
+
+/// The `(usage, cost)` pair an attempt's [`SpendScope`] recorded: the
+/// neutral `(TokenUsage::default(), None)` pair when nothing was recorded,
+/// so `CostTally::record_node`'s neutral rule and every unrecorded path are
+/// untouched (G-50-5a, plan 50-29).
+fn recorded_spend(scope: &SpendScope) -> (TokenUsage, Option<Cost>) {
+    let spend = scope.snapshot();
+    (spend.usage().clone(), spend.cost())
+}
+
+/// A failed attempt that reported the neutral pair reports what its scope
+/// recorded instead -- the calls its Paladin made and was billed for before
+/// the error. Every other result (a success, or a `DirectiveParse` failure
+/// already carrying the result's own usage and cost) passes through
+/// unchanged (A1-50-29: one source per outcome, never two).
+fn with_incurred_spend(result: NodeDispatchResult, scope: &SpendScope) -> NodeDispatchResult {
+    match result {
+        (paladin_id, usage, None, Err(failure), reasoning) if usage == TokenUsage::default() => {
+            let (usage, cost) = recorded_spend(scope);
+            (paladin_id, usage, cost, Err(failure), reasoning)
+        }
+        other => other,
     }
 }
 
@@ -644,6 +890,19 @@ impl<W: WaypointPort + 'static> Clone for NodeDispatch<W> {
     }
 }
 
+/// The model a `NodeDispatch::Paladin` entry's cost attaches to in a
+/// settlement's `model_breakdown` (LEDGR-04, D-02): the node's *configured*
+/// `paladin.data.model`, never the model an adapter actually served (D-08's
+/// `WarEngine::with_treasury_ledger` rustdoc states the fallback-hop
+/// simplification this implies). `None` for every other dispatch kind --
+/// `SpendHook::record` folds that into the `"unknown"` breakdown key.
+fn dispatch_paladin_model<W: WaypointPort + 'static>(dispatch: &NodeDispatch<W>) -> Option<String> {
+    match dispatch {
+        NodeDispatch::Paladin { paladin, .. } => Some(paladin.data.model.clone()),
+        NodeDispatch::Function(_) | NodeDispatch::Battalion { .. } => None,
+    }
+}
+
 /// A vanguard node's failure, distinguishing a `DirectiveParser` parse
 /// failure (CF-02, D-11) -- which the per-node accumulation loop below
 /// converts to the typed `EngineError::DirectiveParseFailed` naming this
@@ -698,6 +957,13 @@ enum NodeFailure {
     /// so this divergence from the general classification is visible at
     /// the type level, not buried inside a conditional.
     StructuredOutputInvalid(PaladinError),
+    /// A `NodeSpec::Battalion` node's child run halted at one of its own
+    /// superstep boundaries (cancel, drain or an attached [`SpendGuard`]'s
+    /// halt; 42-REVIEW CR-1). NOT a failure and never retried -- it is the
+    /// child's unfinished work, carried to the dispatch task's boundary where
+    /// it becomes [`NodeRunOutcome::ChildHalted`] and so ends the PARENT's run
+    /// `Halted` with the CHILD's own cause, never a node that "succeeded".
+    ChildHalted(HaltCause),
 }
 
 impl NodeFailure {
@@ -721,6 +987,8 @@ impl NodeFailure {
     /// - `DirectiveParse`/`Battalion` -> `None`: neither is a node-execution
     ///   failure the Aegis governs (each has its own typed `EngineError`
     ///   and is never retried, D-14).
+    /// - `ChildHalted` -> `None`: a halted child is unfinished work, not a
+    ///   node-execution failure, and is never retried.
     fn node_error(&self, node_id: &NodeId, attempt: u32) -> Option<NodeError> {
         let (transience, source) = match self {
             NodeFailure::Node(err) => (Transience::Unknown, NodeErrorSource::from(err.clone())),
@@ -731,7 +999,9 @@ impl NodeFailure {
             NodeFailure::StructuredOutputInvalid(err) => {
                 (Transience::Unknown, llm_failure::to_node_error_source(err))
             }
-            NodeFailure::DirectiveParse(_) | NodeFailure::Battalion(_) => return None,
+            NodeFailure::DirectiveParse(_)
+            | NodeFailure::Battalion(_)
+            | NodeFailure::ChildHalted(_) => return None,
         };
         Some(NodeError {
             node_id: node_id.clone(),
@@ -826,8 +1096,49 @@ fn next_step_arm_name(next: &NextStep) -> &'static str {
 
 /// [`execute_vanguard_node`]'s per-node result: `paladin_id`/`usage`
 /// (`None`/`TokenUsage::default()` for a `Function` or `Battalion` node)
-/// plus the resolved `Directive` or [`NodeFailure`].
-type NodeDispatchResult = (Option<Uuid>, TokenUsage, Result<Directive, NodeFailure>);
+/// plus this attempt's `cost` (D-10: the Paladin arm's own
+/// `PaladinResult.cost`; the structured-output arm's recorded spend across
+/// every call, or `structured.raw.cost` when nothing was recorded; a failed
+/// or timed-out attempt's recorded spend, G-50-5a plan 50-29; `None`
+/// everywhere `usage` is `TokenUsage::default()`) plus the resolved
+/// `Directive` or [`NodeFailure`].
+type NodeDispatchResult = (
+    Option<Uuid>,
+    TokenUsage,
+    Option<Cost>,
+    Result<Directive, NodeFailure>,
+    AttemptReasoning,
+);
+
+/// The reasoning effort one successful Paladin or structured-output attempt
+/// ran with, as the attempt's own response metadata recorded it (D-11,
+/// REASON-05): the `paladin.reasoning_requested` and
+/// `paladin.reasoning_effective` values, carried beside `cost` to the
+/// attempt's `TraceEvent::NodeFinished`.
+///
+/// Read only from the attempt's `PaladinResult.run_metadata`, never from the
+/// agent's configured effort, so the trace can only show an effort the
+/// adapter reported it applied. `AttemptReasoning::default()` (both `None`)
+/// is every other node kind, every failed or timed-out attempt, and any
+/// attempt whose adapter stamped nothing -- mirroring how `cost` is `None`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct AttemptReasoning {
+    /// `paladin.reasoning_requested`, a `ReasoningEffort` `Display` spelling.
+    requested: Option<String>,
+    /// `paladin.reasoning_effective`, a `ReasoningEffort` `Display` spelling.
+    effective: Option<String>,
+}
+
+impl AttemptReasoning {
+    /// Reads the two reasoning keys out of a result's `run_metadata`; any
+    /// other key is ignored.
+    fn from_run_metadata(run_metadata: &BTreeMap<String, String>) -> Self {
+        Self {
+            requested: run_metadata.get(REASONING_REQUESTED_METADATA_KEY).cloned(),
+            effective: run_metadata.get(REASONING_EFFECTIVE_METADATA_KEY).cloned(),
+        }
+    }
+}
 
 /// Executes a [`NodeSpec::Gate`] node's no-`run`-body-of-its-own contract
 /// (HITL-01, D-05), dispatched exactly like a `Function` node
@@ -1013,7 +1324,9 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                 (
                     None,
                     TokenUsage::default(),
+                    None,
                     result.map_err(NodeFailure::Node),
+                    AttemptReasoning::default(),
                 )
             }
             NodeDispatch::Paladin {
@@ -1046,7 +1359,9 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                         return (
                             paladin_id,
                             TokenUsage::default(),
+                            None,
                             Err(NodeFailure::Node(StateNodeError(e.to_string()))),
+                            AttemptReasoning::default(),
                         );
                     }
                 };
@@ -1079,12 +1394,14 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                         return (
                             paladin_id,
                             TokenUsage::default(),
+                            None,
                             Err(NodeFailure::Node(StateNodeError(format!(
                                 "node has output_schema but no structured executor is wired -- \
                                  WarGraph::validate_structured_executor_backend should have \
                                  rejected this before any node ran (node output_field: {})",
                                 output_field.as_str()
                             )))),
+                            AttemptReasoning::default(),
                         );
                     };
                     return match executor
@@ -1098,10 +1415,28 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                         .await
                     {
                         Ok(structured) => {
-                            let usage = structured.raw.usage.clone();
+                            // --- D-10, G-50-5a (plan 50-29): `structured.raw`
+                            // carries only the LAST model call's usage and
+                            // cost (`execute_structured_call` primes one
+                            // `PaladinResult` per call), but every repair call
+                            // before it was billed too. When this attempt's
+                            // `ATTEMPT_SPEND` scope recorded anything, the
+                            // whole recorded spend is reported; an executor
+                            // that records nothing keeps `raw`'s own figures.
+                            let (usage, cost) = match current_attempt_spend() {
+                                Some(spend) if !spend.is_empty() => {
+                                    (spend.usage().clone(), spend.cost())
+                                }
+                                _ => (structured.raw.usage.clone(), structured.raw.cost.clone()),
+                            };
+                            // --- D-11: the last call's own adapter-stamped
+                            // effort, from `raw` (the same call whose
+                            // response `raw` is), never from configuration.
+                            let reasoning =
+                                AttemptReasoning::from_run_metadata(&structured.raw.run_metadata);
                             let mut delta = StateDelta::new();
                             delta.set_raw(output_field, structured.value);
-                            (paladin_id, usage, Ok(delta.into()))
+                            (paladin_id, usage, cost, Ok(delta.into()), reasoning)
                         }
                         // --- D-29, Phase 25 D-05: exhaustion is ALWAYS
                         // `Transience::Unknown` here -- never delegated to
@@ -1111,10 +1446,17 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                         // `execute_structured`, who has no different-graph
                         // retry available) -- see `NodeFailure::
                         // StructuredOutputInvalid`'s own rustdoc for why.
+                        // D-10, G-50-5a (plan 50-29): the neutral pair here
+                        // and in the arm below is a placeholder --
+                        // `race_attempt`'s `with_incurred_spend` replaces it
+                        // with the spend this attempt's scope recorded (the
+                        // first call and every repair call that was billed).
                         Err(err @ PaladinError::StructuredOutputInvalid { .. }) => (
                             paladin_id,
                             TokenUsage::default(),
+                            None,
                             Err(NodeFailure::StructuredOutputInvalid(err)),
+                            AttemptReasoning::default(),
                         ),
                         // Any OTHER underlying failure (e.g. an LLM call
                         // failure inside the repair loop) keeps its own
@@ -1123,7 +1465,9 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                         Err(other) => (
                             paladin_id,
                             TokenUsage::default(),
+                            None,
                             Err(NodeFailure::Paladin(other)),
+                            AttemptReasoning::default(),
                         ),
                     };
                 }
@@ -1148,20 +1492,47 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                 {
                     Ok(result) => {
                         let usage = result.usage.clone();
+                        // --- D-10: this attempt's own PaladinResult.cost,
+                        // carried beside usage exactly like the structured-
+                        // output arm above.
+                        let cost = result.cost.clone();
+                        // --- D-11 (REASON-05): this attempt's own
+                        // requested / effective effort as its adapter
+                        // recorded it on the response metadata; never the
+                        // agent's configured value. Only a successful
+                        // result reaches here, so a failed attempt keeps
+                        // `AttemptReasoning::default()`.
+                        let reasoning = AttemptReasoning::from_run_metadata(&result.run_metadata);
                         // --- CF-02, D-11: the `DirectiveParser` call replacing
                         // the prior unconditional `delta.set(output_field,
                         // result.output.clone())` write. `PlainOutput`
                         // reproduces that write verbatim; `StructuredDirective`
                         // parses D-11's envelope and applies only its `delta`.
                         match directive_parser.parse(&result.output, &output_field) {
-                            Ok(directive) => (paladin_id, usage, Ok(directive)),
-                            Err(e) => (paladin_id, usage, Err(NodeFailure::DirectiveParse(e))),
+                            Ok(directive) => (paladin_id, usage, cost, Ok(directive), reasoning),
+                            // A failed attempt reports no effort (D-11).
+                            Err(e) => (
+                                paladin_id,
+                                usage,
+                                cost,
+                                Err(NodeFailure::DirectiveParse(e)),
+                                AttemptReasoning::default(),
+                            ),
                         }
                     }
+                    // --- D-10, G-50-5a (plan 50-29): the neutral pair HERE
+                    // is a placeholder -- `race_attempt`'s
+                    // `with_incurred_spend` replaces it with the spend this
+                    // attempt's `ATTEMPT_SPEND` scope recorded (every call
+                    // the Paladin made and was billed for before `e`), so a
+                    // failed attempt reports the spend its attempt scope
+                    // recorded and is charged like a success would be.
                     Err(e) => (
                         paladin_id,
                         TokenUsage::default(),
+                        None,
                         Err(NodeFailure::Paladin(e)),
+                        AttemptReasoning::default(),
                     ),
                 }
             }
@@ -1220,10 +1591,12 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                         return (
                             None,
                             TokenUsage::default(),
+                            None,
                             Err(NodeFailure::Node(StateNodeError(format!(
                                 "battalion node {}: failed to derive child thread id: {e}",
                                 ctx.node_id
                             )))),
+                            AttemptReasoning::default(),
                         );
                     }
                 };
@@ -1269,10 +1642,12 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                             return (
                                 None,
                                 TokenUsage::default(),
+                                None,
                                 Err(NodeFailure::Node(StateNodeError(format!(
                                     "battalion node {}: failed to read child thread history: {e}",
                                     ctx.node_id
                                 )))),
+                                AttemptReasoning::default(),
                             );
                         }
                     }
@@ -1292,7 +1667,13 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                             delta.set_raw(parent_field.clone(), value.clone());
                         }
                     }
-                    return (None, TokenUsage::default(), Ok(delta.into()));
+                    return (
+                        None,
+                        TokenUsage::default(),
+                        None,
+                        Ok(delta.into()),
+                        AttemptReasoning::default(),
+                    );
                 }
 
                 let (
@@ -1328,11 +1709,13 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                                     return (
                                         None,
                                         TokenUsage::default(),
+                                        None,
                                         Err(NodeFailure::Node(StateNodeError(format!(
                                             "battalion node {}: failed to initialize child \
                                          battlefield: {e}",
                                             ctx.node_id
                                         )))),
+                                        AttemptReasoning::default(),
                                     );
                                 }
                             };
@@ -1340,11 +1723,13 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                             return (
                                 None,
                                 TokenUsage::default(),
+                                None,
                                 Err(NodeFailure::Node(StateNodeError(format!(
                                     "battalion node {}: child battlefield missing required \
                                      field(s): {e}",
                                     ctx.node_id
                                 )))),
+                                AttemptReasoning::default(),
                             );
                         }
                         (
@@ -1398,6 +1783,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                     &resources.interceptors,
                     &resources.cancellation,
                     &resources.cancellation_probe,
+                    &resources.spend_guard,
                     Some(Arc::clone(&resources.waypoint_port)),
                     child_checkpoint_ns,
                     // --- HITL-03, D-14: the child run inherits the SAME
@@ -1432,6 +1818,13 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                     // `output_schema` nodes dispatch through the SAME
                     // structured executor the parent's do.
                     resources.structured_executor.clone(),
+                    // --- LEDGR-03, D-08, CF-FR-16 (plan 39-04 Task 2): the
+                    // child's own CHILD hook (constructed once, at
+                    // `child_resources`'s single construction site) -- its
+                    // own attempts fold into the PARENT superstep's
+                    // accumulator, and its own `settle_boundary` calls are
+                    // no-ops.
+                    resources.spend.clone(),
                 ));
                 let outcome = child_fut.await;
 
@@ -1447,45 +1840,67 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                                 delta.set_raw(parent_field.clone(), value.clone());
                             }
                         }
-                        (None, TokenUsage::default(), Ok(delta.into()))
+                        (
+                            None,
+                            TokenUsage::default(),
+                            None,
+                            Ok(delta.into()),
+                            AttemptReasoning::default(),
+                        )
                     }
-                    Ok(RunOutcome::Halted { .. }) => {
-                        // --- D-21: the child observed the shared
-                        // `CancellationToken` at its own superstep boundary
-                        // and persisted `Halted`. This node contributes an
-                        // empty delta (never coerced into a failure); the
-                        // PARENT's own top-of-loop cancellation check -- the
-                        // SAME token -- halts the parent at its own next
-                        // boundary.
-                        (None, TokenUsage::default(), Ok(StateDelta::new().into()))
+                    Ok(RunOutcome::Halted { cause, .. }) => {
+                        // --- D-21, 42-REVIEW CR-1: the child halted at its
+                        // own superstep boundary (cancel, drain or a spend
+                        // halt) and persisted `Halted`. This node did NOT
+                        // finish, so it is never reported as a successful
+                        // node with an empty delta -- that let a TERMINAL
+                        // Battalion node fall through "vanguard empty ->
+                        // Completed", and a non-terminal one be resumed
+                        // past the child's unfinished work. The cause is
+                        // carried to the bookkeeping loop, which halts the
+                        // parent in this same superstep and re-lists this
+                        // node on the Halted Waypoint's vanguard.
+                        (
+                            None,
+                            TokenUsage::default(),
+                            None,
+                            Err(NodeFailure::ChildHalted(cause)),
+                            AttemptReasoning::default(),
+                        )
                     }
                     Ok(RunOutcome::AwaitingInput { .. }) => (
                         None,
                         TokenUsage::default(),
+                        None,
                         Err(NodeFailure::Battalion(
                             EngineError::ParleyInChildUnsupported {
                                 node: ctx.node_id.clone(),
                                 child_thread,
                             },
                         )),
+                        AttemptReasoning::default(),
                     ),
                     Ok(RunOutcome::Failed { error, .. }) => (
                         None,
                         TokenUsage::default(),
+                        None,
                         Err(NodeFailure::Battalion(EngineError::BattalionChildFailed {
                             node: ctx.node_id.clone(),
                             child_thread,
                             source: Box::new(error),
                         })),
+                        AttemptReasoning::default(),
                     ),
                     Err(error) => (
                         None,
                         TokenUsage::default(),
+                        None,
                         Err(NodeFailure::Battalion(EngineError::BattalionChildFailed {
                             node: ctx.node_id.clone(),
                             child_thread,
                             source: Box::new(error),
                         })),
+                        AttemptReasoning::default(),
                     ),
                 }
             }
@@ -1523,6 +1938,14 @@ enum NodeRunOutcome {
     /// so `resume` re-executes the node from attempt 1 rather than
     /// silently dropping it as an ordinary skip would.
     Interrupted,
+    /// A `NodeSpec::Battalion` node's CHILD run halted at its own superstep
+    /// boundary with this cause (42-REVIEW CR-1). Recorded and re-listed
+    /// exactly like [`NodeRunOutcome::Interrupted`] -- the child's own
+    /// `Halted` Waypoint is the restart point `resume` re-enters through the
+    /// resume-mid-child path -- and additionally carries the CHILD's cause so
+    /// the parent's `RunOutcome::Halted` keeps a spend reason instead of
+    /// collapsing to `Token`.
+    ChildHalted(HaltCause),
 }
 
 /// Map one attempt's [`NodeRunOutcome`] onto the [`NodeOutcomeKind`]
@@ -1531,7 +1954,8 @@ enum NodeRunOutcome {
 /// trace and a Waypoint never disagree. A `Succeeded` attempt is further
 /// split into `Ended`/`Parleyed` by its `Directive.next`, mirroring
 /// `NodeOutcomeKind`'s own doc comment; `Interrupted` is reported
-/// `Skipped { reason: "shutdown" }`, exactly as it is recorded on the
+/// `Skipped { reason: "shutdown" }`, and a `ChildHalted` Battalion node
+/// `Skipped { reason: "child_halted" }`, exactly as each is recorded on the
 /// Halted Waypoint itself.
 fn node_outcome_kind(outcome: &NodeRunOutcome) -> NodeOutcomeKind {
     match outcome {
@@ -1547,8 +1971,17 @@ fn node_outcome_kind(outcome: &NodeRunOutcome) -> NodeOutcomeKind {
         NodeRunOutcome::Interrupted => NodeOutcomeKind::Skipped {
             reason: "shutdown".to_string(),
         },
+        // A nested child halted (spend or cancel): the node is re-listed for resume, but its
+        // recorded reason must not contradict the run's own halt reason (Phase 42 review IN-12).
+        NodeRunOutcome::ChildHalted(_) => NodeOutcomeKind::Skipped {
+            reason: CHILD_HALTED_REASON.to_string(),
+        },
     }
 }
+
+/// The `Skipped` reason recorded for a Battalion node whose child run halted on a spend ceiling
+/// or a cancel (Phase 42 review IN-12). Distinct from `"shutdown"`, which names a worker drain.
+const CHILD_HALTED_REASON: &str = "child_halted";
 
 /// What one spawned node-dispatch task (the `tokio::spawn`'d async block in
 /// the dispatch loop below) resolves to: the node's own `NodeId` (so the
@@ -1737,6 +2170,11 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
     // never instead of -- `cancellation` above. `None` behaves identically
     // to a probe that never reports cancellation.
     probe: &Option<Arc<dyn CancellationProbe>>,
+    // --- ALLOW-03, Phase 42 D-04: the optional per-run spend guard,
+    // consulted at every superstep boundary AFTER -- and only when neither
+    // -- `cancellation` nor `probe` already resolved a halt cause. `None`
+    // makes no guard call at all.
+    spend_guard: &Option<Arc<dyn SpendGuard>>,
     waypoint_port_arc: Option<Arc<W>>,
     // --- HITL-04, D-19, D-20: unlike `checkpoint_ns`/`fork_of`/
     // `initial_parley_responses` below (each fixed to a top-level-only
@@ -1751,8 +2189,9 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
     // like `shutdown_grace` a real, always-present engine setting every
     // top-level caller forwards (`None` when no backend is wired --
     // `WarGraph::validate_node_cache_backend` has then already rejected
-    // any `CachePolicy` in the graph).
-    node_cache: Option<Arc<dyn NodeCachePort>>,
+    // any `CachePolicy` in the graph). Bundled with the optional stampede
+    // lock (PACE-04, D-11).
+    node_cache: Option<NodeCacheWiring>,
     // --- RT-04, D-21 (plan 26-13): the engine's confined Vault handle, if
     // any -- like `node_cache`, a real, always-present engine setting every
     // top-level caller forwards (`None` when `WarEngine::with_vault` was
@@ -1765,6 +2204,13 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
     // `WarGraph::validate_structured_executor_backend` has then already
     // rejected any `output_schema` in the graph).
     structured_executor: Option<Arc<dyn StructuredExecutorPort>>,
+    // --- LEDGR-03, D-08 (plan 39-04): this run's top-level spend hook, if a
+    // treasury ledger was attached via `WarEngine::with_treasury_ledger` --
+    // `None` when no ledger is configured, in which case this run performs
+    // no ledger call at all (every pre-existing engine test passes
+    // unchanged). Forwarded, unconditionally, to [`run_with_namespace`],
+    // exactly like every other real, always-present engine setting above.
+    spend: Option<SpendHook>,
 ) -> Result<RunOutcome, EngineError> {
     // --- CF-FR-15, D-20: a top-level call through this public entry point
     // (`WarEngine::start`/`resume_with_options`, and every existing test
@@ -1797,6 +2243,7 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
         interceptors,
         cancellation,
         probe,
+        spend_guard,
         waypoint_port_arc,
         None,
         // --- HITL-03, D-14: a top-level `start`/`resume_with_options` call
@@ -1819,6 +2266,7 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
         node_cache,
         vault,
         structured_executor,
+        spend,
     )
     .await
 }
@@ -1862,6 +2310,11 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
     // nested `NodeSpec::Battalion` child run via
     // `ChildEngineResources::cancellation_probe`.
     probe: &Option<Arc<dyn CancellationProbe>>,
+    // --- ALLOW-03, Phase 42 D-04: the optional per-run spend guard,
+    // consulted at every superstep boundary after the two cancel signals.
+    // Inherited wholesale by a nested `NodeSpec::Battalion` child run via
+    // `ChildEngineResources::spend_guard`.
+    spend_guard: &Option<Arc<dyn SpendGuard>>,
     waypoint_port_arc: Option<Arc<W>>,
     // --- CF-FR-15, D-20: the namespace path THIS run's own Waypoints are
     // stamped with (`Waypoint.checkpoint_ns`) -- `None` for a top-level
@@ -1914,8 +2367,8 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
     parent_heartbeat: Option<HeartbeatHandle>,
     // --- FT-FR-18, D-29 (plan 25-13): this run's node cache backend, if
     // any; a nested `NodeSpec::Battalion` child run inherits the SAME
-    // backend via `ChildEngineResources::node_cache`.
-    node_cache: Option<Arc<dyn NodeCachePort>>,
+    // backend (and stampede lock) via `ChildEngineResources::node_cache`.
+    node_cache: Option<NodeCacheWiring>,
     // --- RT-04, D-21 (plan 26-13): this engine's confined Vault handle, if
     // any -- granted to every `NodeContext` this run builds, and inherited
     // wholesale by a nested `NodeSpec::Battalion` child run via
@@ -1928,6 +2381,14 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
     // `ChildEngineResources::structured_executor`, like every other engine
     // resource.
     structured_executor: Option<Arc<dyn StructuredExecutorPort>>,
+    // --- LEDGR-03, D-08 (plan 39-04): this run's top-level spend hook, if
+    // any -- `None` when no treasury ledger is configured, in which case
+    // this run performs no ledger call at all. A nested `NodeSpec::Battalion`
+    // child run inherits a CHILD hook (never this same top-level one)
+    // through `ChildEngineResources::spend` (Task 2) -- its own attempts
+    // fold into the PARENT superstep's accumulator, and its own
+    // `settle_boundary` calls are no-ops (CF-FR-16).
+    spend: Option<SpendHook>,
 ) -> Result<RunOutcome, EngineError> {
     // --- FT-FR-20, D-28: the graph fingerprint every cache key composed in
     // this run starts with -- computed ONCE per run (never per dispatch),
@@ -1967,12 +2428,19 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 interceptors: interceptors.to_vec(),
                 cancellation: cancellation.clone(),
                 cancellation_probe: probe.clone(),
+                spend_guard: spend_guard.clone(),
                 checkpoint_ns: checkpoint_ns.clone(),
                 fork_of,
                 shutdown_grace,
                 node_cache: node_cache.clone(),
                 vault: vault.clone(),
                 structured_executor: structured_executor.clone(),
+                // --- LEDGR-03, D-08, CF-FR-16 (plan 39-04 Task 2): a CHILD
+                // hook over the SAME shared accumulator, never this run's
+                // own top-level/child hook re-shared verbatim -- the
+                // child's own `settle_boundary` calls are then no-ops by
+                // construction (`SpendHook::child`'s own contract).
+                spend: spend.as_ref().map(SpendHook::child),
             })
         });
 
@@ -2125,6 +2593,17 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
         // `bool`, never a `Result`), so there is nothing here to handle on
         // failure -- an adapter that cannot determine the answer has
         // already decided internally to answer `false`.
+        //
+        // --- ALLOW-03, Phase 42 D-04, D-05: `spend_guard`, if attached, is
+        // consulted here too, exactly once per boundary, but ONLY when
+        // neither cancel signal already resolved a cause -- so a probe cancel
+        // and a spend halt at the same boundary resolve to
+        // `HaltCause::CancelRequested` (cancel wins), and an engine with no
+        // guard makes no guard call at all. The order is probe cancel, then
+        // token, then spend. A guard decision is typed
+        // (`SpendDecision::Halt(HaltReason)`): the engine passes the reason
+        // through to `RunOutcome::Halted { cause }` and learns nothing about
+        // ceilings, ledgers or currencies.
         let token_cancelled = cancellation
             .as_ref()
             .is_some_and(CancellationToken::is_cancelled);
@@ -2132,7 +2611,20 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
             Some(p) => p.is_cancelled(&thread).await,
             None => false,
         };
-        if token_cancelled || probe_cancelled {
+        let halt_cause = if probe_cancelled {
+            Some(HaltCause::CancelRequested)
+        } else if token_cancelled {
+            Some(HaltCause::Token)
+        } else if let Some(guard) = spend_guard {
+            match guard.check(&thread).await {
+                SpendDecision::Halt(reason) => Some(HaltCause::Spend(reason)),
+                // `Continue` and any future decision kind: proceed.
+                _ => None,
+            }
+        } else {
+            None
+        };
+        if let Some(cause) = halt_cause {
             let waypoint = build_waypoint(
                 &thread,
                 parent_waypoint_id,
@@ -2151,6 +2643,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Halted {
                 waypoint: waypoint.waypoint_id,
+                cause,
             });
         }
 
@@ -2476,6 +2969,14 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
             // owns everything it touches, mirroring `port` immediately
             // above.
             let node_structured_executor = structured_executor.clone();
+            // --- LEDGR-03, LEDGR-04, D-08 (plan 39-04): this dispatch's own
+            // spend hook (cloned out of the outer scope, mirroring `port`/
+            // `node_structured_executor` above) and its resolved
+            // `paladin.data.model` (or `None` for a `Function`/`Battalion`
+            // dispatch) -- computed here, once, from `dispatch` BEFORE it is
+            // moved into the spawned task below.
+            let node_spend = spend.clone();
+            let node_model = dispatch_paladin_model(&dispatch);
             let node_trace = Arc::clone(trace);
             // --- D-04, T-28-03-02: this run's shared heartbeat rate-limiter
             // state, cloned into the spawned task alongside `node_trace`
@@ -2516,10 +3017,11 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 node_cache.as_ref(),
                 cache_graph_fingerprint.as_ref(),
             ) {
-                (Some(policy), Some(cache), Some(fingerprint)) => Some(NodeCacheBinding {
+                (Some(policy), Some(wiring), Some(fingerprint)) => Some(NodeCacheBinding {
                     policy: policy.clone(),
-                    cache: Arc::clone(cache),
+                    cache: Arc::clone(&wiring.cache),
                     graph_fingerprint: fingerprint.clone(),
+                    lock: wiring.lock.clone(),
                 }),
                 _ => None,
             };
@@ -2536,13 +3038,60 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                     // `NodeStarted`/`NodeFinished { cache_hit: true }` pair,
                     // consumes no retry budget and calls no port. A `get`
                     // error is a miss (`lookup_node_cache`), never a failure.
+                    //
+                    // --- PACE-04, D-11, D-12: on a MISS, when the engine
+                    // has a Cadence stampede lock, this dispatch tries to
+                    // take it BEFORE executing. The winner executes (and
+                    // stores through `put_fenced` with its token); a loser
+                    // waits at `STAMPEDE_POLL_INTERVAL`, re-reading the cache
+                    // and re-trying the lock each round, and serves the hit
+                    // the winner stored -- so concurrent identical misses
+                    // issue the request once. Waiting honours the run's
+                    // cancellation (`Interrupted`, like a mid-backoff
+                    // cancel), a `try_lock` error or an elapsed TTL runs the
+                    // node anyway (the lock is an optimisation, never a
+                    // correctness dependency, D-13/D-29). With no lock
+                    // configured none of this runs and the path is unchanged.
                     let cache_key: Option<NodeCacheKey> =
                         node_cache_binding.as_ref().and_then(|binding| {
                             compose_node_cache_key(binding, &dispatch, &snap, &base_ctx)
                         });
-                    if let (Some(binding), Some(key)) = (&node_cache_binding, &cache_key)
-                        && let Some(cached) = lookup_node_cache(binding, key, &nid).await
-                    {
+                    let mut served: Option<CachedDelta> = None;
+                    let mut held_lock: Option<HeldLock> = None;
+                    if let (Some(binding), Some(key)) = (&node_cache_binding, &cache_key) {
+                        served = lookup_node_cache(binding, key, &nid).await;
+                        if served.is_none() && binding.lock.is_some() {
+                            match acquire_stampede_lock(binding, key, &nid, &node_cancellation)
+                                .await
+                            {
+                                StampedeOutcome::Served(cached) => served = Some(cached),
+                                StampedeOutcome::Held(held) => held_lock = Some(held),
+                                StampedeOutcome::Proceed => {}
+                                // --- Phase 42 halt contract, research
+                                // Pitfall 15: the run is shutting down while
+                                // this dispatch waited on the lock. Reported
+                                // exactly like a node cancelled mid-backoff:
+                                // no attempt ran, so the bookkeeping loop
+                                // records `Skipped { reason: "shutdown" }`
+                                // and re-lists the node for resume.
+                                StampedeOutcome::Interrupted => {
+                                    return NodeTaskOutput {
+                                        node_id: nid,
+                                        started_at: Utc::now(),
+                                        duration_ms: 0,
+                                        paladin_id: None,
+                                        usage: TokenUsage::default(),
+                                        outcome: NodeRunOutcome::Interrupted,
+                                        attempt: 1,
+                                        failed_attempts: Vec::new(),
+                                        node_error: None,
+                                        cache_hit: false,
+                                    };
+                                }
+                            }
+                        }
+                    }
+                    if let Some(cached) = served {
                         let started_at = Utc::now();
                         node_trace.emit(TraceEvent::NodeStarted {
                             superstep: base_ctx.superstep,
@@ -2565,6 +3114,9 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                             outcome: NodeOutcomeKind::Succeeded,
                             duration_ms,
                             usage: TokenUsage::default(),
+                            cost: None,
+                            reasoning_requested: None,
+                            reasoning_effective: None,
                             cache_hit: true,
                         });
                         return NodeTaskOutput {
@@ -2598,7 +3150,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                     // attempt, pushed in attempt order as each retry is
                     // decided, so the vector is ascending by construction.
                     let mut failed_attempts: Vec<AttemptRecord> = Vec::new();
-                    loop {
+                    let output: NodeTaskOutput = loop {
                         attempt += 1;
                         // --- D-18: rebuilt per attempt with the CURRENT
                         // attempt number and a FRESH `HeartbeatHandle`, so a
@@ -2639,14 +3191,20 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                             }
                         }
 
-                        let (paladin_id, usage, outcome) = match decision {
-                            InterceptDecision::Skip(reason) => {
-                                (None, TokenUsage::default(), NodeRunOutcome::Skipped(reason))
-                            }
+                        let (paladin_id, usage, cost, outcome, reasoning) = match decision {
+                            InterceptDecision::Skip(reason) => (
+                                None,
+                                TokenUsage::default(),
+                                None,
+                                NodeRunOutcome::Skipped(reason),
+                                AttemptReasoning::default(),
+                            ),
                             InterceptDecision::Fail(err) => (
                                 None,
                                 TokenUsage::default(),
+                                None,
                                 NodeRunOutcome::Failed(NodeFailure::Node(err)),
+                                AttemptReasoning::default(),
                             ),
                             InterceptDecision::Proceed => match Arc::clone(&sem)
                                 .acquire_owned()
@@ -2656,25 +3214,28 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                                     // --- FT-FR-08/09/10, D-20: race the
                                     // attempt against its resolved bounds.
                                     // On expiry the attempt future is
-                                    // DROPPED (its partial work never becomes
-                                    // a Directive, T-25-41) and the failure
-                                    // names the bound by typed `TimeoutKind`.
-                                    let (paladin_id, usage, result) = race_attempt(
-                                        execute_vanguard_node(
-                                            dispatch.clone(),
-                                            &snap,
-                                            &ctx,
-                                            &port,
-                                            &node_structured_executor,
-                                        ),
-                                        &attempt_bounds,
-                                        &ctx.heartbeat,
-                                        &nid,
-                                        &node_trace,
-                                        &node_heartbeat_last_emitted,
-                                        heartbeat_interval,
-                                    )
-                                    .await;
+                                    // DROPPED (its partial output never
+                                    // becomes a Directive, T-25-41; the spend
+                                    // it recorded is still counted, G-50-5a)
+                                    // and the failure names the bound by
+                                    // typed `TimeoutKind`.
+                                    let (paladin_id, usage, cost, result, reasoning) =
+                                        race_attempt(
+                                            execute_vanguard_node(
+                                                dispatch.clone(),
+                                                &snap,
+                                                &ctx,
+                                                &port,
+                                                &node_structured_executor,
+                                            ),
+                                            &attempt_bounds,
+                                            &ctx.heartbeat,
+                                            &nid,
+                                            &node_trace,
+                                            &node_heartbeat_last_emitted,
+                                            heartbeat_interval,
+                                        )
+                                        .await;
                                     match result {
                                         Ok(mut directive) => {
                                             // --- ENG-FR-22: run every `after` in
@@ -2705,16 +3266,37 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                                                     &directive.delta,
                                                     snap.schema(),
                                                     &nid,
+                                                    // --- PACE-04, D-14: the
+                                                    // winner's token fences
+                                                    // the write.
+                                                    held_lock.as_ref().map(|held| &held.token),
                                                 )
                                                 .await;
                                             }
                                             (
                                                 paladin_id,
                                                 usage,
+                                                cost,
                                                 NodeRunOutcome::Succeeded(directive),
+                                                reasoning,
                                             )
                                         }
-                                        Err(e) => (paladin_id, usage, NodeRunOutcome::Failed(e)),
+                                        // --- 42-REVIEW CR-1: a halted child is
+                                        // unfinished work, not a failure.
+                                        Err(NodeFailure::ChildHalted(cause)) => (
+                                            paladin_id,
+                                            usage,
+                                            cost,
+                                            NodeRunOutcome::ChildHalted(cause),
+                                            AttemptReasoning::default(),
+                                        ),
+                                        Err(e) => (
+                                            paladin_id,
+                                            usage,
+                                            cost,
+                                            NodeRunOutcome::Failed(e),
+                                            AttemptReasoning::default(),
+                                        ),
                                     }
                                 }
                                 // Semaphore is never `.close()`d anywhere in this
@@ -2728,10 +3310,12 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                                 Err(_) => (
                                     None,
                                     TokenUsage::default(),
+                                    None,
                                     NodeRunOutcome::Failed(NodeFailure::Node(StateNodeError(
                                         "internal error: superstep semaphore closed unexpectedly"
                                             .to_string(),
                                     ))),
+                                    AttemptReasoning::default(),
                                 ),
                             },
                         };
@@ -2744,10 +3328,42 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                             outcome: node_outcome_kind(&outcome),
                             duration_ms,
                             usage: usage.clone(),
+                            // D-10: this attempt's own cost -- the Paladin
+                            // arm's PaladinResult.cost, the structured-output
+                            // arm's structured.raw.cost, or None for every
+                            // other node kind (mirroring `usage` exactly).
+                            // G-50-5a (plan 50-29): a failed attempt reports
+                            // the spend its attempt scope recorded -- the
+                            // calls its Paladin was billed for before the
+                            // error -- or the neutral pair when it recorded
+                            // nothing.
+                            cost: cost.clone(),
+                            // D-11 (REASON-05): this attempt's own requested
+                            // and effective effort, read from the attempt's
+                            // response metadata -- the Paladin arm's
+                            // `PaladinResult.run_metadata` or the structured-
+                            // output arm's `structured.raw.run_metadata`;
+                            // `None` for every other node kind, a failed
+                            // attempt and a cache hit (mirroring `cost`).
+                            reasoning_requested: reasoning.requested.clone(),
+                            reasoning_effective: reasoning.effective.clone(),
                             // Plan 25-13 is the only plan that sets this
                             // `true` (a served-from-cache outcome).
                             cache_hit: false,
                         });
+                        // --- LEDGR-03, LEDGR-04, D-08 (plan 39-04): record
+                        // THIS attempt's own cost against the superstep's
+                        // accumulator -- every attempt passes this point
+                        // (including a retried attempt), so a retry's cost
+                        // is folded in exactly once per attempt, never
+                        // dropped and never double-counted. A `None` cost
+                        // (an unpriced call, a `Function` node, a failed
+                        // attempt that recorded no spend) records nothing;
+                        // a failed attempt's recorded spend (G-50-5a, plan
+                        // 50-29) is recorded exactly like a success's.
+                        if let (Some(hook), Some(attempt_cost)) = (&node_spend, &cost) {
+                            hook.record(node_model.as_deref(), attempt_cost);
+                        }
 
                         // --- D-14, D-15, D-07: only a `NodeFailure::Node`
                         // (a `Function` node's own error, an `InputMapping`
@@ -2843,7 +3459,23 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                             node_error,
                             cache_hit: false,
                         };
+                    };
+                    // --- PACE-04, D-11, research Pitfall 14: the lock is
+                    // released ONCE, here, after the attempt loop ends on
+                    // EVERY path -- success, exhausted or non-retryable
+                    // failure, a handler-compensated failure, a mid-backoff
+                    // cancel, and a non-`Edges` directive that stored
+                    // nothing -- so a holder that wrote nothing hands over
+                    // to a waiter within one poll rather than after the TTL.
+                    // A task ABORTED by the grace-deadline race is dropped
+                    // mid-await and cannot reach this line: its lock then
+                    // expires by its TTL (the backstop), and a late write it
+                    // might have made is refused by `put_fenced`'s token
+                    // check at a backend that enforces it.
+                    if let Some(held) = held_lock {
+                        held.release(&output.node_id).await;
                     }
+                    output
                 }),
             });
         }
@@ -2896,6 +3528,9 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
         let handle_count = dispatch_entries.len();
         let mut results: Vec<Option<NodeTaskOutput>> = (0..handle_count).map(|_| None).collect();
         let mut aborted_node_ids: Vec<NodeId> = Vec::new();
+        // --- 42-REVIEW CR-1: the cause a halted nested `Battalion` child
+        // reported this superstep, if any (see `NodeRunOutcome::ChildHalted`).
+        let mut child_halt_cause: Option<HaltCause> = None;
         // --- CR-02 (24-REVIEW.md): a Muster worker task aborted at the
         // grace deadline must NOT re-enter as an ordinary vanguard node on
         // resume (it would lose its `task_key`/`payload` `MusterContext`,
@@ -3305,6 +3940,42 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         aborted_node_ids.push(node_id);
                     }
                 }
+                NodeRunOutcome::ChildHalted(cause) => {
+                    // --- 42-REVIEW CR-1: the child run halted. Recorded and
+                    // re-listed exactly like `Interrupted` (never merged,
+                    // edges left `Pending`, node back on the Halted
+                    // Waypoint's vanguard so a resume re-enters the child
+                    // through its own `Halted` Waypoint) -- plus the child's
+                    // cause is kept so a spend halt survives to the parent's
+                    // `RunOutcome::Halted`. The first cause in dispatch
+                    // order wins; a cancel cause outranks a spend one below.
+                    completed_records.push(NodeExecutionRecord {
+                        node_id: node_id.clone(),
+                        paladin_id,
+                        started_at,
+                        duration_ms,
+                        usage,
+                        outcome: NodeOutcomeKind::Skipped {
+                            reason: CHILD_HALTED_REASON.to_string(),
+                        },
+                        attempt,
+                        attempts: failed_attempts,
+                        cache_hit: false,
+                    });
+                    child_halt_cause = match (child_halt_cause.take(), cause) {
+                        (None, cause) => Some(cause),
+                        // Cancel wins over spend, mirroring the boundary order.
+                        (Some(HaltCause::Spend(_)), cause @ HaltCause::CancelRequested) => {
+                            Some(cause)
+                        }
+                        (Some(kept), _) => Some(kept),
+                    };
+                    if is_muster_task {
+                        muster_task_aborted = true;
+                    } else {
+                        aborted_node_ids.push(node_id);
+                    }
+                }
                 NodeRunOutcome::Failed(e) => {
                     completed_records.push(NodeExecutionRecord {
                         node_id: node_id.clone(),
@@ -3330,6 +4001,29 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
             }
         }
         completed_records.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+
+        // --- LEDGR-03, D-08, ADR-0052 (plan 39-04): settle THIS superstep
+        // attempt's accumulated spend, synchronously, immediately after
+        // every dispatched node's result has been joined and
+        // `completed_records` sorted -- BEFORE any outcome branch below
+        // persists this superstep's Waypoint. A `None` hook (no treasury
+        // ledger configured) performs no call at all; a child hook
+        // (`ChildEngineResources::spend`) is a no-op here too (its own
+        // `settle_boundary` always returns at once) -- only the top-level
+        // hook this run was given ever actually settles.
+        //
+        // --- WR-4 (42-REVIEW): a charge that could not be WRITTEN (a
+        // ledger error, a currency mismatch) leaves the attached guard's
+        // balance reads blind to this run's own spend. Settlement stays
+        // observational -- it never halts anything itself -- but the guard
+        // is told, and decides (a metered run fails closed at its next
+        // boundary check; see `SpendGuard::note_unsettled_spend`).
+        if let Some(hook) = &spend
+            && hook.settle_boundary(superstep_number).await == SettleHealth::ChargeLost
+            && let Some(guard) = spend_guard
+        {
+            guard.note_unsettled_spend(&thread);
+        }
 
         // --- FT-FR-10, D-20, ENG-FR-03: the engine budget expired
         // MID-superstep and cut an in-flight attempt. The run ends with the
@@ -3415,6 +4109,14 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 // `execute_vanguard_node`, where the child thread id was
                 // in scope -- passed through unchanged.
                 (NodeFailure::Battalion(e), _) => e,
+                // --- 42-REVIEW CR-1: unreachable in practice -- the dispatch
+                // task converts a halted child into
+                // `NodeRunOutcome::ChildHalted` before it can be recorded as
+                // a failure -- but library code must not `unreachable!()` an
+                // invariant it cannot enforce.
+                (NodeFailure::ChildHalted(cause), _) => EngineError::Node(StateNodeError(format!(
+                    "internal error: a halted child ({cause:?}) was recorded as a failure"
+                ))),
             };
             let node_error = error.node_error().cloned();
             let waypoint = build_waypoint(
@@ -3687,8 +4389,30 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 fork_of,
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
+            // The in-process token aborted this superstep mid-flight. Consult
+            // the probe once more to split a caller cancel from a drain (D-14,
+            // G1): a probe that reports a cancel makes this a
+            // `CancelRequested`; otherwise the bare token is all there is.
+            //
+            // --- 42-REVIEW CR-1: a halted nested child's own cause is kept
+            // (so a spend halt reaches the parent's `RunOutcome::Halted`)
+            // unless a cancel signal is observable at this level: the order
+            // stays probe cancel, then token, then the child's cause.
+            let token_cancelled = cancellation
+                .as_ref()
+                .is_some_and(CancellationToken::is_cancelled);
+            let mid_flight_cause = match probe {
+                Some(p) if p.is_cancelled(&thread).await => HaltCause::CancelRequested,
+                _ => match child_halt_cause {
+                    Some(HaltCause::CancelRequested) => HaltCause::CancelRequested,
+                    _ if token_cancelled => HaltCause::Token,
+                    Some(cause) => cause,
+                    None => HaltCause::Token,
+                },
+            };
             return Ok(RunOutcome::Halted {
                 waypoint: waypoint.waypoint_id,
+                cause: mid_flight_cause,
             });
         }
 
@@ -4666,7 +5390,7 @@ mod tests {
             name: name.to_string(),
             ..Default::default()
         };
-        paladin_core::base::entity::node::Node::new(data, Some(name.to_string()))
+        paladin_core::base::entity::Entity::new(data, Some(name.to_string()))
     }
 
     fn schema(fields: Vec<FieldSpec>) -> BattlefieldSchema {
@@ -4727,8 +5451,10 @@ mod tests {
             &no_interceptors(),
             &None,
             &None,
+            &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
             None,
             None,
@@ -4770,8 +5496,10 @@ mod tests {
             &no_interceptors(),
             &None,
             &None,
+            &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
             None,
             None,
@@ -4819,8 +5547,10 @@ mod tests {
             &no_interceptors(),
             &None,
             &None,
+            &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
             None,
             None,
@@ -5615,8 +6345,10 @@ mod tests {
             &no_interceptors(),
             &None,
             &None,
+            &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
             None,
             None,
@@ -7079,8 +7811,10 @@ mod tests {
             &no_interceptors(),
             &None,
             &None,
+            &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
             None,
             None,
@@ -7134,8 +7868,10 @@ mod tests {
             &no_interceptors(),
             &None,
             &None,
+            &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
             None,
             None,
@@ -7720,8 +8456,10 @@ mod tests {
             &no_interceptors(),
             &None,
             &None,
+            &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
             None,
             None,
@@ -7758,8 +8496,10 @@ mod tests {
             &no_interceptors(),
             &None,
             &None,
+            &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
             None,
             None,
@@ -7822,8 +8562,10 @@ mod tests {
             &no_interceptors(),
             &None,
             &None,
+            &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
             None,
             None,
@@ -9307,6 +10049,34 @@ mod tests {
         registries: &EngineRegistries,
         cancellation: &Option<CancellationToken>,
     ) -> Result<RunOutcome, EngineError> {
+        run_with_children_and_guard(
+            graph,
+            thread,
+            initial,
+            store,
+            port,
+            registry,
+            registries,
+            cancellation,
+            &None,
+        )
+        .await
+    }
+
+    /// [`run_with_children`] with a `SpendGuard` attached (ALLOW-03, Phase 42): the guard's
+    /// `Arc` is the one the loop shares into every child run's `ChildEngineResources`.
+    #[allow(clippy::too_many_arguments)]
+    async fn run_with_children_and_guard(
+        graph: &WarGraph,
+        thread: ThreadId,
+        initial: StateDelta,
+        store: &Arc<RecordingWaypointStore>,
+        port: &Arc<dyn PaladinPort>,
+        registry: &CustomDispatchResolver,
+        registries: &EngineRegistries,
+        cancellation: &Option<CancellationToken>,
+        spend_guard: &Option<Arc<dyn SpendGuard>>,
+    ) -> Result<RunOutcome, EngineError> {
         run(
             store.as_ref(),
             WaypointDurability::Strict,
@@ -9327,8 +10097,10 @@ mod tests {
             &no_interceptors(),
             cancellation,
             &None,
+            spend_guard,
             Some(Arc::clone(store)),
             default_shutdown_grace(),
+            None,
             None,
             None,
             None,
@@ -10027,6 +10799,336 @@ mod tests {
         );
     }
 
+    /// A test-local guard that mirrors `TreasurerSpendGuard`'s contract (G11): it answers
+    /// `Halt` on exactly one underlying evaluation (the `halt_on`-th) and, once it has halted,
+    /// memoises that reason for every later call -- even though a fresh evaluation would now
+    /// `Continue` (the window rolled, the balance dropped).
+    struct StickyOnceGuard {
+        evaluations: std::sync::atomic::AtomicUsize,
+        halt_on: usize,
+        halted: std::sync::OnceLock<paladin_core::platform::container::allowance::HaltReason>,
+    }
+
+    #[async_trait::async_trait]
+    impl SpendGuard for StickyOnceGuard {
+        async fn check(&self, _thread: &ThreadId) -> SpendDecision {
+            if let Some(reason) = self.halted.get() {
+                return SpendDecision::Halt(reason.clone());
+            }
+            let call = self
+                .evaluations
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1;
+            if call == self.halt_on {
+                let reason =
+                    paladin_core::platform::container::allowance::HaltReason::LedgerUnavailable;
+                SpendDecision::Halt(self.halted.get_or_init(|| reason).clone())
+            } else {
+                SpendDecision::Continue
+            }
+        }
+    }
+
+    /// ALLOW-03, Phase 42 G11 (T-42-16): the SAME guard `Arc` is shared into a `Battalion`
+    /// node's child run. The guard continues at the parent's first boundary, halts at the
+    /// child's first boundary and is sticky afterwards, so the child halts and the parent halts
+    /// in the same superstep with the child's reason (CR-1: the Battalion node is not recorded as
+    /// a successful node) -- the parent's post-Battalion node never runs.
+    #[tokio::test]
+    async fn child_battalion_halt_on_spend_halts_the_parent() {
+        use paladin_core::platform::container::allowance::HaltReason;
+
+        let child_ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let after_ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        let mut child = WarGraph::new(schema(vec![]), EngineLimits::default());
+        let c1 = NodeId::new("c1");
+        {
+            let flag = Arc::clone(&child_ran);
+            child.add_node(
+                c1.clone(),
+                NodeSpec::Function(CountingFunctionNode::new(move |_run, _state| {
+                    flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                    StateDelta::new()
+                })),
+            );
+        }
+        child.add_entry(c1);
+
+        let sub = NodeId::new("sub");
+        let after = NodeId::new("after");
+        let mut parent = WarGraph::new(schema(vec![]), EngineLimits::default());
+        parent.add_node(
+            sub.clone(),
+            NodeSpec::battalion(Arc::new(child), StateMap::new()),
+        );
+        {
+            let flag = Arc::clone(&after_ran);
+            parent.add_node(
+                after.clone(),
+                NodeSpec::Function(CountingFunctionNode::new(move |_run, _state| {
+                    flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                    StateDelta::new()
+                })),
+            );
+        }
+        parent.add_edge(EdgeSpec {
+            from: sub.clone(),
+            to: after,
+            condition: Some(EdgeCondition::Always),
+        });
+        parent.add_entry(sub);
+
+        // Evaluation 1 = the parent's boundary 1 (Continue), 2 = the child's boundary 1 (Halt).
+        let guard = Arc::new(StickyOnceGuard {
+            evaluations: std::sync::atomic::AtomicUsize::new(0),
+            halt_on: 2,
+            halted: std::sync::OnceLock::new(),
+        });
+        let shared: Option<Arc<dyn SpendGuard>> = Some(guard.clone());
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let thread = ThreadId::new("battalion-spend-halt").unwrap();
+        let outcome = run_with_children_and_guard(
+            &parent,
+            thread.clone(),
+            StateDelta::new(),
+            &store,
+            &no_paladin_port(),
+            &CustomDispatchResolver::new(),
+            &EngineRegistries::default(),
+            &None,
+            &shared,
+        )
+        .await
+        .unwrap();
+
+        match outcome {
+            RunOutcome::Halted { cause, .. } => assert_eq!(
+                cause,
+                HaltCause::Spend(HaltReason::LedgerUnavailable),
+                "the parent halts with the child's own reason"
+            ),
+            other => panic!("expected the parent to halt on spend, got {other:?}"),
+        }
+        assert!(
+            !child_ran.load(std::sync::atomic::Ordering::SeqCst),
+            "the child halted at its first boundary, before dispatching c1"
+        );
+        assert!(
+            !after_ran.load(std::sync::atomic::Ordering::SeqCst),
+            "no parent node after the Battalion node may run"
+        );
+        assert_eq!(
+            guard.evaluations.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "the parent's second boundary was answered by the memoised halt, not a re-read"
+        );
+
+        // IN-12: the Battalion node's recorded reason names the child's halt, never a worker
+        // drain, so it does not contradict the run's own halt reason.
+        let parent_waypoints = store.saved_waypoints(&thread).await;
+        let record = parent_waypoints
+            .first()
+            .and_then(|wp| wp.completed.iter().find(|r| r.node_id.as_str() == "sub"))
+            .expect("the halted Battalion node is recorded on the parent's Halted Waypoint");
+        assert_eq!(
+            record.outcome,
+            NodeOutcomeKind::Skipped {
+                reason: "child_halted".to_string()
+            }
+        );
+
+        let child_waypoints = store
+            .saved_waypoints(&child_thread_id(&thread, "sub"))
+            .await;
+        let latest = child_waypoints
+            .first()
+            .expect("the child must have persisted its Halted Waypoint");
+        assert!(
+            matches!(latest.status, WaypointStatus::Halted),
+            "the child run saw the shared guard and halted, got {:?}",
+            latest.status
+        );
+        assert!(
+            latest.completed.is_empty(),
+            "the child dispatched no node of the halted superstep"
+        );
+    }
+
+    /// Build the CR-1 (42-REVIEW) parent graph: a single entry `Battalion` node `sub` whose
+    /// one-node child (`c1`) bumps `c1_calls`, optionally followed by a parent node `after`
+    /// that bumps `after_calls`. With `with_successor == false` the Battalion node is TERMINAL
+    /// -- the shape that used to short-circuit through "vanguard empty -> Completed".
+    fn build_spend_halt_parent(
+        with_successor: bool,
+        c1_calls: &Arc<std::sync::atomic::AtomicUsize>,
+        after_calls: &Arc<std::sync::atomic::AtomicUsize>,
+    ) -> WarGraph {
+        let mut child = WarGraph::new(schema(vec![]), EngineLimits::default());
+        let c1 = NodeId::new("c1");
+        {
+            let counter = Arc::clone(c1_calls);
+            child.add_node(
+                c1.clone(),
+                NodeSpec::Function(CountingFunctionNode::new(move |_run, _state| {
+                    counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    StateDelta::new()
+                })),
+            );
+        }
+        child.add_entry(c1);
+
+        let sub = NodeId::new("sub");
+        let mut parent = WarGraph::new(schema(vec![]), EngineLimits::default());
+        parent.add_node(
+            sub.clone(),
+            NodeSpec::battalion(Arc::new(child), StateMap::new()),
+        );
+        if with_successor {
+            let after = NodeId::new("after");
+            let counter = Arc::clone(after_calls);
+            parent.add_node(
+                after.clone(),
+                NodeSpec::Function(CountingFunctionNode::new(move |_run, _state| {
+                    counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    StateDelta::new()
+                })),
+            );
+            parent.add_edge(EdgeSpec {
+                from: sub.clone(),
+                to: after,
+                condition: Some(EdgeCondition::Always),
+            });
+        }
+        parent.add_entry(sub);
+        parent
+    }
+
+    /// CR-1 (42-REVIEW): a nested `Battalion` child that halts on spend must NOT be recorded as
+    /// a successful node. Whether the Battalion node is terminal or has a successor, the parent
+    /// halts in the SAME superstep with the CHILD's cause, its `Halted` Waypoint re-lists the
+    /// Battalion node on the vanguard, and a resume re-enters the child exactly once.
+    async fn assert_child_spend_halt_is_resumable(with_successor: bool) {
+        use paladin_core::platform::container::allowance::HaltReason;
+
+        let c1_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let after_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let parent = build_spend_halt_parent(with_successor, &c1_calls, &after_calls);
+
+        // Evaluation 1 = the parent's boundary 1 (Continue), 2 = the child's boundary 1 (Halt).
+        let guard = Arc::new(StickyOnceGuard {
+            evaluations: std::sync::atomic::AtomicUsize::new(0),
+            halt_on: 2,
+            halted: std::sync::OnceLock::new(),
+        });
+        let shared: Option<Arc<dyn SpendGuard>> = Some(guard);
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let thread = ThreadId::new("battalion-spend-halt-resumable").unwrap();
+        let outcome = run_with_children_and_guard(
+            &parent,
+            thread.clone(),
+            StateDelta::new(),
+            &store,
+            &no_paladin_port(),
+            &CustomDispatchResolver::new(),
+            &EngineRegistries::default(),
+            &None,
+            &shared,
+        )
+        .await
+        .unwrap();
+
+        match outcome {
+            RunOutcome::Halted { cause, .. } => assert_eq!(
+                cause,
+                HaltCause::Spend(HaltReason::LedgerUnavailable),
+                "the parent halts with the child's own spend reason"
+            ),
+            other => panic!(
+                "a spend-halted child must halt the parent, not {other:?} \
+                 (with_successor = {with_successor})"
+            ),
+        }
+
+        let parent_waypoints = store.saved_waypoints(&thread).await;
+        let halted = parent_waypoints
+            .first()
+            .expect("the parent must have persisted a Halted Waypoint");
+        assert!(
+            matches!(halted.status, WaypointStatus::Halted),
+            "the parent's latest Waypoint must be Halted, got {:?}",
+            halted.status
+        );
+        assert!(
+            halted.vanguard.contains(&NodeId::new("sub")),
+            "the Halted Waypoint must re-list the Battalion node so a resume re-enters the \
+             child, got vanguard {:?}",
+            halted.vanguard
+        );
+        assert_eq!(c1_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(after_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        // --- Resume the parent from its Halted Waypoint with no guard: the Battalion node
+        // re-dispatches, finds the child's own Halted Waypoint and resumes it exactly once.
+        let latest = halted.clone();
+        let resumed = run(
+            store.as_ref(),
+            WaypointDurability::Strict,
+            None,
+            &CustomDispatchResolver::new(),
+            &EngineRegistries::default(),
+            &parent,
+            thread.clone(),
+            latest.battlefield,
+            latest.vanguard,
+            latest.visit_counts,
+            Some(latest.frontier),
+            None,
+            Some(latest.waypoint_id),
+            latest.superstep + 1,
+            &no_paladin_port(),
+            &no_trace(),
+            &no_interceptors(),
+            &None,
+            &None,
+            &None,
+            Some(Arc::clone(&store)),
+            default_shutdown_grace(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(resumed, RunOutcome::Completed { .. }),
+            "the resumed run must complete, got {resumed:?}"
+        );
+        assert_eq!(
+            c1_calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the child's unfinished node must run exactly once after the resume"
+        );
+        assert_eq!(
+            after_calls.load(std::sync::atomic::Ordering::SeqCst),
+            usize::from(with_successor),
+            "the parent's successor runs once after the resume (when there is one)"
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_child_battalion_spend_halt_halts_the_parent_and_is_resumable() {
+        assert_child_spend_halt_is_resumable(false).await;
+    }
+
+    #[tokio::test]
+    async fn child_battalion_spend_halt_with_successor_is_resumable_through_the_child() {
+        assert_child_spend_halt_is_resumable(true).await;
+    }
+
     // --- Plan 23-09: child ThreadId identity, checkpoint_ns, resume-mid-child ---
 
     /// A two-node sequential child (`c1 -> c2`, `Always`) whose entry node
@@ -10706,6 +11808,21 @@ mod tests {
         cancellation: &Option<CancellationToken>,
         shutdown_grace: std::time::Duration,
     ) -> RunOutcome {
+        run_with_shutdown_grace_and_probe(graph, thread, store, cancellation, &None, shutdown_grace)
+            .await
+    }
+
+    /// As [`run_with_shutdown_grace`], with a cancellation `probe` attached
+    /// (Phase 42 D-14, G1: the mid-superstep halt consults it to split a
+    /// caller cancel from a drain).
+    async fn run_with_shutdown_grace_and_probe(
+        graph: &WarGraph,
+        thread: ThreadId,
+        store: &RecordingWaypointStore,
+        cancellation: &Option<CancellationToken>,
+        probe: &Option<Arc<dyn CancellationProbe>>,
+        shutdown_grace: std::time::Duration,
+    ) -> RunOutcome {
         run(
             store,
             WaypointDurability::Strict,
@@ -10729,9 +11846,11 @@ mod tests {
             &no_trace(),
             &no_interceptors(),
             cancellation,
+            probe,
             &None,
             None,
             shutdown_grace,
+            None,
             None,
             None,
             None,
@@ -10776,8 +11895,10 @@ mod tests {
             &no_interceptors(),
             &None,
             &None,
+            &None,
             None,
             shutdown_grace,
+            None,
             None,
             None,
             None,
@@ -10931,6 +12052,90 @@ mod tests {
             first.vanguard.contains(&id),
             "the aborted node's id must be re-listed in the Halted Waypoint's vanguard, got {:?}",
             first.vanguard
+        );
+    }
+
+    /// A probe answering a fixed value, for the mid-flight cause split.
+    struct FixedProbe(bool);
+
+    #[async_trait::async_trait]
+    impl CancellationProbe for FixedProbe {
+        async fn is_cancelled(&self, _thread: &ThreadId) -> bool {
+            self.0
+        }
+    }
+
+    /// Phase 42 D-14, G1: a node aborted mid-superstep with a probe that
+    /// reports a caller cancel halts as `CancelRequested`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn mid_flight_abort_with_a_cancelling_probe_halts_as_cancel_requested() {
+        let run_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let token = CancellationToken::new();
+        let (graph, _id, _f) =
+            single_slow_entry_graph(std::time::Duration::from_secs(2), run_count, token.clone());
+        let store = RecordingWaypointStore::new();
+        // The probe is consulted at the top of the first boundary too; answer
+        // `false` there by cancelling only once the node is aborted: a probe
+        // that is `true` from the start would halt before any node ran, so the
+        // answer here flips on the second consultation.
+        struct FlipProbe(std::sync::atomic::AtomicUsize);
+        #[async_trait::async_trait]
+        impl CancellationProbe for FlipProbe {
+            async fn is_cancelled(&self, _thread: &ThreadId) -> bool {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 1
+            }
+        }
+        let probe: Option<Arc<dyn CancellationProbe>> =
+            Some(Arc::new(FlipProbe(std::sync::atomic::AtomicUsize::new(0))));
+        let outcome = run_with_shutdown_grace_and_probe(
+            &graph,
+            ThreadId::new("mid-flight-cancel-requested").unwrap(),
+            &store,
+            &Some(token),
+            &probe,
+            std::time::Duration::from_millis(50),
+        )
+        .await;
+        assert!(
+            matches!(
+                outcome,
+                RunOutcome::Halted {
+                    cause: HaltCause::CancelRequested,
+                    ..
+                }
+            ),
+            "got {outcome:?}"
+        );
+    }
+
+    /// Phase 42 D-14: with a probe that does not report a cancel, the
+    /// mid-flight abort stays a bare `Token` halt (a drain).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn mid_flight_abort_with_a_quiet_probe_halts_as_token() {
+        let run_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let token = CancellationToken::new();
+        let (graph, _id, _f) =
+            single_slow_entry_graph(std::time::Duration::from_secs(2), run_count, token.clone());
+        let store = RecordingWaypointStore::new();
+        let probe: Option<Arc<dyn CancellationProbe>> = Some(Arc::new(FixedProbe(false)));
+        let outcome = run_with_shutdown_grace_and_probe(
+            &graph,
+            ThreadId::new("mid-flight-token").unwrap(),
+            &store,
+            &Some(token),
+            &probe,
+            std::time::Duration::from_millis(50),
+        )
+        .await;
+        assert!(
+            matches!(
+                outcome,
+                RunOutcome::Halted {
+                    cause: HaltCause::Token,
+                    ..
+                }
+            ),
+            "got {outcome:?}"
         );
     }
 
@@ -12206,8 +13411,10 @@ mod tests {
             &no_interceptors(),
             &None,
             &None,
+            &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
             None,
             None,
@@ -13838,6 +15045,23 @@ mod tests {
             node_events,
             vec![("NodeStarted", 1, None), ("NodeFinished", 1, Some(true))]
         );
+        // D-11: a cache hit ran nothing, so it carries no effort.
+        let hit_reasoning: Vec<(Option<String>, Option<String>)> = sink
+            .events()
+            .await
+            .iter()
+            .filter_map(|record| match &record.event {
+                TraceEvent::NodeFinished {
+                    reasoning_requested,
+                    reasoning_effective,
+                    ..
+                } if record.thread_id == hit_thread => {
+                    Some((reasoning_requested.clone(), reasoning_effective.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(hit_reasoning, vec![(None, None)]);
         // And the populating run's own pair was NOT a hit.
         let miss_thread = ThreadId::new("trace-1").unwrap();
         let miss_finished: Vec<bool> = sink
@@ -14118,8 +15342,7 @@ mod tests {
                 system_prompt: prompt.to_string(),
                 ..Default::default()
             };
-            let paladin =
-                paladin_core::base::entity::node::Node::new(data, Some("writer".to_string()));
+            let paladin = paladin_core::base::entity::Entity::new(data, Some("writer".to_string()));
             graph.add_node(
                 id.clone(),
                 NodeSpec::paladin(
@@ -14379,8 +15602,10 @@ mod tests {
             &no_interceptors(),
             &None,
             &None,
+            &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
             None,
             None,

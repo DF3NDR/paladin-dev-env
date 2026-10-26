@@ -35,26 +35,14 @@ pub enum PaladinError {
     #[error("Execution error: {0}")]
     ExecutionError(String),
 
-    /// Error from the LLM provider.
-    ///
-    /// **Legacy / retained for compatibility (D-02, X-06):** this stringly
-    /// variant classifies [`Transience::Unknown`] via [`PaladinError::transience`]
-    /// and, as of this phase, is constructed by no first-party code — every
-    /// call site that used to build this variant now builds
-    /// [`PaladinError::LlmFailure`] instead, which carries the same message
-    /// (byte-identical `Display`) plus a typed `transience`/`status`/`provider`.
-    /// The variant is not removed (X-03: no pre-existing public variant is
-    /// removed or reshaped) so any external caller still matching on it keeps
-    /// compiling.
-    #[error("LLM error: {0}")]
-    LlmError(String),
-
     /// A structured LLM-provider failure crossing the `paladin-core` boundary
-    /// by value (D-02). Rendered identically to the legacy
-    /// [`PaladinError::LlmError`] arm (`"LLM error: {message}"`) so
-    /// `src/infrastructure/resilience/circuit_breaker.rs`'s message-based
-    /// callers observe no change; [`PaladinError::is_retryable`] returns
-    /// `true` for this variant, the same legacy answer `LlmError(_)` gave.
+    /// by value.
+    ///
+    /// Renders as `LLM error: {message}`. It carries the originating
+    /// adapter's own classification (`transience`), the HTTP `status` and the
+    /// `provider` name as typed fields, so every retry decision reads
+    /// [`PaladinError::transience`] like it does for any other variant and
+    /// never parses the message text.
     #[error("LLM error: {message}")]
     LlmFailure {
         /// Whether this failure is worth retrying, classified by the
@@ -177,38 +165,6 @@ pub enum PaladinError {
 }
 
 impl PaladinError {
-    /// Check if this error is retryable.
-    ///
-    /// **Legacy predicate, superseded by [`PaladinError::transience`] (D-05).**
-    /// Every answer this gives today is unchanged by this phase and is never
-    /// re-tuned: [`PaladinError::LlmFailure`] returns `true`, the same
-    /// blanket answer the legacy [`PaladinError::LlmError`] arm always gave,
-    /// so `src/infrastructure/resilience/circuit_breaker.rs`'s behaviour does
-    /// not shift under the new variant.
-    pub fn is_retryable(&self) -> bool {
-        matches!(
-            self,
-            PaladinError::LlmError(_)
-                | PaladinError::LlmFailure { .. }
-                | PaladinError::ExecutionError(_)
-        )
-    }
-
-    /// Check if this error represents a terminal state.
-    ///
-    /// **Legacy predicate, superseded by [`PaladinError::transience`] (D-05).**
-    /// Every answer this gives today is unchanged by this phase.
-    pub fn is_terminal(&self) -> bool {
-        matches!(
-            self,
-            PaladinError::Timeout(_)
-                | PaladinError::StopWordDetected(_)
-                | PaladinError::CircuitBreakerOpen
-                | PaladinError::MaxRetriesExceeded(_)
-                | PaladinError::GarrisonRequired
-        )
-    }
-
     /// Classify whether this error is worth retrying (Doc 04 FT-FR-01, D-05).
     ///
     /// Every arm reads a typed field or a variant identity only -- never a
@@ -253,7 +209,6 @@ impl PaladinError {
             // Unresolvable from a bare string: no typed field distinguishes
             // a transient cause from a permanent one.
             PaladinError::ExecutionError(_) => Transience::Unknown,
-            PaladinError::LlmError(_) => Transience::Unknown,
 
             // The structured variant carries its own classification, set by
             // the adapter that produced it (typically `LlmError::transience()`).
@@ -320,22 +275,6 @@ mod tests {
     }
 
     #[test]
-    fn test_is_retryable() {
-        assert!(PaladinError::LlmError("temp".to_string()).is_retryable());
-        assert!(PaladinError::ExecutionError("temp".to_string()).is_retryable());
-        assert!(!PaladinError::ConfigurationError("temp".to_string()).is_retryable());
-        assert!(!PaladinError::Timeout(100).is_retryable());
-    }
-
-    #[test]
-    fn test_is_terminal() {
-        assert!(PaladinError::Timeout(100).is_terminal());
-        assert!(PaladinError::CircuitBreakerOpen.is_terminal());
-        assert!(PaladinError::GarrisonRequired.is_terminal());
-        assert!(!PaladinError::LlmError("temp".to_string()).is_terminal());
-    }
-
-    #[test]
     fn test_garrison_error_conversion() {
         let garrison_error = GarrisonError::StorageError("test".to_string());
         let paladin_error: PaladinError = garrison_error.into();
@@ -357,7 +296,6 @@ mod tests {
             (PaladinError::GarrisonRequired, Permanent),
             (PaladinError::MaxRetriesExceeded(3), Permanent),
             (PaladinError::ExecutionError("x".into()), Unknown),
-            (PaladinError::LlmError("x".into()), Unknown),
             (
                 PaladinError::GuardrailTripped {
                     rule: "x".into(),
@@ -466,52 +404,24 @@ mod tests {
         }
     }
 
-    /// Every `is_retryable()`/`is_terminal()` answer is unchanged by this
-    /// phase (X-03) -- including `true` for the new `LlmFailure` variant,
-    /// the same blanket answer the legacy `LlmError(_)` arm always gave.
+    /// A `LlmFailure` renders as `LLM error: <message>` and answers
+    /// `transience()` with the classification it carries, whatever its
+    /// message says.
     #[test]
-    fn legacy_retryability_predicates_are_unchanged() {
-        assert!(PaladinError::LlmError("temp".to_string()).is_retryable());
-        assert!(PaladinError::ExecutionError("temp".to_string()).is_retryable());
-        assert!(!PaladinError::ConfigurationError("temp".to_string()).is_retryable());
-        assert!(!PaladinError::Timeout(100).is_retryable());
-        assert!(
-            PaladinError::LlmFailure {
-                transience: Transience::Unknown,
-                status: None,
-                provider: None,
-                message: "temp".to_string(),
-            }
-            .is_retryable()
-        );
-
-        assert!(PaladinError::Timeout(100).is_terminal());
-        assert!(PaladinError::CircuitBreakerOpen.is_terminal());
-        assert!(PaladinError::GarrisonRequired.is_terminal());
-        assert!(!PaladinError::LlmError("temp".to_string()).is_terminal());
-        assert!(
-            !PaladinError::LlmFailure {
-                transience: Transience::Unknown,
-                status: None,
-                provider: None,
-                message: "temp".to_string(),
-            }
-            .is_terminal()
-        );
-    }
-
-    /// `LlmFailure`'s rendered `Display` is byte-identical to the legacy
-    /// stringly `LlmError(String)` arm for the same message (D-02, X-03).
-    #[test]
-    fn llm_failure_display_matches_the_legacy_stringly_variant() {
-        let message = "connection reset".to_string();
-        let legacy = PaladinError::LlmError(message.clone());
-        let structured = PaladinError::LlmFailure {
-            transience: Transience::Transient,
-            status: Some(503),
-            provider: Some("openai".to_string()),
-            message,
-        };
-        assert_eq!(legacy.to_string(), structured.to_string());
+    fn llm_failure_renders_its_message_and_returns_its_carried_transience() {
+        for carried in [
+            Transience::Transient,
+            Transience::Permanent,
+            Transience::Unknown,
+        ] {
+            let failure = PaladinError::LlmFailure {
+                transience: carried,
+                status: Some(503),
+                provider: Some("openai".to_string()),
+                message: "connection reset".to_string(),
+            };
+            assert_eq!(failure.to_string(), "LLM error: connection reset");
+            assert_eq!(failure.transience(), carried);
+        }
     }
 }

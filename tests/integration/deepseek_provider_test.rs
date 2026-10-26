@@ -15,10 +15,10 @@ mod deepseek_integration_tests {
     fn create_deepseek_adapter() -> DeepSeekAdapter {
         let api_key = env::var("DEEPSEEK_API_KEY")
             .expect("DEEPSEEK_API_KEY must be set for DeepSeek integration tests");
-        let base_url = env::var("DEEPSEEK_BASE_URL")
-            .unwrap_or_else(|_| "https://api.deepseek.com/v1".to_string());
-
-        let config = DeepSeekConfig::new(api_key, base_url, "deepseek-chat".to_string());
+        let mut config = DeepSeekConfig::new(api_key, "deepseek-chat".to_string());
+        if let Ok(base_url) = env::var("DEEPSEEK_BASE_URL") {
+            config = config.with_base_url(base_url);
+        }
         DeepSeekAdapter::new(config).expect("Failed to create DeepSeek adapter")
     }
 

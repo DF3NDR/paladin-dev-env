@@ -95,6 +95,11 @@ impl Phalanx {
 
     /// Set maximum concurrent Paladins (for concurrency limiting)
     ///
+    /// `max` must be at least 1: the Phalanx execution service rejects a limit
+    /// of 0 with a validation error before any Paladin runs, because a
+    /// zero-permit limiter would block every Paladin forever. It also rejects a
+    /// limit above tokio's `Semaphore::MAX_PERMITS`.
+    ///
     /// # Example
     ///
     /// ```ignore
@@ -154,7 +159,7 @@ impl Phalanx {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::base::entity::node::Node;
+    use crate::base::entity::Entity;
     use crate::platform::container::paladin::{MaxLoops, PaladinData, PaladinStatus};
 
     fn create_test_paladin(name: &str) -> Paladin {
@@ -170,7 +175,7 @@ mod tests {
             vision_enabled: false,
             ..Default::default()
         };
-        Node::new(data, Some(name.to_string()))
+        Entity::new(data, Some(name.to_string()))
     }
 
     #[test]

@@ -186,9 +186,11 @@ impl LlmPort for MockLlmAdapter {
                 content,
                 finish_reason: FinishReason::Stop,
                 usage: TokenUsage::new(10, 20),
+                cost: None,
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: None,
+                reasoning: None,
             }),
             MockResponse::ToolCall {
                 tool_name,
@@ -200,12 +202,14 @@ impl LlmPort for MockLlmAdapter {
                 content: format!("Calling tool: {}", tool_name),
                 finish_reason: FinishReason::FunctionCall,
                 usage: TokenUsage::new(10, 15),
+                cost: None,
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: Some(FunctionCall {
                     name: tool_name,
                     arguments,
                 }),
+                reasoning: None,
             }),
             MockResponse::Streaming(chunks) => {
                 // For non-streaming generate(), concatenate all chunks
@@ -217,9 +221,11 @@ impl LlmPort for MockLlmAdapter {
                     content,
                     finish_reason: FinishReason::Stop,
                     usage: TokenUsage::new(10, 20),
+                    cost: None,
                     created_at: Utc::now(),
                     metadata: HashMap::new(),
                     function_call: None,
+                    reasoning: None,
                 })
             }
             MockResponse::Error(error) => Err(error),
@@ -308,7 +314,7 @@ pub fn create_test_paladin_with_mock(
     name: impl Into<String>,
     _mock: Arc<MockLlmAdapter>,
 ) -> paladin::core::platform::container::paladin::Paladin {
-    use paladin::core::base::entity::node::Node;
+    use paladin::core::base::entity::Entity;
     use paladin::core::platform::container::paladin::{MaxLoops, PaladinData, PaladinStatus};
 
     let data = PaladinData {
@@ -323,7 +329,7 @@ pub fn create_test_paladin_with_mock(
         vision_enabled: false,
         ..Default::default()
     };
-    Node::new(data, None)
+    Entity::new(data, None)
 }
 
 /// Helper function to create a mock pre-configured with success responses
@@ -529,8 +535,8 @@ mod tests {
     fn test_create_test_paladin_with_mock() {
         let mock = Arc::new(MockLlmAdapter::new());
         let paladin = create_test_paladin_with_mock("test_paladin", mock);
-        // Access inner data via .node field
-        assert_eq!(paladin.node.name, "test_paladin");
-        assert_eq!(paladin.node.model, "mock-model");
+        // Access inner data via .data field
+        assert_eq!(paladin.data.name, "test_paladin");
+        assert_eq!(paladin.data.model, "mock-model");
     }
 }

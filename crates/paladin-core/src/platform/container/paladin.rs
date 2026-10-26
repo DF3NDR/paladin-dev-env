@@ -1,14 +1,14 @@
 //! Paladin Domain Entity
 //!
 //! This module defines the core domain entity representing an autonomous AI agent
-//! capable of reasoning and executing actions. The Paladin follows the `Node<T>` pattern
+//! capable of reasoning and executing actions. The Paladin follows the `Entity<T>` pattern
 //! for consistency with other domain entities in the system.
 //!
 //! # Example
 //!
 //! ```
 //! use paladin_core::platform::container::paladin::{PaladinData, PaladinStatus, MaxLoops};
-//! use paladin_core::base::entity::node::Node;
+//! use paladin_core::base::entity::Entity;
 //!
 //! let data = PaladinData {
 //!     system_prompt: "You are a helpful assistant".to_string(),
@@ -24,12 +24,15 @@
 //!     autonomous_prompts: false,
 //!     agent_description: String::new(),
 //!     dynamic_temperature: false,
+//!     reasoning_effort: None,
+//!     reasoning_fallback: None,
 //! };
 //!
-//! let paladin = Node::new(data, Some("MyPaladin".to_string()));
+//! let paladin = Entity::new(data, Some("MyPaladin".to_string()));
 //! ```
 
-use crate::base::entity::node::Node;
+use crate::base::entity::Entity;
+use crate::platform::container::reasoning::{ReasoningEffort, ReasoningFallback};
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// Maximum iteration control for Paladin execution
@@ -137,7 +140,7 @@ pub enum PaladinStatus {
 /// Core data payload for a Paladin entity
 ///
 /// Contains all configuration and state information for an autonomous AI agent.
-/// This struct is wrapped in a `Node<T>` to provide UUID, timestamps, and versioning.
+/// This struct is wrapped in an `Entity<T>` to provide UUID, timestamps, and versioning.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PaladinData {
     /// System prompt defining the Paladin's behavior and personality
@@ -197,15 +200,38 @@ pub struct PaladinData {
     /// exploration in later loops when the agent might be stuck.
     #[serde(default)]
     pub dynamic_temperature: bool,
+
+    /// The agent's default reasoning effort (REASON-01, D-00e)
+    ///
+    /// `None` (the default) leaves the request without an effort of its own, so
+    /// the provider-level default (`llm.<provider>.reasoning_effort`) applies,
+    /// and with neither the wire body is exactly what it was before the knob
+    /// existed. A request's own effort beats this value; this value beats the
+    /// provider default. `PaladinBuilder` refuses
+    /// at build time an effort the model cannot honour.
+    ///
+    /// Stored snapshots written before this field existed still load (serde
+    /// default), and a Paladin that sets none serialises without the key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
+
+    /// How the agent's effort is substituted when the model cannot take it
+    /// exactly (REASON-01, D-00e)
+    ///
+    /// `None` means the effective policy is [`ReasoningFallback::Refuse`]
+    /// (fail loud). Only meaningful beside a set
+    /// [`reasoning_effort`](Self::reasoning_effort).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_fallback: Option<ReasoningFallback>,
 }
 
-/// Type alias for a Paladin entity following the `Node<T>` pattern
+/// Type alias for a Paladin entity following the `Entity<T>` pattern
 ///
 /// # Example
 ///
 /// ```
 /// use paladin_core::platform::container::paladin::{Paladin, PaladinData, PaladinStatus, MaxLoops};
-/// use paladin_core::base::entity::node::Node;
+/// use paladin_core::base::entity::Entity;
 ///
 /// let data = PaladinData {
 ///     system_prompt: "You are a code reviewer".to_string(),
@@ -221,12 +247,14 @@ pub struct PaladinData {
 ///     autonomous_prompts: false,
 ///     agent_description: String::new(),
 ///     dynamic_temperature: false,
+///     reasoning_effort: None,
+///     reasoning_fallback: None,
 /// };
 ///
-/// let paladin: Paladin = Node::new(data, Some("CodeReviewer".to_string()));
-/// assert_eq!(paladin.node.name, "CodeReviewer");
+/// let paladin: Paladin = Entity::new(data, Some("CodeReviewer".to_string()));
+/// assert_eq!(paladin.data.name, "CodeReviewer");
 /// ```
-pub type Paladin = Node<PaladinData>;
+pub type Paladin = Entity<PaladinData>;
 
 impl Default for PaladinData {
     /// Creates a PaladinData instance with sensible defaults.
@@ -245,6 +273,8 @@ impl Default for PaladinData {
     /// - `autonomous_prompts`: false
     /// - `agent_description`: Empty string
     /// - `dynamic_temperature`: false
+    /// - `reasoning_effort`: None
+    /// - `reasoning_fallback`: None
     fn default() -> Self {
         Self {
             system_prompt: String::new(),
@@ -260,6 +290,8 @@ impl Default for PaladinData {
             autonomous_prompts: false,
             agent_description: String::new(),
             dynamic_temperature: false,
+            reasoning_effort: None,
+            reasoning_fallback: None,
         }
     }
 }
@@ -370,6 +402,56 @@ mod tests {
         } else {
             panic!("Expected MaxLoops::Auto variant");
         }
+    }
+
+    #[test]
+    fn reasoning_fields_default_to_none() {
+        let data = PaladinData::default();
+        assert_eq!(data.reasoning_effort, None);
+        assert_eq!(data.reasoning_fallback, None);
+    }
+
+    #[test]
+    fn unset_reasoning_serialises_without_either_key() {
+        let json = serde_json::to_value(PaladinData::default()).unwrap();
+        let object = json.as_object().unwrap();
+        assert!(!object.contains_key("reasoning_effort"));
+        assert!(!object.contains_key("reasoning_fallback"));
+    }
+
+    #[test]
+    fn pre_change_snapshot_still_loads() {
+        let mut json = serde_json::to_value(PaladinData::default()).unwrap();
+        let object = json.as_object_mut().unwrap();
+        object.remove("reasoning_effort");
+        object.remove("reasoning_fallback");
+        let data: PaladinData = serde_json::from_value(json).unwrap();
+        assert_eq!(data.reasoning_effort, None);
+        assert_eq!(data.reasoning_fallback, None);
+    }
+
+    #[test]
+    fn set_reasoning_round_trips() {
+        let data = PaladinData {
+            reasoning_effort: Some(ReasoningEffort::Budget(2048)),
+            reasoning_fallback: Some(ReasoningFallback::NearestLower),
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&data).unwrap();
+        assert_eq!(
+            json["reasoning_effort"],
+            serde_json::json!({ "budget": 2048 })
+        );
+        assert_eq!(
+            json["reasoning_fallback"],
+            serde_json::json!("nearest_lower")
+        );
+        let back: PaladinData = serde_json::from_value(json).unwrap();
+        assert_eq!(back.reasoning_effort, Some(ReasoningEffort::Budget(2048)));
+        assert_eq!(
+            back.reasoning_fallback,
+            Some(ReasoningFallback::NearestLower)
+        );
     }
 
     #[test]

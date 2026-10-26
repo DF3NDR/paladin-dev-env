@@ -1004,10 +1004,11 @@ export ANTHROPIC_API_KEY="sk-..."
 
 #### Error: "Timeout"
 
-**Problem:** Execution exceeded configured timeout.
+**Problem:** An attempt exceeded the configured timeout.
 
 **Solution:**
-- Increase `timeout_seconds` in config
+- Increase `timeout_seconds` in config (it bounds each Paladin / expert attempt, so a long
+  multi-step run is not cut off as a whole)
 - Reduce `max_loops` for simpler tasks
 - Check if LLM API is responding slowly
 - Verify network connectivity

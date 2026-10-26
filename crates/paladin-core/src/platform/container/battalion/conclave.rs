@@ -64,34 +64,54 @@ pub enum ObservabilityLevel {
 
 /// Configuration for Conclave orchestration
 ///
-/// Defines the behavior and settings for a Conclave execution including retry logic,
-/// timeout, synthesis prompt customization, and observability level.
+/// Defines the behavior and settings for a Conclave execution including the retry count,
+/// synthesis prompt customization, and observability level. The per-attempt timeout and the
+/// backoff shape come from `battalion_config.aegis`: each expert and aggregator attempt is
+/// bounded by `aegis.timeout`, and `aegis.retry` (or its default) shapes the wait between
+/// retries while `retry_attempts` stays the retry count.
 ///
 /// # Examples
 ///
 /// ```
+/// use paladin_core::platform::container::aegis::{Aegis, TimeoutPolicy};
 /// use paladin_core::platform::container::battalion::conclave::{ConclaveConfig, ObservabilityLevel};
 /// use paladin_core::platform::container::battalion::BattalionConfig;
+/// use std::time::Duration;
 ///
-/// let battalion_config = BattalionConfig::new("expert_panel");
+/// // Each expert and aggregator attempt may run for at most ten minutes.
+/// let battalion_config = BattalionConfig::new("expert_panel").with_aegis(Aegis {
+///     timeout: Some(TimeoutPolicy {
+///         run_timeout: Some(Duration::from_secs(600)),
+///         idle_timeout: None,
+///     }),
+///     ..Aegis::default()
+/// });
 /// let mut config = ConclaveConfig::new("Analysis", battalion_config);
 ///
 /// config = config
 ///     .with_retry_attempts(3)
-///     .with_timeout(600)
 ///     .with_observability(ObservabilityLevel::Verbose)
 ///     .with_expert_names(true);
+///
+/// assert_eq!(config.retry_attempts, 3);
+/// assert!(config.battalion_config.validate_aegis().is_ok());
 /// ```
+///
+/// # Removed v0.10 key
+///
+/// A stored document that still carries the v0.10 whole-run timeout key is refused at
+/// load: deserialization fails with an error that names the key, its replacement
+/// (`battalion_config.aegis.timeout.run_timeout`) and `MIGRATION.md` row `M-B-06`, and
+/// never echoes the value. A removed key nested inside `battalion_config` is refused
+/// through [`BattalionConfig`] the same way. Unrelated unknown keys are still ignored.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "super::legacy_keys::ConclaveConfigWire")]
 pub struct ConclaveConfig {
     /// Name of the Conclave
     pub name: String,
 
     /// Base Battalion configuration
     pub battalion_config: BattalionConfig,
-
-    /// Timeout for entire Conclave execution in seconds
-    pub timeout_seconds: u64,
 
     /// Number of retry attempts for failed experts (0-5)
     pub retry_attempts: u32,
@@ -124,7 +144,6 @@ impl ConclaveConfig {
     ///
     /// # Default Values
     ///
-    /// - `timeout_seconds`: 300 (5 minutes)
     /// - `retry_attempts`: 2
     /// - `synthesis_prompt`: None (uses default template)
     /// - `include_expert_names`: true
@@ -134,19 +153,12 @@ impl ConclaveConfig {
         Self {
             name: name.into(),
             battalion_config,
-            timeout_seconds: 300,
             retry_attempts: 2,
             synthesis_prompt: None,
             include_expert_names: true,
             max_expert_output_tokens: None,
             observability_level: ObservabilityLevel::default(),
         }
-    }
-
-    /// Set timeout in seconds (builder pattern)
-    pub fn with_timeout(mut self, seconds: u64) -> Self {
-        self.timeout_seconds = seconds;
-        self
     }
 
     /// Set retry attempts (builder pattern)
@@ -267,7 +279,8 @@ impl Conclave {
     /// Ensures:
     /// - At least 2 expert Paladins
     /// - All Paladin names are unique (including aggregator)
-    /// - Configuration values are within valid ranges
+    /// - `retry_attempts` is within 0-5
+    /// - The Battalion's Aegis policy is valid (`BattalionConfig::validate_aegis`)
     ///
     /// # Errors
     ///
@@ -284,7 +297,7 @@ impl Conclave {
         // Check for duplicate names among experts
         let mut expert_names = std::collections::HashSet::new();
         for expert in &self.experts {
-            let name = &expert.node.name;
+            let name = &expert.data.name;
             if !expert_names.insert(name.clone()) {
                 return Err(BattalionError::ValidationError(format!(
                     "Duplicate expert name: '{}'",
@@ -294,7 +307,7 @@ impl Conclave {
         }
 
         // Check aggregator name doesn't conflict with expert names
-        let aggregator_name = &self.aggregator.node.name;
+        let aggregator_name = &self.aggregator.data.name;
         if expert_names.contains(aggregator_name) {
             return Err(BattalionError::ValidationError(format!(
                 "Aggregator name '{}' conflicts with an expert name",
@@ -310,18 +323,8 @@ impl Conclave {
             )));
         }
 
-        // Validate timeout is reasonable
-        if self.config.timeout_seconds < 10 {
-            return Err(BattalionError::ValidationError(
-                "Timeout must be at least 10 seconds".to_string(),
-            ));
-        }
-
-        if self.config.timeout_seconds > 3600 {
-            return Err(BattalionError::ValidationError(
-                "Timeout cannot exceed 3600 seconds (1 hour)".to_string(),
-            ));
-        }
+        // The per-attempt timeout and backoff policy live in `aegis`.
+        self.config.battalion_config.validate_aegis()?;
 
         Ok(())
     }
@@ -438,10 +441,6 @@ pub enum ConclaveError {
     #[error("Configuration error: {0}")]
     ConfigurationError(String),
 
-    /// Execution timed out
-    #[error("Execution timeout after {0} seconds")]
-    Timeout(u64),
-
     /// Specific expert failed
     #[error("Expert '{0}' failed: {1}")]
     ExpertError(String, String),
@@ -456,7 +455,6 @@ impl From<ConclaveError> for BattalionError {
             }
             ConclaveError::AggregatorFailed(msg) => BattalionError::AggregationError(msg),
             ConclaveError::ConfigurationError(msg) => BattalionError::ConfigurationError(msg),
-            ConclaveError::Timeout(seconds) => BattalionError::Timeout(seconds),
             ConclaveError::ExpertError(name, msg) => {
                 BattalionError::PaladinError(format!("Expert '{}': {}", name, msg))
             }
@@ -467,7 +465,7 @@ impl From<ConclaveError> for BattalionError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::base::entity::node::Node;
+    use crate::base::entity::Entity;
     use crate::platform::container::paladin::{MaxLoops, PaladinData, PaladinStatus};
 
     fn create_test_paladin(name: &str) -> Paladin {
@@ -484,7 +482,7 @@ mod tests {
             ..Default::default()
         };
 
-        Node::new(paladin_data, Some(name.to_string()))
+        Entity::new(paladin_data, Some(name.to_string()))
     }
 
     fn create_test_config() -> ConclaveConfig {
@@ -569,13 +567,11 @@ mod tests {
     fn test_conclave_config_builder() {
         let battalion_config = BattalionConfig::new("test");
         let config = ConclaveConfig::new("TestConclave", battalion_config)
-            .with_timeout(600)
             .with_retry_attempts(3)
             .with_expert_names(false)
             .with_observability(ObservabilityLevel::Verbose)
             .with_synthesis_prompt("Custom prompt");
 
-        assert_eq!(config.timeout_seconds, 600);
         assert_eq!(config.retry_attempts, 3);
         assert!(!config.include_expert_names);
         assert_eq!(config.observability_level, ObservabilityLevel::Verbose);
@@ -591,28 +587,41 @@ mod tests {
     }
 
     #[test]
-    fn test_conclave_timeout_validation() {
+    fn conclave_validate_delegates_to_validate_aegis() {
+        use crate::platform::container::aegis::{Aegis, ErrorHandlerSpec};
+        use crate::platform::container::battlefield::FieldName;
+        use crate::platform::container::waypoint::NodeId;
+
         let experts = vec![
             create_test_paladin("Expert1"),
             create_test_paladin("Expert2"),
         ];
         let aggregator = create_test_paladin("Aggregator");
 
-        // Test timeout too small
-        let battalion_config = BattalionConfig::new("test");
-        let mut config = ConclaveConfig::new("TestConclave", battalion_config);
-        config.timeout_seconds = 5; // Too small
+        // A Route handler is not supported on the Battalion patterns.
+        let battalion_config = BattalionConfig::new("test").with_aegis(Aegis {
+            on_error: Some(ErrorHandlerSpec::Route {
+                to: NodeId::new("cancel"),
+                error_field: FieldName::new("failure").expect("valid field name"),
+            }),
+            ..Aegis::default()
+        });
+        let config = ConclaveConfig::new("TestConclave", battalion_config);
+        match Conclave::new(experts.clone(), aggregator.clone(), config) {
+            Err(BattalionError::ValidationError(msg)) => assert!(msg.contains("Route"), "{msg}"),
+            other => panic!("Expected ValidationError, got {:?}", other.map(|_| ())),
+        }
 
-        let result = Conclave::new(experts.clone(), aggregator.clone(), config);
-        assert!(result.is_err());
+        // The retry_attempts <= 5 rule is kept.
+        let mut config = create_test_config();
+        config.retry_attempts = 6;
+        assert!(matches!(
+            Conclave::new(experts.clone(), aggregator.clone(), config),
+            Err(BattalionError::ValidationError(_))
+        ));
 
-        // Test timeout too large
-        let battalion_config = BattalionConfig::new("test");
-        let mut config = ConclaveConfig::new("TestConclave", battalion_config);
-        config.timeout_seconds = 4000; // Too large
-
-        let result = Conclave::new(experts, aggregator, config);
-        assert!(result.is_err());
+        // A valid policy is accepted.
+        assert!(Conclave::new(experts, aggregator, create_test_config()).is_ok());
     }
 
     #[test]

@@ -11,7 +11,7 @@ are tracked over time.
 */
 
 use crate::base::entity::collection::{CollectionType, Item};
-use crate::base::service::node_version_service::{ChangeType, HashAlgorithm, VersioningError};
+use crate::base::service::entity_version_service::{ChangeType, HashAlgorithm, VersioningError};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -104,7 +104,7 @@ pub trait CollectionVersionRepository<T> {
 /// use paladin_core::base::service::collection_versioning_service::{
 ///     CollectionVersion, CollectionVersionRepository, CollectionVersionService,
 /// };
-/// use paladin_core::base::service::node_version_service::VersioningError;
+/// use paladin_core::base::service::entity_version_service::VersioningError;
 /// use std::sync::Arc;
 /// use uuid::Uuid;
 ///

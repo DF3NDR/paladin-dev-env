@@ -45,7 +45,7 @@
 //!   consumer yet (Docs 05, 07); ENG-FR-23's cancellation-to-`Halted` path
 //!   lives inline in `superstep`/`WarEngine` since it needs no dedicated
 //!   type beyond `tokio_util::sync::CancellationToken`.
-//! - [`retry`] — `backoff_delay`/`wait_backoff`/`should_retry` (Doc 04
+//! - [`retry`](crate::engine::retry) — `backoff_delay`/`wait_backoff`/`should_retry` (Doc 04
 //!   FT-FR-02, D-15): the Aegis retry loop's own backoff math and
 //!   cancellation-aware wait, wrapped around the whole per-node dispatch
 //!   closure in `superstep` -- OUTSIDE the `hooks` interceptor chain
@@ -80,6 +80,11 @@ pub mod node;
 /// carry every named-registration registry through (D-13, D-30).
 pub mod registries;
 pub mod retry;
+/// Superstep spend accumulation and the boundary settle writer (Doc 08
+/// LEDGR-03/04, D-07, D-08, ADR-0052, ADR-0053 §4): `SuperstepSpend`,
+/// `SpendHook` -- crate-private, threaded through `superstep::run` and
+/// `WarEngine::with_treasury_ledger`.
+mod settlement;
 pub mod shutdown;
 mod superstep;
 #[cfg(test)]
@@ -95,6 +100,7 @@ use tokio_util::sync::CancellationToken;
 use crate::edge_evaluator::EdgeConditionEvaluator;
 use crate::error_handler::ErrorHandler;
 use crate::retry_predicate::RetryPredicateEvaluator;
+use paladin_core::platform::container::allowance::HaltReason;
 use paladin_core::platform::container::battalion::BattalionError;
 #[cfg(test)]
 use paladin_core::platform::container::battlefield::CustomDispatchResolver;
@@ -107,20 +113,26 @@ use paladin_core::platform::container::parley::{
     OnExpire, ParleyId, ParleyKind, ParleyRequest, ParleyResponse,
 };
 use paladin_core::platform::container::run::RunId;
+use paladin_core::platform::container::treasury_ledger::SettlementContext;
 use paladin_core::platform::container::vault::Namespace;
 use paladin_core::platform::container::waypoint::{
     GraphFingerprint, NodeId, ThreadId, WaypointId, WaypointStatus,
 };
+use paladin_ports::output::cadence_port::CadencePort;
 use paladin_ports::output::cancellation_probe::CancellationProbe;
 use paladin_ports::output::node_cache_port::NodeCachePort;
 use paladin_ports::output::paladin_port::PaladinPort;
+use paladin_ports::output::spend_guard::SpendGuard;
 use paladin_ports::output::structured_executor_port::StructuredExecutorPort;
 use paladin_ports::output::trace_sink_port::{
     RunFinishStatus, TraceEmitter, TraceEvent, TraceSink,
 };
+use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
 use paladin_ports::output::vault_confined::ConfinedVault;
 use paladin_ports::output::vault_port::VaultPort;
 use paladin_ports::output::waypoint_port::{WaypointError, WaypointPort};
+
+use crate::engine::settlement::SpendHook;
 
 pub use bridges::{CAMPAIGN_FAN_IN_SEPARATOR, campaign_node_ids, dedicated_output_field};
 pub use directive_parser::{DirectiveParseError, DirectiveParser, OnParseError};
@@ -291,6 +303,39 @@ pub enum WaypointDurability {
     BestEffort,
 }
 
+/// Why a run ended as [`RunOutcome::Halted`] (ALLOW-03, Phase 42 D-05, ADR-0057).
+///
+/// Resolved at the top of the superstep loop in a fixed priority: a probe-observed
+/// cancel first, then the in-process token, then the attached [`SpendGuard`]. So a
+/// cancel and a spend halt observed at the same boundary resolve to
+/// [`HaltCause::CancelRequested`] (cancel wins).
+///
+/// # Examples
+///
+/// ```
+/// use paladin_battalion::engine::HaltCause;
+/// use paladin_core::platform::container::allowance::HaltReason;
+///
+/// let cause = HaltCause::Spend(HaltReason::LedgerUnavailable);
+/// assert_ne!(cause, HaltCause::Token);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum HaltCause {
+    /// A durable caller cancel was observed through the attached
+    /// `CancellationProbe`.
+    CancelRequested,
+    /// The in-process `CancellationToken` was observed cancelled -- a worker
+    /// shutdown drain, or a residual caller cancel the probe did not report;
+    /// the worker re-derives which (plan 42-06). With a `PerRunCancelProbe`
+    /// attached, a same-instance caller cancel arrives as
+    /// [`HaltCause::CancelRequested`] instead.
+    Token,
+    /// The attached [`SpendGuard`] answered `Halt`; the reason is the guard's
+    /// own, passed through untouched.
+    Spend(HaltReason),
+}
+
 /// The outcome of a `WarEngine::start` or `WarEngine::resume` call.
 #[derive(Debug)]
 pub enum RunOutcome {
@@ -311,16 +356,24 @@ pub enum RunOutcome {
         /// The waypoint recording the pause.
         waypoint: WaypointId,
     },
-    /// The run was gracefully halted: a `CancellationToken` was observed
-    /// cancelled at a superstep boundary (ENG-FR-23). The in-flight
-    /// superstep, if any, was allowed to finish and merge before the
-    /// `Halted` `Waypoint` was persisted, so it is always a consistent
-    /// restart point — `WarEngine::resume`/`resume_with_options` can
-    /// continue from it exactly as from a `Running` waypoint (Doc 03 lands
-    /// the dedicated pause/resume API this shares its plumbing with).
+    /// The run was gracefully halted at a superstep boundary: a cancel
+    /// signal (the in-process `CancellationToken` or an attached
+    /// `CancellationProbe`) or an attached [`SpendGuard`]'s halt decision
+    /// was observed (ENG-FR-23, ALLOW-03). The in-flight superstep, if any,
+    /// was allowed to finish and merge before the `Halted` `Waypoint` was
+    /// persisted, so it is always a consistent restart point —
+    /// `WarEngine::resume`/`resume_with_options` can continue from it
+    /// exactly as from a `Running` waypoint (Doc 03 lands the dedicated
+    /// pause/resume API this shares its plumbing with).
+    ///
+    /// `cause` says WHICH signal halted the run (Phase 42 D-05): the worker,
+    /// the run row and every wire surface read this one typed value instead
+    /// of re-deriving the reason from side flags.
     Halted {
         /// The waypoint recording the halt.
         waypoint: WaypointId,
+        /// Why the run halted.
+        cause: HaltCause,
     },
     /// The run failed — a bounded-iteration limit was hit, or a node's
     /// execution or the merge it fed returned an error. A Waypoint carrying
@@ -350,18 +403,38 @@ impl RunOutcome {
 
 /// The [`RunFinishStatus`] a `superstep::run`/`run_with_namespace` call's own
 /// `Result<RunOutcome, EngineError>` maps onto (D-02, D-04; closes
-/// 27-CONTEXT D-25's correction, T-28-03-04). An engine-limit failure (e.g.
-/// `RecursionLimitExceeded`) is returned as a bare `Err` via `?`, never
-/// wrapped in `Ok(RunOutcome::Failed { .. })` -- so both paths map to
-/// `Failed` here, or `RunFinished.status` could never be trusted to
-/// distinguish success from failure for exactly the run shapes most likely
-/// to fail.
-fn run_finish_status(outcome: &Result<RunOutcome, EngineError>) -> RunFinishStatus {
+/// 27-CONTEXT D-25's correction, T-28-03-04), paired with the Treasurer
+/// [`HaltReason`] the run halted on, if any (Phase 42 D-05, D-19, G4).
+///
+/// An engine-limit failure (e.g. `RecursionLimitExceeded`) is returned as a
+/// bare `Err` via `?`, never wrapped in `Ok(RunOutcome::Failed { .. })` --
+/// so both paths map to `Failed` here, or `RunFinished.status` could never be
+/// trusted to distinguish success from failure for exactly the run shapes
+/// most likely to fail.
+///
+/// The reason is `Some` only for a halt whose [`HaltCause`] is
+/// `Spend(reason)`: a cancel or token halt, and every non-halt outcome, name
+/// no reason, so the engine's own terminal trace event states the Treasurer
+/// reason at the source and nowhere else. A [`HaltCause::CancelRequested`]
+/// halt finishes as [`RunFinishStatus::Cancelled`] (D-05, D-14); a bare
+/// [`HaltCause::Token`] halt stays `Halted` -- the worker decides whether it
+/// was a drain.
+fn run_finish_status(
+    outcome: &Result<RunOutcome, EngineError>,
+) -> (RunFinishStatus, Option<HaltReason>) {
     match outcome {
-        Ok(RunOutcome::Completed { .. }) => RunFinishStatus::Completed,
-        Ok(RunOutcome::Failed { .. }) | Err(_) => RunFinishStatus::Failed,
-        Ok(RunOutcome::Halted { .. }) => RunFinishStatus::Halted,
-        Ok(RunOutcome::AwaitingInput { .. }) => RunFinishStatus::AwaitingInput,
+        Ok(RunOutcome::Completed { .. }) => (RunFinishStatus::Completed, None),
+        Ok(RunOutcome::Failed { .. }) | Err(_) => (RunFinishStatus::Failed, None),
+        Ok(RunOutcome::Halted {
+            cause: HaltCause::Spend(reason),
+            ..
+        }) => (RunFinishStatus::Halted, Some(reason.clone())),
+        Ok(RunOutcome::Halted {
+            cause: HaltCause::CancelRequested,
+            ..
+        }) => (RunFinishStatus::Cancelled, None),
+        Ok(RunOutcome::Halted { .. }) => (RunFinishStatus::Halted, None),
+        Ok(RunOutcome::AwaitingInput { .. }) => (RunFinishStatus::AwaitingInput, None),
     }
 }
 
@@ -1484,6 +1557,13 @@ pub struct WarEngine<W: WaypointPort> {
     /// run, like every other engine resource, so a cancelled parent
     /// thread's children observe it too.
     cancellation_probe: Option<Arc<dyn CancellationProbe>>,
+    /// The optional per-run spend guard consulted at every superstep boundary
+    /// AFTER the two cancel signals above (ALLOW-03, Phase 42 D-04), wired via
+    /// [`WarEngine::with_spend_guard`]. `None` means no check at all -- no
+    /// guard call, behaviour identical to before the port existed. Forwarded
+    /// wholesale into every `NodeSpec::Battalion` child engine run, like the
+    /// probe, so a child run is guarded by the SAME per-run instance.
+    spend_guard: Option<Arc<dyn SpendGuard>>,
     /// The grace window a mid-superstep cancellation races the in-flight
     /// batch of spawned node tasks against (HITL-04, D-19, D-20). A runtime
     /// setting, never part of `EngineLimits` and never hashed into the
@@ -1498,6 +1578,13 @@ pub struct WarEngine<W: WaypointPort> {
     /// running uncached. Forwarded wholesale into every
     /// `NodeSpec::Battalion` child run, like every other engine resource.
     node_cache: Option<Arc<dyn NodeCachePort>>,
+    /// The Cadence stampede lock and its TTL (Phase 43, PACE-04, D-11), wired
+    /// via [`WarEngine::with_cadence`]. `None` by default: with no lock the
+    /// cache's miss path makes no `try_lock` call at all. Only consulted for
+    /// a node that has a cache policy on an engine that has a node cache, and
+    /// forwarded with the node cache into every `NodeSpec::Battalion` child
+    /// run.
+    cadence_lock: Option<(Arc<dyn CadencePort>, std::time::Duration)>,
     /// This engine's confined Vault handle (Doc 05 RT-04, D-21), wired via
     /// [`WarEngine::with_vault`]. `None` by default: an engine with no
     /// Vault store gives every node's `NodeContext::vault()` `None`, never
@@ -1540,6 +1627,15 @@ pub struct WarEngine<W: WaypointPort> {
     /// existed. `Mutex`, not `RwLock`: a quick take-or-leave, never held
     /// across an `.await`.
     bound_trace: std::sync::Mutex<Option<(ThreadId, Arc<TraceDispatcher>)>>,
+    /// This engine's treasury ledger, wired via
+    /// [`WarEngine::with_treasury_ledger`] (D-08, ADR-0052). `None` by
+    /// default -- an engine with no ledger attached settles nothing, and
+    /// every pre-existing engine test passes unchanged. When `Some`, the
+    /// SAME `(ledger, context)` pair backs a fresh top-level
+    /// [`crate::engine::settlement::SpendHook`] on every `start`/`resume*`
+    /// call -- rendered as a presence flag only, never printed, if this
+    /// type ever gains a manual `Debug` impl.
+    treasury: Option<(Arc<dyn TreasuryLedgerPort>, SettlementContext)>,
 }
 
 // --- CF-FR-16, D-21: `+ 'static` is required here (not on the struct
@@ -1567,12 +1663,15 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             interceptors: Vec::new(),
             cancellation_token: None,
             cancellation_probe: None,
+            spend_guard: None,
             shutdown_grace: std::time::Duration::from_secs(30),
             node_cache: None,
+            cadence_lock: None,
             vault: None,
             structured_executor: None,
             trace_dispatcher_cell: std::sync::Mutex::new(None),
             bound_trace: std::sync::Mutex::new(None),
+            treasury: None,
         }
     }
 
@@ -1826,6 +1925,53 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         self
     }
 
+    /// Attach a [`SpendGuard`] this engine consults once per superstep
+    /// boundary, at the top of the loop, BESIDE and AFTER the cancellation
+    /// token and probe (ALLOW-03, Phase 42 D-04, D-05): a `Halt` decision
+    /// writes the same `WaypointStatus::Halted` Waypoint a cancel writes and
+    /// returns [`RunOutcome::Halted`] with [`HaltCause::Spend`], without
+    /// dispatching any node of the superstep that was about to run. A cancel
+    /// observed at the same boundary wins.
+    ///
+    /// `None` -- never calling this builder -- means no check at all: the
+    /// engine makes no guard call and behaves exactly as before. The engine
+    /// learns no allowance concept; policy lives in the guard's adapter.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_battalion::engine::WarEngine;
+    /// use paladin_core::platform::container::paladin::Paladin;
+    /// use paladin_core::platform::container::paladin_error::PaladinError;
+    /// use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream};
+    /// use paladin_ports::output::spend_guard::NeverHalts;
+    /// use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
+    /// use std::sync::Arc;
+    /// use async_trait::async_trait;
+    ///
+    /// struct NoopPort;
+    /// #[async_trait]
+    /// impl PaladinPort for NoopPort {
+    ///     async fn execute(&self, _p: &Paladin, _i: &str) -> Result<PaladinResult, PaladinError> {
+    ///         Err(PaladinError::ExecutionError("unused".into()))
+    ///     }
+    ///     async fn execute_stream(&self, _p: &Paladin, _i: &str) -> Result<PaladinStream, PaladinError> {
+    ///         Err(PaladinError::ExecutionError("unused".into()))
+    ///     }
+    ///     fn validate(&self, _p: &Paladin) -> Result<(), PaladinError> { Ok(()) }
+    /// }
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let _engine = WarEngine::new(Arc::new(NoopPort), Arc::new(InMemoryWaypointStore::new()))
+    ///     .with_spend_guard(Arc::new(NeverHalts));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_spend_guard(mut self, guard: Arc<dyn SpendGuard>) -> Self {
+        self.spend_guard = Some(guard);
+        self
+    }
+
     /// Set the grace window a mid-superstep cancellation races the
     /// in-flight batch of spawned node tasks against (HITL-04, D-19, D-20):
     /// once the cancellation token fires while nodes are executing, the
@@ -1928,6 +2074,94 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         self
     }
 
+    /// Guard the node cache's miss-to-store window with a distributed stampede
+    /// lock (Phase 43, PACE-04, D-11, D-12).
+    ///
+    /// Without a lock, two workers that miss the same cache entry at the same
+    /// moment both execute the node and both pay for the LLM call. With one,
+    /// a cache-policy node that misses first takes the lock through `port`
+    /// ([`CadencePort::try_lock`]): the winner executes and stores its result
+    /// through [`NodeCachePort::put_fenced`] with its fencing token, then
+    /// releases the lock. Every other dispatch waits, re-reading the cache
+    /// every ~100 ms (and trying the lock again, so a holder that released
+    /// without writing hands over within one poll), and serves the stored
+    /// delta as a cache hit (`NodeFinished { cache_hit: true }`).
+    ///
+    /// The lock is an optimisation, never a correctness dependency (D-13,
+    /// D-29): a lock error runs the node without the lock after one warning,
+    /// and a waiter whose `lock_ttl` elapses with no entry executes the node
+    /// itself. A run's cancellation interrupts a waiting dispatch promptly,
+    /// like a node cancelled mid-backoff. Child `NodeSpec::Battalion` runs
+    /// inherit the lock with the node cache.
+    ///
+    /// It only engages for a node with a cache policy on an engine that also
+    /// has a node cache ([`WarEngine::with_node_cache`]); an engine without a
+    /// lock, or a node without a cache policy, makes no lock call.
+    ///
+    /// `lock_ttl` should exceed the p99 node duration including Aegis retries
+    /// (`treasurer.cadence.lock_ttl_secs`, default 120): the lock is not
+    /// renewed, and a holder that outlives it can be overtaken -- its late
+    /// write is then refused by a fence-checking cache. The server attaches no
+    /// node cache today, so it attaches no lock either; this is a library
+    /// builder.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use std::time::Duration;
+    /// use async_trait::async_trait;
+    /// use paladin_battalion::engine::WarEngine;
+    /// use paladin_core::platform::container::paladin::Paladin;
+    /// use paladin_core::platform::container::paladin_error::PaladinError;
+    /// use paladin_ports::output::cadence_port::CadencePolicy;
+    /// use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream};
+    /// use paladin_storage::cadence::in_memory::InMemoryCadence;
+    /// use paladin_storage::node_cache::in_memory::InMemoryNodeCache;
+    /// use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
+    ///
+    /// struct NoopPort;
+    /// #[async_trait]
+    /// impl PaladinPort for NoopPort {
+    ///     async fn execute(&self, _p: &Paladin, _i: &str) -> Result<PaladinResult, PaladinError> {
+    ///         unreachable!()
+    ///     }
+    ///     async fn execute_stream(&self, _p: &Paladin, _i: &str) -> Result<PaladinStream, PaladinError> {
+    ///         unreachable!()
+    ///     }
+    ///     fn validate(&self, _p: &Paladin) -> Result<(), PaladinError> { Ok(()) }
+    /// }
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let cadence = Arc::new(InMemoryCadence::new(CadencePolicy::default()));
+    /// let engine = WarEngine::new(Arc::new(NoopPort), Arc::new(InMemoryWaypointStore::new()))
+    ///     .with_node_cache(Arc::new(InMemoryNodeCache::new()))
+    ///     .with_cadence(cadence, Duration::from_secs(120));
+    /// # let _ = engine;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_cadence(
+        mut self,
+        port: Arc<dyn CadencePort>,
+        lock_ttl: std::time::Duration,
+    ) -> Self {
+        self.cadence_lock = Some((port, lock_ttl));
+        self
+    }
+
+    /// The node cache together with the stampede lock, as the superstep loop
+    /// consumes them (`None` without a node cache: a lock guards nothing
+    /// without one).
+    fn node_cache_wiring(&self) -> Option<superstep::NodeCacheWiring> {
+        self.node_cache
+            .as_ref()
+            .map(|cache| superstep::NodeCacheWiring {
+                cache: Arc::clone(cache),
+                lock: self.cadence_lock.clone(),
+            })
+    }
+
     /// Wire `executor` as this engine's structured-output executor (RT-05,
     /// RT-FR-19, D-29; plan 26-18), the shape `WarEngine::with_node_cache`
     /// establishes: a plain `Option<Arc<dyn _>>` field, checked separately
@@ -2013,6 +2247,91 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         self
     }
 
+    /// Attach a treasury ledger this engine settles spend into, once per
+    /// superstep attempt, synchronously at the superstep boundary (D-08,
+    /// ADR-0052) -- the same boundary Phase 41/42 will later attach
+    /// reservation and the mid-run halt to, through this same hook's ledger
+    /// and context.
+    ///
+    /// The settlement key is `(context.run_id, superstep, context.attempt)`:
+    /// `context.attempt` MUST be the persisted `Run.attempt` counter (D-07)
+    /// -- this engine never invents its own counter, so a caller building
+    /// `context` for a real run must read it from that run's own record. The
+    /// per-model breakdown is keyed on each dispatched `NodeSpec::Paladin`
+    /// node's *configured* model (`paladin.data.model`) -- when a
+    /// `FallbackLlmAdapter` hop serves a different model than configured,
+    /// that hop's cost is still priced at the SERVED model's rate but
+    /// attributed to the CONFIGURED model here (a deliberate simplification;
+    /// no `PaladinResult` field carries the served model back to this
+    /// bridge yet).
+    ///
+    /// A superstep with no priced attempt writes no row; two currencies in
+    /// one superstep write no row and log an error, never a combined
+    /// figure. A ledger `Err` is logged at `error` and a duplicate-key
+    /// `AlreadySettled` outcome at `warn` -- neither ever changes this run's
+    /// outcome, retries a node, or halts the run (D-08): the ledger is
+    /// observational in this phase. A nested `NodeSpec::Battalion` child
+    /// run never settles on its own -- its nodes' costs roll into the
+    /// PARENT superstep that dispatched it (CF-FR-16).
+    ///
+    /// Without a call to this method, this engine performs no ledger call
+    /// at all, and every pre-existing engine test passes unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use async_trait::async_trait;
+    /// use paladin_battalion::engine::WarEngine;
+    /// use paladin_core::platform::container::paladin::Paladin;
+    /// use paladin_core::platform::container::paladin_error::PaladinError;
+    /// use paladin_core::platform::container::run::RunId;
+    /// use paladin_core::platform::container::treasury_ledger::{LedgerScope, SettlementContext};
+    /// use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream};
+    /// use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
+    /// use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
+    ///
+    /// struct NoopPort;
+    /// #[async_trait]
+    /// impl PaladinPort for NoopPort {
+    ///     async fn execute(&self, _p: &Paladin, _i: &str) -> Result<PaladinResult, PaladinError> {
+    ///         unreachable!()
+    ///     }
+    ///     async fn execute_stream(&self, _p: &Paladin, _i: &str) -> Result<PaladinStream, PaladinError> {
+    ///         unreachable!()
+    ///     }
+    ///     fn validate(&self, _p: &Paladin) -> Result<(), PaladinError> { Ok(()) }
+    /// }
+    ///
+    /// let ledger = Arc::new(InMemoryTreasuryLedger::new());
+    /// let context = SettlementContext {
+    ///     scope: LedgerScope::unattributed(),
+    ///     run_id: RunId::new_v7(),
+    ///     attempt: 1,
+    /// };
+    /// let engine = WarEngine::new(Arc::new(NoopPort), Arc::new(InMemoryWaypointStore::new()))
+    ///     .with_treasury_ledger(ledger, context);
+    /// ```
+    pub fn with_treasury_ledger(
+        mut self,
+        ledger: Arc<dyn TreasuryLedgerPort>,
+        context: SettlementContext,
+    ) -> Self {
+        self.treasury = Some((ledger, context));
+        self
+    }
+
+    /// A fresh top-level [`SpendHook`] over this engine's own treasury
+    /// ledger, if one was attached via [`WarEngine::with_treasury_ledger`] --
+    /// `None` otherwise, so every `start`/`resume*` entry point forwards the
+    /// SAME `None` down to `superstep::run`/`run_with_namespace` that it
+    /// always did before this plan.
+    fn spend_hook(&self) -> Option<SpendHook> {
+        self.treasury
+            .clone()
+            .map(|(ledger, context)| SpendHook::top_level(ledger, context))
+    }
+
     /// Start a new run of `graph` under `thread`, seeded with `initial`.
     ///
     /// Runs the full superstep loop (ENG-FR-01): validates the graph,
@@ -2072,11 +2391,17 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             &self.interceptors,
             &self.cancellation_token,
             &self.cancellation_probe,
+            &self.spend_guard,
             Some(Arc::clone(&self.waypoint_port)),
             self.shutdown_grace,
-            self.node_cache.clone(),
+            self.node_cache_wiring(),
             self.vault.clone(),
             self.structured_executor.clone(),
+            // --- LEDGR-03, D-08 (plan 39-04): this call's own top-level
+            // spend hook, if a treasury ledger was attached via
+            // `with_treasury_ledger` -- `None` otherwise, an engine with no
+            // ledger performs no settle call at all.
+            self.spend_hook(),
         )
         .await;
         // D-02, D-04, D-11: `status` from the `RunOutcome`/`Err` this call
@@ -2086,10 +2411,13 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         // consumer, `TraceDispatcher::superstep_count`/`total_usage`'s own
         // doc comments); `trace_dropped_total` is stamped by
         // `TraceDispatcher::emit` itself at enqueue time (D-07).
+        let (status, halt_reason) = run_finish_status(&outcome);
         trace.emit(TraceEvent::RunFinished {
-            status: run_finish_status(&outcome),
+            status,
             total_supersteps: trace.superstep_count(),
             usage: trace.total_usage(),
+            cost: trace.total_cost(),
+            halt_reason,
             duration_ms: run_started_at.elapsed().as_millis() as u64,
             trace_dropped_total: 0,
         });
@@ -2204,6 +2532,8 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
                 status: RunFinishStatus::Completed,
                 total_supersteps: trace.superstep_count(),
                 usage: trace.total_usage(),
+                cost: trace.total_cost(),
+                halt_reason: None,
                 duration_ms: run_started_at.elapsed().as_millis() as u64,
                 trace_dropped_total: 0,
             });
@@ -2312,17 +2642,26 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             &self.interceptors,
             &self.cancellation_token,
             &self.cancellation_probe,
+            &self.spend_guard,
             Some(Arc::clone(&self.waypoint_port)),
             self.shutdown_grace,
-            self.node_cache.clone(),
+            self.node_cache_wiring(),
             self.vault.clone(),
             self.structured_executor.clone(),
+            // --- LEDGR-03, D-08 (plan 39-04): this call's own top-level
+            // spend hook, if a treasury ledger was attached via
+            // `with_treasury_ledger` -- `None` otherwise, an engine with no
+            // ledger performs no settle call at all.
+            self.spend_hook(),
         )
         .await;
+        let (status, halt_reason) = run_finish_status(&outcome);
         trace.emit(TraceEvent::RunFinished {
-            status: run_finish_status(&outcome),
+            status,
             total_supersteps: trace.superstep_count(),
             usage: trace.total_usage(),
+            cost: trace.total_cost(),
+            halt_reason,
             duration_ms: run_started_at.elapsed().as_millis() as u64,
             trace_dropped_total: 0,
         });
@@ -2656,6 +2995,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             &self.interceptors,
             &self.cancellation_token,
             &self.cancellation_probe,
+            &self.spend_guard,
             Some(Arc::clone(&self.waypoint_port)),
             None,
             // --- HITL-03, D-14: the resumed run's own Waypoints stay on the
@@ -2668,15 +3008,23 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             // --- FT-FR-09, D-19: a top-level resume has no parent node to
             // beat -- only a Battalion child dispatch passes `Some`.
             None,
-            self.node_cache.clone(),
+            self.node_cache_wiring(),
             self.vault.clone(),
             self.structured_executor.clone(),
+            // --- LEDGR-03, D-08 (plan 39-04): this call's own top-level
+            // spend hook, if a treasury ledger was attached via
+            // `with_treasury_ledger` -- `None` otherwise, an engine with no
+            // ledger performs no settle call at all.
+            self.spend_hook(),
         )
         .await;
+        let (status, halt_reason) = run_finish_status(&outcome);
         trace.emit(TraceEvent::RunFinished {
-            status: run_finish_status(&outcome),
+            status,
             total_supersteps: trace.superstep_count(),
             usage: trace.total_usage(),
+            cost: trace.total_cost(),
+            halt_reason,
             duration_ms: run_started_at.elapsed().as_millis() as u64,
             trace_dropped_total: 0,
         });
@@ -2826,6 +3174,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             &self.interceptors,
             &self.cancellation_token,
             &self.cancellation_probe,
+            &self.spend_guard,
             Some(Arc::clone(&self.waypoint_port)),
             waypoint.checkpoint_ns,
             // --- HITL-03, D-14/D-16: `from` becomes the branch ROOT --
@@ -2838,15 +3187,23 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             // --- FT-FR-09, D-19: a top-level fork has no parent node to
             // beat -- only a Battalion child dispatch passes `Some`.
             None,
-            self.node_cache.clone(),
+            self.node_cache_wiring(),
             self.vault.clone(),
             self.structured_executor.clone(),
+            // --- LEDGR-03, D-08 (plan 39-04): this call's own top-level
+            // spend hook, if a treasury ledger was attached via
+            // `with_treasury_ledger` -- `None` otherwise, an engine with no
+            // ledger performs no settle call at all.
+            self.spend_hook(),
         )
         .await;
+        let (status, halt_reason) = run_finish_status(&outcome);
         trace.emit(TraceEvent::RunFinished {
-            status: run_finish_status(&outcome),
+            status,
             total_supersteps: trace.superstep_count(),
             usage: trace.total_usage(),
+            cost: trace.total_cost(),
+            halt_reason,
             duration_ms: run_started_at.elapsed().as_millis() as u64,
             trace_dropped_total: 0,
         });
@@ -2902,12 +3259,13 @@ fn validate_response_shape(
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use chrono::Utc;
+    use chrono::{DateTime, Utc};
     use paladin_core::platform::container::aegis::{Aegis, RetryPolicy, RetryPredicate};
     use paladin_core::platform::container::battalion::campaign::EdgeCondition;
     use paladin_core::platform::container::battlefield::{
         BattlefieldSchema, DispatchRule, FieldName, FieldSpec,
     };
+    use paladin_core::platform::container::cost::{Cost, CurrencyCode};
     use paladin_core::platform::container::directive::{Directive, MusterTask, NextStep};
     use paladin_core::platform::container::paladin_error::PaladinError;
     use paladin_core::platform::container::parley::{
@@ -2915,12 +3273,18 @@ mod tests {
     };
     use paladin_core::platform::container::token_usage::TokenUsage;
     use paladin_core::platform::container::transience::Transience;
+    use paladin_core::platform::container::treasury_ledger::{
+        LedgerScope, ReservationId, ReserveRequest, SettleOutcome, SettleRequest,
+        SettlementContext, SettlementKey, SpendGroupBy, SpendQuery, SpendRow,
+    };
     use paladin_core::platform::container::waypoint::{NodeOutcomeKind, Waypoint};
     use paladin_ports::output::paladin_port::{PaladinResult, PaladinStream};
     use paladin_ports::output::trace_sink_port::MiddlewareAction;
+    use paladin_ports::output::treasury_ledger_port::TreasuryLedgerError;
+    use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
     use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
 
-    use crate::engine::graph::{EdgeSpec, GateRequestTemplate};
+    use crate::engine::graph::{EdgeSpec, GateRequestTemplate, StateMap};
     use crate::engine::test_support::{
         AttemptObservingNode, CountingFunctionNode, FailThenSucceedNode, FailingFunctionNode,
         FailingPaladinPort, FixedDecisionInterceptor, MusterFailThenSucceedWorker,
@@ -3244,7 +3608,19 @@ mod tests {
             name: name.to_string(),
             ..Default::default()
         };
-        paladin_core::base::entity::node::Node::new(data, Some(name.to_string()))
+        paladin_core::base::entity::Entity::new(data, Some(name.to_string()))
+    }
+
+    /// Plan 39-04: like [`make_paladin`], but with an explicit `model` --
+    /// the settlement `model_breakdown` key every treasury-ledger test below
+    /// asserts against.
+    fn make_paladin_with_model(name: &str, model: &str) -> Paladin {
+        let data = paladin_core::platform::container::paladin::PaladinData {
+            name: name.to_string(),
+            model: model.to_string(),
+            ..Default::default()
+        };
+        paladin_core::base::entity::Entity::new(data, Some(name.to_string()))
     }
 
     fn engine_with_port(
@@ -3499,6 +3875,1832 @@ mod tests {
         assert_eq!(run_usage.cache_read_tokens, Some(100));
         assert_eq!(run_usage.cache_write_tokens, Some(50));
         assert_eq!(run_usage.reasoning_tokens, Some(207));
+    }
+
+    /// Plan 38-07 (D-10): each Paladin attempt's `NodeFinished.cost` is that
+    /// attempt's own `PaladinResult.cost`; a non-Paladin (`Function`) node's
+    /// is `None`; `RunFinished.cost` is the sum of the two priced Paladin
+    /// nodes -- end-to-end through the engine's Paladin-attempt bridge.
+    #[tokio::test]
+    async fn run_finished_cost_sums_priced_paladin_nodes() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let out = FieldName::new("out").unwrap();
+        let fn_out = FieldName::new("fn_out").unwrap();
+        let schema = BattlefieldSchema::new(vec![
+            FieldSpec::new(out.clone(), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(fn_out.clone(), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let n1 = NodeId::new("first");
+        let n2 = NodeId::new("second");
+        let fn_node = NodeId::new("func");
+        graph.add_node(
+            n1.clone(),
+            NodeSpec::paladin(make_paladin("first"), InputMapping::new("go"), out.clone()),
+        );
+        graph.add_node(
+            n2.clone(),
+            NodeSpec::paladin(make_paladin("second"), InputMapping::new("go"), out),
+        );
+        graph.add_node(
+            fn_node.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(fn_out, serde_json::json!("v"))),
+        );
+        graph.add_edge(EdgeSpec {
+            from: n1.clone(),
+            to: n2.clone(),
+            condition: None,
+        });
+        graph.add_entry(n1.clone());
+        graph.add_entry(fn_node.clone());
+
+        let port = Arc::new(RecordingPaladinPort::new());
+        port.set_output_with_usage_and_cost(
+            "first",
+            "done",
+            TokenUsage::new(10, 5),
+            Some(Cost::new(10_000, usd.clone())),
+        );
+        port.set_output_with_usage_and_cost(
+            "second",
+            "done",
+            TokenUsage::new(20, 10),
+            Some(Cost::new(32_500, usd.clone())),
+        );
+        let store = Arc::new(RecordingWaypointStore::new());
+        let sink = RecordingTraceSink::new();
+        let engine = WarEngine::new(port, store.clone()).with_trace_sink(sink.clone());
+
+        let thread = ThreadId::new("cost-sums-priced-nodes").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let events = sink.events().await;
+        let finished_cost_for = |node: &NodeId| -> Option<Cost> {
+            events
+                .iter()
+                .find_map(|r| match &r.event {
+                    TraceEvent::NodeFinished { node_id, cost, .. } if node_id == node => {
+                        Some(cost.clone())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("NodeFinished for {node:?} present"))
+        };
+        assert_eq!(finished_cost_for(&n1), Some(Cost::new(10_000, usd.clone())));
+        assert_eq!(finished_cost_for(&n2), Some(Cost::new(32_500, usd.clone())));
+        assert_eq!(finished_cost_for(&fn_node), None);
+
+        let run_cost = events
+            .iter()
+            .find_map(|r| match &r.event {
+                TraceEvent::RunFinished { cost, .. } => Some(cost.clone()),
+                _ => None,
+            })
+            .expect("a RunFinished record must exist");
+        assert_eq!(run_cost, Some(Cost::new(42_500, usd)));
+    }
+
+    /// The `(requested, effective)` reasoning pair a `NodeFinished` for
+    /// `node` carried (D-11), for the emission tests below.
+    fn finished_reasoning_for(
+        events: &[paladin_ports::output::trace_sink_port::TraceRecord],
+        node: &NodeId,
+    ) -> (Option<String>, Option<String>) {
+        events
+            .iter()
+            .find_map(|r| match &r.event {
+                TraceEvent::NodeFinished {
+                    node_id,
+                    reasoning_requested,
+                    reasoning_effective,
+                    ..
+                } if node_id == node => {
+                    Some((reasoning_requested.clone(), reasoning_effective.clone()))
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("NodeFinished for {node:?} present"))
+    }
+
+    fn reasoning_metadata(
+        requested: &str,
+        effective: &str,
+    ) -> std::collections::BTreeMap<String, String> {
+        use paladin_core::platform::container::reasoning::{
+            REASONING_EFFECTIVE_METADATA_KEY, REASONING_REQUESTED_METADATA_KEY,
+        };
+        std::collections::BTreeMap::from([
+            (
+                REASONING_REQUESTED_METADATA_KEY.to_string(),
+                requested.to_string(),
+            ),
+            (
+                REASONING_EFFECTIVE_METADATA_KEY.to_string(),
+                effective.to_string(),
+            ),
+        ])
+    }
+
+    /// D-11 (REASON-05): a Paladin attempt whose result carries the two
+    /// adapter-stamped `paladin.reasoning_*` metadata keys emits a
+    /// `NodeFinished` naming that attempt's own requested and effective
+    /// effort (a substitution shows as two different values); a Paladin that
+    /// stamped nothing, and a `Function` node, emit both `None`.
+    #[tokio::test]
+    async fn node_finished_carries_the_attempts_own_reasoning_metadata() {
+        let out = FieldName::new("out").unwrap();
+        let fn_out = FieldName::new("fn_out").unwrap();
+        let schema = BattlefieldSchema::new(vec![
+            FieldSpec::new(out.clone(), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(fn_out.clone(), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let n1 = NodeId::new("first");
+        let n2 = NodeId::new("second");
+        let n3 = NodeId::new("third");
+        let fn_node = NodeId::new("func");
+        for (id, name) in [(&n1, "first"), (&n2, "second"), (&n3, "third")] {
+            graph.add_node(
+                id.clone(),
+                NodeSpec::paladin(make_paladin(name), InputMapping::new("go"), out.clone()),
+            );
+        }
+        graph.add_node(
+            fn_node.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(fn_out, serde_json::json!("v"))),
+        );
+        graph.add_edge(EdgeSpec {
+            from: n1.clone(),
+            to: n2.clone(),
+            condition: None,
+        });
+        graph.add_edge(EdgeSpec {
+            from: n2.clone(),
+            to: n3.clone(),
+            condition: None,
+        });
+        graph.add_entry(n1.clone());
+        graph.add_entry(fn_node.clone());
+
+        let port = Arc::new(RecordingPaladinPort::new());
+        port.set_run_metadata("first", reasoning_metadata("high", "high"));
+        port.set_run_metadata("second", reasoning_metadata("xhigh", "high"));
+        let sink = RecordingTraceSink::new();
+        let engine = WarEngine::new(port, Arc::new(RecordingWaypointStore::new()))
+            .with_trace_sink(sink.clone());
+        let outcome = engine
+            .start(
+                &graph,
+                ThreadId::new("node-finished-reasoning").unwrap(),
+                StateDelta::new(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let events = sink.events().await;
+        assert_eq!(
+            finished_reasoning_for(&events, &n1),
+            (Some("high".to_string()), Some("high".to_string()))
+        );
+        assert_eq!(
+            finished_reasoning_for(&events, &n2),
+            (Some("xhigh".to_string()), Some("high".to_string())),
+            "a substitution is visible as two different values"
+        );
+        assert_eq!(finished_reasoning_for(&events, &n3), (None, None));
+        assert_eq!(finished_reasoning_for(&events, &fn_node), (None, None));
+    }
+
+    /// REASON-05 prohibition: the trace never shows an effort the attempt did
+    /// not run with. An agent CONFIGURED with an effort whose response carried
+    /// no reasoning metadata (an adapter that did not apply one) emits `None`,
+    /// not the configured value.
+    #[tokio::test]
+    async fn node_finished_never_reads_the_agents_configured_effort() {
+        use paladin_core::platform::container::reasoning::ReasoningEffort;
+        let out = FieldName::new("out").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let node = NodeId::new("configured");
+        let mut paladin = make_paladin("configured");
+        paladin.data.reasoning_effort = Some(ReasoningEffort::High);
+        graph.add_node(
+            node.clone(),
+            NodeSpec::paladin(paladin, InputMapping::new("go"), out),
+        );
+        graph.add_entry(node.clone());
+
+        let sink = RecordingTraceSink::new();
+        let engine = WarEngine::new(
+            Arc::new(RecordingPaladinPort::new()),
+            Arc::new(RecordingWaypointStore::new()),
+        )
+        .with_trace_sink(sink.clone());
+        engine
+            .start(
+                &graph,
+                ThreadId::new("node-finished-configured").unwrap(),
+                StateDelta::new(),
+            )
+            .await
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(
+            finished_reasoning_for(&sink.events().await, &node),
+            (None, None)
+        );
+    }
+
+    /// D-11: a failed Paladin attempt emits both fields `None`.
+    #[tokio::test]
+    async fn a_failed_attempt_emits_no_reasoning_fields() {
+        let out = FieldName::new("out").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let node = NodeId::new("failing");
+        graph.add_node(
+            node.clone(),
+            NodeSpec::paladin(make_paladin("failing"), InputMapping::new("go"), out),
+        );
+        graph.add_entry(node.clone());
+        // Single-attempt retry policy: policy-governed, so the failure is
+        // recorded, without any actual retry.
+        graph.set_aegis(node.clone(), retrying_aegis(1));
+
+        let sink = RecordingTraceSink::new();
+        let engine = WarEngine::new(
+            FailingPaladinPort::new(|| PaladinError::ExecutionError("paladin down".into())),
+            Arc::new(RecordingWaypointStore::new()),
+        )
+        .with_trace_sink(sink.clone());
+        let outcome = engine
+            .start(
+                &graph,
+                ThreadId::new("node-finished-failed").unwrap(),
+                StateDelta::new(),
+            )
+            .await
+            .unwrap();
+        assert!(outcome.node_error().is_some());
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(
+            finished_reasoning_for(&sink.events().await, &node),
+            (None, None)
+        );
+    }
+
+    /// Plan 38-07 (D-10, D-00c): when one of two Paladin nodes reports usage
+    /// but no cost, the run's `RunFinished.cost` is `None`, never a partial
+    /// sum of just the priced node.
+    #[tokio::test]
+    async fn run_finished_cost_is_none_when_a_paladin_node_is_unpriced() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let out = FieldName::new("out").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let n1 = NodeId::new("first");
+        let n2 = NodeId::new("second");
+        graph.add_node(
+            n1.clone(),
+            NodeSpec::paladin(make_paladin("first"), InputMapping::new("go"), out.clone()),
+        );
+        graph.add_node(
+            n2.clone(),
+            NodeSpec::paladin(make_paladin("second"), InputMapping::new("go"), out),
+        );
+        graph.add_edge(EdgeSpec {
+            from: n1.clone(),
+            to: n2.clone(),
+            condition: None,
+        });
+        graph.add_entry(n1.clone());
+
+        let port = Arc::new(RecordingPaladinPort::new());
+        port.set_output_with_usage_and_cost(
+            "first",
+            "done",
+            TokenUsage::new(10, 5),
+            Some(Cost::new(10_000, usd)),
+        );
+        port.set_output_with_usage_and_cost("second", "done", TokenUsage::new(5, 5), None);
+        let store = Arc::new(RecordingWaypointStore::new());
+        let sink = RecordingTraceSink::new();
+        let engine = WarEngine::new(port, store.clone()).with_trace_sink(sink.clone());
+
+        let thread = ThreadId::new("cost-none-when-unpriced").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let events = sink.events().await;
+        let run_cost = events
+            .iter()
+            .find_map(|r| match &r.event {
+                TraceEvent::RunFinished { cost, .. } => Some(cost.clone()),
+                _ => None,
+            })
+            .expect("a RunFinished record must exist");
+        assert_eq!(run_cost, None);
+    }
+
+    // --- Plan 39-04 Task 1: WarEngine::with_treasury_ledger, the boundary
+    // settle, and the superstep spend accumulator ----------------------
+
+    /// Builds the shared three-node graph every Task 1 treasury-ledger test
+    /// below runs: superstep 1 dispatches two parallel priced `Paladin`
+    /// entries (`first`/gpt-4, `second`/gpt-4o-mini); superstep 2 dispatches
+    /// one more (`third`/gpt-4), reached only via `first`'s own edge, so
+    /// `second` never gates it. Each writes to its own field so two
+    /// concurrent superstep-1 writers never contend over one
+    /// `DispatchRule::LastWrite` field.
+    fn treasury_ledger_test_graph() -> (WarGraph, NodeId, NodeId, NodeId) {
+        let out1 = FieldName::new("out1").unwrap();
+        let out2 = FieldName::new("out2").unwrap();
+        let out3 = FieldName::new("out3").unwrap();
+        let schema = BattlefieldSchema::new(vec![
+            FieldSpec::new(out1.clone(), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(out2.clone(), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(out3.clone(), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let n1 = NodeId::new("first");
+        let n2 = NodeId::new("second");
+        let n3 = NodeId::new("third");
+        graph.add_node(
+            n1.clone(),
+            NodeSpec::paladin(
+                make_paladin_with_model("first", "gpt-4"),
+                InputMapping::new("go"),
+                out1,
+            ),
+        );
+        graph.add_node(
+            n2.clone(),
+            NodeSpec::paladin(
+                make_paladin_with_model("second", "gpt-4o-mini"),
+                InputMapping::new("go"),
+                out2,
+            ),
+        );
+        graph.add_node(
+            n3.clone(),
+            NodeSpec::paladin(
+                make_paladin_with_model("third", "gpt-4"),
+                InputMapping::new("go"),
+                out3,
+            ),
+        );
+        graph.add_edge(EdgeSpec {
+            from: n1.clone(),
+            to: n3.clone(),
+            condition: None,
+        });
+        graph.add_entry(n1.clone());
+        graph.add_entry(n2.clone());
+        (graph, n1, n2, n3)
+    }
+
+    /// LEDGR-03/04, D-07, D-08: superstep 1's two parallel priced attempts
+    /// settle as ONE row aggregating both, superstep 2's one attempt as a
+    /// SECOND row -- spend by run sums to the total across both, spend by
+    /// model folds each superstep's own `model_breakdown`, and
+    /// `RunFinished.cost` equals the settled total.
+    #[tokio::test]
+    async fn treasury_ledger_settles_once_per_superstep_with_model_breakdown() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let (graph, _n1, _n2, _n3) = treasury_ledger_test_graph();
+
+        let port = Arc::new(RecordingPaladinPort::new());
+        port.set_output_with_usage_and_cost(
+            "first",
+            "done",
+            TokenUsage::new(10, 5),
+            Some(Cost::new(10_000, usd.clone())),
+        );
+        port.set_output_with_usage_and_cost(
+            "second",
+            "done",
+            TokenUsage::new(5, 5),
+            Some(Cost::new(2_500, usd.clone())),
+        );
+        port.set_output_with_usage_and_cost(
+            "third",
+            "done",
+            TokenUsage::new(20, 10),
+            Some(Cost::new(30_000, usd.clone())),
+        );
+
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let run_id = RunId::new_v7();
+        let context = SettlementContext {
+            scope: LedgerScope::unattributed(),
+            run_id: run_id.clone(),
+            attempt: 1,
+        };
+        let store = Arc::new(RecordingWaypointStore::new());
+        let sink = RecordingTraceSink::new();
+        let engine = WarEngine::new(port, store.clone())
+            .with_trace_sink(sink.clone())
+            .with_treasury_ledger(ledger.clone(), context);
+
+        let thread = ThreadId::new("treasury-settles-once-per-superstep").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        let by_run = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                run_ids: vec![run_id.clone()],
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(by_run.len(), 1, "one currency, one row");
+        assert_eq!(by_run[0].amount, Cost::new(42_500, usd.clone()));
+        assert_eq!(by_run[0].settlements, 2, "one settlement per superstep");
+
+        let by_model = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Model,
+                run_ids: vec![run_id.clone()],
+                ..Default::default()
+            })
+            .await
+            .expect("spend by model succeeds");
+        let gpt4 = by_model
+            .iter()
+            .find(|row| row.group == "gpt-4")
+            .expect("a gpt-4 row exists");
+        assert_eq!(gpt4.amount, Cost::new(40_000, usd.clone()));
+        assert_eq!(gpt4.settlements, 2, "gpt-4 appears in both superstep rows");
+        let mini = by_model
+            .iter()
+            .find(|row| row.group == "gpt-4o-mini")
+            .expect("a gpt-4o-mini row exists");
+        assert_eq!(mini.amount, Cost::new(2_500, usd.clone()));
+        assert_eq!(mini.settlements, 1);
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let events = sink.events().await;
+        let run_cost = events
+            .iter()
+            .find_map(|r| match &r.event {
+                TraceEvent::RunFinished { cost, .. } => Some(cost.clone()),
+                _ => None,
+            })
+            .expect("a RunFinished record must exist");
+        assert_eq!(
+            run_cost,
+            Some(Cost::new(42_500, usd)),
+            "RunFinished.cost equals the settled total"
+        );
+    }
+
+    /// D-08: a superstep in which every attempt's cost is `None` writes no
+    /// settlement row at all -- the run still completes normally.
+    #[tokio::test]
+    async fn unpriced_superstep_writes_no_settlement() {
+        let (graph, _n1, _n2, _n3) = treasury_ledger_test_graph();
+
+        let port = Arc::new(RecordingPaladinPort::new());
+        port.set_output("first", "done");
+        port.set_output("second", "done");
+        port.set_output("third", "done");
+
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let run_id = RunId::new_v7();
+        let context = SettlementContext {
+            scope: LedgerScope::unattributed(),
+            run_id: run_id.clone(),
+            attempt: 1,
+        };
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine =
+            WarEngine::new(port, store.clone()).with_treasury_ledger(ledger.clone(), context);
+
+        let thread = ThreadId::new("unpriced-superstep-writes-no-settlement").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        let by_run = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                run_ids: vec![run_id],
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert!(by_run.is_empty(), "no attempt was priced, so no row exists");
+    }
+
+    /// D-08: an engine with no `with_treasury_ledger` call performs no
+    /// ledger call at all -- the pre-existing (pre-Phase-39) engine
+    /// behavior is completely unchanged.
+    #[tokio::test]
+    async fn engine_without_treasury_ledger_is_unchanged() {
+        let (graph, _n1, _n2, _n3) = treasury_ledger_test_graph();
+
+        let port = Arc::new(RecordingPaladinPort::new());
+        port.set_output_with_usage_and_cost(
+            "first",
+            "done",
+            TokenUsage::new(10, 5),
+            Some(Cost::new(10_000, CurrencyCode::new("USD").unwrap())),
+        );
+        port.set_output("second", "done");
+        port.set_output("third", "done");
+        let store = Arc::new(RecordingWaypointStore::new());
+        // Deliberately no `.with_treasury_ledger(..)` call.
+        let engine = WarEngine::new(port, store.clone());
+
+        let thread = ThreadId::new("engine-without-treasury-ledger-is-unchanged").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+    }
+
+    // --- Plan 50-29 (G-50-5a remainder (b)): an attempt counts the spend it
+    // incurred however it ends -----------------------------------------------
+
+    use crate::engine::test_support::{AfterRecording, SpendRecordingPaladinPort};
+
+    /// Runs a single-`Paladin`-node graph (`scout`/gpt-4, writing `out`)
+    /// with `port` under `aegis` against a fresh in-memory ledger and a
+    /// recording trace sink. Returns the outcome, the ledger, the run id and
+    /// every `NodeFinished` record's `(usage, cost)` pair in emit order.
+    async fn run_scout_with_ledger(
+        thread: &str,
+        port: Arc<dyn PaladinPort>,
+        aegis: Option<Aegis>,
+    ) -> (
+        RunOutcome,
+        Arc<InMemoryTreasuryLedger>,
+        RunId,
+        Vec<(TokenUsage, Option<Cost>)>,
+    ) {
+        let out = FieldName::new("out").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let node_id = NodeId::new("scout");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::paladin(
+                make_paladin_with_model("scout", "gpt-4"),
+                InputMapping::new("go"),
+                out,
+            ),
+        );
+        graph.add_entry(node_id.clone());
+        if let Some(aegis) = aegis {
+            graph.set_aegis(node_id, aegis);
+        }
+
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let run_id = RunId::new_v7();
+        let context = SettlementContext {
+            scope: LedgerScope::unattributed(),
+            run_id: run_id.clone(),
+            attempt: 1,
+        };
+        let store = Arc::new(RecordingWaypointStore::new());
+        let sink = RecordingTraceSink::new();
+        let engine = WarEngine::new(port, store)
+            .with_trace_sink(sink.clone())
+            .with_treasury_ledger(ledger.clone(), context);
+        let outcome = engine
+            .start(&graph, ThreadId::new(thread).unwrap(), StateDelta::new())
+            .await
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let finished = sink
+            .events()
+            .await
+            .iter()
+            .filter_map(|record| match &record.event {
+                TraceEvent::NodeFinished { usage, cost, .. } => Some((usage.clone(), cost.clone())),
+                _ => None,
+            })
+            .collect();
+        (outcome, ledger, run_id, finished)
+    }
+
+    /// The ledger's single by-run row for `run_id`: `(amount, settlements)`,
+    /// or `None` when nothing was settled.
+    async fn settled_for(ledger: &InMemoryTreasuryLedger, run_id: &RunId) -> Option<(Cost, u64)> {
+        let rows = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                run_ids: vec![run_id.clone()],
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert!(rows.len() <= 1, "one currency, at most one row: {rows:?}");
+        rows.first()
+            .map(|row| (row.amount.clone(), row.settlements))
+    }
+
+    fn spend_recording_failure() -> PaladinError {
+        PaladinError::ExecutionError("middleware refused the second loop".into())
+    }
+
+    /// G-50-5a remainder (b), plan 50-29 tracer: a Paladin attempt that
+    /// recorded usage U and cost C through the attempt spend scope and then
+    /// failed with a non-LLM `PaladinError` reports U and C on its
+    /// `NodeFinished`, and the superstep boundary settles C exactly once,
+    /// under the node's model. Before this plan the attempt reported the
+    /// neutral pair and settled nothing.
+    #[tokio::test]
+    async fn failed_paladin_attempt_records_its_incurred_spend() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let usage = TokenUsage::new(1_000, 62_000);
+        let cost = Cost::new(2_403_000, usd.clone());
+        let port = SpendRecordingPaladinPort::new(
+            usage.clone(),
+            Some(cost.clone()),
+            AfterRecording::Fail(spend_recording_failure),
+        );
+
+        let (outcome, ledger, run_id, finished) = run_scout_with_ledger(
+            "failed-attempt-counts-its-spend",
+            port.clone(),
+            // A single-attempt retry policy: policy-governed, so the
+            // structured `NodeError` is recorded, with no actual retry.
+            Some(retrying_aegis(1)),
+        )
+        .await;
+
+        assert_eq!(port.call_count(), 1, "no retry policy: one attempt");
+        let node_error = outcome.node_error().expect("the run failed on the node");
+        assert!(
+            matches!(node_error.source, NodeErrorSource::Paladin { .. }),
+            "a non-LLM Paladin failure: {node_error:?}"
+        );
+        assert_eq!(
+            finished,
+            vec![(usage, Some(cost.clone()))],
+            "NodeFinished reports the spend the failed attempt recorded"
+        );
+        assert_eq!(
+            settled_for(&ledger, &run_id).await,
+            Some((cost.clone(), 1)),
+            "the boundary settles C exactly once"
+        );
+
+        let by_model = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Model,
+                run_ids: vec![run_id],
+                ..Default::default()
+            })
+            .await
+            .expect("spend by model succeeds");
+        assert_eq!(by_model.len(), 1);
+        assert_eq!(by_model[0].group, "gpt-4", "charged under the node's model");
+        assert_eq!(by_model[0].amount, cost);
+    }
+
+    /// LEDGR-03/04 under retries: three failed attempts each record C once
+    /// -- three `NodeFinished` records carrying C, and the one superstep
+    /// settle charges exactly 3C in one settlement, never a double count.
+    #[tokio::test]
+    async fn each_failed_retry_attempt_is_charged_once() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let usage = TokenUsage::new(10, 5);
+        let cost = Cost::new(10_000, usd.clone());
+        let port = SpendRecordingPaladinPort::new(
+            usage.clone(),
+            Some(cost.clone()),
+            AfterRecording::Fail(spend_recording_failure),
+        );
+
+        let (outcome, ledger, run_id, finished) = run_scout_with_ledger(
+            "each-failed-retry-charged-once",
+            port.clone(),
+            Some(retrying_aegis(3)),
+        )
+        .await;
+
+        assert_eq!(
+            port.call_count(),
+            3,
+            "ExecutionError is Unknown: retried to exhaustion"
+        );
+        assert!(outcome.node_error().is_some(), "every attempt failed");
+        assert_eq!(
+            finished,
+            vec![
+                (usage.clone(), Some(cost.clone())),
+                (usage.clone(), Some(cost.clone())),
+                (usage, Some(cost)),
+            ],
+            "one NodeFinished per attempt, each with that attempt's own spend"
+        );
+        assert_eq!(
+            settled_for(&ledger, &run_id).await,
+            Some((Cost::new(30_000, usd), 1)),
+            "one settle per superstep, 3 x C, each attempt counted once"
+        );
+    }
+
+    /// Controls (A1-50-29): a failing port that records nothing still reports
+    /// the neutral pair and settles nothing; a port that records U/C and then
+    /// succeeds with the same U/C on its `PaladinResult` (what the real
+    /// service does) is charged C once -- the success keeps its one source,
+    /// `PaladinResult.cost`, and the scope never adds a second count.
+    #[tokio::test]
+    async fn unrecorded_failures_stay_neutral_and_successes_are_not_double_counted() {
+        let usd = CurrencyCode::new("USD").unwrap();
+
+        let silent = FailingPaladinPort::new(spend_recording_failure);
+        let (outcome, ledger, run_id, finished) = run_scout_with_ledger(
+            "unrecorded-failure-stays-neutral",
+            silent,
+            Some(retrying_aegis(1)),
+        )
+        .await;
+        assert!(outcome.node_error().is_some());
+        assert_eq!(finished, vec![(TokenUsage::default(), None)]);
+        assert_eq!(
+            settled_for(&ledger, &run_id).await,
+            None,
+            "nothing to settle"
+        );
+
+        let usage = TokenUsage::new(10, 5);
+        let cost = Cost::new(10_000, usd);
+        let recording_success = SpendRecordingPaladinPort::new(
+            usage.clone(),
+            Some(cost.clone()),
+            AfterRecording::Succeed,
+        );
+        let (outcome, ledger, run_id, finished) =
+            run_scout_with_ledger("success-not-double-counted", recording_success, None).await;
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+        assert_eq!(finished, vec![(usage, Some(cost.clone()))]);
+        assert_eq!(
+            settled_for(&ledger, &run_id).await,
+            Some((cost, 1)),
+            "C once: PaladinResult.cost is the success's only source"
+        );
+    }
+
+    /// An `Aegis` declaring only a `TimeoutPolicy`, no retry.
+    fn timeout_only_aegis(
+        run_timeout: Option<std::time::Duration>,
+        idle_timeout: Option<std::time::Duration>,
+    ) -> Aegis {
+        Aegis {
+            timeout: Some(paladin_core::platform::container::aegis::TimeoutPolicy {
+                run_timeout,
+                idle_timeout,
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// G-50-5a (plan 50-29, Task 2): a port that records U and C and then
+    /// stalls past the attempt's `run_timeout` is cut by the deadline -- its
+    /// attempt future dropped mid-sleep -- yet its `NodeFinished` reports U
+    /// and C and the boundary settles C once. The idle bound behaves the
+    /// same. Paused clock: no wall-clock sleeps.
+    #[tokio::test(start_paused = true)]
+    async fn timed_out_attempt_records_its_incurred_spend() {
+        use paladin_core::platform::container::node_error::TimeoutKind;
+        let usd = CurrencyCode::new("USD").unwrap();
+        let usage = TokenUsage::new(400, 80);
+        let cost = Cost::new(1_200_000, usd.clone());
+        let ten_seconds = std::time::Duration::from_secs(10);
+
+        for (label, aegis, expected_kind) in [
+            (
+                "run-deadline",
+                timeout_only_aegis(Some(std::time::Duration::from_millis(500)), None),
+                TimeoutKind::Run,
+            ),
+            (
+                "idle-window",
+                timeout_only_aegis(
+                    Some(ten_seconds * 2),
+                    Some(std::time::Duration::from_millis(250)),
+                ),
+                TimeoutKind::Idle,
+            ),
+        ] {
+            let port = SpendRecordingPaladinPort::new(
+                usage.clone(),
+                Some(cost.clone()),
+                AfterRecording::Stall(ten_seconds),
+            );
+            let (outcome, ledger, run_id, finished) = run_scout_with_ledger(
+                &format!("timed-out-attempt-counts-its-spend-{label}"),
+                port.clone(),
+                Some(aegis),
+            )
+            .await;
+
+            assert_eq!(
+                port.call_count(),
+                1,
+                "{label}: one attempt, no retry policy"
+            );
+            let node_error = outcome
+                .node_error()
+                .unwrap_or_else(|| panic!("{label}: expected a timed-out node, got {outcome:?}"));
+            assert_eq!(
+                node_error.source,
+                NodeErrorSource::Timeout(expected_kind),
+                "{label}: the typed bound fired"
+            );
+            assert_eq!(
+                finished,
+                vec![(usage.clone(), Some(cost.clone()))],
+                "{label}: the dropped attempt's recorded spend reaches NodeFinished"
+            );
+            assert_eq!(
+                settled_for(&ledger, &run_id).await,
+                Some((cost.clone(), 1)),
+                "{label}: the boundary settles C once"
+            );
+        }
+    }
+
+    use crate::engine::test_support::{SpendRecordingStructuredExecutor, StructuredEnding};
+
+    /// Runs a single structured `Paladin` node (`scout`/gpt-4, an inline
+    /// `{"type": "object"}` output schema, writing `out`) through `executor`
+    /// against a fresh ledger and trace sink. Returns the outcome, the
+    /// ledger, the run id and every `NodeFinished` `(usage, cost)` pair.
+    async fn run_structured_scout_with_ledger(
+        thread: &str,
+        executor: Arc<dyn StructuredExecutorPort>,
+    ) -> (
+        RunOutcome,
+        Arc<InMemoryTreasuryLedger>,
+        RunId,
+        Vec<(TokenUsage, Option<Cost>)>,
+    ) {
+        use paladin_core::platform::container::structured::SchemaRef;
+        let out = FieldName::new("out").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let node_id = NodeId::new("scout");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::paladin(
+                make_paladin_with_model("scout", "gpt-4"),
+                InputMapping::new("go"),
+                out,
+            )
+            .with_output_schema(SchemaRef::Inline(serde_json::json!({"type": "object"}))),
+        );
+        graph.add_entry(node_id.clone());
+        graph.set_aegis(node_id, retrying_aegis(1));
+
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let run_id = RunId::new_v7();
+        let context = SettlementContext {
+            scope: LedgerScope::unattributed(),
+            run_id: run_id.clone(),
+            attempt: 1,
+        };
+        let sink = RecordingTraceSink::new();
+        let engine = WarEngine::new(
+            Arc::new(RecordingPaladinPort::new()),
+            Arc::new(RecordingWaypointStore::new()),
+        )
+        .with_structured_executor(executor)
+        .with_trace_sink(sink.clone())
+        .with_treasury_ledger(ledger.clone(), context);
+        let outcome = engine
+            .start(&graph, ThreadId::new(thread).unwrap(), StateDelta::new())
+            .await
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let finished = sink
+            .events()
+            .await
+            .iter()
+            .filter_map(|record| match &record.event {
+                TraceEvent::NodeFinished { usage, cost, .. } => Some((usage.clone(), cost.clone())),
+                _ => None,
+            })
+            .collect();
+        (outcome, ledger, run_id, finished)
+    }
+
+    /// Three scripted structured calls: 1_000 + 1_000 + 500 nanos USD, 30 +
+    /// 30 + 25 tokens.
+    fn three_structured_calls(usd: &CurrencyCode) -> Vec<(TokenUsage, Option<Cost>)> {
+        vec![
+            (TokenUsage::new(20, 10), Some(Cost::new(1_000, usd.clone()))),
+            (TokenUsage::new(20, 10), Some(Cost::new(1_000, usd.clone()))),
+            (TokenUsage::new(20, 5), Some(Cost::new(500, usd.clone()))),
+        ]
+    }
+
+    /// G-50-5a (plan 50-29, Task 2): a structured executor that records
+    /// three calls' spend and fails with `StructuredOutputInvalid` reports
+    /// the SUM on its `NodeFinished` and settles the sum once; the same
+    /// executor succeeding on its third call reports the sum too -- not only
+    /// the last call's `raw.cost`, because every repair call was billed.
+    #[tokio::test]
+    async fn structured_repairs_count_every_call() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let sum_usage = TokenUsage::new(60, 25);
+        let sum_cost = Cost::new(2_500, usd.clone());
+
+        let exhausted = SpendRecordingStructuredExecutor::recording(
+            three_structured_calls(&usd),
+            StructuredEnding::Invalid,
+        );
+        let (outcome, ledger, run_id, finished) =
+            run_structured_scout_with_ledger("structured-exhaustion-counts-every-call", exhausted)
+                .await;
+        let node_error = outcome
+            .node_error()
+            .unwrap_or_else(|| panic!("expected StructuredOutputInvalid, got {outcome:?}"));
+        assert!(
+            matches!(
+                &node_error.source,
+                NodeErrorSource::Paladin { kind, .. } if kind == "StructuredOutputInvalid"
+            ),
+            "got {node_error:?}"
+        );
+        assert_eq!(finished, vec![(sum_usage.clone(), Some(sum_cost.clone()))]);
+        assert_eq!(
+            settled_for(&ledger, &run_id).await,
+            Some((sum_cost.clone(), 1))
+        );
+
+        let repaired = SpendRecordingStructuredExecutor::recording(
+            three_structured_calls(&usd),
+            StructuredEnding::Succeed(serde_json::json!({"ok": true})),
+        );
+        let (outcome, ledger, run_id, finished) =
+            run_structured_scout_with_ledger("structured-success-counts-every-call", repaired)
+                .await;
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => assert_eq!(
+                final_state.get_raw(&FieldName::new("out").unwrap()),
+                Some(&serde_json::json!({"ok": true}))
+            ),
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        assert_eq!(
+            finished,
+            vec![(sum_usage, Some(sum_cost.clone()))],
+            "the sum of every call, not only the last call's raw figures"
+        );
+        assert_eq!(settled_for(&ledger, &run_id).await, Some((sum_cost, 1)));
+    }
+
+    /// Control: a structured executor that records nothing keeps reporting
+    /// `raw`'s own figures (the last call's) on success and the neutral pair
+    /// on failure -- the pre-50-29 behaviour, unchanged.
+    #[tokio::test]
+    async fn a_silent_structured_executor_keeps_raw_figures() {
+        let usd = CurrencyCode::new("USD").unwrap();
+
+        let silent_success = SpendRecordingStructuredExecutor::silent(
+            three_structured_calls(&usd),
+            StructuredEnding::Succeed(serde_json::json!({"ok": true})),
+        );
+        let (outcome, ledger, run_id, finished) =
+            run_structured_scout_with_ledger("silent-structured-success", silent_success).await;
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+        let last_cost = Cost::new(500, usd.clone());
+        assert_eq!(
+            finished,
+            vec![(TokenUsage::new(20, 5), Some(last_cost.clone()))],
+            "raw carries the last call only"
+        );
+        assert_eq!(settled_for(&ledger, &run_id).await, Some((last_cost, 1)));
+
+        let silent_failure = SpendRecordingStructuredExecutor::silent(
+            three_structured_calls(&usd),
+            StructuredEnding::Invalid,
+        );
+        let (outcome, ledger, run_id, finished) =
+            run_structured_scout_with_ledger("silent-structured-failure", silent_failure).await;
+        assert!(outcome.node_error().is_some());
+        assert_eq!(finished, vec![(TokenUsage::default(), None)]);
+        assert_eq!(settled_for(&ledger, &run_id).await, None);
+    }
+
+    /// D-11: a structured-output attempt reads the pair from
+    /// `structured.raw.run_metadata`; an executor whose `raw` stamped nothing
+    /// emits `None`, and so does a failed structured attempt.
+    #[tokio::test]
+    async fn a_structured_attempt_reads_reasoning_from_the_raw_result() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let with_effort = SpendRecordingStructuredExecutor::recording_with_run_metadata(
+            three_structured_calls(&usd),
+            StructuredEnding::Succeed(serde_json::json!({"ok": true})),
+            reasoning_metadata("medium", "low"),
+        );
+        let (outcome, sink) =
+            run_structured_scout_with_sink("structured-reasoning-stamped", with_effort).await;
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+        assert_eq!(
+            finished_reasoning_for(&sink.events().await, &NodeId::new("scout")),
+            (Some("medium".to_string()), Some("low".to_string()))
+        );
+
+        let unstamped = SpendRecordingStructuredExecutor::recording(
+            three_structured_calls(&usd),
+            StructuredEnding::Succeed(serde_json::json!({"ok": true})),
+        );
+        let (outcome, sink) =
+            run_structured_scout_with_sink("structured-reasoning-unstamped", unstamped).await;
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+        assert_eq!(
+            finished_reasoning_for(&sink.events().await, &NodeId::new("scout")),
+            (None, None)
+        );
+
+        let failed = SpendRecordingStructuredExecutor::recording_with_run_metadata(
+            three_structured_calls(&usd),
+            StructuredEnding::Invalid,
+            reasoning_metadata("medium", "low"),
+        );
+        let (outcome, sink) =
+            run_structured_scout_with_sink("structured-reasoning-failed", failed).await;
+        assert!(outcome.node_error().is_some());
+        assert_eq!(
+            finished_reasoning_for(&sink.events().await, &NodeId::new("scout")),
+            (None, None),
+            "a failed attempt emits no effort"
+        );
+    }
+
+    /// Runs the single structured `scout` node through `executor` and returns
+    /// the outcome with the recording trace sink.
+    async fn run_structured_scout_with_sink(
+        thread: &str,
+        executor: Arc<dyn StructuredExecutorPort>,
+    ) -> (RunOutcome, Arc<RecordingTraceSink>) {
+        use paladin_core::platform::container::structured::SchemaRef;
+        let out = FieldName::new("out").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let node_id = NodeId::new("scout");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::paladin(
+                make_paladin_with_model("scout", "gpt-4"),
+                InputMapping::new("go"),
+                out,
+            )
+            .with_output_schema(SchemaRef::Inline(serde_json::json!({"type": "object"}))),
+        );
+        graph.add_entry(node_id.clone());
+        graph.set_aegis(node_id, retrying_aegis(1));
+        let sink = RecordingTraceSink::new();
+        let engine = WarEngine::new(
+            Arc::new(RecordingPaladinPort::new()),
+            Arc::new(RecordingWaypointStore::new()),
+        )
+        .with_structured_executor(executor)
+        .with_trace_sink(sink.clone());
+        let outcome = engine
+            .start(&graph, ThreadId::new(thread).unwrap(), StateDelta::new())
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        (outcome, sink)
+    }
+
+    // --- Plan 39-04 Task 2: nested Battalion roll-up, the retry invariant,
+    // and ledger failure isolation ---------------------------------------
+
+    /// Records every `SettleRequest` this ledger receives -- its key and its
+    /// amount, in call order -- delegating everything to a real
+    /// `InMemoryTreasuryLedger`. `SettleOutcome` alone cannot distinguish
+    /// "one settle call" from "one settlement row" (a duplicate key is
+    /// still exactly one call, `AlreadySettled`), so this double counts
+    /// CALLS directly.
+    #[derive(Default)]
+    struct RecordingTreasuryLedger {
+        inner: InMemoryTreasuryLedger,
+        calls: std::sync::Mutex<Vec<(SettlementKey, Cost)>>,
+    }
+
+    impl RecordingTreasuryLedger {
+        fn new() -> Self {
+            Self::default()
+        }
+
+        fn calls(&self) -> Vec<(SettlementKey, Cost)> {
+            self.calls.lock().expect("calls mutex poisoned").clone()
+        }
+    }
+
+    #[async_trait]
+    impl TreasuryLedgerPort for RecordingTreasuryLedger {
+        async fn reserve(
+            &self,
+            request: ReserveRequest,
+        ) -> Result<ReservationId, TreasuryLedgerError> {
+            self.inner.reserve(request).await
+        }
+
+        async fn release(&self, reservation: ReservationId) -> Result<(), TreasuryLedgerError> {
+            self.inner.release(reservation).await
+        }
+
+        async fn settle(
+            &self,
+            request: SettleRequest,
+        ) -> Result<SettleOutcome, TreasuryLedgerError> {
+            self.calls
+                .lock()
+                .expect("calls mutex poisoned")
+                .push((request.key.clone(), request.amount.clone()));
+            self.inner.settle(request).await
+        }
+
+        async fn spend(&self, query: SpendQuery) -> Result<Vec<SpendRow>, TreasuryLedgerError> {
+            self.inner.spend(query).await
+        }
+
+        async fn store_now(&self) -> Result<DateTime<Utc>, TreasuryLedgerError> {
+            self.inner.store_now().await
+        }
+    }
+
+    /// A ledger whose `settle` always fails with `TreasuryLedgerError::Backend`
+    /// -- proves D-08's "never fails the run" guarantee. `reserve`/`release`
+    /// are unreachable: this plan's production writer never calls them.
+    struct FailingTreasuryLedger;
+
+    #[async_trait]
+    impl TreasuryLedgerPort for FailingTreasuryLedger {
+        async fn reserve(
+            &self,
+            _request: ReserveRequest,
+        ) -> Result<ReservationId, TreasuryLedgerError> {
+            unreachable!("not exercised by this plan's settle-only production writer")
+        }
+
+        async fn release(&self, _reservation: ReservationId) -> Result<(), TreasuryLedgerError> {
+            unreachable!("not exercised by this plan's settle-only production writer")
+        }
+
+        async fn settle(
+            &self,
+            _request: SettleRequest,
+        ) -> Result<SettleOutcome, TreasuryLedgerError> {
+            Err(TreasuryLedgerError::Backend {
+                source: Box::new(std::io::Error::other("ledger backend unavailable")),
+            })
+        }
+
+        async fn spend(&self, _query: SpendQuery) -> Result<Vec<SpendRow>, TreasuryLedgerError> {
+            Ok(Vec::new())
+        }
+
+        async fn store_now(&self) -> Result<DateTime<Utc>, TreasuryLedgerError> {
+            Ok(Utc::now())
+        }
+    }
+
+    /// Wraps a `RecordingPaladinPort`, failing the FIRST call to
+    /// `flaky_name` with a retry-eligible (`Transience::Unknown`) error, and
+    /// delegating every other call -- including `flaky_name`'s own retried
+    /// second attempt -- to `inner` unchanged.
+    struct FlakyOnceThenRecordingPort {
+        inner: Arc<RecordingPaladinPort>,
+        flaky_name: String,
+        flaky_calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl FlakyOnceThenRecordingPort {
+        fn new(inner: Arc<RecordingPaladinPort>, flaky_name: impl Into<String>) -> Arc<Self> {
+            Arc::new(Self {
+                inner,
+                flaky_name: flaky_name.into(),
+                flaky_calls: std::sync::atomic::AtomicUsize::new(0),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl PaladinPort for FlakyOnceThenRecordingPort {
+        async fn execute(
+            &self,
+            paladin: &Paladin,
+            input: &str,
+        ) -> Result<PaladinResult, PaladinError> {
+            if paladin.data.name == self.flaky_name
+                && self
+                    .flaky_calls
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                    == 0
+            {
+                return Err(PaladinError::ExecutionError(
+                    "transient failure".to_string(),
+                ));
+            }
+            self.inner.execute(paladin, input).await
+        }
+
+        async fn execute_stream(
+            &self,
+            paladin: &Paladin,
+            input: &str,
+        ) -> Result<PaladinStream, PaladinError> {
+            self.inner.execute_stream(paladin, input).await
+        }
+
+        fn validate(&self, paladin: &Paladin) -> Result<(), PaladinError> {
+            self.inner.validate(paladin)
+        }
+    }
+
+    /// CF-FR-16: a `NodeSpec::Battalion` node's entire child run (however
+    /// many supersteps the child itself takes) is awaited inline within the
+    /// ONE parent superstep that dispatched it -- so the child's two priced
+    /// attempts (7_000 then 8_000, across two child supersteps) roll into
+    /// the PARENT's superstep 1 settlement, and the parent's own second
+    /// superstep (1_000) settles separately, both under the top-level run
+    /// id.
+    #[tokio::test]
+    async fn nested_battalion_child_spend_rolls_into_the_parent_superstep() {
+        let usd = CurrencyCode::new("USD").unwrap();
+
+        let child_out = FieldName::new("child_out").unwrap();
+        let child_schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            child_out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut child_graph = WarGraph::new(child_schema, EngineLimits::default());
+        let c1 = NodeId::new("child-first");
+        let c2 = NodeId::new("child-second");
+        child_graph.add_node(
+            c1.clone(),
+            NodeSpec::paladin(
+                make_paladin_with_model("child-first", "gpt-4"),
+                InputMapping::new("go"),
+                child_out.clone(),
+            ),
+        );
+        child_graph.add_node(
+            c2.clone(),
+            NodeSpec::paladin(
+                make_paladin_with_model("child-second", "gpt-4"),
+                InputMapping::new("go"),
+                child_out,
+            ),
+        );
+        child_graph.add_edge(EdgeSpec {
+            from: c1.clone(),
+            to: c2.clone(),
+            condition: None,
+        });
+        child_graph.add_entry(c1);
+
+        let parent_out = FieldName::new("parent_out").unwrap();
+        let parent_schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            parent_out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut parent = WarGraph::new(parent_schema, EngineLimits::default());
+        let battalion_id = NodeId::new("battalion");
+        parent.add_node(
+            battalion_id.clone(),
+            NodeSpec::battalion(Arc::new(child_graph), StateMap::new()),
+        );
+        let parent_second = NodeId::new("parent-second");
+        parent.add_node(
+            parent_second.clone(),
+            NodeSpec::paladin(
+                make_paladin_with_model("parent-second", "gpt-4"),
+                InputMapping::new("go"),
+                parent_out,
+            ),
+        );
+        parent.add_edge(EdgeSpec {
+            from: battalion_id.clone(),
+            to: parent_second.clone(),
+            condition: None,
+        });
+        parent.add_entry(battalion_id);
+
+        let port = Arc::new(RecordingPaladinPort::new());
+        port.set_output_with_usage_and_cost(
+            "child-first",
+            "done",
+            TokenUsage::new(1, 1),
+            Some(Cost::new(7_000, usd.clone())),
+        );
+        port.set_output_with_usage_and_cost(
+            "child-second",
+            "done",
+            TokenUsage::new(1, 1),
+            Some(Cost::new(8_000, usd.clone())),
+        );
+        port.set_output_with_usage_and_cost(
+            "parent-second",
+            "done",
+            TokenUsage::new(1, 1),
+            Some(Cost::new(1_000, usd.clone())),
+        );
+
+        let ledger = Arc::new(RecordingTreasuryLedger::new());
+        let run_id = RunId::new_v7();
+        let context = SettlementContext {
+            scope: LedgerScope::unattributed(),
+            run_id: run_id.clone(),
+            attempt: 1,
+        };
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine =
+            WarEngine::new(port, store.clone()).with_treasury_ledger(ledger.clone(), context);
+
+        let thread = ThreadId::new("nested-battalion-child-spend-rolls-up").unwrap();
+        let outcome = engine
+            .start(&parent, thread, StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        let calls = ledger.calls();
+        assert_eq!(
+            calls.len(),
+            2,
+            "exactly two settle calls: one per parent superstep"
+        );
+        assert_eq!(calls[0].0.run_id, run_id);
+        assert_eq!(calls[0].0.superstep, 1);
+        assert_eq!(
+            calls[0].1,
+            Cost::new(15_000, usd.clone()),
+            "the child's two attempts roll into the parent's superstep 1"
+        );
+        assert_eq!(calls[1].0.run_id, run_id);
+        assert_eq!(calls[1].0.superstep, 2);
+        assert_eq!(calls[1].1, Cost::new(1_000, usd));
+    }
+
+    /// ADR-0053 §4's accepted assumption-delta invariant: three parallel
+    /// priced Paladin nodes plus one whose Aegis retry policy retries a
+    /// failed first attempt all dispatch in the SAME superstep -- exactly
+    /// one settle call results, summing every priced attempt (the failed
+    /// first attempt of the flaky node contributes nothing; only its
+    /// successful retry is priced).
+    #[tokio::test]
+    async fn one_settlement_per_superstep_attempt_across_parallel_nodes_and_retries() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let out1 = FieldName::new("out1").unwrap();
+        let out2 = FieldName::new("out2").unwrap();
+        let out3 = FieldName::new("out3").unwrap();
+        let out4 = FieldName::new("out4").unwrap();
+        let schema = BattlefieldSchema::new(vec![
+            FieldSpec::new(out1.clone(), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(out2.clone(), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(out3.clone(), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(out4.clone(), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let n1 = NodeId::new("one");
+        let n2 = NodeId::new("two");
+        let n3 = NodeId::new("three");
+        let n4 = NodeId::new("flaky");
+        graph.add_node(
+            n1.clone(),
+            NodeSpec::paladin(
+                make_paladin_with_model("one", "gpt-4"),
+                InputMapping::new("go"),
+                out1,
+            ),
+        );
+        graph.add_node(
+            n2.clone(),
+            NodeSpec::paladin(
+                make_paladin_with_model("two", "gpt-4o-mini"),
+                InputMapping::new("go"),
+                out2,
+            ),
+        );
+        graph.add_node(
+            n3.clone(),
+            NodeSpec::paladin(
+                make_paladin_with_model("three", "gpt-4"),
+                InputMapping::new("go"),
+                out3,
+            ),
+        );
+        graph.add_node(
+            n4.clone(),
+            NodeSpec::paladin(
+                make_paladin_with_model("flaky", "gpt-4"),
+                InputMapping::new("go"),
+                out4,
+            ),
+        );
+        graph.add_entry(n1.clone());
+        graph.add_entry(n2.clone());
+        graph.add_entry(n3.clone());
+        graph.add_entry(n4.clone());
+        graph.set_aegis(n4.clone(), retrying_aegis(3));
+
+        let recording_port = Arc::new(RecordingPaladinPort::new());
+        recording_port.set_output_with_usage_and_cost(
+            "one",
+            "done",
+            TokenUsage::new(1, 1),
+            Some(Cost::new(5_000, usd.clone())),
+        );
+        recording_port.set_output_with_usage_and_cost(
+            "two",
+            "done",
+            TokenUsage::new(1, 1),
+            Some(Cost::new(6_000, usd.clone())),
+        );
+        recording_port.set_output_with_usage_and_cost(
+            "three",
+            "done",
+            TokenUsage::new(1, 1),
+            Some(Cost::new(7_000, usd.clone())),
+        );
+        recording_port.set_output_with_usage_and_cost(
+            "flaky",
+            "done",
+            TokenUsage::new(1, 1),
+            Some(Cost::new(9_000, usd.clone())),
+        );
+        let port = FlakyOnceThenRecordingPort::new(recording_port, "flaky");
+
+        let ledger = Arc::new(RecordingTreasuryLedger::new());
+        let run_id = RunId::new_v7();
+        let context = SettlementContext {
+            scope: LedgerScope::unattributed(),
+            run_id: run_id.clone(),
+            attempt: 1,
+        };
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine =
+            WarEngine::new(port, store.clone()).with_treasury_ledger(ledger.clone(), context);
+
+        let thread = ThreadId::new("one-settlement-per-superstep-parallel-and-retries").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        let calls = ledger.calls();
+        assert_eq!(
+            calls.len(),
+            1,
+            "exactly one settle call for the one superstep, across parallel nodes and a retry"
+        );
+        assert_eq!(calls[0].0.run_id, run_id);
+        assert_eq!(calls[0].0.superstep, 1);
+        assert_eq!(calls[0].1, Cost::new(27_000, usd));
+    }
+
+    /// D-08: a `settle` call that fails never fails, retries a node in, or
+    /// halts the run -- `RunOutcome::Completed` and a `TraceEvent::RunFinished`
+    /// are both still produced.
+    #[tokio::test]
+    async fn failing_treasury_ledger_never_fails_the_run() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let out = FieldName::new("out").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let n1 = NodeId::new("priced");
+        graph.add_node(
+            n1.clone(),
+            NodeSpec::paladin(
+                make_paladin_with_model("priced", "gpt-4"),
+                InputMapping::new("go"),
+                out,
+            ),
+        );
+        graph.add_entry(n1);
+
+        let port = Arc::new(RecordingPaladinPort::new());
+        port.set_output_with_usage_and_cost(
+            "priced",
+            "done",
+            TokenUsage::new(1, 1),
+            Some(Cost::new(1_000, usd)),
+        );
+
+        let ledger = Arc::new(FailingTreasuryLedger);
+        let context = SettlementContext {
+            scope: LedgerScope::unattributed(),
+            run_id: RunId::new_v7(),
+            attempt: 1,
+        };
+        let store = Arc::new(RecordingWaypointStore::new());
+        let sink = RecordingTraceSink::new();
+        let engine = WarEngine::new(port, store.clone())
+            .with_trace_sink(sink.clone())
+            .with_treasury_ledger(ledger, context);
+
+        let thread = ThreadId::new("failing-treasury-ledger-never-fails-the-run").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let events = sink.events().await;
+        assert!(
+            events
+                .iter()
+                .any(|r| matches!(r.event, TraceEvent::RunFinished { .. })),
+            "RunFinished must still be emitted"
+        );
+    }
+
+    /// WR-4 (42-REVIEW): a boundary settlement that could not be written (a ledger error)
+    /// is reported to an attached `SpendGuard` through `note_unsettled_spend`, and a guard that
+    /// fails closed on it halts the run at the NEXT boundary -- the run is not left spending
+    /// unmetered. Settlement itself still never fails the run.
+    #[tokio::test]
+    async fn a_lost_settlement_is_reported_to_the_guard_and_halts_the_next_boundary() {
+        use paladin_core::platform::container::allowance::HaltReason;
+        use paladin_ports::output::spend_guard::{SpendDecision, SpendGuard};
+
+        /// Continues until told a charge was lost, then halts like `TreasurerSpendGuard`.
+        #[derive(Default)]
+        struct FailsClosedWhenBlind {
+            blind: std::sync::atomic::AtomicBool,
+            notified: std::sync::atomic::AtomicUsize,
+        }
+
+        #[async_trait]
+        impl SpendGuard for FailsClosedWhenBlind {
+            async fn check(&self, _thread: &ThreadId) -> SpendDecision {
+                if self.blind.load(std::sync::atomic::Ordering::SeqCst) {
+                    SpendDecision::Halt(HaltReason::LedgerUnavailable)
+                } else {
+                    SpendDecision::Continue
+                }
+            }
+
+            fn note_unsettled_spend(&self, _thread: &ThreadId) {
+                self.notified
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                self.blind.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let (graph, _n1, _n2, n3) = treasury_ledger_test_graph();
+        let port = Arc::new(RecordingPaladinPort::new());
+        for name in ["first", "second", "third"] {
+            port.set_output_with_usage_and_cost(
+                name,
+                "done",
+                TokenUsage::new(1, 1),
+                Some(Cost::new(1_000, usd.clone())),
+            );
+        }
+        let context = SettlementContext {
+            scope: LedgerScope::unattributed(),
+            run_id: RunId::new_v7(),
+            attempt: 1,
+        };
+        let store = Arc::new(RecordingWaypointStore::new());
+        let guard = Arc::new(FailsClosedWhenBlind::default());
+        let engine = WarEngine::new(port, store.clone())
+            .with_treasury_ledger(Arc::new(FailingTreasuryLedger), context)
+            .with_spend_guard(guard.clone());
+        let thread = ThreadId::new("lost-settlement-halts-next-boundary").unwrap();
+
+        let outcome = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+
+        match outcome {
+            RunOutcome::Halted { cause, .. } => assert_eq!(
+                cause,
+                HaltCause::Spend(HaltReason::LedgerUnavailable),
+                "the guard failed closed on the reported lost charge"
+            ),
+            other => panic!("expected a spend Halted, got {other:?}"),
+        }
+        assert_eq!(
+            guard.notified.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "superstep 1's lost charge is reported exactly once before the run halts"
+        );
+        let completed: std::collections::HashSet<String> = ascending_history(&store, &thread)
+            .await
+            .iter()
+            .flat_map(|w| w.completed.iter().map(|r| r.node_id.as_str().to_string()))
+            .collect();
+        assert!(
+            !completed.contains(n3.as_str()),
+            "the superstep after the lost charge never ran"
+        );
+    }
+
+    /// WR-4: with no guard attached, a lost settlement stays purely observational, as before.
+    /// A guard that does not override `note_unsettled_spend` keeps its behaviour too.
+    #[tokio::test]
+    async fn a_lost_settlement_does_not_halt_a_run_whose_guard_ignores_the_signal() {
+        use paladin_ports::output::spend_guard::NeverHalts;
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let (graph, _n1, _n2, _n3) = treasury_ledger_test_graph();
+        let port = Arc::new(RecordingPaladinPort::new());
+        for name in ["first", "second", "third"] {
+            port.set_output_with_usage_and_cost(
+                name,
+                "done",
+                TokenUsage::new(1, 1),
+                Some(Cost::new(1_000, usd.clone())),
+            );
+        }
+        let context = SettlementContext {
+            scope: LedgerScope::unattributed(),
+            run_id: RunId::new_v7(),
+            attempt: 1,
+        };
+        let engine = WarEngine::new(port, Arc::new(RecordingWaypointStore::new()))
+            .with_treasury_ledger(Arc::new(FailingTreasuryLedger), context)
+            .with_spend_guard(Arc::new(NeverHalts));
+        let outcome = engine
+            .start(
+                &graph,
+                ThreadId::new("lost-settlement-default-guard").unwrap(),
+                StateDelta::new(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+    }
+
+    /// LEDGR-03: pre-settling `(run_id, 1, 1)` before the run starts (a
+    /// stand-in for a lease redelivery that re-settles an already-settled
+    /// superstep attempt) is not an error -- the pre-settled amount is kept
+    /// for superstep 1, and superstep 2 adds its own settlement on top.
+    #[tokio::test]
+    async fn already_settled_superstep_is_not_an_error() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let out1 = FieldName::new("out1").unwrap();
+        let out2 = FieldName::new("out2").unwrap();
+        let schema = BattlefieldSchema::new(vec![
+            FieldSpec::new(out1.clone(), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(out2.clone(), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let n1 = NodeId::new("first");
+        let n2 = NodeId::new("second");
+        graph.add_node(
+            n1.clone(),
+            NodeSpec::paladin(
+                make_paladin_with_model("first", "gpt-4"),
+                InputMapping::new("go"),
+                out1,
+            ),
+        );
+        graph.add_node(
+            n2.clone(),
+            NodeSpec::paladin(
+                make_paladin_with_model("second", "gpt-4"),
+                InputMapping::new("go"),
+                out2,
+            ),
+        );
+        graph.add_edge(EdgeSpec {
+            from: n1.clone(),
+            to: n2.clone(),
+            condition: None,
+        });
+        graph.add_entry(n1.clone());
+
+        let port = Arc::new(RecordingPaladinPort::new());
+        port.set_output_with_usage_and_cost(
+            "first",
+            "done",
+            TokenUsage::new(1, 1),
+            Some(Cost::new(10_000, usd.clone())),
+        );
+        port.set_output_with_usage_and_cost(
+            "second",
+            "done",
+            TokenUsage::new(1, 1),
+            Some(Cost::new(2_000, usd.clone())),
+        );
+
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let run_id = RunId::new_v7();
+        let scope = LedgerScope::unattributed();
+        let pre_settle_key = SettlementKey::new(run_id.clone(), 1, 1);
+        ledger
+            .settle(SettleRequest::unreserved(
+                scope.clone(),
+                pre_settle_key,
+                Cost::new(1, usd.clone()),
+                BTreeMap::from([("gpt-4".to_string(), 1_i64)]),
+            ))
+            .await
+            .expect("pre-settle succeeds");
+
+        let context = SettlementContext {
+            scope,
+            run_id: run_id.clone(),
+            attempt: 1,
+        };
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine =
+            WarEngine::new(port, store.clone()).with_treasury_ledger(ledger.clone(), context);
+
+        let thread = ThreadId::new("already-settled-superstep-is-not-an-error").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        let by_run = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                run_ids: vec![run_id],
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(by_run.len(), 1);
+        assert_eq!(
+            by_run[0].amount,
+            Cost::new(1 + 2_000, usd),
+            "the pre-settled superstep-1 amount is kept, superstep 2 adds its own"
+        );
+        assert_eq!(
+            by_run[0].settlements, 2,
+            "the pre-settled row plus superstep 2's own"
+        );
     }
 
     /// A run with zero Paladin nodes at all (a plain `Function` node)
@@ -5361,7 +7563,7 @@ mod tests {
         .unwrap();
 
         let waypoint_id = match outcome {
-            RunOutcome::Halted { waypoint } => waypoint,
+            RunOutcome::Halted { waypoint, .. } => waypoint,
             other => panic!("expected Halted, got {other:?}"),
         };
 
@@ -5532,6 +7734,16 @@ mod tests {
             }
         }
 
+        /// A probe that always answers `true` (shared with `spend_guard_tests`).
+        pub(super) struct AlwaysCancelProbe;
+
+        #[async_trait]
+        impl CancellationProbe for AlwaysCancelProbe {
+            async fn is_cancelled(&self, _thread: &ThreadId) -> bool {
+                true
+            }
+        }
+
         /// A probe that always answers `false` -- proves an attached-but-
         /// never-cancelling probe changes nothing about a run's outcome.
         struct NeverCancellingProbe;
@@ -5564,7 +7776,7 @@ mod tests {
             .unwrap();
 
             let waypoint_id = match outcome {
-                RunOutcome::Halted { waypoint } => waypoint,
+                RunOutcome::Halted { waypoint, .. } => waypoint,
                 other => panic!("expected Halted, got {other:?}"),
             };
 
@@ -5726,7 +7938,7 @@ mod tests {
             .unwrap();
 
             let waypoint_id = match outcome {
-                RunOutcome::Halted { waypoint } => waypoint,
+                RunOutcome::Halted { waypoint, .. } => waypoint,
                 other => panic!("expected Halted, got {other:?}"),
             };
             let waypoints = ascending_history(&store, &thread).await;
@@ -5739,6 +7951,366 @@ mod tests {
                 halted.vanguard,
                 vec![ids[1].clone()],
                 "the never-cancelled token coexists with the cancelling probe; either signal halts"
+            );
+        }
+    }
+
+    // --- ALLOW-03, Phase 42 D-04, D-05: SpendGuard -> Halted with a typed
+    // cause, beside and after the cancel signals. Nested in its own `mod` so
+    // `cargo test -p paladin-battalion --lib spend_guard` selects exactly this
+    // group, mirroring `cancellation_probe_tests` above (whose helpers it
+    // reuses).
+    mod spend_guard_tests {
+        use super::*;
+        use paladin_core::platform::container::allowance::HaltReason;
+        use paladin_ports::output::spend_guard::{SpendDecision, SpendGuard};
+
+        /// Counts every `check` call and answers `Halt(reason)` from the
+        /// configured call number onward.
+        struct HaltFromCall {
+            calls: std::sync::atomic::AtomicUsize,
+            halt_from: usize,
+            reason: HaltReason,
+        }
+
+        impl HaltFromCall {
+            fn new(halt_from: usize) -> Arc<Self> {
+                Arc::new(Self {
+                    calls: std::sync::atomic::AtomicUsize::new(0),
+                    halt_from,
+                    reason: HaltReason::LedgerUnavailable,
+                })
+            }
+        }
+
+        #[async_trait]
+        impl SpendGuard for HaltFromCall {
+            async fn check(&self, _thread: &ThreadId) -> SpendDecision {
+                let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                if call >= self.halt_from {
+                    SpendDecision::Halt(self.reason.clone())
+                } else {
+                    SpendDecision::Continue
+                }
+            }
+        }
+
+        /// A guard that always continues and counts its calls.
+        struct CountingGuard {
+            calls: std::sync::atomic::AtomicUsize,
+        }
+
+        #[async_trait]
+        impl SpendGuard for CountingGuard {
+            async fn check(&self, _thread: &ThreadId) -> SpendDecision {
+                self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                SpendDecision::Continue
+            }
+        }
+
+        /// The ids of every node that completed in any Waypoint of `thread`.
+        async fn completed_node_ids(
+            store: &RecordingWaypointStore,
+            thread: &ThreadId,
+        ) -> std::collections::HashSet<String> {
+            ascending_history(store, thread)
+                .await
+                .iter()
+                .flat_map(|w| w.completed.iter().map(|r| r.node_id.as_str().to_string()))
+                .collect()
+        }
+
+        #[tokio::test]
+        async fn guard_halting_on_the_second_boundary_halts_after_one_completed_superstep() {
+            let (graph, ids) = four_node_chain_graph();
+            let guard = HaltFromCall::new(2);
+            let store = Arc::new(RecordingWaypointStore::new());
+            let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone())
+                .with_spend_guard(guard.clone());
+            let thread = ThreadId::new("guard-halt-second-boundary").unwrap();
+
+            let outcome = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                engine.start(&graph, thread.clone(), StateDelta::new()),
+            )
+            .await
+            .expect("a spend halt must not hang the run")
+            .unwrap();
+
+            let (waypoint_id, cause) = match outcome {
+                RunOutcome::Halted { waypoint, cause } => (waypoint, cause),
+                other => panic!("expected Halted, got {other:?}"),
+            };
+            assert_eq!(cause, HaltCause::Spend(HaltReason::LedgerUnavailable));
+
+            let waypoints = ascending_history(&store, &thread).await;
+            let halted = waypoints
+                .iter()
+                .find(|w| w.waypoint_id == waypoint_id)
+                .expect("the returned waypoint id must exist in the thread's history");
+            assert_eq!(halted.status, WaypointStatus::Halted);
+            assert_eq!(
+                halted.vanguard,
+                vec![ids[1].clone()],
+                "the Halted waypoint's vanguard must be boundary 2's: exactly the node that would \
+                 run next, identical to the cancel path"
+            );
+
+            let completed = completed_node_ids(&store, &thread).await;
+            assert!(completed.contains(ids[0].as_str()), "superstep 1 completed");
+            assert!(
+                !completed.contains(ids[1].as_str()),
+                "no node of the halted superstep may be dispatched"
+            );
+            assert_eq!(
+                guard.calls.load(std::sync::atomic::Ordering::SeqCst),
+                2,
+                "the guard is consulted exactly once per boundary and the halt stops the loop"
+            );
+        }
+
+        #[tokio::test]
+        async fn guard_halting_on_the_first_boundary_dispatches_nothing() {
+            let (graph, ids) = four_node_chain_graph();
+            let guard = HaltFromCall::new(1);
+            let store = Arc::new(RecordingWaypointStore::new());
+            let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone())
+                .with_spend_guard(guard);
+            let thread = ThreadId::new("guard-halt-first-boundary").unwrap();
+
+            let outcome = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                engine.start(&graph, thread.clone(), StateDelta::new()),
+            )
+            .await
+            .expect("a spend halt must not hang the run")
+            .unwrap();
+
+            let waypoint_id = match outcome {
+                RunOutcome::Halted {
+                    waypoint,
+                    cause: HaltCause::Spend(_),
+                } => waypoint,
+                other => panic!("expected a spend Halted, got {other:?}"),
+            };
+            let waypoints = ascending_history(&store, &thread).await;
+            let halted = waypoints
+                .iter()
+                .find(|w| w.waypoint_id == waypoint_id)
+                .expect("the returned waypoint id must exist in the thread's history");
+            assert_eq!(halted.status, WaypointStatus::Halted);
+            assert_eq!(halted.vanguard, vec![ids[0].clone()]);
+            assert!(
+                completed_node_ids(&store, &thread).await.is_empty(),
+                "a first-boundary halt dispatches nothing"
+            );
+        }
+
+        /// Every `RunFinished` the recording sink saw, after the dispatcher's
+        /// asynchronous consumer has drained.
+        async fn run_finished_events(
+            sink: &Arc<RecordingTraceSink>,
+        ) -> Vec<(RunFinishStatus, Option<HaltReason>)> {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            sink.events()
+                .await
+                .iter()
+                .filter_map(|record| match &record.event {
+                    TraceEvent::RunFinished {
+                        status,
+                        halt_reason,
+                        ..
+                    } => Some((*status, halt_reason.clone())),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        /// D-05, D-19, G4: the engine's own terminal trace event names the
+        /// guard's reason at the source.
+        #[tokio::test]
+        async fn spend_halted_run_finished_carries_the_guards_reason() {
+            let (graph, _ids) = four_node_chain_graph();
+            let guard = HaltFromCall::new(2);
+            let sink = RecordingTraceSink::new();
+            let engine = WarEngine::new(
+                Arc::new(UnimplementedPaladinPort),
+                Arc::new(InMemoryWaypointStore::new()),
+            )
+            .with_trace_sink(sink.clone())
+            .with_spend_guard(guard);
+            let thread = ThreadId::new("run-finished-spend-reason").unwrap();
+
+            let outcome = engine
+                .start(&graph, thread, StateDelta::new())
+                .await
+                .unwrap();
+            assert!(matches!(
+                outcome,
+                RunOutcome::Halted {
+                    cause: HaltCause::Spend(_),
+                    ..
+                }
+            ));
+
+            assert_eq!(
+                run_finished_events(&sink).await,
+                vec![(RunFinishStatus::Halted, Some(HaltReason::LedgerUnavailable))],
+                "exactly one RunFinished, naming the spend guard's reason"
+            );
+        }
+
+        /// A cancel halt and a completed run name no Treasurer reason.
+        #[tokio::test]
+        async fn non_spend_run_finished_carries_no_halt_reason() {
+            struct CancelProbe;
+
+            #[async_trait]
+            impl CancellationProbe for CancelProbe {
+                async fn is_cancelled(&self, _thread: &ThreadId) -> bool {
+                    true
+                }
+            }
+
+            let (graph, _ids) = four_node_chain_graph();
+            let cancelled_sink = RecordingTraceSink::new();
+            let cancelled = WarEngine::new(
+                Arc::new(UnimplementedPaladinPort),
+                Arc::new(InMemoryWaypointStore::new()),
+            )
+            .with_trace_sink(cancelled_sink.clone())
+            .with_cancellation_probe(Arc::new(CancelProbe));
+            let outcome = cancelled
+                .start(
+                    &graph,
+                    ThreadId::new("run-finished-cancel").unwrap(),
+                    StateDelta::new(),
+                )
+                .await
+                .unwrap();
+            assert!(matches!(
+                outcome,
+                RunOutcome::Halted {
+                    cause: HaltCause::CancelRequested,
+                    ..
+                }
+            ));
+            assert_eq!(
+                run_finished_events(&cancelled_sink).await,
+                vec![(RunFinishStatus::Cancelled, None)]
+            );
+        }
+
+        /// D-05: `run_finish_status` pairs the status with the reason only for
+        /// a spend halt.
+        #[test]
+        fn run_finish_status_names_a_reason_only_for_a_spend_halt() {
+            let halted = |cause| {
+                Ok(RunOutcome::Halted {
+                    waypoint: WaypointId::generate(),
+                    cause,
+                })
+            };
+            assert_eq!(
+                run_finish_status(&halted(HaltCause::Spend(HaltReason::LedgerUnavailable))),
+                (RunFinishStatus::Halted, Some(HaltReason::LedgerUnavailable))
+            );
+            assert_eq!(
+                run_finish_status(&halted(HaltCause::Token)),
+                (RunFinishStatus::Halted, None)
+            );
+            assert_eq!(
+                run_finish_status(&halted(HaltCause::CancelRequested)),
+                (RunFinishStatus::Cancelled, None)
+            );
+            assert_eq!(
+                run_finish_status(&Err(EngineError::InvalidLimits {
+                    reason: "x".to_owned()
+                })),
+                (RunFinishStatus::Failed, None)
+            );
+        }
+
+        #[tokio::test]
+        async fn guard_that_never_halts_changes_nothing() {
+            let (graph_a, _ids_a) = four_node_chain_graph();
+            let engine_no_guard = WarEngine::new(
+                Arc::new(UnimplementedPaladinPort),
+                Arc::new(InMemoryWaypointStore::new()),
+            );
+            let outcome_a = engine_no_guard
+                .start(
+                    &graph_a,
+                    ThreadId::new("no-guard").unwrap(),
+                    StateDelta::new(),
+                )
+                .await
+                .unwrap();
+
+            let (graph_b, _ids_b) = four_node_chain_graph();
+            let guard = Arc::new(CountingGuard {
+                calls: std::sync::atomic::AtomicUsize::new(0),
+            });
+            let engine_with_guard = WarEngine::new(
+                Arc::new(UnimplementedPaladinPort),
+                Arc::new(InMemoryWaypointStore::new()),
+            )
+            .with_spend_guard(guard.clone());
+            let outcome_b = engine_with_guard
+                .start(
+                    &graph_b,
+                    ThreadId::new("with-continuing-guard").unwrap(),
+                    StateDelta::new(),
+                )
+                .await
+                .unwrap();
+
+            match (outcome_a, outcome_b) {
+                (
+                    RunOutcome::Completed {
+                        final_state: state_a,
+                        ..
+                    },
+                    RunOutcome::Completed {
+                        final_state: state_b,
+                        ..
+                    },
+                ) => assert_eq!(state_a, state_b),
+                other => panic!("expected both runs to complete, got {other:?}"),
+            }
+            assert!(
+                guard.calls.load(std::sync::atomic::Ordering::SeqCst) >= 1,
+                "an attached guard is consulted at the boundaries"
+            );
+        }
+
+        #[tokio::test]
+        async fn cancel_wins_over_spend_at_the_same_boundary() {
+            let (graph, _ids) = four_node_chain_graph();
+            let probe = Arc::new(cancellation_probe_tests::AlwaysCancelProbe);
+            let guard = HaltFromCall::new(1);
+            let store = Arc::new(RecordingWaypointStore::new());
+            let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone())
+                .with_cancellation_probe(probe)
+                .with_spend_guard(guard.clone());
+            let thread = ThreadId::new("cancel-beats-spend").unwrap();
+
+            let outcome = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                engine.start(&graph, thread, StateDelta::new()),
+            )
+            .await
+            .expect("cancellation must not hang the run")
+            .unwrap();
+
+            match outcome {
+                RunOutcome::Halted { cause, .. } => assert_eq!(cause, HaltCause::CancelRequested),
+                other => panic!("expected Halted, got {other:?}"),
+            }
+            assert_eq!(
+                guard.calls.load(std::sync::atomic::Ordering::SeqCst),
+                0,
+                "the guard is not even consulted once a cancel signal resolved the cause"
             );
         }
     }
@@ -9715,6 +12287,661 @@ mod tests {
         }
     }
 
+    // --- Phase 43 plan 11, PACE-04 (D-11, D-12, D-13, D-29): the Cadence
+    //     stampede lock around the node cache's miss-to-put window ----------
+    mod stampede_lock_tests {
+        use super::*;
+        use crate::engine::node::StateNode;
+        use crate::engine::superstep::STAMPEDE_POLL_INTERVAL;
+        use crate::engine::test_support::{
+            CountingFunctionNode, RecordingTraceSink, SlowFunctionNode,
+            captured_warnings_for_this_thread, install_capturing_logger,
+        };
+        use paladin_core::platform::container::aegis::{
+            CacheKeySpec, CachePolicy, ErrorHandlerSpec,
+        };
+        use paladin_core::platform::container::node_cache::CachedDelta;
+        use paladin_ports::output::cadence_port::{
+            CadenceError, CadenceKey, CadencePolicy, FencingToken, GateReading, LockKey,
+        };
+        use paladin_ports::output::node_cache_port::{NodeCacheError, NodeCacheKey};
+        use paladin_storage::cadence::in_memory::InMemoryCadence;
+        use paladin_storage::node_cache::in_memory::InMemoryNodeCache;
+        use std::sync::Mutex;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+        use tokio::time::Instant;
+
+        /// How the scripted Cadence answers `try_lock`.
+        #[derive(Clone, Copy)]
+        enum LockMode {
+            /// Delegate to a real `InMemoryCadence` (the genuine lock).
+            Delegate,
+            /// Always `Ok(None)`: someone else always holds the lock.
+            AlwaysBusy,
+            /// Always `Err`: the backend is down.
+            Failing,
+        }
+
+        /// A `CadencePort` that counts the lock calls the engine makes and
+        /// can be scripted to be busy forever or to fail.
+        struct CountingCadence {
+            inner: InMemoryCadence,
+            mode: LockMode,
+            try_locks: AtomicUsize,
+            acquired: AtomicUsize,
+            unlocks: AtomicUsize,
+        }
+
+        impl CountingCadence {
+            fn new(mode: LockMode) -> Arc<Self> {
+                Arc::new(Self {
+                    inner: InMemoryCadence::new(CadencePolicy::default()),
+                    mode,
+                    try_locks: AtomicUsize::new(0),
+                    acquired: AtomicUsize::new(0),
+                    unlocks: AtomicUsize::new(0),
+                })
+            }
+            fn try_locks(&self) -> usize {
+                self.try_locks.load(Ordering::SeqCst)
+            }
+            fn acquired(&self) -> usize {
+                self.acquired.load(Ordering::SeqCst)
+            }
+            fn unlocks(&self) -> usize {
+                self.unlocks.load(Ordering::SeqCst)
+            }
+        }
+
+        #[async_trait]
+        impl CadencePort for CountingCadence {
+            async fn gate(&self, key: &CadenceKey) -> Result<GateReading, CadenceError> {
+                self.inner.gate(key).await
+            }
+            async fn record_rate_limited(
+                &self,
+                key: &CadenceKey,
+                retry_after: Option<Duration>,
+            ) -> Result<GateReading, CadenceError> {
+                self.inner.record_rate_limited(key, retry_after).await
+            }
+            async fn record_success(&self, key: &CadenceKey) -> Result<(), CadenceError> {
+                self.inner.record_success(key).await
+            }
+            async fn try_lock(
+                &self,
+                key: &LockKey,
+                ttl: Duration,
+            ) -> Result<Option<FencingToken>, CadenceError> {
+                self.try_locks.fetch_add(1, Ordering::SeqCst);
+                match self.mode {
+                    LockMode::Delegate => {
+                        let got = self.inner.try_lock(key, ttl).await?;
+                        if got.is_some() {
+                            self.acquired.fetch_add(1, Ordering::SeqCst);
+                        }
+                        Ok(got)
+                    }
+                    LockMode::AlwaysBusy => Ok(None),
+                    LockMode::Failing => Err(CadenceError::Backend {
+                        message: "simulated lock backend failure".to_string(),
+                    }),
+                }
+            }
+            async fn unlock(
+                &self,
+                key: &LockKey,
+                token: &FencingToken,
+            ) -> Result<bool, CadenceError> {
+                self.unlocks.fetch_add(1, Ordering::SeqCst);
+                self.inner.unlock(key, token).await
+            }
+        }
+
+        /// An `InMemoryNodeCache` that records how it was written (plain vs
+        /// fenced, and with which token) and can make its entry appear right
+        /// after the first `get` answered "miss" -- the window in which the
+        /// previous lock holder stores and releases.
+        struct FencedCache {
+            inner: InMemoryNodeCache,
+            gets: AtomicUsize,
+            plain_puts: AtomicUsize,
+            fenced: Mutex<Vec<FencingToken>>,
+            appears_after_first_get: Mutex<Option<StateDelta>>,
+        }
+
+        impl FencedCache {
+            fn new() -> Arc<Self> {
+                Arc::new(Self {
+                    inner: InMemoryNodeCache::new(),
+                    gets: AtomicUsize::new(0),
+                    plain_puts: AtomicUsize::new(0),
+                    fenced: Mutex::new(Vec::new()),
+                    appears_after_first_get: Mutex::new(None),
+                })
+            }
+            fn gets(&self) -> usize {
+                self.gets.load(Ordering::SeqCst)
+            }
+            fn plain_puts(&self) -> usize {
+                self.plain_puts.load(Ordering::SeqCst)
+            }
+            fn fenced_tokens(&self) -> Vec<FencingToken> {
+                self.fenced.lock().unwrap().clone()
+            }
+        }
+
+        #[async_trait]
+        impl NodeCachePort for FencedCache {
+            async fn get(&self, key: &NodeCacheKey) -> Result<Option<CachedDelta>, NodeCacheError> {
+                self.gets.fetch_add(1, Ordering::SeqCst);
+                let answer = self.inner.get(key).await?;
+                let late = self.appears_after_first_get.lock().unwrap().take();
+                if let Some(delta) = late {
+                    self.inner.put(key, &delta, Duration::from_secs(60)).await?;
+                }
+                Ok(answer)
+            }
+            async fn put(
+                &self,
+                key: &NodeCacheKey,
+                delta: &StateDelta,
+                ttl: Duration,
+            ) -> Result<(), NodeCacheError> {
+                self.plain_puts.fetch_add(1, Ordering::SeqCst);
+                self.inner.put(key, delta, ttl).await
+            }
+            async fn put_fenced(
+                &self,
+                key: &NodeCacheKey,
+                delta: &StateDelta,
+                ttl: Duration,
+                fence: &FencingToken,
+            ) -> Result<(), NodeCacheError> {
+                self.fenced.lock().unwrap().push(*fence);
+                self.inner.put(key, delta, ttl).await
+            }
+            async fn invalidate(&self, prefix: &str) -> Result<u64, NodeCacheError> {
+                self.inner.invalidate(prefix).await
+            }
+        }
+
+        /// Sleeps `hold`, records when it failed, then fails.
+        struct SlowFailingNode {
+            hold: Duration,
+            failed_at: Arc<Mutex<Option<Instant>>>,
+        }
+
+        #[async_trait]
+        impl StateNode for SlowFailingNode {
+            async fn run(
+                &self,
+                _state: &Battlefield,
+                _ctx: &crate::engine::node::NodeContext,
+            ) -> Result<Directive, crate::engine::node::StateNodeError> {
+                tokio::time::sleep(self.hold).await;
+                *self.failed_at.lock().unwrap() = Some(Instant::now());
+                Err(crate::engine::node::StateNodeError("boom".to_string()))
+            }
+        }
+
+        fn result_field() -> FieldName {
+            FieldName::new("result").unwrap()
+        }
+
+        fn cache_aegis() -> Aegis {
+            Aegis {
+                cache: Some(CachePolicy {
+                    ttl: Duration::from_secs(60),
+                    key: CacheKeySpec::Default,
+                }),
+                ..Aegis::default()
+            }
+        }
+
+        /// The one-node graph every test starts from. Two graphs built with
+        /// different node implementations but the same shape share a cache
+        /// key (the key is the graph fingerprint, node id and input).
+        fn cached_graph(node: Arc<dyn StateNode>, aegis: Aegis) -> WarGraph {
+            let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+            let id = NodeId::new("cached");
+            graph.add_node(id.clone(), NodeSpec::Function(node));
+            graph.add_entry(id.clone());
+            graph.set_aegis(id, aegis);
+            graph
+        }
+
+        fn plain_graph(node: Arc<dyn StateNode>) -> WarGraph {
+            let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+            let id = NodeId::new("plain");
+            graph.add_node(id.clone(), NodeSpec::Function(node));
+            graph.add_entry(id);
+            graph
+        }
+
+        fn locked_engine(
+            cache: &Arc<FencedCache>,
+            cadence: &Arc<CountingCadence>,
+            lock_ttl: Duration,
+        ) -> WarEngine<InMemoryWaypointStore> {
+            engine()
+                .with_node_cache(cache.clone())
+                .with_cadence(cadence.clone(), lock_ttl)
+        }
+
+        fn thread(name: &str) -> ThreadId {
+            ThreadId::new(name).unwrap()
+        }
+
+        fn result_of(outcome: &RunOutcome) -> Option<String> {
+            match outcome {
+                RunOutcome::Completed { final_state, .. } => {
+                    final_state.get::<String>(&result_field()).unwrap()
+                }
+                other => panic!("expected Completed, got {other:?}"),
+            }
+        }
+
+        /// A node that writes `value` and records the (paused) clock at the
+        /// moment it executes.
+        fn stamping_node(
+            value: &'static str,
+            ran_at: Arc<Mutex<Option<Instant>>>,
+        ) -> Arc<CountingFunctionNode> {
+            CountingFunctionNode::new(move |_run, _state| {
+                *ran_at.lock().unwrap() = Some(Instant::now());
+                let mut delta = StateDelta::new();
+                delta.set_raw(result_field(), serde_json::json!(value));
+                delta
+            })
+        }
+
+        /// Success criterion 4 (D-11, D-12, PACE-04): two engines sharing one
+        /// cache and one Cadence run the same cache-policy node at once on a
+        /// miss; the handler runs exactly once and the other dispatch serves
+        /// the stored delta as a cache hit. The winner stored through
+        /// `put_fenced` with its token and released the lock.
+        #[tokio::test(start_paused = true)]
+        async fn concurrent_identical_cache_misses_execute_the_node_once() {
+            let runs = Arc::new(AtomicUsize::new(0));
+            let node = SlowFunctionNode::new(
+                result_field(),
+                serde_json::json!("computed"),
+                Duration::from_millis(500),
+                runs.clone(),
+            );
+            let graph = cached_graph(node, cache_aegis());
+            let cache = FencedCache::new();
+            let cadence = CountingCadence::new(LockMode::Delegate);
+            let sink = RecordingTraceSink::new();
+            let engine_a = locked_engine(&cache, &cadence, Duration::from_secs(60))
+                .with_trace_sink(sink.clone());
+            let engine_b = locked_engine(&cache, &cadence, Duration::from_secs(60))
+                .with_trace_sink(sink.clone());
+
+            let (a, b) = tokio::join!(
+                engine_a.start(&graph, thread("stampede-a"), StateDelta::new()),
+                engine_b.start(&graph, thread("stampede-b"), StateDelta::new()),
+            );
+
+            assert_eq!(result_of(&a.unwrap()).as_deref(), Some("computed"));
+            assert_eq!(result_of(&b.unwrap()).as_deref(), Some("computed"));
+            assert_eq!(
+                runs.load(Ordering::SeqCst),
+                1,
+                "the handler runs exactly once"
+            );
+            assert_eq!(cadence.acquired(), 1, "exactly one dispatch won the lock");
+            assert!(cadence.try_locks() >= 2, "the other dispatch tried too");
+            assert_eq!(cadence.unlocks(), 1, "the winner released its lock");
+            let tokens = cache.fenced_tokens();
+            assert_eq!(tokens.len(), 1, "the winner stored through put_fenced");
+            assert!(
+                matches!(tokens[0], FencingToken::Local(_)),
+                "the in-process Cadence issues Local tokens"
+            );
+            assert_eq!(cache.plain_puts(), 0, "no unfenced put under a lock");
+
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let mut finished: Vec<bool> = sink
+                .events()
+                .await
+                .iter()
+                .filter_map(|record| match &record.event {
+                    TraceEvent::NodeFinished { cache_hit, .. } => Some(*cache_hit),
+                    _ => None,
+                })
+                .collect();
+            finished.sort();
+            assert_eq!(
+                finished,
+                vec![false, true],
+                "one NodeFinished executed, one served as a cache hit"
+            );
+        }
+
+        /// D-12, research Pattern 6: a holder that fails and stores nothing
+        /// hands the lock to a waiter within one poll (not the TTL), because
+        /// the waiter re-tries the lock every round. Paused clock.
+        #[tokio::test(start_paused = true)]
+        async fn failed_holder_hands_the_lock_over_within_one_poll() {
+            let failed_at = Arc::new(Mutex::new(None));
+            let holder_graph = cached_graph(
+                Arc::new(SlowFailingNode {
+                    hold: Duration::from_millis(500),
+                    failed_at: failed_at.clone(),
+                }),
+                cache_aegis(),
+            );
+            let ran_at = Arc::new(Mutex::new(None));
+            let waiter_node = stamping_node("from-the-waiter", ran_at.clone());
+            let waiter_graph = cached_graph(waiter_node.clone(), cache_aegis());
+            let cache = FencedCache::new();
+            let cadence = CountingCadence::new(LockMode::Delegate);
+            let ttl = Duration::from_secs(60);
+            let holder = locked_engine(&cache, &cadence, ttl);
+            let waiter = locked_engine(&cache, &cadence, ttl);
+
+            let (holder_outcome, waiter_outcome) = tokio::join!(
+                holder.start(&holder_graph, thread("holder"), StateDelta::new()),
+                async {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    waiter
+                        .start(&waiter_graph, thread("waiter"), StateDelta::new())
+                        .await
+                },
+            );
+
+            assert!(
+                !matches!(holder_outcome, Ok(RunOutcome::Completed { .. })),
+                "the holder's node failed"
+            );
+            assert_eq!(
+                result_of(&waiter_outcome.unwrap()).as_deref(),
+                Some("from-the-waiter")
+            );
+            assert_eq!(waiter_node.run_count(), 1);
+            let handover = ran_at
+                .lock()
+                .unwrap()
+                .unwrap()
+                .duration_since(failed_at.lock().unwrap().unwrap());
+            assert!(
+                handover
+                    <= STAMPEDE_POLL_INTERVAL
+                        + STAMPEDE_POLL_INTERVAL / 2
+                        + Duration::from_millis(5),
+                "the waiter took over {handover:?} after the holder failed, expected within one poll \
+                 (the TTL is 60 s)"
+            );
+            assert_eq!(cadence.acquired(), 2);
+            assert_eq!(cadence.unlocks(), 2, "both holders released");
+        }
+
+        /// D-12: with the lock held by someone else for good, the loser waits
+        /// the TTL and then executes the node itself -- never stalls, never
+        /// errors. The store is a plain put (it holds no token).
+        #[tokio::test(start_paused = true)]
+        async fn ttl_elapsed_without_an_entry_executes_uncached() {
+            let ran_at = Arc::new(Mutex::new(None));
+            let node = stamping_node("ran-anyway", ran_at.clone());
+            let graph = cached_graph(node.clone(), cache_aegis());
+            let cache = FencedCache::new();
+            let cadence = CountingCadence::new(LockMode::AlwaysBusy);
+            let engine = locked_engine(&cache, &cadence, Duration::from_secs(1));
+
+            let started = Instant::now();
+            let outcome = engine
+                .start(&graph, thread("ttl-elapsed"), StateDelta::new())
+                .await
+                .unwrap();
+
+            assert_eq!(result_of(&outcome).as_deref(), Some("ran-anyway"));
+            assert_eq!(node.run_count(), 1);
+            let waited = ran_at.lock().unwrap().unwrap().duration_since(started);
+            assert!(waited >= Duration::from_secs(1), "waited only {waited:?}");
+            assert!(
+                waited <= Duration::from_secs(1) + Duration::from_millis(50),
+                "waited {waited:?}, expected about the 1 s TTL"
+            );
+            assert!(cadence.try_locks() >= 5, "it re-tried the lock each poll");
+            assert_eq!(cadence.unlocks(), 0, "it never held the lock");
+            assert!(cache.fenced_tokens().is_empty());
+            assert_eq!(cache.plain_puts(), 1);
+        }
+
+        /// D-13, D-29: a `try_lock` error never fails the node -- it runs
+        /// once, without the lock, after exactly one warning.
+        #[tokio::test(start_paused = true)]
+        async fn lock_error_executes_without_the_lock() {
+            install_capturing_logger();
+            let node = CountingFunctionNode::fixed(result_field(), serde_json::json!("unlocked"));
+            let graph = cached_graph(node.clone(), cache_aegis());
+            let cache = FencedCache::new();
+            let cadence = CountingCadence::new(LockMode::Failing);
+            let engine = locked_engine(&cache, &cadence, Duration::from_secs(60));
+
+            let outcome = engine
+                .start(&graph, thread("lock-error"), StateDelta::new())
+                .await
+                .unwrap();
+
+            assert_eq!(result_of(&outcome).as_deref(), Some("unlocked"));
+            assert_eq!(node.run_count(), 1);
+            assert_eq!(cadence.try_locks(), 1, "no retry loop on a lock error");
+            assert_eq!(cadence.unlocks(), 0);
+            let warnings: Vec<String> = captured_warnings_for_this_thread()
+                .into_iter()
+                .filter(|line| line.contains("stampede lock unavailable"))
+                .collect();
+            assert_eq!(warnings.len(), 1, "exactly one warning, got {warnings:?}");
+            assert!(
+                warnings[0].contains("cached"),
+                "names the node: {warnings:?}"
+            );
+            assert!(
+                !warnings[0].contains("node-cache:"),
+                "never the key material"
+            );
+            assert_eq!(cache.plain_puts(), 1, "stored without a fence");
+        }
+
+        /// Phase 42 halt contract, research Pitfall 15: a run cancelled while
+        /// a dispatch waits on the lock ends promptly (long before the TTL or
+        /// the holder), and the node never runs.
+        #[tokio::test(start_paused = true)]
+        async fn cancellation_interrupts_a_waiting_dispatch() {
+            let holder_runs = Arc::new(AtomicUsize::new(0));
+            let holder_graph = cached_graph(
+                SlowFunctionNode::new(
+                    result_field(),
+                    serde_json::json!("holder"),
+                    Duration::from_secs(5),
+                    holder_runs.clone(),
+                ),
+                cache_aegis(),
+            );
+            let waiter_node = CountingFunctionNode::fixed(result_field(), serde_json::json!("w"));
+            let waiter_graph = cached_graph(waiter_node.clone(), cache_aegis());
+            let cache = FencedCache::new();
+            let cadence = CountingCadence::new(LockMode::Delegate);
+            let ttl = Duration::from_secs(60);
+            let token = CancellationToken::new();
+            let holder = locked_engine(&cache, &cadence, ttl);
+            let waiter =
+                locked_engine(&cache, &cadence, ttl).with_cancellation_token(token.clone());
+
+            let started = Instant::now();
+            let (holder_outcome, (waiter_outcome, waiter_done_at), ()) = tokio::join!(
+                holder.start(&holder_graph, thread("cancel-holder"), StateDelta::new()),
+                async {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    let outcome = waiter
+                        .start(&waiter_graph, thread("cancel-waiter"), StateDelta::new())
+                        .await;
+                    (outcome, Instant::now())
+                },
+                async {
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                    token.cancel();
+                },
+            );
+
+            assert!(matches!(waiter_outcome.unwrap(), RunOutcome::Halted { .. }));
+            let elapsed = waiter_done_at.duration_since(started);
+            assert!(
+                elapsed <= Duration::from_millis(400),
+                "the waiting dispatch ended after {elapsed:?}; it should end at the cancel (300 ms), \
+                 not the holder (5 s) or the TTL (60 s)"
+            );
+            assert_eq!(
+                waiter_node.run_count(),
+                0,
+                "a cancelled waiter never executes"
+            );
+            assert!(matches!(
+                holder_outcome.unwrap(),
+                RunOutcome::Completed { .. }
+            ));
+            assert_eq!(holder_runs.load(Ordering::SeqCst), 1);
+        }
+
+        /// D-11: without `with_cadence`, or for a node without a cache policy,
+        /// the engine makes no lock call at all and behaves as before.
+        #[tokio::test(start_paused = true)]
+        async fn no_cadence_means_no_lock_calls() {
+            // A cache-policy node on an engine with a cache but no Cadence.
+            let cadence = CountingCadence::new(LockMode::Delegate);
+            let cache = FencedCache::new();
+            let node = CountingFunctionNode::fixed(result_field(), serde_json::json!("v"));
+            let graph = cached_graph(node.clone(), cache_aegis());
+            let no_lock = engine().with_node_cache(cache.clone());
+            no_lock
+                .start(&graph, thread("no-lock"), StateDelta::new())
+                .await
+                .unwrap();
+            assert_eq!(node.run_count(), 1);
+            assert_eq!(
+                cache.gets(),
+                1,
+                "exactly one lookup, as before the lock existed"
+            );
+            assert_eq!(cache.plain_puts(), 1, "a plain put");
+            assert!(cache.fenced_tokens().is_empty());
+            assert_eq!(cadence.try_locks(), 0);
+
+            // A node with NO cache policy on an engine WITH a Cadence.
+            let plain_node = CountingFunctionNode::fixed(result_field(), serde_json::json!("p"));
+            let plain = plain_graph(plain_node.clone());
+            let locked = locked_engine(&cache, &cadence, Duration::from_secs(60));
+            locked
+                .start(&plain, thread("no-policy"), StateDelta::new())
+                .await
+                .unwrap();
+            assert_eq!(plain_node.run_count(), 1);
+            assert_eq!(cadence.try_locks(), 0, "no cache policy, no lock");
+            assert_eq!(cache.gets(), 1, "the cache was not consulted for it either");
+
+            // A Cadence but no node cache at all: nothing for the lock to guard.
+            let cache_less = engine().with_cadence(cadence.clone(), Duration::from_secs(60));
+            cache_less
+                .start(&plain, thread("no-cache"), StateDelta::new())
+                .await
+                .unwrap();
+            assert_eq!(cadence.try_locks(), 0);
+        }
+
+        /// Research Pitfall 14: the lock is released on EVERY exit path of
+        /// the attempt loop -- success, a plain failure, a handler-
+        /// compensated failure, and a non-`Edges` directive that stores
+        /// nothing.
+        #[tokio::test(start_paused = true)]
+        async fn unlock_runs_on_every_exit() {
+            async fn run_once(
+                node: Arc<dyn StateNode>,
+                aegis: Aegis,
+                name: &str,
+            ) -> (usize, usize, usize) {
+                let cache = FencedCache::new();
+                let cadence = CountingCadence::new(LockMode::Delegate);
+                let engine = locked_engine(&cache, &cadence, Duration::from_secs(60));
+                let _ = engine
+                    .start(&cached_graph(node, aegis), thread(name), StateDelta::new())
+                    .await;
+                (
+                    cadence.acquired(),
+                    cadence.unlocks(),
+                    cache.fenced_tokens().len() + cache.plain_puts(),
+                )
+            }
+
+            // Success: stored with the token, then released.
+            let ok = CountingFunctionNode::fixed(result_field(), serde_json::json!("ok"));
+            assert_eq!(run_once(ok, cache_aegis(), "exit-ok").await, (1, 1, 1));
+
+            // A plain failure: nothing stored, still released.
+            let failing = crate::engine::test_support::FailingFunctionNode::new("nope");
+            assert_eq!(
+                run_once(failing, cache_aegis(), "exit-fail").await,
+                (1, 1, 0)
+            );
+
+            // A failure the node's own error handler compensates.
+            let compensated = Aegis {
+                on_error: Some(ErrorHandlerSpec::Absorb {
+                    fallback_delta: StateDelta::new(),
+                }),
+                ..cache_aegis()
+            };
+            let failing = crate::engine::test_support::FailingFunctionNode::new("absorbed");
+            assert_eq!(
+                run_once(failing, compensated, "exit-compensated").await,
+                (1, 1, 0)
+            );
+
+            // A directive that is not `Edges`: its delta is never cached.
+            let ends = CountingFunctionNode::with_directive(|_run, _state| Directive {
+                delta: StateDelta::new(),
+                next: NextStep::End,
+            });
+            assert_eq!(run_once(ends, cache_aegis(), "exit-end").await, (1, 1, 0));
+        }
+
+        /// The previous holder may store and release between a dispatch's
+        /// first miss and its own acquisition: the winner re-reads the cache
+        /// once it holds the lock and serves the entry rather than executing a
+        /// duplicate, releasing the lock it just took.
+        #[tokio::test(start_paused = true)]
+        async fn a_winner_that_finds_the_entry_after_acquiring_serves_it() {
+            let node = CountingFunctionNode::fixed(result_field(), serde_json::json!("computed"));
+            let graph = cached_graph(node.clone(), cache_aegis());
+            let cache = FencedCache::new();
+            let mut stored = StateDelta::new();
+            stored.set_raw(
+                result_field(),
+                serde_json::json!("stored-by-the-previous-holder"),
+            );
+            *cache.appears_after_first_get.lock().unwrap() = Some(stored);
+            let cadence = CountingCadence::new(LockMode::Delegate);
+            let engine = locked_engine(&cache, &cadence, Duration::from_secs(60));
+
+            let outcome = engine
+                .start(&graph, thread("late-hit"), StateDelta::new())
+                .await
+                .unwrap();
+
+            assert_eq!(
+                result_of(&outcome).as_deref(),
+                Some("stored-by-the-previous-holder")
+            );
+            assert_eq!(node.run_count(), 0, "served, not re-executed");
+            assert_eq!(cadence.acquired(), 1);
+            assert_eq!(cadence.unlocks(), 1, "the lock it took was released");
+            assert!(cache.fenced_tokens().is_empty(), "it stored nothing");
+        }
+    }
+
     /// Plan 26-13, Doc 05 RT-04, D-21: `WarEngine::with_vault` grants a base
     /// namespace to every node of every run on the engine, `NodeContext::
     /// vault()` is the read/write handle a `StateNode` uses, an engine
@@ -10258,7 +13485,7 @@ mod tests {
                 tokio::time::sleep(std::time::Duration::from_millis(1)).await;
                 let tokens = self
                     .tokens
-                    .get(paladin.node.name.as_str())
+                    .get(paladin.data.name.as_str())
                     .copied()
                     .unwrap_or(0);
                 Ok(PaladinResult {
@@ -10331,6 +13558,7 @@ mod tests {
                     usage,
                     duration_ms,
                     trace_dropped_total,
+                    ..
                 } => Some((
                     *status,
                     *total_supersteps,
@@ -10736,8 +13964,10 @@ mod tests {
             &[],
             &None,
             &None,
+            &None,
             None,
             std::time::Duration::from_secs(30),
+            None,
             None,
             None,
             None,
@@ -10792,8 +14022,10 @@ mod tests {
             &[],
             &None,
             &None,
+            &None,
             None,
             std::time::Duration::from_secs(30),
+            None,
             None,
             None,
             None,

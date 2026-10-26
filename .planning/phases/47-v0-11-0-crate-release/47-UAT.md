@@ -3,7 +3,7 @@ status: testing
 phase: 47-v0-11-0-crate-release
 source: [47-VERIFICATION.md]
 started: 2026-10-26T21:41:29Z
-updated: 2026-10-26T21:41:29Z
+updated: 2026-10-26T22:20:00Z
 ---
 
 ## Current Test
@@ -23,7 +23,7 @@ expected: Read the condensed root CHANGELOG.md [0.11.0] entry against the B-1 le
 result: [pending]
 
 ### 2. Coverage job `Lines:` figure recorded
-expected: Open the `Coverage` job of ci.yml run 40368801098 (job 121733645613, merge commit 70657919) in the Actions UI, copy the printed `Lines:` figure into 47-CI-EVIDENCE.md Findings and the audit's "Outside the table" paragraph (todo 2026-10-26-record-v0-11-0-coverage-lines-figure.md). The figure is at or above 82 percent (ADR-0006); a figure below 82 means the gate or the figure was misread and must be escalated.
+expected: The `Coverage` job of ci.yml run 40368801098 (job 121733645613, merge commit 70657919) printed `Lines:     167104/180183 = 92.74%` (read at the verify step through the GitHub job-logs API, since the Actions log host is blocked from the sandbox). The figure is quoted verbatim in a dated 47-CI-EVIDENCE.md Findings entry ("2026-10-26 — Verify step"), the audit's "Outside the table" paragraph now carries it, and todo 2026-10-26-record-v0-11-0-coverage-lines-figure.md is moved to completed. 92.74 is at or above the 82 percent floor (ADR-0006), so no escalation. Confirm the recorded figure and its placement; say so if you want the figure cross-checked against the Actions UI yourself.
 result: [pending]
 
 ## Summary

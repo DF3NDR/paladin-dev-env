@@ -36,3 +36,12 @@ verification step").
    means the gate or the figure was misread and must be escalated, not recorded.
 
 Picked up by `/gsd-verify-work 47` if still open when Phase 47 is verified.
+
+## Resolved
+
+2026-10-26, at `/gsd-verify-work 47`. The `Coverage` job of the merge commit's push run (run 40368801098,
+job 121733645613) was read through the GitHub Actions job-logs API (GitHub MCP server), which is not subject
+to the sandbox's blob-host block. `Coverage summary` printed `Lines:     167104/180183 = 92.74%`, above the 82
+percent floor. Quoted verbatim in `47-CI-EVIDENCE.md` Findings ("2026-10-26 — Verify step") and the audit's
+"Outside the table" paragraph now carries the figure. Note: the final-head PR run 40332201657 named in step 1
+was superseded by the merge-commit run named in `47-VERIFICATION.md`; the merge commit is the released tree.

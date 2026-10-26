@@ -66,7 +66,7 @@ Phase: 47 (v0.11.0 Crate Release) — COMPLETE (verified 2026-10-26)
 Plan: 10 of 10
 Status: ALL PHASES COMPLETE — milestone v0.11.0 ready to close; PR #60 (`chore/47-close`, documentation-only) is open for the maintainer to merge, then `/gsd-audit-milestone v0.11.0` and `/gsd-complete-milestone v0.11.0` are the maintainer's next commands
 Last activity: 2026-10-26 — Phase 47 verified and marked complete: `47-UAT.md` 2/2 passed (the maintainer's B-1 condensation read, and the `Coverage` job's `Lines: 167104/180183 = 92.74%` on the merge commit, read at the verify step through the GitHub job-logs API and recorded in `47-CI-EVIDENCE.md`, the acceptance audit and the completed todo); `47-VERIFICATION.md` `passed`; the api-coverage gate passed on `COVERAGE.md`'s no-external-API declaration; ROADMAP Phase 47 checkbox ticked, progress row 10/10 Complete; `.continue-here.md` removed. Observed and left for the maintainer: the Codecov upload step reports `success` while its CLI fails for want of a token. Next: merge PR #60, then `/gsd-audit-milestone v0.11.0` and `/gsd-complete-milestone v0.11.0`.
-Previous: 2026-10-26 — Phase 47 complete, transitioned to Phase 48
+Previous: 2026-10-26 — Plan 47-10 complete: 47-READY-TO-CLOSE.md written, chore/47-close pushed, docs-only PR #60 open (maintainer merges); phase verification and phase.complete 47 next
 
 ## Performance Metrics
 

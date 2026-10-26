@@ -1220,10 +1220,10 @@ This is option 1 of the row-6 checkpoint, gated. Effect, exactly as decided:
 - **Push 1 of 2 (plain, after the maintainer's `push ok`; first attempt, no retry needed).** `git push -u origin chore/47-close`, exit 0, output verbatim:
 
   ```
-  remote: 
-  remote: Create a pull request for 'chore/47-close' on GitHub by visiting:        
-  remote:      https://github.com/DF3NDR/paladin-dev-env/pull/new/chore/47-close        
-  remote: 
+  remote:
+  remote: Create a pull request for 'chore/47-close' on GitHub by visiting:  
+  remote:      https://github.com/DF3NDR/paladin-dev-env/pull/new/chore/47-close  
+  remote:
   To https://github.com/DF3NDR/paladin-dev-env
    * [new branch]          chore/47-close -> chore/47-close
   branch 'chore/47-close' set up to track 'origin/chore/47-close'.
@@ -1273,3 +1273,8 @@ This is option 1 of the row-6 checkpoint, gated. Effect, exactly as decided:
 - **Question.** Plan 47-02 Task 3's `- B-1 maintainer read: requested` line (B-1 condensation ledger above): whether the condensed root `CHANGELOG.md` entry, now `## [0.11.0] - 2026-10-26`, adds any claim beyond the uncondensed text at `700a92d86f3d6b2e24bbd2c163daec7c307297e0` or drops any breaking change, security note or removal. The mechanical proxy (ids, figures, code spans, byte-identical untouched subsections) was recorded as passing; the changed-meaning judgment was the maintainer's.
 - **Answer.** UAT test 1 of `47-UAT.md`, presented at the verify step on 2026-10-26, was answered `Pass` by the maintainer: the condensed entry adds no claim beyond the uncondensed text and drops no breaking change, security note or removal.
 - **Effect.** The `- B-1 maintainer read: requested` line is closed by this entry (append-only; the original line stands as written). The first human-verification item of `47-VERIFICATION.md` is satisfied. Nothing in the changelog is changed by this answer.
+
+### 2026-10-26 — Verify step: trailing whitespace trimmed in the plan 47-10 `git push` quotation (pre-commit red on PR #60)
+
+- The `pre-commit` workflow was red on `chore/47-close` from run 40407547679 (push, SHA `3c1632b0`) through run 40417054874 (pull_request, SHA `9b43f2c7`): the `trailing-whitespace` hook rewrote the four `remote:` lines of the verbatim `git push -u origin chore/47-close` output quoted in the entry "Plan 47-10: close-out branch pushed, documentation-only pull request opened" above (one line ended in a single space, two in eight; the hook strips the first and normalises the others to the Markdown two-space line break). Every other hook, including `cargo fmt` and `cargo clippy -D warnings`, passed. The two runs before it on this branch (SHAs `2c84434a`, `692112f7`) were cancelled as superseded, so the red first showed at `3c1632b0`.
+- Fixed by applying the hook's own change (`pre-commit run trailing-whitespace --all-files`) and committing it: the quotation now differs from the terminal output only in trailing spaces, which `git` printed as padding. No other line of this file changed. Append-only (D-00d) is kept: the 47-10 entry's text stands, and this note records the trim.

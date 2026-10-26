@@ -4,16 +4,16 @@ milestone: v0.11.0
 milestone_name: Crate Release
 current_phase: 47
 current_phase_name: v0.11.0 Crate Release
-status: executing
-stopped_at: Completed 47-09-PLAN.md (chore/47-close, not pushed); next plan 47-10
-last_updated: "2026-10-26T20:57:09.336Z"
+status: verifying
+stopped_at: "Completed 47-10-PLAN.md (PR #60 open; ready to close; next: Phase 47 verification and phase.complete 47)"
+last_updated: "2026-10-26T21:27:59.148Z"
 last_activity: 2026-10-26
-last_activity_desc: "Plan 47-09 complete on chore/47-close (not pushed); SHIP-07 ticked on the registry table, MILESTONES release record and web3sec hand-off written; plan 47-10 next"
+last_activity_desc: "Plan 47-10 complete: 47-READY-TO-CLOSE.md written, chore/47-close pushed, docs-only PR #60 open (maintainer merges); phase verification and phase.complete 47 next"
 progress:
   total_phases: 15
-  completed_phases: 14
+  completed_phases: 15
   total_plans: 174
-  completed_plans: 173
+  completed_plans: 174
 ---
 
 # Project State
@@ -43,7 +43,7 @@ delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-1
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 150/150 plans ([██████████] 99%) of the phases planned so far (38-45, 48-51);
+**Progress:** [████████████████████] 150/150 plans ([██████████] 100%) of the phases planned so far (38-45, 48-51);
 Phases 46 and 47 are not yet planned; Phase 49 closed 2026-10-14 (3/3 kept plans, 3 cancelled); Phase 50.1 sealed 2026-10-20;
 Phase 51 sealed 2026-10-23 (20/20 plans, verification `passed` 7/7, UAT 3/3, security 61/61 closed, ADR-0062); Phase 46 is next, then Phase 47.
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -62,10 +62,10 @@ under `milestones/`.
 
 ## Current Position
 
-Phase: 47 (v0.11.0 Crate Release) — EXECUTING
+Phase: 47 (v0.11.0 Crate Release) — READY TO CLOSE (all 10 plans complete; verification and phase.complete 47 pending)
 Plan: 10 of 10
-Status: Ready to execute
-Last activity: 2026-10-26 — Plan 47-08 complete on chore/47-close (not pushed); v0.11.0 tag equals the PR #59 merge commit, 12 of 12 crates at 0.11.0; plan 47-09 next
+Status: Phase complete — ready for verification
+Last activity: 2026-10-26 — Plan 47-10 complete: 47-READY-TO-CLOSE.md written, chore/47-close pushed, docs-only PR #60 open (maintainer merges); phase verification and phase.complete 47 next
 
 ## Performance Metrics
 
@@ -362,6 +362,7 @@ Last activity: 2026-10-26 — Plan 47-08 complete on chore/47-close (not pushed)
 | Phase 47 P07 | not separable (maintainer decisions, merge, CI) | 3 tasks | 3 files |
 | Phase 47 P08 | 12m | 3 tasks | 5 files |
 | Phase 47 P09 | 5m | 2 tasks | 7 files |
+| Phase 47 P10 | 30m | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -656,6 +657,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: [Phase 47] 47-07: Task 2 proceed (2026-10-26T16:49Z); Task 3 reply `tagged ...` (20:32Z) carried a 41-character first token (stray leading 7), recorded verbatim and not used; plan-text SHA-A2 read as SHA-A4 72e13f95
 - [Phase ?]: [Phase 47] 47-08: tag v0.11.0 (77a37c18) peels to merge commit 70657919 = PR #59 merge_commit_sha = origin/main, parents df24689c and SHA-A4; release.yml run 40396108246 green, publish job success; 12 of 12 crates at 0.11.0 unyanked with trustpub_data naming DF3NDR/paladin-dev-env; chore/47-close cut from the merge commit and not pushed
 - [Phase 47]: v0.11.0 released: tag `v0.11.0` on merge commit `70657919beadbd341a72be2d0107080017a803f0`, release run `40396108246`, 12/12 crates registry-verified at `0.11.0` (unyanked, sparse-index re-read 2026-10-26T20:53Z), Trusted Publishing — D-16: SHIP-07 was ticked on the live sparse-index table (12 of 12 derived crates at 0.11.0, yanked false, trustpub_data naming run 40396108246), not on the merge, the tag or the workflow log.
+- [Phase 47]: Phase 47 ends at ready-to-close: 47-READY-TO-CLOSE.md written, chore/47-close pushed and docs-only PR #60 opened on the maintainer's push ok; audit, milestone close and merge stay the maintainer's — D-17 and D-00l: the last plan ends at a hand-off; SC1-SC3 observed TRUE from evidence (SC3 under B1=a), the Coverage Lines figure and the B-1 read stated as open
 
 ### Pending Todos
 
@@ -881,8 +883,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-26T20:57:09.299Z
-**Stopped at:** Completed 47-09-PLAN.md (chore/47-close, not pushed); next plan 47-10
+**Last session:** 2026-10-26T21:27:59.079Z
+**Stopped at:** Completed 47-10-PLAN.md (PR #60 open; ready to close; next: Phase 47 verification and phase.complete 47)
 **Resume file:** .planning/phases/47-v0-11-0-crate-release/.continue-here.md
 
 ## Operator Next Steps

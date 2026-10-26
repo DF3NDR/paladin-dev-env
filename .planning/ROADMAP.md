@@ -841,7 +841,7 @@ Plans:
 
 **Wave 10** *(blocked on Wave 9 completion)*
 
-- [ ] 47-10-PLAN.md — `47-READY-TO-CLOSE.md` against SC1–SC3, milestone-close prerequisites, push `chore/47-close` and open the docs-only PR (wave 10)
+- [x] 47-10-PLAN.md — `47-READY-TO-CLOSE.md` against SC1–SC3, milestone-close prerequisites, push `chore/47-close` and open the docs-only PR (wave 10)
 
 ## Progress
 

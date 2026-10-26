@@ -37,9 +37,9 @@ labelled as a research figure, never as a measurement.
   `nightly-2026-09-20-x86_64-unknown-linux-gnu`, `1.97.1-x86_64-unknown-linux-gnu (active)` — **MSRV 1.88 is
   absent** (so the MSRV gate has no local row; its CI twin is the `MSRV (Rust 1.88)` job). `cargo-release`
   was not installed at the start of plan 47-01; Task 2 installed exactly 1.1.7 (`--locked`, outside the repository): `cargo-release 1.1.7` (Local sweep rows 13-14).
-- **Tick commit:** (filled by plan 47-08).
-- **Merge commit:** (filled by plan 47-08).
-- **Tagged commit:** (filled by plan 47-08).
+- **Tick commit:** the maintainer's tick is SHA-A2 `6ef9207a672cceb8aaddc2dccdd9986c33d5366b` (2026-10-26T02:18:19Z, uppercase `[X]`), superseded as the head by the redate (SHA-A3) and the maintainer's re-confirmation **SHA-A4 `72e13f9583ffe2b89580049045ac094ed3d46dbf`** (2026-10-26T13:37:14Z), which is the final head of PR #59 and the **PR-side parent of the merge** (filled by plan 47-08).
+- **Merge commit:** `70657919beadbd341a72be2d0107080017a803f0` (SHA-B), "Merge pull request #59 from DF3NDR/claude/laughing-dirac-e0h2ax", created by the maintainer in the GitHub UI, authored by `Amo <1178902+Am0rfu5@users.noreply.github.com>` and committed by GitHub at 2026-10-26T13:27:07-04:00 (= 17:27:07Z); `GET /pulls/59` reads `merged: true`, `merged_at` `2026-10-26T17:27:08Z`, `merged_by` `Am0rfu5`, `merge_commit_sha` `70657919beadbd341a72be2d0107080017a803f0`. A merge commit with two parents, never a squash or a rebase (D-00c). Its tree `885e4ac570b1810eb5f96ded84853adfa297ec7b` is identical to the tree of SHA-A4 (`git diff 72e13f95 70657919` prints nothing): `main` contributed no content change (filled by plan 47-08).
+- **Tagged commit:** `70657919beadbd341a72be2d0107080017a803f0` (`git rev-parse 'v0.11.0^{commit}'`) = SHA-B = `origin/main` = `GET /pulls/59 .merge_commit_sha`; the annotated tag object is `77a37c1846e5ab6716a51b78fb39541bccd1a7ae` (filled by plan 47-08; the proof is in the CI-run subsection "Plan 47-08 — the tag sits on the merge commit").
 - SHA-PRE-B1: 700a92d86f3d6b2e24bbd2c163daec7c307297e0
 - B1-MODE: a
 - SHA-PRE-BUMP: 680cf9c294dc22de02c1faae19afc45188470a35
@@ -51,6 +51,8 @@ labelled as a research figure, never as a measurement.
 - SHA-A3: 02f6ee2e7aa1dea9a349444a7aa53ba41ab01ca5
 - SHA-A4: 72e13f9583ffe2b89580049045ac094ed3d46dbf
 - SHA-A4 role: the maintainer's re-confirmation commit on the redated head, and the **final head** of `claude/laughing-dirac-e0h2ax` and of PR #59 (`docs(47): re-confirm the v0.11.0 sign-off on the redated head (maintainer)`, parent SHA-A3). **Plan 47-07's text calls the tick commit `SHA-A2` and reads the checks on it; because the redate and the re-confirmation came after the tick, that role now belongs to SHA-A4.** Plan 47-07 reads its required contexts, its `Check publish order` step and its hand-off values (`SHA-A2` in the plan's wording) on `SHA-A4`, not on `6ef9207a`. `6ef9207a` stays the maintainer's first tick and is superseded as the head.
+- SHA-B: 70657919beadbd341a72be2d0107080017a803f0
+- SHA-B role: the merge commit of PR #59 and the commit the annotated tag `v0.11.0` peels to. Equality note: the tag object peels to the merge commit and `GET /pulls/59 .merge_commit_sha` is identical (read 2026-10-26T20:44Z). Its two parents are `df24689c3d1fd52b0e730105c15b22c2c4ad1404` (the frozen `main`, D-02) and SHA-A4 `72e13f9583ffe2b89580049045ac094ed3d46dbf`; plan 47-08's text says `SHA-A2` for that second parent, read as SHA-A4 (the plan-text drift recorded under SHA-A4 role).
 - DATE: 2026-10-26 (stamp date after the maintainer's `redate 2026-10-26` of 2026-10-26T02:27Z; the pre-build decision's `DATE=2026-10-25` stays recorded above and in Findings, append-only)
 - **B-1 pre-condensation measurements (plan 47-02 Task 2, measured at `SHA-PRE-B1`):** root `[Unreleased]` body 156528 bytes; `### Added` 84557 bytes and 57 top-level bullets; `### Changed` 36407 bytes and 44 top-level bullets (a top-level bullet is a column-0 `- ` line with everything nested under it; the subsection byte counts here exclude the heading line, so they sit 10 bytes under the 47-01 table's 84567 and 36419, which include it). Lead paragraph added by Task 2 names the SHA above.
 
@@ -554,6 +556,37 @@ The 43 `success`, by source workflow: `ci.yml` jobs (24 `success`; the 25th `ci.
 
 ---
 
+### Plan 47-08 — the tag sits on the merge commit (read 2026-10-26T20:44Z, `chore/47-close` cut from it)
+
+**Resume condition re-read once (both parts hold, none polled, D-00i).** (a) `git ls-remote --tags origin 'refs/tags/v0.11.0*'` prints `77a37c1846e5ab6716a51b78fb39541bccd1a7ae refs/tags/v0.11.0` and `70657919beadbd341a72be2d0107080017a803f0 refs/tags/v0.11.0^{}`; `git merge-base --is-ancestor "$(git rev-parse 'v0.11.0^{commit}')" origin/main` exits 0. (b) `release.yml` run 40396108246 is `completed`/`success`, `run_started_at` 2026-10-26T20:29:33Z, `updated_at` 20:42:21Z.
+
+**Equality proof (E-1; containment alone is rejected).**
+
+| Fact | Value | Source |
+|---|---|---|
+| tag object type | `tag` (annotated, not lightweight) | `git cat-file -t v0.11.0` |
+| tag object SHA | `77a37c1846e5ab6716a51b78fb39541bccd1a7ae` | `git rev-parse v0.11.0`; equals the second token of the maintainer's reply |
+| tagger | `Am0rfu5 <1178902+Am0rfu5@users.noreply.github.com>` | `git cat-file -p v0.11.0` |
+| tagger date | `1793046542 -0400` = **2026-10-26T20:29:02Z** (16:29:02 local) | same |
+| tag message | `v0.11.0` | same |
+| peeled commit (`TC`) | `70657919beadbd341a72be2d0107080017a803f0` | `git rev-parse 'v0.11.0^{commit}'` |
+| `origin/main` | `70657919beadbd341a72be2d0107080017a803f0` | `git rev-parse origin/main` and `GET git/ref/heads/main` |
+| PR #59 `merged` / `merged_at` | `true` / `2026-10-26T17:27:08Z` | `GET /pulls/59` |
+| PR #59 `merge_commit_sha` | `70657919beadbd341a72be2d0107080017a803f0` | `GET /pulls/59` |
+| `TC == merge_commit_sha == origin/main` | **identical** | byte comparison of the three values above |
+| parents of `TC` | exactly two: `df24689c3d1fd52b0e730105c15b22c2c4ad1404` (old `main`, the D-02 base) and `72e13f9583ffe2b89580049045ac094ed3d46dbf` (SHA-A4, PR #59's final head) | `git rev-list --parents -n 1 TC` (`wc -w` = 3) |
+| `TC` tree vs SHA-A4 tree | both `885e4ac570b1810eb5f96ded84853adfa297ec7b` | `git rev-parse 70657919^{tree} 72e13f95^{tree}` |
+
+The maintainer's Task 3 reply named the first token `770657919beadbd341a72be2d0107080017a803f0`, which has 41 characters (a stray leading `7`); it is not used. Every SHA in this record is resolved from the tag itself. See Findings, "Plan 47-07: the maintainer's Task 3 reply".
+
+**Tagger date against `ci.yml` and against DATE (D-00c, D-00n, as fact, no edit).** The `ci.yml` push run on `TC` (40368801098) started 2026-10-26T17:27:32Z and its `updated_at` is 2026-10-26T18:35:02Z (last job `Kubernetes Smoke Test` completed 18:34:47Z), conclusion `success`; the tag was created at 20:29:02Z, **1 h 54 min after `ci.yml` concluded**, so D-00c's order (tag only after `ci.yml` is `success` on the merge commit) holds. The tag date `2026-10-26` (UTC; 16:29:02 at the tagger's -0400 offset) **equals DATE**; the twelve `## [0.11.0] - 2026-10-26` headings in the tagged tree (`git show TC:<changelog>`: the root `CHANGELOG.md` and the eleven `crates/*/CHANGELOG.md`, 12 files) read the same date. No mismatch; nothing edited.
+
+**Stray-commit reconciliation (D-00l).** `git rev-list --count 72e13f95..refs/heads/claude/laughing-dirac-e0h2ax` = **0**: the local release branch is exactly SHA-A4, no stray commit, nothing to re-apply. The remote ref `refs/heads/claude/laughing-dirac-e0h2ax` **no longer exists** on GitHub (`GET git/ref/heads/claude/laughing-dirac-e0h2ax` answers 404; `git ls-remote` prints nothing): it was deleted after the merge (the maintainer's repository setting), so the "still points at SHA-A4" check is vacuous and recorded as such. The local remote-tracking ref `refs/remotes/origin/claude/laughing-dirac-e0h2ax` is a stale entry (no `fetch --prune` was run) still reading `72e13f95`; PR #59 `head.sha` still reads `72e13f95`, and the tagged commit keeps SHA-A4 as its PR-side parent, so what was released is exactly what was reviewed.
+
+**Branch.** `chore/47-close` was cut from `70657919beadbd341a72be2d0107080017a803f0` with `git checkout -b`; the six uncommitted entries (`.planning/ROADMAP.md`, `.planning/STATE.md`, `.continue-here.md`, `47-CI-EVIDENCE.md`, `47-06-SUMMARY.md` and the coverage todo) carried across without refusal, and `git diff --stat` was byte-identical before and after. No stash, reset or checkout of a file was used. They were committed in three groups (plan 47-06 close-out `a0b3fcf3`, plan 47-07 record `37708dbb`, the todo `fd70e888`), then this plan's own commits. Nothing was pushed (plan 47-10 pushes and opens the docs-only PR).
+
+---
+
 ### CI-evidence-only entries (D-12)
 
 Three gates are not signed rows of the audit and have no local twin in this sandbox. Each is **to be read from the PR run on SHA-A0 in plan 47-06**; nothing is recorded here as measured.
@@ -1023,3 +1056,16 @@ This is option 1 of the row-6 checkpoint, gated. Effect, exactly as decided:
 - **State re-read once before the hand-off (2026-10-26T16:50Z, read-only):** PR #59 `open`, not merged, `head.sha` `72e13f9583ffe2b89580049045ac094ed3d46dbf`, `mergeable` true, `mergeable_state` `unstable` (advisory CodeQL, unchanged); `main` `df24689c3d1fd52b0e730105c15b22c2c4ad1404`; no `v0.11.0*` tag ref on origin; local `HEAD` = SHA-A4, nothing ahead of it. `merge_commit_sha` `ad5e7f8e` is GitHub's test-merge preview only, not the target (plan 47-08 reads the real one after the merge).
 - **Time pressure.** The tag must be pushed before 2026-10-27T00:00Z (DATE `2026-10-26`); `ci.yml` on the merge commit takes about two hours (`End-to-End Tests` and `Publish Dry Run` run there for the first time). Otherwise the maintainer replies `redate`.
 - **No GitHub write, no commit, no push, no merge, no tag, no dispatch** by this plan; the sign-off box was not touched (D-00a).
+
+### 2026-10-26 — Plan 47-07: the maintainer's Task 3 reply, and the 41-character SHA in it
+
+- **Reply, verbatim, received 2026-10-26T20:32Z (UTC):** `tagged 770657919beadbd341a72be2d0107080017a803f0` then, on the next line, `77a37c1846e5ab6716a51b78fb39541bccd1a7ae`.
+- **Transcription defect.** The first token is 41 hex characters: a stray leading `7` before the real merge SHA `70657919beadbd341a72be2d0107080017a803f0`. It is not an object in the repository (`git cat-file -t` answers `Not a valid object name`); after removing the one character it is byte-identical to `git rev-parse 'v0.11.0^{commit}'`. The second token is the tag object SHA and is exact. The defect is in the paste, not in the tag: nothing was tagged wrongly. The SHAs recorded in this file come from the tag, never from the paste.
+- **Reading.** Reply kind `tagged` (not `red`, not `redate`). The two-part resume condition was re-read independently by plan 47-08 (above) and holds.
+
+### 2026-10-26 — Plan 47-08: the tag equals PR #59's merge commit; the release branch's remote ref is gone; the Coverage figure is still unread
+
+- **Equality holds** (subsection "Plan 47-08 — the tag sits on the merge commit"): the annotated tag `77a37c18` peels to `70657919`, which is PR #59's `merge_commit_sha`, `origin/main`, and has the two expected parents (`df24689c` and SHA-A4 `72e13f95`). The merge tree is identical to SHA-A4's tree. The tag (20:29:02Z) is 1 h 54 min after `ci.yml` concluded on the merge commit (18:35:02Z) and on DATE (2026-10-26).
+- **Remote release branch deleted after the merge.** `refs/heads/claude/laughing-dirac-e0h2ax` answers 404; the plan's "still points at SHA-A2" check (read as SHA-A4) has nothing to check. Not a defect: deleting the head branch after the merge is the maintainer's GitHub setting (D-00l). The commit is not lost: it is the merge's second parent and PR #59's recorded `head.sha`. Local `claude/laughing-dirac-e0h2ax` is still `72e13f95` with no stray commit.
+- **Coverage figure: disposition.** The `Coverage` job's printed `Lines:` figure (82 percent floor, ADR-0006) is **still unread; no number is recorded here**. Tracked by `.planning/todos/pending/2026-10-26-record-v0-11-0-coverage-lines-figure.md` (committed on this branch as `fd70e888`; recheck by 2026-11-02, owner the maintainer), otherwise picked up in the Phase 47 verification step. The `Coverage` job on the merge commit (job 121733645613) concluded `success` under `--fail-under-lines 82`; that remains the floor gate's conclusion only.
+- **Still outstanding from the maintainer:** the B-1 condensation read (47-02 Task 3, `B-1 maintainer read: requested`). Not blocking.

@@ -110,11 +110,11 @@ Pointers only; they are the adaptation spec and are not restated here. Both are 
    section 10.8 that did not read as written.
 
 - Baseline provenance: **2,592 passed / 0 failed / 2 ignored** is web3sec's own `cargo test --workspace` total as
-  web3sec reported it: the trial on `v0.10.1` (the Phase 49 hand-off, 2026-10-08, section 1; its return contract is
-  section 9 of that file), re-measured by web3sec at Paladin `21426037` after fixing 112 compile errors (the 50.1
-  hand-off, 2026-10-18/19, section 1, which also says that figure was "the last full measurement" and that
+  web3sec reported it: the trial on `v0.10.1` (`49-HANDOFF-web3sec.md`, 2026-10-08, section 1; its return contract is
+  section 9 of that file), re-measured by web3sec at Paladin `21426037` after fixing 112 compile errors (`50.1-HANDOFF-web3sec-consumer-surface.md`,
+  2026-10-18/19, section 1, which also says that figure was "the last full measurement" and that
   web3sec's own Phase 48 work "may raise it"). Paladin did not and cannot measure it in Phase 47 (it has no copy of
-  your workspace). A **later-dated source disagrees**: web3sec's 2026-10-24 findings (the fifth hand-off, section 1)
+  your workspace). A **later-dated source disagrees**: web3sec's 2026-10-24 findings (`46-FEEDBACK-web3sec.md`, section 1)
   report **2,683 passed / 0 failed / 2 ignored** at `e28e43b5`, "before and after" the adaptation, suite by suite.
   So **2,683 / 0 / 2 is the latest figure on record and 2,592 / 0 / 2 the earlier one**; the +91 is consistent
   with your own work between the two measurements but Paladin cannot confirm that. Report against your latest

@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 47
 current_phase_name: v0.11.0 Crate Release
 status: executing
-stopped_at: "Hard stop at 47-05 Task 2: CI on SHA-A0 d4e66b47 pending; resume at plan 47-06 Task 1"
-last_updated: "2026-10-25T21:10:06.385Z"
-last_activity: 2026-10-25
-last_activity_desc: Phase 47 execution started
+stopped_at: "Completed 47-06-PLAN.md (uncommitted by design); hard stop at plan 47-07 Task 1: CI on SHA-A4 72e13f95 in flight"
+last_updated: "2026-10-26T13:47:23.695Z"
+last_activity: 2026-10-26
+last_activity_desc: Plan 47-06 complete; CI on SHA-A4 in flight; plan 47-07 next
 progress:
   total_phases: 15
   completed_phases: 14
   total_plans: 174
-  completed_plans: 169
+  completed_plans: 170
 ---
 
 # Project State
@@ -43,7 +43,7 @@ delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-1
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 150/150 plans ([██████████] 97%) of the phases planned so far (38-45, 48-51);
+**Progress:** [████████████████████] 150/150 plans ([██████████] 98%) of the phases planned so far (38-45, 48-51);
 Phases 46 and 47 are not yet planned; Phase 49 closed 2026-10-14 (3/3 kept plans, 3 cancelled); Phase 50.1 sealed 2026-10-20;
 Phase 51 sealed 2026-10-23 (20/20 plans, verification `passed` 7/7, UAT 3/3, security 61/61 closed, ADR-0062); Phase 46 is next, then Phase 47.
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -63,9 +63,9 @@ under `milestones/`.
 ## Current Position
 
 Phase: 47 (v0.11.0 Crate Release) — EXECUTING
-Plan: 6 of 10
+Plan: 7 of 10
 Status: Ready to execute
-Last activity: 2026-10-25 — Phase 47 execution started
+Last activity: 2026-10-26 — Plan 47-06 complete (uncommitted); hard stop for CI on SHA-A4 72e13f95; plan 47-07 next
 
 ## Performance Metrics
 
@@ -358,6 +358,7 @@ Last activity: 2026-10-25 — Phase 47 execution started
 | Phase 47 P03 | 50m | 3 tasks | 28 files |
 | Phase 47 P04 | 45m (final continuation) | 3 tasks | 3 files |
 | Phase 47 P05 | 8m | 2 tasks | 3 files |
+| Phase 47 P06 | not separable (maintainer waits and CI) | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -648,6 +649,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: [Phase 47] 47-01: maintainer pre-build decision B1=a B2=a R7=a EMPTY=a SPACE=a DATE=2026-10-25 (reply 2026-10-25T18:19:21Z)
 - [Phase ?]: 47-02: B2=a applied (tokio 1.53.3, Cargo.lock only) and B1=a applied (root [Unreleased] 156528 -> 108926 bytes, SHA-PRE-B1 700a92d8); Added tightened in the Task 3 commit
 - [Phase 47]: 47-04: row 4 paladin-web and row 6 make test leg are CI-attributed by maintainer decision (D-00j halts); sign-off box stays unticked
+- [Phase 47]: 47-06: Option 1 for the pre-commit red on SHA-A0 (SHA-A1 pushed over it); accept-X for the uppercase tick; redate to 2026-10-26; the maintainer's re-confirmation SHA-A4 72e13f95 is the final head and plan 47-07 reads its checks on SHA-A4 where it says SHA-A2
 
 ### Pending Todos
 
@@ -873,8 +875,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-25T21:10:06.347Z
-**Stopped at:** Hard stop at 47-05 Task 2: CI on SHA-A0 d4e66b47 pending; resume at plan 47-06 Task 1
+**Last session:** 2026-10-26T13:47:23.635Z
+**Stopped at:** Completed 47-06-PLAN.md (uncommitted by design); hard stop at plan 47-07 Task 1: CI on SHA-A4 72e13f95 in flight
 **Resume file:** .planning/phases/47-v0-11-0-crate-release/.continue-here.md
 
 ## Operator Next Steps

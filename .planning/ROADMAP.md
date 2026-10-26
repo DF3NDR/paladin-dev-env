@@ -825,7 +825,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 47-06-PLAN.md — PR CI evidence per job and coverage, push SHA-A1, maintainer tick checkpoint, tick verified on `origin` at the PR head (wave 6)
+- [x] 47-06-PLAN.md — PR CI evidence per job and coverage, push SHA-A1, maintainer tick checkpoint, tick verified on `origin` at the PR head (wave 6)
 
 **Wave 7** *(blocked on Wave 6 completion)*
 

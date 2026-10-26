@@ -745,6 +745,20 @@ every one is `ABSENT` at `0.11.0`. The formal table below is filled by plan 47-0
 
 | Crate | `vers` | `cksum` | `yanked` |
 |---|---|---|---|
+| paladin-ai | `0.11.0` | `e1c7bc99342fb8bc7597ae1bc1366141315a8ce062208fc14f00d74bc4218b9c` | `false` |
+| paladin-ai-core | `0.11.0` | `614ee6291ef3694a12535ced30b370f37ebaed232272d34daa2b810a67a8b3de` | `false` |
+| paladin-battalion | `0.11.0` | `6945de6df7cc5e204ecde14cb05a02f554674dd54371fb25b38e3e4447e9042c` | `false` |
+| paladin-content | `0.11.0` | `70048d0a412b3cb19ceb091554c49dc555a6277bac081dea86974b126620d38a` | `false` |
+| paladin-eval | `0.11.0` | `e82010890ec10d7ac2e025b834fbe9fdf62d7ceddb4e94dd1dd24348493f80f3` | `false` |
+| paladin-herald | `0.11.0` | `f63023ace1131a9856091c218951009a201161a041fea33c7653646fcd4cbbbb` | `false` |
+| paladin-llm | `0.11.0` | `5c720645921585c64463acfe3d153408135dd214170f4e7cdb3668d245c4411c` | `false` |
+| paladin-memory | `0.11.0` | `2093703df30bc6a1d4a4a263309ff8f50466cc495707f558e19d201b06b215c4` | `false` |
+| paladin-notifications | `0.11.0` | `72ba11e5af52cc2c74c730d086953301ca64096daa4bc4f7c13d36c88c25831d` | `false` |
+| paladin-ports | `0.11.0` | `dbc5f2f9303c4640cae0b20033916f77830cca9f9dbd147de7965b185f20ca4a` | `false` |
+| paladin-storage | `0.11.0` | `c011653d85f0aa2d54629b403a12f173d701cd9b0924eacbc62673ea18f3eecc` | `false` |
+| paladin-web | `0.11.0` | `84b9c8f2efaa059056d728dd1a55d1f6bd3a87126faf4ba0b876bf5c4e33f1a9` | `false` |
+
+Filled by plan 47-08 on 2026-10-26T20:47Z from the live sparse index; the derivation, assertions and Trusted Publishing proof are in "Post-publish verification (plan 47-08)" below.
 
 ### Pre-tag guard (plan 47-07, 2026-10-26T15:40Z): `V=0.11.0`
 
@@ -766,6 +780,41 @@ Immediately before the hand-off (E-1). Same read-only sparse-index probe as the 
 | paladin-web | `ABSENT` | `0.10.1` |
 
 `git ls-remote --tags origin 'refs/tags/v0.11.0*'` printed nothing (exit 0): no `v0.11.0`, release-candidate or shadow tag exists on the remote. The version is not already taken. The formal table above remains for plan 47-08, after the publish run.
+
+---
+
+### Post-publish verification (plan 47-08, 2026-10-26T20:47Z): `V=0.11.0`
+
+**Derived-count block.** Derived on `chore/47-close` (the tagged tree plus `.planning/` only): `cargo metadata --format-version 1 --no-deps --offline | jq -r '.packages[] | select(.publish == null) | .name' | LC_ALL=C sort`. 13 workspace members; `paladin-doc-examples` carries `publish = []` and is excluded. **N = 12**:
+
+`paladin-ai`, `paladin-ai-core`, `paladin-battalion`, `paladin-content`, `paladin-eval`, `paladin-herald`, `paladin-llm`, `paladin-memory`, `paladin-notifications`, `paladin-ports`, `paladin-storage`, `paladin-web`.
+
+(`paladin-ai-core` and `paladin-web` both read `0.11.0` in `cargo metadata`.) The same twelve names as the pre-tag baseline and the pre-tag guard, and the same twelve as the `CRATES` array of `scripts/publish-crates.sh` (a different order: the array is the publish order, the table is sorted).
+
+**The probe.** One `GET https://index.crates.io/<path>` per crate (`pa/la/<crate>` for all twelve), HTTP 200 for all twelve, the only header the mandatory `User-Agent: paladin-release-verify (github.com/DF3NDR/paladin-dev-env)` (D-00h); no credential, no `-L`, no token request (D-00g, T-47-38). The sparse-index line whose `vers` is `0.11.0` is read for `cksum` and `yanked`. The formal table above is the result, sorted `LC_ALL=C`.
+
+**Assertions.** Rows in the formal table = **12 = N**; **N > 0**; every row has `vers` = `0.11.0`, `yanked` = `false` and a 64-hex `cksum`; **no row is `ABSENT`**; exactly one `0.11.0` line per crate (no duplicate); no `0.11.0` line is yanked. Read between 2026-10-26T20:47:01Z and 20:47:05Z. **Elapsed since the publish job's `completed_at` (2026-10-26T20:42:20Z): 4 min 41 s** at the first read. The workflow log was not the proof (it is unreadable here, and D-00h forbids it as proof): the registry rows are.
+
+**Trusted Publishing proof (D-00f, D-00g).** One `GET https://crates.io/api/v1/crates/<crate>/0.11.0` per crate (HTTP 200 for all twelve, `User-Agent` only), `.version.trustpub_data` and `.version.yanked`. Every crate names `provider` `github`, **`repository` `DF3NDR/paladin-dev-env`**, `run_id` `40396108246` (the `release.yml` run for the tag) and `sha` `70657919beadbd341a72be2d0107080017a803f0` (SHA-B); `published_by` is `null` for every version (no user token published them) and `yanked` is `false` for every version. The `created_at` column below is the registry's own upload time.
+
+| Crate | `trustpub_data.provider` | `trustpub_data.repository` | `trustpub_data.run_id` | `created_at` |
+|---|---|---|---|---|
+| paladin-ai | `github` | `DF3NDR/paladin-dev-env` | `40396108246` | `2026-10-26T20:42:14.126269Z` |
+| paladin-ai-core | `github` | `DF3NDR/paladin-dev-env` | `40396108246` | `2026-10-26T20:37:41.120667Z` |
+| paladin-battalion | `github` | `DF3NDR/paladin-dev-env` | `40396108246` | `2026-10-26T20:38:16.685855Z` |
+| paladin-content | `github` | `DF3NDR/paladin-dev-env` | `40396108246` | `2026-10-26T20:39:38.747958Z` |
+| paladin-eval | `github` | `DF3NDR/paladin-dev-env` | `40396108246` | `2026-10-26T20:40:33.372806Z` |
+| paladin-herald | `github` | `DF3NDR/paladin-dev-env` | `40396108246` | `2026-10-26T20:37:56.377252Z` |
+| paladin-llm | `github` | `DF3NDR/paladin-dev-env` | `40396108246` | `2026-10-26T20:38:38.912132Z` |
+| paladin-memory | `github` | `DF3NDR/paladin-dev-env` | `40396108246` | `2026-10-26T20:38:47.098177Z` |
+| paladin-notifications | `github` | `DF3NDR/paladin-dev-env` | `40396108246` | `2026-10-26T20:39:22.778683Z` |
+| paladin-ports | `github` | `DF3NDR/paladin-dev-env` | `40396108246` | `2026-10-26T20:37:53.161967Z` |
+| paladin-storage | `github` | `DF3NDR/paladin-dev-env` | `40396108246` | `2026-10-26T20:39:49.735077Z` |
+| paladin-web | `github` | `DF3NDR/paladin-dev-env` | `40396108246` | `2026-10-26T20:39:20.084327Z` |
+
+The twelve uploads lie between 20:37:41Z and 20:42:14Z, inside the publish job's step window (20:36:55Z to 20:42:16Z), in the order of the `CRATES` array. Each version was published by the release run for the tag, on the tagged commit, through Trusted Publishing: the registry itself records the run id and SHA, which the workflow log could only have claimed.
+
+**Verdict.** SHIP-07's registry leg holds: every publishable crate resolves on the sparse index at `0.11.0`, unyanked, with the checksum recorded above. No row failed, so no D-18 read-only diagnosis applies. The independent live re-read at verify time (the Task 3 automated check, 2026-10-26T20:50Z, three minutes after the first read) found 12 of 12 derived crates with `vers == "0.11.0"` and `yanked == false`, and 12 table rows matching the row pattern.
 
 ---
 

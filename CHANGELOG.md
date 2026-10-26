@@ -5,7 +5,7 @@ All notable changes to the Paladin project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.11.0] - 2026-10-25
+## [0.11.0] - 2026-10-26
 
 This root entry is condensed to fit the GitHub Release body limit (Phase 47, B-1). Full per-change detail is in each crate's `CHANGELOG.md` `[0.11.0]` section, in `MIGRATION.md` section 10, and in the uncondensed text at commit `700a92d86f3d6b2e24bbd2c163daec7c307297e0` (`git show 700a92d86f3d6b2e24bbd2c163daec7c307297e0:CHANGELOG.md`).
 

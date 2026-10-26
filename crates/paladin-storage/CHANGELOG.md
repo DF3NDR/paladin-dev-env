@@ -5,7 +5,7 @@ All notable changes to `paladin-storage` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows lockstep workspace versioning.
 
-## [0.11.0] - 2026-10-25
+## [0.11.0] - 2026-10-26
 
 ### Fixed
 

@@ -138,5 +138,14 @@ This phase performed none of these four steps and merged nothing.
 
 ---
 
+## The close-out pull request
+
+- **Pull request:** [#60](https://github.com/DF3NDR/paladin-dev-env/pull/60), `docs(47): v0.11.0 release records and close-out`, `chore/47-close` → `main`, open, not a draft, opened 2026-10-26 through REST (`gh api -X POST repos/DF3NDR/paladin-dev-env/pulls`, body from a file) after the maintainer's `push ok`.
+- **Documentation-only:** `git diff --name-only v0.11.0 HEAD -- . ':!.planning'` printed nothing before the push, and `GET /pulls/60/files` lists no path outside `.planning/` (14 changed files at the read).
+- **Not done by this plan:** merged, auto-merge, labelled, reviewers requested, tagged, dispatched, published, yanked, or touched the GitHub Release. `mergeable_state` reads `blocked` (required contexts and the ruleset, not a defect of the branch).
+- **Detail and the read-back:** `47-CI-EVIDENCE.md` § "Findings carried forward" → "Plan 47-10: close-out branch pushed, documentation-only pull request opened". Commits added after the open (this record, the SUMMARY and the tracking files) ride the same branch and are pushed before this plan returns.
+
+---
+
 *Phase: 47-v0-11-0-crate-release*
 *Written: 2026-10-26*

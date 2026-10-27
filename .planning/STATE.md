@@ -1,34 +1,31 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.11.0
-milestone_name: Treasurer Spend Governance (closed 2026-10-27)
-status: Awaiting next milestone
-stopped_at: "Milestone v0.11.0 completed and archived 2026-10-27; no active phase — next: /gsd-new-milestone (phases start at 52)"
-last_updated: "2026-10-27T21:44:21.870Z"
+milestone: v0.11.1
+milestone_name: Dogfood Cleanup
+status: planning
+last_updated: "2026-10-27T22:44:40.705Z"
 last_activity: 2026-10-27
-last_activity_desc: Milestone v0.11.0 completed and archived
 progress:
-  total_phases: 15
-  completed_phases: 15
-  total_plans: 174
-  completed_plans: 174
-current_phase: 47
-current_phase_name: v0.11.0 Crate Release
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-10-27 after the v0.11.0 milestone close)
+See: .planning/PROJECT.md (updated 2026-10-27 at the v0.11.1 milestone open)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Planning the next milestone — `/gsd-new-milestone` (questioning → research →
-requirements → roadmap); new phases start at **Phase 52**. The pre-release todo
-`2026-10-14-web3sec-single-bump-to-v0-11-0.md` and `47-HANDOFF-web3sec.md` are the consumer's
-own next step and are not Paladin phases.
+**Current focus:** Milestone v0.11.1 "Dogfood Cleanup" — defining requirements and roadmap
+from `.project/v0.11.1/` (carried-gaps inventory, dogfood findings log, scoping notes); new phases
+start at **Phase 52**. Decisions at open: OpenAI Responses API out, `${VAR}` auth keys refused at
+boot, research skipped.
 
 **Previous milestone:** v0.11.0 "Treasurer Spend Governance" closed 2026-10-27 — 15 phases
 (38-51, with 50.1 inserted and 48-51 added mid-milestone from a code survey and three web3sec
@@ -49,11 +46,10 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 
 ## Current Position
 
-Phase: Milestone v0.11.0 complete — no active phase
+Phase: Not started (defining requirements)
 Plan: —
-Status: Awaiting next milestone (`/gsd-new-milestone`; new phases start at Phase 52)
-Last activity: 2026-10-27 — Milestone v0.11.0 completed and archived: `milestone complete` moved the 15 phase directories to `milestones/v0.11.0-phases/`, archived ROADMAP.md, REQUIREMENTS.md and the audit, and wrote the MILESTONES.md entry (folded with Phase 47's release record); ROADMAP.md collapsed to one `<details>` block; PROJECT.md reviewed in full (Current State, Validated/Active/Out of Scope, Context, Key Decisions); RETROSPECTIVE.md extended; REQUIREMENTS.md removed for the next milestone. Pre-close artifact audit acknowledged 9 open items (recorded under *Deferred Items*). Tag `v0.11.0` already existed from Phase 47 (merge commit `70657919`); no new tag cut.
-Previous: 2026-10-27 — `/gsd-validate-phase` sweep closed the audit's nine unreconciled VALIDATION.md files (15/15 Nyquist-compliant, 0 gaps across 251 mapped tasks); the v0.11.0 audit re-run read `tech_debt` with 0 critical gaps (supersedes the 2026-10-24 `gaps_found`)
+Status: Defining requirements
+Last activity: 2026-10-27 — Milestone v0.11.1 started
 
 ## Performance Metrics
 
@@ -667,12 +663,15 @@ Four pending todos were acknowledged as deferred at the v0.11.0 close (see *Defe
   against the RustFS dev stack) and confirm it reproduces the CI figure (now 92.74 % on the
   v0.11.0 merge commit, not the 82.39 % the todo quotes). `recheck_by: 2026-10-16` has passed;
   carried since the v0.8.0 close.
+
 - `todos/pending/2026-10-13-review-content-data-orchestration-base-items.md` — review the
   unfinished content / general data orchestration system before removing any of the five base
   items Phase 48 retained (ENTITY-04, D-05, ADR-0060).
+
 - `todos/pending/2026-10-14-web3sec-single-bump-to-v0-11-0.md` — web3sec moves once, straight to
   `v0.11.0`, with `MIGRATION.md` section 10 / §9.8 and `47-HANDOFF-web3sec.md` as the spec; stays
   pending until the consumer reports back (Phase 49 D-15). Owner: repo maintainer (relay).
+
 - `todos/pending/2026-10-20-openai-responses-api-for-pro-tier.md` — add OpenAI Responses API
   support so `gpt-5.5-pro` and siblings are usable (Phase 50.1 seed probe finding).
 

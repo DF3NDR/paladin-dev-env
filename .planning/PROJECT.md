@@ -607,20 +607,67 @@ What v0.9.0 settled, in one paragraph each:
   proven end-to-end on `v0.8.1-rc.5`, the first fully-green release run in this project's
   history, with every declared human check closed by recorded UAT.
 
-## Next Milestone: not yet defined
+## Current Milestone: v0.11.1 Dogfood Cleanup
 
-The v0.11.0 milestone closed 2026-10-27. The next milestone is defined by `/gsd-new-milestone`
-(questioning → research → requirements → roadmap); its phases start at **Phase 52**. Candidate
-inputs already on file, none of them decided: the four pending todos (OpenAI Responses API for the
-pro tier; the base-item review behind ENTITY-04; the user-owned coverage reproduction; the web3sec
-single bump, which is the consumer's step, not a Paladin phase); the audit's two integration
-warnings (G1, an aggregate HTTP spend route — LEDGR-04's HTTP half; G2, an assertion on the
-engine-factory Treasurer wiring); the untenanted `/v1/threads/*` routes (WINDOWS row 58); the
-tracing-overhead bar still not met (rows 35/61); the Phase 47 release-process carry-overs (semver
-baseline re-pin to 0.11.0 plus `paladin-eval`, `check-migration-allowlist` in `ci.yml`, the
-release-body builder's 131,072-byte cap, stale `k8s/` labels, the crate changelogs' "No functional
-change" wording); the Codecov token decision; the `zip` RustSec exceptions due 2026-12-31; and the
-remaining v2 list (FUT-01…07, FUT-11…13) in `milestones/v0.11.0-REQUIREMENTS.md`.
+**Goal:** Close the security, correctness, release-process and first-run gaps v0.11.0 left behind,
+plus whatever dogfooding v0.11.0 (the maintainer's own runs and the web3sec consumer's return against
+the `v0.11.0` tag) surfaces, so the `v0.11.1` tag ships with `WINDOWS.md` `open_count: 0` and a
+milestone audit that reads `passed` rather than `tech_debt`.
+
+**Target features:**
+- Release-process and CI repair — semver baseline re-pinned to 0.11.0 with `paladin-eval` added,
+  the crate-wide semver allows dropped, `check-migration-allowlist` wired into `ci.yml`, the
+  `main`-only E2E and publish-dry-run jobs run on PRs, the release-body builder's 131,072-byte argv
+  cap fixed (`jq --rawfile`), advisory CodeQL alerts triaged, issue #41 closed (inventory D1–D7).
+- Tenant isolation closure — one visibility gate for `/v1/threads/*`, run submission and fork;
+  the service-layer tenant check on cancel; error-body redaction on the run controller; the
+  principal/tenant check on `GET /agents/{id}/jobs/{job_id}`; a boot-time assertion that a
+  configured Treasurer is actually attached to the worker pool (A1–A5, A8 — the only S1 cluster).
+- First-run usability — unexpanded `${VAR}` HTTP auth keys refused at boot with a named error and
+  the examples made honest; README/docs/k8s version strings corrected and held by a
+  `check-version-strings` gate; crate changelog corrections in the 0.11.1 entries; stale doc, count
+  and link nits; the committed API-surface snapshot refreshed (B1/C1–C8, C10).
+- Correctness small fixes — the `todo!()` panic in `paladin-content` fenced, Failed-vs-Halted
+  mapping on the agent-kind run, `RunStatusValue::Cancelled` in `paladin-eval`, the `claude-opus-4-8`
+  seed row, hermetic `run_api_wiring` tests, the non-flaky cancel test, lint and stub leftovers
+  (B2–B6, E1–E5, E7).
+- Dogfood findings — one or more phases scoped from `.project/v0.11.1/02-dogfood-findings-log.md`
+  once the maintainer's runs and the web3sec return (`47-HANDOFF-web3sec.md` §6) are in; every
+  `DF-nn` entry dispositioned (in / out with a reason / duplicate) before the tag.
+- Register hygiene close-out — `/gsd-validate-phase` on the nine draft phases, SUMMARY frontmatter
+  repaired, WINDOWS rows 56/68/69/79 dispositioned, the three diagnosed debug sessions archived,
+  a bounded human read of the Phase 40 judgment-tier prohibitions (F1–F5).
+
+**Input of record:** `.project/v0.11.1/` (`00-README.md`, `01-carried-gaps-inventory.md`,
+`02-dogfood-findings-log.md`, `03-suggestions-and-scoping.md`), snapshot 2026-10-27 on `main` at
+`ebf04f1`. Inventory row ids (A1…G4) and finding ids (DF-nn) are the cross-reference keys. New
+phases start at **Phase 52**.
+
+**Decisions taken at milestone open (2026-10-27):**
+- OpenAI Responses API for the pro tier (G2) — **out**; stays the pending todo and becomes the first
+  item of the next feature milestone. v0.11.1 carries no feature item.
+- `${VAR}` in HTTP auth keys (B1) — **refuse at boot** with a named error naming the key; fix
+  `config.example.yml` and the `k8s/server/configmap.yaml` header. No new expansion path.
+- Research — skipped; the carried-gaps inventory is the research for a cleanup milestone.
+- Smaller decisions, as the outline recommends: A6 reserved tenant/key literals rejected (cheap
+  validation); A7 unattributed pre-Phase-41 schedules get a boot-time `warn!`, no backfill; B4
+  unpriced reachable models get a boot/admission warning, workflow assistants are not refused; B9
+  Grok vendor cost fields stay deferred; B10 "the server attaches no node cache" is documented, not
+  wired; B12 cache-key version kept and documented; D5 the publish-order reading is recorded as
+  accepted; D10 the eight crate-level `#![allow(rustdoc::…)]` are removed but the all-features CI
+  test job stays out; F5 a bounded human read of the Phase 40 subset only; G3 the base-layer
+  content/data items are reviewed and fenced, not finished.
+- Versioning — a patch bump under semver 0.x. If a security fix in the tenant-isolation theme forces
+  a persisted or public-surface break, the number becomes `v0.12.0`, decided when the break is
+  known, not at the tag.
+
+**Scope guards:** no new ports, adapters or HTTP routes except where a security fix needs one (a
+tenant column on threads is a migration, not a feature); no `MIGRATION.md` break unless forced by a
+security fix; stubs that panic are fenced with an `Err`, never finished; accepted contracts
+(inventory §H — ADR-0057 check-only boundary, streamed-call overshoot, agent-loop no-Waypoint, the
+OBS-05 waiver, the aggregate spend route, the FUT register) stay out; measurement work (Ollama /
+OpenAI-compatible probes, quota-body capture, retry-counter unification — C9) stays out unless a
+dogfood run on that provider hands over a captured body.
 
 ## Previous Milestone: v0.11.0 Treasurer Spend Governance (shipped 2026-10-27)
 
@@ -1308,30 +1355,33 @@ while the code ships):
 
 ### Active
 
-**No active milestone (v0.11.0 closed 2026-10-27).** Requirements for the next milestone are
-minted into a fresh `.planning/REQUIREMENTS.md` by `/gsd-new-milestone`. Candidates, none
-decided (see *Next Milestone* above for the full list):
+**Milestone v0.11.1 "Dogfood Cleanup" (opened 2026-10-27).** Requirement IDs are minted in
+`.planning/REQUIREMENTS.md`; the themes below are the scope (inventory rows in parentheses):
 
-- [ ] Aggregate HTTP spend route — per-tenant / per-key / per-model spend over HTTP (LEDGR-04's
-      HTTP half; audit G1, released as a documented deferral)
-- [ ] Assert the engine-factory Treasurer wiring (settlement, spend guard, cancel probe) when a
-      treasurer is configured (audit G2)
-- [ ] Tenant-scope the `/v1/threads/*` routes (WINDOWS row 58, Phase 40 D-14)
-- [ ] OpenAI Responses API so the pro tier is usable (todo 2026-10-20)
-- [ ] Tracing overhead toward the ≤ 3 % bar (rows 35/61 — accepted at +19.36 % / +16.19 %, not met)
-- [ ] Release-process carry-overs from Phase 47 (semver baseline 0.11.0 + `paladin-eval`,
-      `check-migration-allowlist` in CI, release-body cap, stale `k8s/` labels, crate changelog
-      wording for the persisted-key change)
+- [ ] Release-process and CI repair — semver gate re-pinned to the 0.11.0 baseline and actually
+      checking, allows dropped, allowlist check and `main`-only jobs on PRs, release-body cap fixed,
+      CodeQL triaged, issue #41 closed (D1–D7)
+- [ ] Tenant isolation closure — `/v1/threads/*`, run submission, fork, cancel, agent jobs all
+      tenant-gated; error bodies redacted; Treasurer attachment asserted at boot (A1–A5, A8)
+- [ ] First-run usability — unexpanded `${VAR}` auth keys refused at boot, version strings fixed and
+      gated, changelog/doc/k8s corrections, API-surface snapshot refreshed (B1, C1–C8, C10)
+- [ ] Correctness small fixes — `todo!()` fenced, Failed-vs-Halted mapping, `Cancelled` eval
+      status, opus-4-8 seed row, hermetic and non-flaky tests, lint leftovers (B2–B6, E1–E5, E7)
+- [ ] Dogfood findings — every `DF-nn` in `02-dogfood-findings-log.md` dispositioned; the
+      promoted ones fixed (content arrives from the maintainer's runs and the web3sec return)
+- [ ] Register hygiene close-out — nine draft phases validated, SUMMARY frontmatter, WINDOWS
+      dispositions, debug sessions archived, Phase 40 prohibition read (F1–F5)
 
 Carried-in open items (tracked, not requirements):
 
-- The four pending todos (STATE.md *Pending Todos* / *Deferred Items*): the user-owned local
-  coverage-reproduction walkthrough (carried since v0.8.0), the base-item review behind ENTITY-04,
-  the web3sec single bump to `v0.11.0` (the consumer's step), the OpenAI Responses API.
+- Pending todos: the user-owned local coverage-reproduction walkthrough (carried since v0.8.0;
+  fits this milestone as dogfooding of the testing guide), the web3sec single bump to `v0.11.0`
+  (the consumer's step — its return feeds the dogfood findings log), the OpenAI Responses API
+  (**out** of v0.11.1 by decision), the base-item review (folded into the correctness theme as
+  review-and-fence).
 - Nyquist validation unreconciled for archived Phases 05-21.
-- The v0.11.0 audit's `tech_debt` register (13 open WINDOWS rows with owners, the Phase 47
-  carried findings, the three `zip` RustSec exceptions due 2026-12-31) in
-  `milestones/v0.11.0-MILESTONE-AUDIT.md`; the v0.10.0 and v0.9.0 registers in their audits.
+- The three `zip 3.0.0` RustSec exceptions (review 2026-12-31) — re-check `utoipa-swagger-ui`
+  upstream at milestone open; not a requirement unless the upstream has moved.
 
 ### Out of Scope
 
@@ -2632,3 +2682,8 @@ carried phase-level decisions; Constraints updated for `paladin-eval` and MSRV 1
 *Last updated: 2026-09-24 at the start of milestone v0.11.0 "Treasurer Spend Governance"
 (`/gsd-new-milestone`): *Next Milestone Goals* replaced by *Current Milestone*; Active re-seeded;
 new phases start at Phase 38.*
+
+*Last updated: 2026-10-27 at the start of milestone v0.11.1 "Dogfood Cleanup"
+(`/gsd-new-milestone`): *Next Milestone: not yet defined* replaced by *Current Milestone*; Active
+re-seeded from `.project/v0.11.1/`; the four shape decisions (Responses API out, `${VAR}` refused at
+boot, research skipped, smaller decisions per the outline) recorded; new phases start at Phase 52.*

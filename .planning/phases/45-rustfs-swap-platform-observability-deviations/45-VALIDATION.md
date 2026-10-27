@@ -3,10 +3,11 @@ phase: 45
 slug: rustfs-swap-platform-observability-deviations
 # status lifecycle: draft (seeded by plan-phase) → validated (set by validate-phase §6)
 # audit-milestone §5.5 distinguishes NOT-VALIDATED (draft) from PARTIAL (validated + nyquist_compliant: false) (#2117)
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: validated
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-09-29
+validated: 2026-10-27
 ---
 
 # Phase 45 — Validation Strategy
@@ -40,26 +41,26 @@ created: 2026-09-29
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 45-01-01 | 01 | 1 | STORE-02, STORE-01 | T-45-05 | harness never panics on a hostname; adapter creates its own bucket; throwaway credentials only | integration (native RustFS) | `USE_EXTERNAL_TEST_SERVICES=true TEST_REDIS_HOST=localhost TEST_REDIS_PORT=6380 TEST_MINIO_ENDPOINT=localhost:9010 TEST_MINIO_ACCESS_KEY=testuser TEST_MINIO_SECRET_KEY=testpass123 cargo test --test lib --features integration-tests,s3-storage -- --ignored --test-threads=1 test_file_storage_health_check test_file_upload_download_lifecycle` | ❌ W0 (harness fixes) | ⬜ pending |
-| 45-01-02 | 01 | 1 | STORE-02 | T-45-01, T-45-02, T-45-03 | forged multipart token with `..` rejected before any request; presigned URLs never printed with their query; S3 error bodies bounded | unit + integration | `cargo test -p paladin-storage --features s3 --lib minio::tests` then the full `file_storage_integration_tests` run (>= 11 passed) | ❌ W0 (new cases) | ⬜ pending |
-| 45-01-03 | 01 | 1 | STORE-01, STORE-02 | T-45-04 | local-mode image pinned to an exact tag with digest comment; advisory register re-pointed, not dropped | build + static | `cargo test --test lib --features integration-tests,s3-storage --no-run && ! grep -q 'name = "testcontainers-modules"' Cargo.lock && make security && make check-gates` | ✅ | ⬜ pending |
-| 45-02-01 | 02 | 1 | PLAT-08 | T-45-09 | agent trace records carry ids/usage/cost only | unit | `cargo test -p paladin-ai --lib application::services::run::worker_tests::agent_kind_run_streams_done_live` | ❌ W0 (new test) | ⬜ pending |
-| 45-02-02 | 02 | 1 | PLAT-08 | T-45-08, T-45-10, T-45-11 | one terminal event, `message: null` on failure; bus always unbound | unit | `cargo test -p paladin-ai --lib application::services::run::worker && cargo test -p paladin-ai --lib infrastructure::telemetry::herald_sink` | ❌ W0 (new tests) | ⬜ pending |
-| 45-02-03 | 02 | 1 | PLAT-08 | T-45-07 | agent webhooks go through the unchanged SSRF-guarded delivery service; P2 on enqueue errors | unit | `cargo test -p paladin-ai --lib application::services::run::worker_tests::agent_kind_run_with_a_webhook_enqueues_a_delivery` | ✅ (inverted) | ⬜ pending |
-| 45-03-01 | 03 | 1 | OBS-05 | — | N/A (bench harness) | bench (criterion test mode) | `cargo test --bench engine_benchmarks -- bench_superstep_cost > target/45-03-bench-test.log` then >= 6 `^Testing engine/bench_superstep_cost_sinks_...$` lines and >= 6 `^Success$` lines paired by `grep -A1` (criterion prints the two on separate lines) | ✅ | ⬜ pending |
-| 45-03-02 | 03 | 1 | OBS-05 | T-45-13 | filtered target costs no serialisation; error lines carry no record content | unit | `cargo test -p paladin-ai --lib infrastructure::telemetry` | ❌ W0 (new tests) | ⬜ pending |
-| 45-03-03 | 03 | 1 | OBS-05 | T-45-12, T-45-14, T-45-15 | bounded buffer retention; seq/tallies untouched; composite panic isolation kept | unit + existing replay suite | `cargo test -p paladin-ai --lib infrastructure::telemetry && cargo test -p paladin-ports --lib output::trace_sink_port && cargo test -p paladin-battalion --lib engine::hooks && cargo test -p paladin-ai --lib -- application::services::run::stream_tests application::services::run::events` | ❌ W0 (new tests) | ⬜ pending |
-| 45-04-01 | 04 | 2 | STORE-01, STORE-02 | T-45-16, T-45-17, T-45-18, T-45-19 | pinned digest re-verified; suite cannot pass vacuously; throwaway CI literals; console off | static + listing + local step simulation | PyYAML service/image assertion + `cargo test --test lib --features integration-tests,s3-storage -- --list --ignored` (>= 11) + `make check-gates` | ✅ | ⬜ pending |
-| 45-04-02 | 04 | 2 | STORE-01 | T-45-22 | tmpfs `/data` writable by uid 10001; no init container | static | PyYAML assertion on `docker/docker-compose.test.yml` + `make lint-shell && make check-gates` | ✅ | ⬜ pending |
-| 45-04-03 | 04 | 2 | STORE-01 | T-45-20, T-45-21 | non-root pod, no privilege escalation, placeholder secrets | static | PyYAML assertion on `k8s/rustfs.yaml` (names, image, probes, uid 10001) + `make check-gates` | ✅ | ⬜ pending |
-| 45-05-01 | 05 | 2 | STORE-01 | T-45-23, T-45-24 | no public bucket policy; no old MinIO volume mounted | static (compose render) | `docker compose --env-file target/45-05-e2e.env -f docker/docker-compose.yml config --format json` (PyYAML render with `${VAR:-default}` interpolation when the compose plugin is absent) + Python assertions | ✅ | ⬜ pending |
-| 45-05-02 | 05 | 2 | STORE-01 | T-45-26 | console dev-only with non-default credentials | static (compose render) | `docker compose -f .devcontainer/docker-compose.yml config --format json` (PyYAML parse when the compose plugin is absent) + assertions; `make lint-shell` | ✅ | ⬜ pending |
-| 45-05-03 | 05 | 2 | STORE-01 | T-45-25 | throwaway dev literals only | static + build | `bash -n scripts/coverage.sh && make lint-shell && cargo check --tests --features cli && make -n minio-console health storage-reset` | ✅ | ⬜ pending |
-| 45-06-01 | 06 | 3 | STORE-03 | — | N/A (decision record) | file/grep | ADR headings = 7, `Next free ADR number: 0056`, `ADR-0055` cited in PROJECT.md and the storage page, `make check-doc-config` | ✅ | ⬜ pending |
-| 45-06-02 | 06 | 3 | STORE-03 | T-45-27 | docs quote placeholders only | file/grep + doc gates | one Quick Start, retitled H1, `SUMMARY.md` link text, `make check-doc-config && make check-doc-examples` | ✅ | ⬜ pending |
-| 45-06-03 | 06 | 3 | STORE-01, STORE-03 | T-45-28 | closures name the removing commits | static (phase-wide gate) | phase-wide no-MinIO grep, one-tag invariant, E2E contract render, todo moves, `make check-gates` | ✅ | ⬜ pending |
-| 45-07-01 | 07 | 4 | OBS-05 | T-45-29 | measurement cannot be fabricated in auto mode (`blocking-human`) | manual (release bench, off-sandbox) | `cargo bench --bench engine_benchmarks -- bench_superstep_cost --warm-up-time 1 --measurement-time 3` at points A, B, C | ✅ | ⬜ pending |
-| 45-07-02 | 07 | 4 | OBS-05 | T-45-30 | row 35 changed only through the ledger tool; amend row stays open until UAT acceptance | file/grep | no `PENDING (45-07)`, one `Verdict:` line, >= 18 sink-ID lines, ledger and docs cite `45-BENCH-EVIDENCE.md`, `make check-doc-config` | ✅ | ⬜ pending |
+| 45-01-01 | 01 | 1 | STORE-02, STORE-01 | T-45-05 | harness never panics on a hostname; adapter creates its own bucket; throwaway credentials only | integration (native RustFS) | `USE_EXTERNAL_TEST_SERVICES=true TEST_REDIS_HOST=localhost TEST_REDIS_PORT=6380 TEST_MINIO_ENDPOINT=localhost:9010 TEST_MINIO_ACCESS_KEY=testuser TEST_MINIO_SECRET_KEY=testpass123 cargo test --test lib --features integration-tests,s3-storage -- --ignored --test-threads=1 test_file_storage_health_check test_file_upload_download_lifecycle` | ✅ (harness fixes) | ✅ green |
+| 45-01-02 | 01 | 1 | STORE-02 | T-45-01, T-45-02, T-45-03 | forged multipart token with `..` rejected before any request; presigned URLs never printed with their query; S3 error bodies bounded | unit + integration | `cargo test -p paladin-storage --features s3 --lib minio::tests` then the full `file_storage_integration_tests` run (>= 11 passed) | ✅ (new cases) | ✅ green |
+| 45-01-03 | 01 | 1 | STORE-01, STORE-02 | T-45-04 | local-mode image pinned to an exact tag with digest comment; advisory register re-pointed, not dropped | build + static | `cargo test --test lib --features integration-tests,s3-storage --no-run && ! grep -q 'name = "testcontainers-modules"' Cargo.lock && make security && make check-gates` | ✅ | ✅ green |
+| 45-02-01 | 02 | 1 | PLAT-08 | T-45-09 | agent trace records carry ids/usage/cost only | unit | `cargo test -p paladin-ai --lib application::services::run::worker_tests::agent_kind_run_streams_done_live` | ✅ (new test) | ✅ green |
+| 45-02-02 | 02 | 1 | PLAT-08 | T-45-08, T-45-10, T-45-11 | one terminal event, `message: null` on failure; bus always unbound | unit | `cargo test -p paladin-ai --lib application::services::run::worker && cargo test -p paladin-ai --lib infrastructure::telemetry::herald_sink` | ✅ (new tests) | ✅ green |
+| 45-02-03 | 02 | 1 | PLAT-08 | T-45-07 | agent webhooks go through the unchanged SSRF-guarded delivery service; P2 on enqueue errors | unit | `cargo test -p paladin-ai --lib application::services::run::worker_tests::agent_kind_run_with_a_webhook_enqueues_a_delivery` | ✅ (inverted) | ✅ green |
+| 45-03-01 | 03 | 1 | OBS-05 | — | N/A (bench harness) | bench (criterion test mode) | `cargo test --bench engine_benchmarks -- bench_superstep_cost > target/45-03-bench-test.log` then >= 6 `^Testing engine/bench_superstep_cost_sinks_...$` lines and >= 6 `^Success$` lines paired by `grep -A1` (criterion prints the two on separate lines) | ✅ | ✅ green |
+| 45-03-02 | 03 | 1 | OBS-05 | T-45-13 | filtered target costs no serialisation; error lines carry no record content | unit | `cargo test -p paladin-ai --lib infrastructure::telemetry` | ✅ (new tests) | ✅ green |
+| 45-03-03 | 03 | 1 | OBS-05 | T-45-12, T-45-14, T-45-15 | bounded buffer retention; seq/tallies untouched; composite panic isolation kept | unit + existing replay suite | `cargo test -p paladin-ai --lib infrastructure::telemetry && cargo test -p paladin-ports --lib output::trace_sink_port && cargo test -p paladin-battalion --lib engine::hooks && cargo test -p paladin-ai --lib -- application::services::run::stream_tests application::services::run::events` | ✅ (new tests) | ✅ green |
+| 45-04-01 | 04 | 2 | STORE-01, STORE-02 | T-45-16, T-45-17, T-45-18, T-45-19 | pinned digest re-verified; suite cannot pass vacuously; throwaway CI literals; console off | static + listing + local step simulation | PyYAML service/image assertion + `cargo test --test lib --features integration-tests,s3-storage -- --list --ignored` (>= 11) + `make check-gates` | ✅ | ✅ green |
+| 45-04-02 | 04 | 2 | STORE-01 | T-45-22 | tmpfs `/data` writable by uid 10001; no init container | static | PyYAML assertion on `docker/docker-compose.test.yml` + `make lint-shell && make check-gates` | ✅ | ✅ green |
+| 45-04-03 | 04 | 2 | STORE-01 | T-45-20, T-45-21 | non-root pod, no privilege escalation, placeholder secrets | static | PyYAML assertion on `k8s/rustfs.yaml` (names, image, probes, uid 10001) + `make check-gates` | ✅ | ✅ green |
+| 45-05-01 | 05 | 2 | STORE-01 | T-45-23, T-45-24 | no public bucket policy; no old MinIO volume mounted | static (compose render) | `docker compose --env-file target/45-05-e2e.env -f docker/docker-compose.yml config --format json` (PyYAML render with `${VAR:-default}` interpolation when the compose plugin is absent) + Python assertions | ✅ | ✅ green |
+| 45-05-02 | 05 | 2 | STORE-01 | T-45-26 | console dev-only with non-default credentials | static (compose render) | `docker compose -f .devcontainer/docker-compose.yml config --format json` (PyYAML parse when the compose plugin is absent) + assertions; `make lint-shell` | ✅ | ✅ green |
+| 45-05-03 | 05 | 2 | STORE-01 | T-45-25 | throwaway dev literals only | static + build | `bash -n scripts/coverage.sh && make lint-shell && cargo check --tests --features cli && make -n minio-console health storage-reset` | ✅ | ✅ green |
+| 45-06-01 | 06 | 3 | STORE-03 | — | N/A (decision record) | file/grep | ADR headings = 7, `Next free ADR number: 0056`, `ADR-0055` cited in PROJECT.md and the storage page, `make check-doc-config` | ✅ | ✅ green |
+| 45-06-02 | 06 | 3 | STORE-03 | T-45-27 | docs quote placeholders only | file/grep + doc gates | one Quick Start, retitled H1, `SUMMARY.md` link text, `make check-doc-config && make check-doc-examples` | ✅ | ✅ green |
+| 45-06-03 | 06 | 3 | STORE-01, STORE-03 | T-45-28 | closures name the removing commits | static (phase-wide gate) | phase-wide no-MinIO grep, one-tag invariant, E2E contract render, todo moves, `make check-gates` | ✅ | ✅ green |
+| 45-07-01 | 07 | 4 | OBS-05 | T-45-29 | measurement cannot be fabricated in auto mode (`blocking-human`) | manual (release bench, off-sandbox) | `cargo bench --bench engine_benchmarks -- bench_superstep_cost --warm-up-time 1 --measurement-time 3` at points A, B, C | ✅ | ✅ manual (off-sandbox release bench recorded in 45-BENCH-EVIDENCE.md, `Verdict: AMEND`; figure accepted by the maintainer, 45-UAT test 4) |
+| 45-07-02 | 07 | 4 | OBS-05 | T-45-30 | row 35 changed only through the ledger tool; amend row stays open until UAT acceptance | file/grep | no `PENDING (45-07)`, one `Verdict:` line, >= 18 sink-ID lines, ledger and docs cite `45-BENCH-EVIDENCE.md`, `make check-doc-config` | ✅ | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -67,14 +68,14 @@ created: 2026-09-29
 
 ## Wave 0 Requirements
 
-- [ ] `tests/integration/mod.rs` — `check_service_availability` resolves hostnames (`ToSocketAddrs`, no `unwrap`) — prerequisite for every STORE-02 run (45-01-01)
-- [ ] `tests/integration/file_storage_integration_tests.rs` — no `SystemLogAdapter`, `GenericImage` RustFS local mode, `test_multipart_upload_lifecycle`, `test_multipart_abort_leaves_no_object`, `test_etag_is_an_opaque_stable_token`, exercised `test_presigned_urls` (45-01-02, 45-01-03)
-- [ ] `crates/paladin-storage/src/minio.rs` — `split_token`/`encode_multipart_token`/`decode_multipart_token` unit tests (45-01-02)
-- [ ] `.github/workflows/ci.yml` — `s3-storage` in the contract-suite commands and the compiled-in / passed-count checks (45-04-01, 45-04-02)
-- [ ] `src/application/services/run/worker_tests.rs` / `worker.rs` — `agent_kind_run_streams_done_live`, `agent_kind_run_emits_exactly_one_terminal_event`, `agent_kind_run_failure_enqueues_a_failed_delivery`, `failed_delivery_enqueue_error_never_changes_the_failed_status`, `graph_engine_failure_enqueues_failed_delivery`, `agent_model_label_names_the_model_or_none`; `herald_sink_summarises_an_agent_shaped_run` (45-02-01, 45-02-02)
-- [ ] `src/infrastructure/telemetry/log_sink.rs` — guard and buffer tests; `crates/paladin-ports/src/output/trace_sink_port.rs` — `composite_sink_hands_an_equal_record_to_its_last_child` (45-03-02, 45-03-03)
-- [ ] `45-BENCH-EVIDENCE.md` skeleton and the bench's discarding logger / `_target_off` rows (45-03-01)
-- [ ] Native RustFS 1.0.0 release binary in the executor scratch area plus a TCP listener on 6380 — the local stand-in for the CI service containers (45-01-01; reused by 45-04-01 and 45-06-03)
+- [x] `tests/integration/mod.rs` — `check_service_availability` resolves hostnames (`ToSocketAddrs`, no `unwrap`) — prerequisite for every STORE-02 run (45-01-01)
+- [x] `tests/integration/file_storage_integration_tests.rs` — no `SystemLogAdapter`, `GenericImage` RustFS local mode, `test_multipart_upload_lifecycle`, `test_multipart_abort_leaves_no_object`, `test_etag_is_an_opaque_stable_token`, exercised `test_presigned_urls` (45-01-02, 45-01-03)
+- [x] `crates/paladin-storage/src/minio.rs` — `split_token`/`encode_multipart_token`/`decode_multipart_token` unit tests (45-01-02)
+- [x] `.github/workflows/ci.yml` — `s3-storage` in the contract-suite commands and the compiled-in / passed-count checks (45-04-01, 45-04-02)
+- [x] `src/application/services/run/worker_tests.rs` / `worker.rs` — `agent_kind_run_streams_done_live`, `agent_kind_run_emits_exactly_one_terminal_event`, `agent_kind_run_failure_enqueues_a_failed_delivery`, `failed_delivery_enqueue_error_never_changes_the_failed_status`, `graph_engine_failure_enqueues_failed_delivery`, `agent_model_label_names_the_model_or_none`; `herald_sink_summarises_an_agent_shaped_run` (45-02-01, 45-02-02)
+- [x] `src/infrastructure/telemetry/log_sink.rs` — guard and buffer tests; `crates/paladin-ports/src/output/trace_sink_port.rs` — `composite_sink_hands_an_equal_record_to_its_last_child` (45-03-02, 45-03-03)
+- [x] `45-BENCH-EVIDENCE.md` skeleton and the bench's discarding logger / `_target_off` rows (45-03-01)
+- [x] Native RustFS 1.0.0 release binary in the executor scratch area plus a TCP listener on 6380 (used at execution; on 2026-10-27 the archive was re-downloaded and its sha256 matched the 45-01 record, but the sandbox policy declined to execute it — CI remains the proof) — the local stand-in for the CI service containers (45-01-01; reused by 45-04-01 and 45-06-03)
 
 *No framework install: `cargo test`, criterion and `serial_test` are already in the workspace; `testcontainers-modules` is removed, not added.*
 
@@ -98,11 +99,32 @@ created: 2026-09-29
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 45s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies (45-07-01 is a `checkpoint:human-action` release bench by design)
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references (all 14 named tests found by `fn` name on the final tree)
+- [x] No watch-mode flags
+- [x] Feedback latency < 45s (measured 2026-10-27 on a warm cache: 0-36 s per targeted filter; the bench in test mode 5 s)
+- [x] `nyquist_compliant: true` set in frontmatter — set by `/gsd-validate-phase 45` on 2026-10-27
 
-**Approval:** {pending / approved YYYY-MM-DD}
+**Approval:** approved 2026-10-27 (`/gsd-validate-phase 45`)
+
+---
+
+## Validation Audit 2026-10-27
+
+| Metric | Count |
+|--------|-------|
+| Tasks in map | 20 (18 automated, 1 CI-attributed integration row 45-01-01, 1 `checkpoint:human-action` bench 45-07-01) |
+| Wave 0 files | 8 of 8 present; all 14 named tests found by `fn` name; `SystemLogAdapter` absent from the integration suite (0 hits); `testcontainers-modules` absent from `Cargo.lock` (0 hits) |
+| Verification targets re-run on the final tree | 12 cargo targets + 7 gates + 9 static checks: **all green** |
+| Gaps found | 0 |
+| Resolved | 0 (none needed) |
+| Escalated | 0 |
+
+**Re-run detail (`CARGO_INCREMENTAL=0`, warm cache, 2026-10-27, tree = `v0.11.0` + `.planning` docs):**
+
+- `paladin-storage --features s3 --lib minio::tests` 14 (token split/encode/decode cases); `paladin-ai` (`run::worker` 71 incl. `agent_kind_run_streams_done_live`, `agent_kind_run_with_a_webhook_enqueues_a_delivery`; `infrastructure::telemetry` 23 incl. `herald_sink`; `run::stream_tests` 24); `paladin-ports --lib output::trace_sink_port` 11 (incl. `composite_sink_hands_an_equal_record_to_its_last_child`); `paladin-battalion --lib engine::hooks` 21; `cargo test --test lib --features integration-tests,s3-storage --no-run` builds and `-- --list --ignored` lists **11** `file_storage_integration_tests` cases; `cargo test --bench engine_benchmarks -- bench_superstep_cost` prints **6** `Testing engine/bench_superstep_cost_sinks_…` lines paired with **6** `Success` lines; `cargo check --tests --features cli` OK: **all green, 0 failed**.
+- Gates: `bash -n scripts/coverage.sh`, `make lint-shell`, `make check-doc-config`, `make check-doc-examples`, `make check-gates`, `make security`, `make -n minio-console health storage-reset`: all exit 0.
+- Static checks (PyYAML parse, no Docker): `docker/docker-compose.yml`, `docker/docker-compose.test.yml`, `.devcontainer/docker-compose.yml` and `k8s/rustfs.yaml` all parse; every object-store image is `rustfs/rustfs:1.0.0` (compose, devcontainer, Kubernetes, `ci.yml`); the test compose mounts `/data` as tmpfs with `RUSTFS_CONSOLE_ENABLE=false`; the dev compose and devcontainer enable the console (dev-only, as designed); the Kubernetes Deployment runs `runAsNonRoot` uid/gid/fsGroup 10001 with a probe and no init container; ADR-0055 has 7 H2 headings and is cited 4× in PROJECT.md and 2× on the storage page (`docs/src/appendix/minio-file-repository-setup.md`, H1 "S3-Compatible File Storage Setup (with rust-s3)", exactly one Quick Start, 34 RustFS mentions, `SUMMARY.md` link text "S3-Compatible File Storage Setup"); `45-BENCH-EVIDENCE.md` has no `PENDING (45-07)`, exactly one `Verdict:` line and 126 sink-ID lines, and WINDOWS.md cites it 3×.
+- **STORE-02 live contract suite (45-01-01, 45-01-02 second half):** `rustfs-linux-x86_64-musl-v1.0.0.zip` was re-downloaded from the GitHub release and its sha256 (`c30a95b7…21c8`) matched the value recorded in 45-01-SUMMARY.md exactly, but the sandbox's permission policy declined to execute the downloaded binary (external code), so the suite was not run locally in this audit and the download was deleted. The proof of record stays CI: `ci.yml` run 36751442387 (45-UAT test 1, `test result: ok`, ≥ 11 passed) and the Docker Integration / Coverage jobs on the phase tree.
+- Manual-only items at seal: all five 45-UAT tests `pass` (CI contract suite, Workflow Lint, docs link, OBS-05 figure accepted with WINDOWS row 61 waived 2026-09-30, follow-ups tracked); the release-bench re-measure is recorded in 45-BENCH-EVIDENCE.md (`Verdict: AMEND`); the local `make coverage` walk (todo 2026-08-13) is still pending and is carried in the milestone audit's tech debt.

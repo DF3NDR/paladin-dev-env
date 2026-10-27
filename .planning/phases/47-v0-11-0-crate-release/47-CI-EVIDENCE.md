@@ -37,9 +37,9 @@ labelled as a research figure, never as a measurement.
   `nightly-2026-09-20-x86_64-unknown-linux-gnu`, `1.97.1-x86_64-unknown-linux-gnu (active)` — **MSRV 1.88 is
   absent** (so the MSRV gate has no local row; its CI twin is the `MSRV (Rust 1.88)` job). `cargo-release`
   was not installed at the start of plan 47-01; Task 2 installed exactly 1.1.7 (`--locked`, outside the repository): `cargo-release 1.1.7` (Local sweep rows 13-14).
-- **Tick commit:** (filled by plan 47-08).
-- **Merge commit:** (filled by plan 47-08).
-- **Tagged commit:** (filled by plan 47-08).
+- **Tick commit:** the maintainer's tick is SHA-A2 `6ef9207a672cceb8aaddc2dccdd9986c33d5366b` (2026-10-26T02:18:19Z, uppercase `[X]`), superseded as the head by the redate (SHA-A3) and the maintainer's re-confirmation **SHA-A4 `72e13f9583ffe2b89580049045ac094ed3d46dbf`** (2026-10-26T13:37:14Z), which is the final head of PR #59 and the **PR-side parent of the merge** (filled by plan 47-08).
+- **Merge commit:** `70657919beadbd341a72be2d0107080017a803f0` (SHA-B), "Merge pull request #59 from DF3NDR/claude/laughing-dirac-e0h2ax", created by the maintainer in the GitHub UI, authored by `Amo <1178902+Am0rfu5@users.noreply.github.com>` and committed by GitHub at 2026-10-26T13:27:07-04:00 (= 17:27:07Z); `GET /pulls/59` reads `merged: true`, `merged_at` `2026-10-26T17:27:08Z`, `merged_by` `Am0rfu5`, `merge_commit_sha` `70657919beadbd341a72be2d0107080017a803f0`. A merge commit with two parents, never a squash or a rebase (D-00c). Its tree `885e4ac570b1810eb5f96ded84853adfa297ec7b` is identical to the tree of SHA-A4 (`git diff 72e13f95 70657919` prints nothing): `main` contributed no content change (filled by plan 47-08).
+- **Tagged commit:** `70657919beadbd341a72be2d0107080017a803f0` (`git rev-parse 'v0.11.0^{commit}'`) = SHA-B = `origin/main` = `GET /pulls/59 .merge_commit_sha`; the annotated tag object is `77a37c1846e5ab6716a51b78fb39541bccd1a7ae` (filled by plan 47-08; the proof is in the CI-run subsection "Plan 47-08 — the tag sits on the merge commit").
 - SHA-PRE-B1: 700a92d86f3d6b2e24bbd2c163daec7c307297e0
 - B1-MODE: a
 - SHA-PRE-BUMP: 680cf9c294dc22de02c1faae19afc45188470a35
@@ -48,6 +48,11 @@ labelled as a research figure, never as a measurement.
 - SHA-A0: d4e66b47628559b175f1958b4f5267058096dd7f
 - SHA-A1: b2feb0a1986febe2348567a0c6de6ada12b32e6b
 - SHA-A2: 6ef9207a672cceb8aaddc2dccdd9986c33d5366b
+- SHA-A3: 02f6ee2e7aa1dea9a349444a7aa53ba41ab01ca5
+- SHA-A4: 72e13f9583ffe2b89580049045ac094ed3d46dbf
+- SHA-A4 role: the maintainer's re-confirmation commit on the redated head, and the **final head** of `claude/laughing-dirac-e0h2ax` and of PR #59 (`docs(47): re-confirm the v0.11.0 sign-off on the redated head (maintainer)`, parent SHA-A3). **Plan 47-07's text calls the tick commit `SHA-A2` and reads the checks on it; because the redate and the re-confirmation came after the tick, that role now belongs to SHA-A4.** Plan 47-07 reads its required contexts, its `Check publish order` step and its hand-off values (`SHA-A2` in the plan's wording) on `SHA-A4`, not on `6ef9207a`. `6ef9207a` stays the maintainer's first tick and is superseded as the head.
+- SHA-B: 70657919beadbd341a72be2d0107080017a803f0
+- SHA-B role: the merge commit of PR #59 and the commit the annotated tag `v0.11.0` peels to. Equality note: the tag object peels to the merge commit and `GET /pulls/59 .merge_commit_sha` is identical (read 2026-10-26T20:44Z). Its two parents are `df24689c3d1fd52b0e730105c15b22c2c4ad1404` (the frozen `main`, D-02) and SHA-A4 `72e13f9583ffe2b89580049045ac094ed3d46dbf`; plan 47-08's text says `SHA-A2` for that second parent, read as SHA-A4 (the plan-text drift recorded under SHA-A4 role).
 - DATE: 2026-10-26 (stamp date after the maintainer's `redate 2026-10-26` of 2026-10-26T02:27Z; the pre-build decision's `DATE=2026-10-25` stays recorded above and in Findings, append-only)
 - **B-1 pre-condensation measurements (plan 47-02 Task 2, measured at `SHA-PRE-B1`):** root `[Unreleased]` body 156528 bytes; `### Added` 84557 bytes and 57 top-level bullets; `### Changed` 36407 bytes and 44 top-level bullets (a top-level bullet is a column-0 `- ` line with everything nested under it; the subsection byte counts here exclude the heading line, so they sit 10 bytes under the 47-01 table's 84567 and 36419, which include it). Lead paragraph added by Task 2 names the SHA above.
 
@@ -139,6 +144,9 @@ the MIGRATION section 10 freeze check. All rows ran on local HEAD `f72fe6acd6a56
 | 72 | Restamp, docs-only (plan 47-06 second continuation; 2026-10-26T02:31Z): `sed -i 's/^## \[0\.11\.0\] - 2026-10-25$/## [0.11.0] - 2026-10-26/' CHANGELOG.md crates/*/CHANGELOG.md`, then `git diff --numstat`, `git diff --name-only`, `git diff -U0 \| grep '^[+-]'`; committed as `c64dc37d` `chore(release): restamp 0.11.0 changelogs to 2026-10-26 (redate)` (parent `c42e7100`, which sits on SHA-A2 `6ef9207a`) | Before: exactly one `^## \[0\.11\.0\] - 2026-10-25$` in each of the 12 files, and `git grep -n 2026-10-25 -- . ':!.planning' ':!.project'` listed only those 12 heading lines. After: `git diff --numstat` printed `1 1` for each of the 12 paths (`CHANGELOG.md` and `crates/{paladin-battalion,paladin-content,paladin-core,paladin-eval,paladin-herald,paladin-llm,paladin-memory,paladin-notifications,paladin-ports,paladin-storage,paladin-web}/CHANGELOG.md`); `git diff --name-only` listed exactly those 12 and `wc -l` read 12; the changed lines were 12 x `-## [0.11.0] - 2026-10-25` and 12 x `+## [0.11.0] - 2026-10-26`, nothing else. `git show --stat HEAD`: 12 files changed, 12 insertions, 12 deletions; no deletions of files. After the commit `git grep -n 2026-10-25 -- . ':!.planning' ':!.project'` prints nothing. | PASS (docs-only, +1/-1 x 12) |
 | 73 | Re-seal row 7 re-read on the redated head (plan 47-06 second continuation; SHA `c64dc37d` working tree at the restamp, 2026-10-26T02:31Z to 02:32Z; tree outside `.planning/` is the same as the pushed SHA-A3, which adds only a docs commit under `.planning/`): `make check-changelogs`; `make check-gates`; `./scripts/check-release-consistency.sh --tag v0.11.0`; per changelog `grep -c '^## \[Unreleased\]'`, `grep -c '^## \[0\.11\.0\] - 2026-10-26$'`, `grep -c '^## \[0\.11\.0\] - 2026-10-25$'` and `grep -m1 '^## \['`; the three EMPTY-line greps; `./scripts/extract-changelog-section.sh --version 0.11.0 \| wc -c`; the offline `_cor_build_payload` rehearsal of 47-03 Task 2 | `make check-changelogs` exit 0 (`11 publishable crate(s) checked, all have a CHANGELOG.md`). `make check-gates` exit 0, all nine guards OK individually in the order of the Makefile prerequisite list (changelogs, crate names `12 ... allow-list exactly`, advisory register `15 register row(s)`, workflow suppressions, workflow triggers `7 policy-table row(s)`, CodeQL dismissals `6 governed dismissal(s)`, migration allowlist set-equal to the section 9.2 and 10.2 registers, publish order `OK: 12 crate(s)`, dependency allowlist `paladin-core (14) and paladin-ports (12) ... match ADR-0015's measured sets`); no `❌` line. `check-release-consistency.sh --tag v0.11.0` exit 0 (`OK: 12 publishable package(s) checked, all match tag version '0.11.0' with a changelog section for it`); its CI-conclusion clause (D-10) was not checked locally, as before. R7 greps in each of the 12 changelogs: `[Unreleased]` count 0, `## [0.11.0] - 2026-10-26` count 1, `## [0.11.0] - 2026-10-25` count 0, and the first `## [` heading is `## [0.11.0] - 2026-10-26`. EMPTY lines: the lockstep line `No functional change; version bumped in lockstep with the workspace.` is present once each in `paladin-content`, `paladin-memory` and `paladin-notifications`. Release body: `extract-changelog-section.sh --changelog CHANGELOG.md --version 0.11.0 --output <file>` 108926 bytes (limit 110,000), equal to the row-7 figure measured on `d82d67ca` (the extractor emits the section body without its heading line, so the date change does not move the count); `extract-changelog-section.sh --version 0.11.0` to stdout read 108926 bytes both before and after the restamp (identical), and `_cor_build_payload v0.11.0 "Release v0.11.0" <file> false` exited 0 with a payload `.body` length of 108824 (limit 125,000; `jq` `length` counts characters, not bytes, so it sits under the byte count). | PASS: re-seal row 7 holds on the redated head |
 | 74 | PR #59 body check for the stale stamp date (plan 47-06 second continuation; 2026-10-26T02:33Z; read-only): `gh api repos/DF3NDR/paladin-dev-env/pulls/59 --jq .body \| grep -n 2026-10-25` | The stored body is 4316 bytes; `grep -n 2026-10-25` exit 1 (no match), and a case-insensitive search for `2026-10`, `stamp`, `dated` and `date` also matched nothing: the body carries no changelog date at all, so no stale date exists to correct and no body edit is needed for plan 47-07's hand-off. Nothing written. | no stale date in the PR body |
+| 75 | Plan 47-06 final continuation, read-only re-verification of the maintainer's re-confirmation commit SHA-A4 `72e13f9583ffe2b89580049045ac094ed3d46dbf` (2026-10-26T13:42Z to 13:43Z; `git ls-remote origin refs/heads/main refs/heads/claude/laughing-dirac-e0h2ax`, `git ls-remote --tags origin 'refs/tags/v0.11.0*'`, `gh api repos/DF3NDR/paladin-dev-env/pulls/59`, `git log -1 --format=...`, `git diff --numstat`, `git diff --name-only`, `git diff -U0`, `git show <sha>:<audit path>` with `grep -c`; nothing written) | `git ls-remote` prints `72e13f9583ffe2b89580049045ac094ed3d46dbf` for `refs/heads/claude/laughing-dirac-e0h2ax` and `df24689c3d1fd52b0e730105c15b22c2c4ad1404` for `main` (D-02 holds); no `refs/tags/v0.11.0*` on origin (0 lines). `GET /pulls/59`: `head.sha` `72e13f9583ffe2b89580049045ac094ed3d46dbf`, `state` `open`, `mergeable_state` `blocked`, `commits` 1126, `changed_files` 1111, `base.ref` `main`, `title` `release: v0.11.0 — Treasurer Spend Governance`. Commit: author and committer `Am0rfu5 <1178902+Am0rfu5@users.noreply.github.com>` (not this phase's commit identity), authored and committed 2026-10-26T13:37:14Z, subject `docs(47): re-confirm the v0.11.0 sign-off on the redated head (maintainer)`, parent `02f6ee2e7aa1dea9a349444a7aa53ba41ab01ca5` (SHA-A3), and it is the only commit in `SHA-A3..SHA-A4` (`git log --format=... SHA-A3..SHA-A4`). `git diff --numstat SHA-A3 SHA-A4`: `1 1 .planning/phases/47-v0-11-0-crate-release/47-ACCEPTANCE-AUDIT.md`, the only path (`--name-only`). The `-` line is line 67, `- [X] **The \`v0.11.0\` tag may be cut**...`; the `+` line is the same line with `- [x]`; line 67 of SHA-A3 with the marker lower-cased is byte-identical to line 67 of SHA-A4, so the marker case is the whole change. Ticked-box counts read with `git show <sha>:<path> \| grep -c`: `^- \[[xX]\]` 1 at SHA-A3 and 1 at SHA-A4 (unchanged, the box stays ticked); `^- \[x\]` 0 at SHA-A3 and 1 at SHA-A4; `^- \[X\]` 1 at SHA-A3 and 0 at SHA-A4. The prescribed re-confirmation text line (`Sign-off re-confirmed by the maintainer on the redated head ...`) is **not present** at SHA-A4 (`grep -c 'Sign-off re-confirmed'` prints 0). The marker is now the plan's own lowercase `[x]` form, so the plan 47-06 Task 3 lowercase verify would match at SHA-A4. **Local state, as read:** local `HEAD` is still `02f6ee2e7aa1dea9a349444a7aa53ba41ab01ca5` (SHA-A3), one commit behind origin; `git rev-list --count HEAD..SHA-A4` prints 1 and SHA-A3 is an ancestor of SHA-A4, so a fast-forward is possible, but the orchestrator's note that the local branch had been fast-forwarded did not hold at this read. This continuation ran no ref-changing command (no fetch, merge, checkout or reset); the object `72e13f95` was already present locally and `origin/claude/laughing-dirac-e0h2ax` already read it. The working-tree copy of the audit file therefore still carries the SHA-A3 `[X]` line until the branch is fast-forwarded; this continuation did not edit it (the box is the maintainer's, D-00a). | SHA-A4 VERIFIED as the maintainer's one-line, one-file commit; final head = remote tip = PR head; local HEAD NOT advanced |
+| 76 | Maintainer reply and orchestrator ruling on the re-confirmation (plan 47-06 final continuation; no command run to obtain either; SHA-A4 `72e13f9583ffe2b89580049045ac094ed3d46dbf`) | Maintainer reply received by the orchestrator 2026-10-26T13:40Z, quoted by the orchestrator: `reconfirmed 72e13f95…`. The orchestrator's ruling, recorded verbatim in the Findings entry "2026-10-26 — Plan 47-06: the maintainer's re-confirmation commit SHA-A4 (orchestrator ruling)": the commit is accepted as the maintainer's re-confirmation on the redated head. The missing text line is a deviation from the orchestrator-prescribed edit, not from the plan. The maintainer retains a blocking decision at plan 47-07 Task 2 before any merge or tag. | ACCEPTED on orchestrator authority |
+| 77 | SHA-A3 run conclusions, re-read by this continuation (2026-10-26T13:42Z; `gh api "repos/DF3NDR/paladin-dev-env/actions/runs?head_sha=02f6ee2e7aa1dea9a349444a7aa53ba41ab01ca5&per_page=100" --jq ...`, then `gh api repos/DF3NDR/paladin-dev-env/actions/runs/<id>/jobs?per_page=100 --paginate` for the two `ci.yml` runs; read-only) | All nine runs on SHA-A3 are `status` `completed`, `conclusion` `success`: `ci.yml` push 40259674470 and pull_request 40259680069, `codeql.yml` push 40259674498 and pull_request 40259679984, `feature-flags.yml` push 40259674404 and pull_request 40259679964, `Docs` pull_request 40259679968, `pre-commit` push 40259674346 and pull_request 40259679980. The two `ci.yml` runs have 39 jobs each (counted from the paginated jobs API): every job `success` except the by-design skips `End-to-End Tests` and `Publish Dry Run` (both runs) and, on the push run only, `Benchmark Regression Signal (Non-Blocking)` (`success` on the pull_request run). `Coverage`, `API Surface Tracking`, `Consumer-Surface Muster`, `Semver Checks (vs v0.9.0)`, `Unit Tests (stable)`, `License & Dependency Policy` and `MSRV (Rust 1.88)` are `success` in both. This is a record of SHA-A3 only; SHA-A3 is no longer the head, and the checks plan 47-07 must read are those on SHA-A4. | SHA-A3 all green (superseded as head) |
 
 **MIGRATION section 10 freeze answer (D-00n).** Rows 17-18: the public surface is unmoved since `e28e43b5` — the only two source changes are a test and rustdoc, and `API Surface Tracking` concluded `success` on PR #59's head `2e857c6ce7e0d9f37ff5cc74def293d2d0587756`. **MIGRATION section 10 stays frozen at `e28e43b5`**; nothing is put to the maintainer on this point. (Caveat recorded for plan 47-04: the `pull_request` run of the same job had not concluded at the read; the push-run conclusion is the one cited.)
 
@@ -436,6 +444,235 @@ The `ci.yml`, `codeql.yml` and `feature-flags.yml` runs on SHA-A2 had not conclu
 
 **Folded-in record.** The SHA-A1 push record above was left uncommitted by the previous continuation. It is committed here, together with the Provenance `SHA-A1` and `SHA-A2` lines, because the redate means a docs commit lands after the tick regardless and the maintainer's re-confirmation commit becomes the new last commit (D-13 ordering is restored by that commit, not by leaving this record uncommitted).
 
+### Plan 47-06 — push of SHA-A3, the redated head (2026-10-26T02:33Z)
+
+**Authority.** The push is the one write this continuation was authorised to make (the maintainer's `redate 2026-10-26`, Local sweep row 70). Before the push (2026-10-26T02:32:56Z): `git ls-remote origin refs/heads/main refs/heads/claude/laughing-dirac-e0h2ax` read `df24689c3d1fd52b0e730105c15b22c2c4ad1404` for `main` (D-02 unmoved) and `6ef9207a672cceb8aaddc2dccdd9986c33d5366b` (SHA-A2) for the branch, so the push is a plain fast-forward.
+
+**The push, verbatim** (`git push origin claude/laughing-dirac-e0h2ax`, plain, exit 0, 2026-10-26T02:33:17Z to 02:33:19Z):
+
+```
+To https://github.com/DF3NDR/paladin-dev-env
+   6ef9207a..02f6ee2e  claude/laughing-dirac-e0h2ax -> claude/laughing-dirac-e0h2ax
+```
+
+**SHA-A3 ("the redated head") is `02f6ee2e7aa1dea9a349444a7aa53ba41ab01ca5`**, three commits over SHA-A2 (`c42e7100` evidence, `c64dc37d` restamp, `02f6ee2e` row 7 re-read and audit). `git diff --name-only 6ef9207a 02f6ee2e` lists the twelve changelogs and, under `.planning/`, `47-ACCEPTANCE-AUDIT.md` and `47-CI-EVIDENCE.md` only. Read back at 2026-10-26T02:33:35Z: `git ls-remote origin refs/heads/claude/laughing-dirac-e0h2ax` prints `02f6ee2e7aa1dea9a349444a7aa53ba41ab01ca5`; `GET /pulls/59` prints `head.sha` `02f6ee2e7aa1dea9a349444a7aa53ba41ab01ca5`, `state` `open`, `mergeable_state` `blocked`, `commits` 1125, `changed_files` 1111, `title` `release: v0.11.0 — Treasurer Spend Governance`; `main` still `df24689c3d1fd52b0e730105c15b22c2c4ad1404`. Local HEAD equals both.
+
+**Runs created on SHA-A3**, from one read at 2026-10-26T02:33:35Z (all nine present in that single read; not polled, D-00i). Statuses are as read and are not conclusions; `pending` is the status GitHub reported at the read, recorded as read and not interpreted:
+
+| Workflow | Run ID (URL) | Event | Status at read |
+|---|---|---|---|
+| `ci.yml` | [40259674470](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40259674470) | `push` | `pending` |
+| `ci.yml` | [40259680069](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40259680069) | `pull_request` | `pending` |
+| `codeql.yml` | [40259674498](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40259674498) | `push` | `pending` |
+| `codeql.yml` | [40259679984](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40259679984) | `pull_request` | `pending` |
+| `pre-commit` | [40259674346](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40259674346) | `push` | `in_progress` |
+| `pre-commit` | [40259679980](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40259679980) | `pull_request` | `queued` |
+| `feature-flags.yml` | [40259674404](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40259674404) | `push` | `pending` |
+| `feature-flags.yml` | [40259679964](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40259679964) | `pull_request` | `pending` |
+| `Docs` | [40259679968](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40259679968) | `pull_request` | `queued` |
+
+**The SHA-A2 runs, one read 8 seconds later (2026-10-26T02:33:41Z).** Not cancelled yet at the read: `ci.yml` push 40258493932 and pull_request 40258498666, `codeql.yml` push 40258493958 and pull_request 40258498645, and `feature-flags.yml` push 40258493930 and pull_request 40258498663 were all `in_progress`; `pre-commit` push 40258493971 and pull_request 40258498690 and `Docs` pull_request 40258498642 had concluded `success`. This plan did not cancel, re-run or dispatch anything; any later cancellation by the `ci.yml` concurrency group is GitHub's action and is not read here.
+
+No conclusion on SHA-A3 is recorded. The maintainer re-confirms the sign-off after CI is green on SHA-A3; plan 47-07 reads every required context per job on SHA-A3 and on the maintainer's re-confirmation commit before any merge hand-off. This push record and the Provenance `SHA-A3` line are not committed in this plan so that the maintainer's re-confirmation commit is the last commit on the branch (D-13); plan 47-08 commits them.
+
+### Plan 47-06 — SHA-A3 conclusions and the runs on SHA-A4, the final head (2026-10-26T13:42Z)
+
+**SHA-A3 `02f6ee2e7aa1dea9a349444a7aa53ba41ab01ca5`, read once more** (Local sweep row 77). All nine runs concluded `success`:
+
+| Workflow | Run ID (URL) | Event | Status | Conclusion |
+|---|---|---|---|---|
+| `ci.yml` | [40259674470](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40259674470) | `push` | `completed` | `success` |
+| `ci.yml` | [40259680069](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40259680069) | `pull_request` | `completed` | `success` |
+| `codeql.yml` | [40259674498](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40259674498) | `push` | `completed` | `success` |
+| `codeql.yml` | [40259679984](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40259679984) | `pull_request` | `completed` | `success` |
+| `feature-flags.yml` | [40259674404](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40259674404) | `push` | `completed` | `success` |
+| `feature-flags.yml` | [40259679964](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40259679964) | `pull_request` | `completed` | `success` |
+| `Docs` | [40259679968](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40259679968) | `pull_request` | `completed` | `success` |
+| `pre-commit` | [40259674346](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40259674346) | `push` | `completed` | `success` |
+| `pre-commit` | [40259679980](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40259679980) | `pull_request` | `completed` | `success` |
+
+The `ci.yml` jobs on both SHA-A3 runs were read individually (paginated jobs API): every job `success` except `End-to-End Tests` and `Publish Dry Run` (`skipped` on pull requests and pushes alike, by design) and `Benchmark Regression Signal (Non-Blocking)` (`skipped` on the push run, `success` on the pull_request run). The `Coverage` job concluded `success`; its printed `Lines:` figure is still unreadable from this sandbox (job logs sit on a proxy-blocked host) and is still requested from the maintainer.
+
+**SHA-A4 `72e13f9583ffe2b89580049045ac094ed3d46dbf` is the final head** (the maintainer's re-confirmation commit; Provenance `SHA-A4`, Local sweep row 75). Nine runs started on it, from one read at 2026-10-26T13:42:54Z (created 13:37:20Z to 13:37:24Z; not polled, D-00i). Statuses are as read and are not conclusions:
+
+| Workflow | Run ID (URL) | Event | Status at read |
+|---|---|---|---|
+| `ci.yml` | [40332190995](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40332190995) | `push` | `queued` |
+| `ci.yml` | [40332201657](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40332201657) | `pull_request` | `queued` |
+| `codeql.yml` | [40332190540](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40332190540) | `push` | `in_progress` |
+| `codeql.yml` | [40332201694](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40332201694) | `pull_request` | `queued` |
+| `feature-flags.yml` | [40332190592](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40332190592) | `push` | `queued` |
+| `feature-flags.yml` | [40332201653](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40332201653) | `pull_request` | `queued` |
+| `Docs` | [40332201764](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40332201764) | `pull_request` | `in_progress` |
+| `pre-commit` | [40332190830](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40332190830) | `push` | `completed` (conclusion `success` at the read) |
+| `pre-commit` | [40332201801](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40332201801) | `pull_request` | `in_progress` |
+
+Only the `pre-commit` push run had completed at the read. That single `success` is recorded as read and is **not** the proof of record: plan 47-07 reads all nine runs and the 44 required contexts once, after every run has `status: completed`. This continuation committed and pushed nothing, so none of these runs is cancelled by it (a new push on the branch would cancel the in-flight `ci.yml` runs through the concurrency group). The required-context tally for SHA-A4 is not recorded here; the live ruleset `Protect main branch` (id 20868126) still lists 44 required contexts at this read (count only), and plan 47-07 derives the names from the ruleset at its own read.
+
+### Plan 47-07 — every run on SHA-A4 (the final head; plan 47-07's wording is `SHA-A2`) (read 2026-10-26T15:38Z to 15:42Z)
+
+**Substitution, recorded once.** Plan 47-07 calls the tick commit `SHA-A2` ("the true final commit") and its automated verify reads the `- SHA-A2:` line of the resume file against the remote tip. That line holds `6ef9207a672cceb8aaddc2dccdd9986c33d5366b`, the maintainer's first tick, superseded by the redate (SHA-A3 `02f6ee2e`) and by the maintainer's re-confirmation (SHA-A4). Wherever plan 47-07 says `SHA-A2` this subsection reads **SHA-A4 `72e13f9583ffe2b89580049045ac094ed3d46dbf`**, and the verify was run against the `- SHA-A4:` line instead (resume file, orchestrator instruction). Not a defect in the code; a plan-text drift caused by the redate.
+
+**Step 1 re-check (D-02, D-13), all read-only, 2026-10-26T15:40Z.** `main` = `df24689c3d1fd52b0e730105c15b22c2c4ad1404` (`gh api repos/DF3NDR/paladin-dev-env/git/ref/heads/main`; unchanged from the frozen D-02 baseline). The remote branch tip `origin/claude/laughing-dirac-e0h2ax` = `git/ref/heads/claude/laughing-dirac-e0h2ax` = PR #59 `head.sha` = local `HEAD` = SHA-A4 (`git rev-list 72e13f95..HEAD` empty: no stray local commit). PR #59: `state` open, `mergeable` true, `mergeable_state` `unstable`, `merge_commit_sha` `ad5e7f8e3ad2a08fa4b01c1187fb929591326fba` (GitHub's test-merge preview, not a merge; it is not the tag target). `git ls-remote --tags origin 'refs/tags/v0.11.0*'` prints nothing. The audit's box (line 67) reads lowercase `- [x] **The \`v0.11.0\` tag may be cut**` and is untouched by this plan (D-00a); SHA-A4 changes that one line of that one file.
+
+**The nine runs on SHA-A4** (`gh api "repos/DF3NDR/paladin-dev-env/actions/runs?head_sha=72e13f95...&per_page=100"`, one read, not polled, D-00i). Every one `status: completed`, `conclusion: success`; no further run exists on this SHA. Jobs counted from `actions/runs/<id>/jobs?per_page=100&page=<n>`:
+
+| Workflow | Run ID (URL) | Event | Status | Conclusion | Jobs (per-job read) |
+|---|---|---|---|---|---|
+| `ci.yml` | [40332190995](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40332190995) | `push` | `completed` | `success` | 39: 36 `success`, 3 `skipped` (`End-to-End Tests` 121622728358, `Publish Dry Run` 121616712979, `Benchmark Regression Signal (Non-Blocking)` 121604198437) |
+| `ci.yml` | [40332201657](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40332201657) | `pull_request` | `completed` | `success` | 39: 37 `success`, 2 `skipped` (`End-to-End Tests` 121627201918, `Publish Dry Run` 121619119594) |
+| `codeql.yml` | [40332190540](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40332190540) | `push` | `completed` | `success` | 1: `CodeQL Analysis (Rust)` `success` |
+| `codeql.yml` | [40332201694](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40332201694) | `pull_request` | `completed` | `success` | 1: `CodeQL Analysis (Rust)` `success` |
+| `feature-flags.yml` | [40332190592](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40332190592) | `push` | `completed` | `success` | 20, all `success` |
+| `feature-flags.yml` | [40332201653](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40332201653) | `pull_request` | `completed` | `success` | 20, all `success` |
+| `Docs` | [40332201764](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40332201764) | `pull_request` | `completed` | `success` | 2: `Build MDBook` `success`, `Deploy to GitHub Pages` `skipped` (by design off `main`) |
+| `pre-commit` | [40332190830](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40332190830) | `push` | `completed` | `success` | 1: `pre-commit run --all-files` `success` |
+| `pre-commit` | [40332201801](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40332201801) | `pull_request` | `completed` | `success` | 1: `pre-commit run --all-files` `success` |
+
+Both `ci.yml` runs read `run_attempt` 1 (nothing was re-run). The push run's last job completed 2026-10-26T15:04:41Z and the pull_request run's last job 15:38:21Z.
+
+**Required-context tally on SHA-A4 (the live `Protect main branch` ruleset, id 20868126, `enforcement` active, target branch `refs/heads/main`, bypass actors none).** The ruleset's `required_status_checks` rule lists **44 contexts** (`strict_required_status_checks_policy` true; no `integration_id` pinned), the same 44 names as at SHA-A0; the other rules are `deletion`, `non_fast_forward` and `pull_request` (0 approving reviews, stale-review dismissal on push). The check runs on SHA-A4 were paged manually (`commits/72e13f95.../check-runs?per_page=100&page=1` and `page=2`: 100 + 28 = 128, `total_count` 128, 67 distinct names; `--paginate` is refused by this proxy). Each context was matched by name against every check run of that name (each name has two, one per event):
+
+| Result across both events | Count | Contexts |
+|---|---|---|
+| `success` (every check run of that name) | **43** | all 43 others, individually named below |
+| `skipped` (every check run of that name) | **1** | `End-to-End Tests` (121622728358 push, 121627201918 pull_request; by design off `main`, a skipped required context is satisfied) |
+| `failure` / `cancelled` / `timed_out` | **0** | none |
+| absent (no check run of that name) | **0** | none |
+
+The 43 `success`, by source workflow: `ci.yml` jobs (24 `success`; the 25th `ci.yml` context is the skipped `End-to-End Tests` above): `API Surface Tracking`, `Benchmark Compile Check`, `CLI Snapshot Tests`, `Code Quality`, `Coverage`, `Crate Isolation (paladin-ai)`, `(paladin-ai-core)`, `(paladin-battalion)`, `(paladin-content)`, `(paladin-llm)`, `(paladin-memory)`, `(paladin-notifications)`, `(paladin-ports)`, `(paladin-storage)`, `(paladin-web)`, `Docker Integration Tests`, `Example Muster (Feature Matrix)`, `Integration Tests`, `License & Dependency Policy`, `OSV Scanner`, `Security Audit`, `Unit Tests (beta)`, `Unit Tests (stable)`, `Workflow Lint`; `feature-flags.yml` jobs (17): the 15 `Build & Test (<feature>)` contexts `all-features`, `cli`, `content-processing`, `default`, `full`, `llm-all`, `llm-anthropic`, `llm-deepseek`, `llm-openai`, `no-default-features`, `notifications`, `redis-queue`, `s3-storage`, `vision`, `web-server`, plus `CLI Isolation (library without cli feature)` and `Feature Matrix Summary`; `Docs`: `Build MDBook`; `pre-commit`: `pre-commit run --all-files`. 24 + 17 + 1 + 1 = 43 `success`, plus the 1 `skipped`, = 44.
+
+**`Check publish order` step.** Job `License & Dependency Policy`: push run job 121604195906 and pull_request run job 121604230804, step 11 `Check publish order` `success` in both (steps 9, 10, 12 and 13 `Check workflow trigger policy`, `Check CodeQL dismissal register`, `Check core/ports dependency allowlist (ADR-0015)`, `Run shell-guard regression tests` also `success`).
+
+**Other jobs worth naming (not among the 44), all `success` on both events unless stated:** `Semver Checks (vs v0.9.0)`, `MSRV (Rust 1.88)`, `Consumer-Surface Muster`, `E2E Platform API (PRD 06 acceptance-1 lifecycle + SHIP-02 boot proof)`, `Docker Build`, `Kubernetes Smoke Test`, `Build & Test (dev-ui)`, `OTel Feature (otel)`, `LLM Registry Unit Tests (llm-all)`, `Generated SDK Clients (Python + TypeScript) smoke`, the live-server Redis, Postgres and Ollama suites, `Socket Security: Project Report` and `Socket Security: Pull Request Alerts` (app `socket-security`), `osv-scanner` (app `github-advanced-security`, "No new alerts in code changed by this pull request"). `Publish Dry Run` is `skipped` on both events and `Benchmark Regression Signal (Non-Blocking)` `skipped` on the push run, `success` on the pull_request run: neither is required; both skips are by design. **`Publish Dry Run` and `End-to-End Tests` have therefore still never executed on this tree**; they run first on the merge commit (RESEARCH Pitfall 8 / A-6).
+
+**`Coverage` job.** PR run job 121604231253 `success` (completed 14:10:42Z), push run job 121604196143 `success` (completed 14:07:49Z); steps `Measure coverage`, `Coverage summary`, `Upload coverage summary`, `Upload coverage to Codecov` all `success` in both. `Measure coverage` delegates to `scripts/coverage.sh`, which passes `--fail-under-lines "${COVERAGE_FLOOR:-82}"` to `cargo llvm-cov`; the step's `success` is therefore a gate conclusion that the 82 percent floor was not breached, and it is recorded as that and nothing more. **The printed `Lines:` figure was not read: job logs and the `coverage-summary` artifact sit on the blob host this sandbox cannot reach. No number is recorded. It remains a maintainer-supplied item, still outstanding.**
+
+**Why `mergeable_state` reads `unstable` and not `blocked`.** GitHub's `unstable` means a non-passing check exists that does not block the merge; `blocked` would mean a required context is missing or failing, and the tally above shows none. The only non-success, non-skipped check run on SHA-A4 is the **`CodeQL`** results check (app `github-advanced-security`, check run 121611604849, `failure`, started 13:51:34Z, completed 13:51:39Z, title "24 new alerts including 24 high severity security vulnerabilities"). It is not among the 44, is not a ruleset rule here (the ruleset has no `code_scanning` rule), and CodeQL is advisory-only in this repository (`.github/instructions/security.instructions.md`). It is the same check, with the same title and count, recorded at SHA-A0 (check run 121293439567; Findings entry of 2026-10-25) and on the earlier PR head `2e857c6c`, so it predates this phase's bump; nothing under `src/` or `crates/*/src/` changed between the bump and SHA-R. The combined commit status API returns `state` `pending` with `statuses` empty (`total_count` 0): no legacy statuses exist, so it contributes nothing. The code-scanning alerts endpoint answered 403 `Resource not accessible by integration` for this token, so the 24 alerts were not re-listed here; the previously recorded annotations (`Cleartext logging of sensitive information`) stand, untriaged, owner the maintainer.
+
+**Superseded runs (not red).** The six `ci.yml`, `codeql.yml` and `feature-flags.yml` runs on SHA-A2 `6ef9207a` (push 40258493932, 40258493958, 40258493930 and pull_request 40258498666, 40258498645, 40258498663) read `cancelled`, cancelled by the concurrency group when the SHA-A3 push landed; that is a superseded head, not a failure. The three `pre-commit` and `Docs` runs on SHA-A2 concluded `success`. All nine runs on SHA-A1 concluded `success`, all nine on SHA-A3 `success` (Local sweep row 77). None of those is the proof for the merge; the nine above are.
+
+**Not done here, by design.** Nothing merged, tagged, dispatched, re-run, cancelled, commented on, labelled or PATCHed; nothing committed or pushed (SHA-A4 stays the last commit on the branch, D-00n); no watcher (D-00i).
+
+---
+
+### Plan 47-08 — the tag sits on the merge commit (read 2026-10-26T20:44Z, `chore/47-close` cut from it)
+
+**Resume condition re-read once (both parts hold, none polled, D-00i).** (a) `git ls-remote --tags origin 'refs/tags/v0.11.0*'` prints `77a37c1846e5ab6716a51b78fb39541bccd1a7ae refs/tags/v0.11.0` and `70657919beadbd341a72be2d0107080017a803f0 refs/tags/v0.11.0^{}`; `git merge-base --is-ancestor "$(git rev-parse 'v0.11.0^{commit}')" origin/main` exits 0. (b) `release.yml` run 40396108246 is `completed`/`success`, `run_started_at` 2026-10-26T20:29:33Z, `updated_at` 20:42:21Z.
+
+**Equality proof (E-1; containment alone is rejected).**
+
+| Fact | Value | Source |
+|---|---|---|
+| tag object type | `tag` (annotated, not lightweight) | `git cat-file -t v0.11.0` |
+| tag object SHA | `77a37c1846e5ab6716a51b78fb39541bccd1a7ae` | `git rev-parse v0.11.0`; equals the second token of the maintainer's reply |
+| tagger | `Am0rfu5 <1178902+Am0rfu5@users.noreply.github.com>` | `git cat-file -p v0.11.0` |
+| tagger date | `1793046542 -0400` = **2026-10-26T20:29:02Z** (16:29:02 local) | same |
+| tag message | `v0.11.0` | same |
+| peeled commit (`TC`) | `70657919beadbd341a72be2d0107080017a803f0` | `git rev-parse 'v0.11.0^{commit}'` |
+| `origin/main` | `70657919beadbd341a72be2d0107080017a803f0` | `git rev-parse origin/main` and `GET git/ref/heads/main` |
+| PR #59 `merged` / `merged_at` | `true` / `2026-10-26T17:27:08Z` | `GET /pulls/59` |
+| PR #59 `merge_commit_sha` | `70657919beadbd341a72be2d0107080017a803f0` | `GET /pulls/59` |
+| `TC == merge_commit_sha == origin/main` | **identical** | byte comparison of the three values above |
+| parents of `TC` | exactly two: `df24689c3d1fd52b0e730105c15b22c2c4ad1404` (old `main`, the D-02 base) and `72e13f9583ffe2b89580049045ac094ed3d46dbf` (SHA-A4, PR #59's final head) | `git rev-list --parents -n 1 TC` (`wc -w` = 3) |
+| `TC` tree vs SHA-A4 tree | both `885e4ac570b1810eb5f96ded84853adfa297ec7b` | `git rev-parse 70657919^{tree} 72e13f95^{tree}` |
+
+The maintainer's Task 3 reply named the first token `770657919beadbd341a72be2d0107080017a803f0`, which has 41 characters (a stray leading `7`); it is not used. Every SHA in this record is resolved from the tag itself. See Findings, "Plan 47-07: the maintainer's Task 3 reply".
+
+**Tagger date against `ci.yml` and against DATE (D-00c, D-00n, as fact, no edit).** The `ci.yml` push run on `TC` (40368801098) started 2026-10-26T17:27:32Z and its `updated_at` is 2026-10-26T18:35:02Z (last job `Kubernetes Smoke Test` completed 18:34:47Z), conclusion `success`; the tag was created at 20:29:02Z, **1 h 54 min after `ci.yml` concluded**, so D-00c's order (tag only after `ci.yml` is `success` on the merge commit) holds. The tag date `2026-10-26` (UTC; 16:29:02 at the tagger's -0400 offset) **equals DATE**; the twelve `## [0.11.0] - 2026-10-26` headings in the tagged tree (`git show TC:<changelog>`: the root `CHANGELOG.md` and the eleven `crates/*/CHANGELOG.md`, 12 files) read the same date. No mismatch; nothing edited.
+
+**Stray-commit reconciliation (D-00l).** `git rev-list --count 72e13f95..refs/heads/claude/laughing-dirac-e0h2ax` = **0**: the local release branch is exactly SHA-A4, no stray commit, nothing to re-apply. The remote ref `refs/heads/claude/laughing-dirac-e0h2ax` **no longer exists** on GitHub (`GET git/ref/heads/claude/laughing-dirac-e0h2ax` answers 404; `git ls-remote` prints nothing): it was deleted after the merge (the maintainer's repository setting), so the "still points at SHA-A4" check is vacuous and recorded as such. The local remote-tracking ref `refs/remotes/origin/claude/laughing-dirac-e0h2ax` is a stale entry (no `fetch --prune` was run) still reading `72e13f95`; PR #59 `head.sha` still reads `72e13f95`, and the tagged commit keeps SHA-A4 as its PR-side parent, so what was released is exactly what was reviewed.
+
+**Branch.** `chore/47-close` was cut from `70657919beadbd341a72be2d0107080017a803f0` with `git checkout -b`; the six uncommitted entries (`.planning/ROADMAP.md`, `.planning/STATE.md`, `.continue-here.md`, `47-CI-EVIDENCE.md`, `47-06-SUMMARY.md` and the coverage todo) carried across without refusal, and `git diff --stat` was byte-identical before and after. No stash, reset or checkout of a file was used. They were committed in three groups (plan 47-06 close-out `a0b3fcf3`, plan 47-07 record `37708dbb`, the todo `fd70e888`), then this plan's own commits. Nothing was pushed (plan 47-10 pushes and opens the docs-only PR).
+
+---
+
+### Plan 47-08 — the post-merge runs on SHA-B and the `release.yml` run for the tag (read 2026-10-26T20:44Z to 20:50Z, once, not polled)
+
+**Runs on the merge commit `70657919` (SHA-B)** (`gh api "repos/DF3NDR/paladin-dev-env/actions/runs?head_sha=70657919...&per_page=100"`). Six runs, every one `completed`/`success`, `run_attempt` 1 (nothing re-run); the five on `main` are the merge's own push, the sixth is the tag's:
+
+| Workflow | Run ID (URL) | Event | Branch | Started | Concluded | Conclusion |
+|---|---|---|---|---|---|---|
+| `ci.yml` | [40368801098](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40368801098) | `push` | `main` | 2026-10-26T17:27:32Z | 2026-10-26T18:35:02Z | `success` |
+| `codeql.yml` | [40368801085](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40368801085) | `push` | `main` | 17:27:32Z | 17:45:14Z | `success` (1 job, `CodeQL Analysis (Rust)` 121733635951) |
+| `feature-flags.yml` | [40368801056](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40368801056) | `push` | `main` | 17:27:32Z | 17:46:05Z | `success` (20 jobs, all `success`) |
+| `Docs` | [40368801025](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40368801025) | `push` | `main` | 17:27:32Z | 17:34:39Z | `success` (`Build MDBook` 121733635547 and `Deploy to GitHub Pages` 121736355264, both `success`; the deploy runs on `main`) |
+| `pre-commit` | [40368801102](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40368801102) | `push` | `main` | 17:27:32Z | 17:33:37Z | `success` (1 job) |
+| `Release` (`release.yml`) | [40396108246](https://github.com/DF3NDR/paladin-dev-env/actions/runs/40396108246) | `push` | `v0.11.0` | 2026-10-26T20:29:33Z | 2026-10-26T20:42:21Z | `success` |
+
+**`ci.yml` on SHA-B, per job (run 40368801098; 39 jobs: 38 `success`, 1 `skipped`).** `End-to-End Tests` (121746301100, `success`, 17:50:41Z to 18:02:58Z; step 6 `Run end-to-end tests` `success`) and `Publish Dry Run` (121737571718, `success`, 17:38:17Z to 17:42:09Z; step 5 `Dry run publish workspace` `success`) **executed for the first time on this tree and passed**, which closes RESEARCH Pitfall 8 / A-6: both had been `skipped` on every run off `main` until now. The one skip is `Benchmark Regression Signal (Non-Blocking)` (121733695157, `skipped`; not required, skipped on `push` by design). The last job to finish was `Kubernetes Smoke Test` (121766348293, 18:34:47Z). Every job:
+
+| Job | Job id | Conclusion |
+|---|---|---|
+| API Surface Tracking | 121733645568 | success |
+| Benchmark Compile Check | 121733646031 | success |
+| Benchmark Regression Signal (Non-Blocking) | 121733695157 | skipped |
+| CLI Snapshot Tests | 121733645422 | success |
+| Code Quality | 121733645233 | success |
+| Consumer-Surface Muster | 121733645696 | success |
+| Coverage | 121733645613 | success |
+| Crate Isolation (paladin-ai) | 121733645583 | success |
+| Crate Isolation (paladin-ai-core) | 121733645778 | success |
+| Crate Isolation (paladin-battalion) | 121733645471 | success |
+| Crate Isolation (paladin-content) | 121733645604 | success |
+| Crate Isolation (paladin-llm) | 121733645603 | success |
+| Crate Isolation (paladin-memory) | 121733645673 | success |
+| Crate Isolation (paladin-notifications) | 121733645663 | success |
+| Crate Isolation (paladin-ports) | 121733645476 | success |
+| Crate Isolation (paladin-storage) | 121733645652 | success |
+| Crate Isolation (paladin-web) | 121733645749 | success |
+| Docker Build | 121737571565 | success |
+| Docker Integration Tests | 121733645475 | success |
+| E2E Platform API (PRD 06 acceptance-1 lifecycle + SHIP-02 boot proof) | 121733645598 | success |
+| End-to-End Tests | 121746301100 | success |
+| Example Muster (Feature Matrix) | 121736863580 | success |
+| Generated SDK Clients (Python + TypeScript) smoke | 121733645764 | success |
+| Integration Tests | 121733645160 | success |
+| Kubernetes Smoke Test | 121766348293 | success |
+| License & Dependency Policy | 121733645712 | success |
+| MSRV (Rust 1.88) | 121733645700 | success |
+| OSV Scanner | 121733645221 | success |
+| Ollama Integration Tests (live server) | 121733645265 | success |
+| Postgres Storage Contract Suites (live server) | 121733644743 | success |
+| Publish Dry Run | 121737571718 | success |
+| Redis Cadence Contract Suite (live server) | 121733645083 | success |
+| Redis Node Cache Contract Suite (live server) | 121733645827 | success |
+| Redis Run Queue Contract Suite (live server) | 121733645694 | success |
+| Security Audit | 121733646375 | success |
+| Semver Checks (vs v0.9.0) | 121733645280 | success |
+| Unit Tests (beta) | 121733645595 | success |
+| Unit Tests (stable) | 121733646007 | success |
+| Workflow Lint | 121733645340 | success |
+
+**`Check publish order` step (A-SC3).** Job `License & Dependency Policy` (121733645712, `success`), step 11 `Check publish order` `success` (steps 5-10, 12 and 13 `Check per-crate changelogs`, `Check crates.io package names`, `Check advisory exception register`, `Check workflow files for inline advisory suppressions`, `Check workflow trigger policy`, `Check CodeQL dismissal register`, `Check core/ports dependency allowlist (ADR-0015)`, `Run shell-guard regression tests` also `success`; step 16 `Run cargo-deny check` `success`). **`release.yml` has no separate publish-order step; its `Pre-Publish Consistency Gate` requires this `ci.yml` run to have concluded `success` on the tagged commit**, and it did (`success`, below), so the publish-order gate is green on the release path through `ci.yml` and through the `Publish to crates.io` job's own `success`.
+
+**`release.yml` run 40396108246, per job.** Event `push`, `head_branch` `v0.11.0`, `head_sha` `70657919beadbd341a72be2d0107080017a803f0` (= SHA-B), actor and triggering actor `Am0rfu5`, `run_number` 20, `run_attempt` 1, `status` `completed`, overall conclusion `success` (jobs as read from `actions/runs/40396108246/jobs?per_page=100`; twelve jobs, the four `Build Binaries` matrix legs counted separately):
+
+| Job | Job id | Conclusion |
+|---|---|---|
+| Verify Tag From Main | 121829473092 | success |
+| Test Suite | 121829553151 | success |
+| Create Release | 121829552871 | success |
+| Pre-Publish Consistency Gate | 121829552774 | success |
+| Publish to crates.io | 121833090264 | success |
+| Finalize Release Body | 121835144307 | success |
+| Build Binaries (macos-latest, aarch64-apple-darwin, paladin-macos-arm64) | 121829671824 | success |
+| Build Binaries (ubuntu-latest, x86_64-unknown-linux-gnu, paladin-linux-amd64) | 121829671905 | success |
+| Build Binaries (macos-latest, x86_64-apple-darwin, paladin-macos-amd64) | 121829672121 | success |
+| Build Binaries (ubuntu-latest, aarch64-unknown-linux-gnu, paladin-linux-arm64) | 121829672160 | success |
+| Build and Push Docker Images | 121829671721 | success |
+| Generate SBOM | 121829671718 | success |
+
+Job graph as run (`.github/workflows/release.yml`): `Verify Tag From Main` first (20:29:36Z to 20:29:43Z; steps `Resolve release commit` and `Ensure release commit is contained in main` `success`); `Test Suite`, `Create Release` and `Pre-Publish Consistency Gate` need it (the gate's step 6 `Run pre-publish consistency gate` `success`, 20:29:47Z to 20:30:34Z); `Build and Push Docker Images`, `Build Binaries` and `Generate SBOM` need `Create Release`; `Finalize Release Body` needs `Create Release`, the Docker job, the binaries and the SBOM (20:40:30Z to 20:40:43Z); `Publish to crates.io` needs `Test Suite`, `Create Release` and `Pre-Publish Consistency Gate` (20:36:34Z to 20:42:20Z).
+
+**The `Publish to crates.io` job's conclusion, on its own: `success`** (job 121833090264, `completed_at` 2026-10-26T20:42:20Z; steps `Determine publish mode`, `Authenticate with crates.io` and `Publish crates in dependency order` all `success`, the last 20:36:55Z to 20:42:16Z). **The run's overall `success` is not publish health;** the job's conclusion is recorded separately, and neither is the proof of publication: that is the registry table (Registry verification, "Post-publish").
+
+**Publish outcome table (E-3).** `GET actions/jobs/121833090264/logs` answered `Forbidden` (the redirect to `productionresultssa10.blob.core.windows.net` is denied by this sandbox's egress policy, as for every earlier job log). **The per-crate `| Crate | Outcome |` table (`published-now` / `already-at-this-version`) is therefore unreadable here and is not transcribed.** The per-crate state comes from the registry (Registry verification, "Post-publish"); as a read-only cross-check, the crates.io `created_at` of each `0.11.0` version, taken in time order, is `paladin-ai-core`, `paladin-ports`, `paladin-herald`, `paladin-battalion`, `paladin-llm`, `paladin-memory`, `paladin-web`, `paladin-notifications`, `paladin-content`, `paladin-storage`, `paladin-eval`, `paladin-ai`, which matches the `CRATES` array of `scripts/publish-crates.sh` exactly (a derived order, labelled as such, not the job's emitted table).
+
+**GitHub Release object** (`GET releases/tags/v0.11.0`; read only, never edited): `id` 424734632, `name` `Release v0.11.0`, `tag_name` `v0.11.0`, `target_commitish` `main`, `draft` false, `prerelease` false, `published_at` 2026-10-26T20:29:52Z, **body length 109810 characters (at most 125,000: within the cap)**, the artifact marker `<!-- paladin:release-artifacts -->` is **present**, 10 assets attached. `Create Release` and `Finalize Release Body` are both `success`. This closes B-1 at run level: the condensed body (108926 bytes at the re-seal) fit the payload builder and the body carries the marker. No `gh release edit` was run; a wrong body would have been the maintainer's to correct.
+
+**Not done here, by design.** Nothing re-run, re-dispatched, cancelled, published, yanked, merged, tagged or edited; no GitHub write of any kind; no watcher (D-00i); the job log was requested once and not retried.
+
 ---
 
 ### CI-evidence-only entries (D-12)
@@ -508,6 +745,76 @@ every one is `ABSENT` at `0.11.0`. The formal table below is filled by plan 47-0
 
 | Crate | `vers` | `cksum` | `yanked` |
 |---|---|---|---|
+| paladin-ai | `0.11.0` | `e1c7bc99342fb8bc7597ae1bc1366141315a8ce062208fc14f00d74bc4218b9c` | `false` |
+| paladin-ai-core | `0.11.0` | `614ee6291ef3694a12535ced30b370f37ebaed232272d34daa2b810a67a8b3de` | `false` |
+| paladin-battalion | `0.11.0` | `6945de6df7cc5e204ecde14cb05a02f554674dd54371fb25b38e3e4447e9042c` | `false` |
+| paladin-content | `0.11.0` | `70048d0a412b3cb19ceb091554c49dc555a6277bac081dea86974b126620d38a` | `false` |
+| paladin-eval | `0.11.0` | `e82010890ec10d7ac2e025b834fbe9fdf62d7ceddb4e94dd1dd24348493f80f3` | `false` |
+| paladin-herald | `0.11.0` | `f63023ace1131a9856091c218951009a201161a041fea33c7653646fcd4cbbbb` | `false` |
+| paladin-llm | `0.11.0` | `5c720645921585c64463acfe3d153408135dd214170f4e7cdb3668d245c4411c` | `false` |
+| paladin-memory | `0.11.0` | `2093703df30bc6a1d4a4a263309ff8f50466cc495707f558e19d201b06b215c4` | `false` |
+| paladin-notifications | `0.11.0` | `72ba11e5af52cc2c74c730d086953301ca64096daa4bc4f7c13d36c88c25831d` | `false` |
+| paladin-ports | `0.11.0` | `dbc5f2f9303c4640cae0b20033916f77830cca9f9dbd147de7965b185f20ca4a` | `false` |
+| paladin-storage | `0.11.0` | `c011653d85f0aa2d54629b403a12f173d701cd9b0924eacbc62673ea18f3eecc` | `false` |
+| paladin-web | `0.11.0` | `84b9c8f2efaa059056d728dd1a55d1f6bd3a87126faf4ba0b876bf5c4e33f1a9` | `false` |
+
+Filled by plan 47-08 on 2026-10-26T20:47Z from the live sparse index; the derivation, assertions and Trusted Publishing proof are in "Post-publish verification (plan 47-08)" below.
+
+### Pre-tag guard (plan 47-07, 2026-10-26T15:40Z): `V=0.11.0`
+
+Immediately before the hand-off (E-1). Same read-only sparse-index probe as the baseline, one `GET` per crate over the publishable set derived from `cargo metadata --no-deps` (13 workspace members; `paladin-doc-examples` carries `publish = []` and is excluded, leaving the same 12). The only header sent is the mandatory `User-Agent` (`paladin-release-preflight (am0rfu5@protonmail.com; read-only sparse-index probe, phase 47)`, D-00h); no credential of any kind (D-00g). `index.crates.io` was reachable through the agent proxy (HTTP 200 for all twelve, no denial). **12 of 12 `ABSENT` at `0.11.0`**; the highest published version of every crate is `0.10.1`:
+
+| Crate | `0.11.0` | Highest non-yanked version in the index |
+|---|---|---|
+| paladin-ai | `ABSENT` | `0.10.1` |
+| paladin-ai-core | `ABSENT` | `0.10.1` (`0.10.0` yanked) |
+| paladin-battalion | `ABSENT` | `0.10.1` |
+| paladin-content | `ABSENT` | `0.10.1` |
+| paladin-eval | `ABSENT` | `0.10.1` |
+| paladin-herald | `ABSENT` | `0.10.1` (`0.10.0` yanked) |
+| paladin-llm | `ABSENT` | `0.10.1` |
+| paladin-memory | `ABSENT` | `0.10.1` |
+| paladin-notifications | `ABSENT` | `0.10.1` |
+| paladin-ports | `ABSENT` | `0.10.1` (`0.10.0` yanked) |
+| paladin-storage | `ABSENT` | `0.10.1` |
+| paladin-web | `ABSENT` | `0.10.1` |
+
+`git ls-remote --tags origin 'refs/tags/v0.11.0*'` printed nothing (exit 0): no `v0.11.0`, release-candidate or shadow tag exists on the remote. The version is not already taken. The formal table above remains for plan 47-08, after the publish run.
+
+---
+
+### Post-publish verification (plan 47-08, 2026-10-26T20:47Z): `V=0.11.0`
+
+**Derived-count block.** Derived on `chore/47-close` (the tagged tree plus `.planning/` only): `cargo metadata --format-version 1 --no-deps --offline | jq -r '.packages[] | select(.publish == null) | .name' | LC_ALL=C sort`. 13 workspace members; `paladin-doc-examples` carries `publish = []` and is excluded. **N = 12**:
+
+`paladin-ai`, `paladin-ai-core`, `paladin-battalion`, `paladin-content`, `paladin-eval`, `paladin-herald`, `paladin-llm`, `paladin-memory`, `paladin-notifications`, `paladin-ports`, `paladin-storage`, `paladin-web`.
+
+(`paladin-ai-core` and `paladin-web` both read `0.11.0` in `cargo metadata`.) The same twelve names as the pre-tag baseline and the pre-tag guard, and the same twelve as the `CRATES` array of `scripts/publish-crates.sh` (a different order: the array is the publish order, the table is sorted).
+
+**The probe.** One `GET https://index.crates.io/<path>` per crate (`pa/la/<crate>` for all twelve), HTTP 200 for all twelve, the only header the mandatory `User-Agent: paladin-release-verify (github.com/DF3NDR/paladin-dev-env)` (D-00h); no credential, no `-L`, no token request (D-00g, T-47-38). The sparse-index line whose `vers` is `0.11.0` is read for `cksum` and `yanked`. The formal table above is the result, sorted `LC_ALL=C`.
+
+**Assertions.** Rows in the formal table = **12 = N**; **N > 0**; every row has `vers` = `0.11.0`, `yanked` = `false` and a 64-hex `cksum`; **no row is `ABSENT`**; exactly one `0.11.0` line per crate (no duplicate); no `0.11.0` line is yanked. Read between 2026-10-26T20:47:01Z and 20:47:05Z. **Elapsed since the publish job's `completed_at` (2026-10-26T20:42:20Z): 4 min 41 s** at the first read. The workflow log was not the proof (it is unreadable here, and D-00h forbids it as proof): the registry rows are.
+
+**Trusted Publishing proof (D-00f, D-00g).** One `GET https://crates.io/api/v1/crates/<crate>/0.11.0` per crate (HTTP 200 for all twelve, `User-Agent` only), `.version.trustpub_data` and `.version.yanked`. Every crate names `provider` `github`, **`repository` `DF3NDR/paladin-dev-env`**, `run_id` `40396108246` (the `release.yml` run for the tag) and `sha` `70657919beadbd341a72be2d0107080017a803f0` (SHA-B); `published_by` is `null` for every version (no user token published them) and `yanked` is `false` for every version. The `created_at` column below is the registry's own upload time.
+
+| Crate | `trustpub_data.provider` | `trustpub_data.repository` | `trustpub_data.run_id` | `created_at` |
+|---|---|---|---|---|
+| paladin-ai | `github` | `DF3NDR/paladin-dev-env` | `40396108246` | `2026-10-26T20:42:14.126269Z` |
+| paladin-ai-core | `github` | `DF3NDR/paladin-dev-env` | `40396108246` | `2026-10-26T20:37:41.120667Z` |
+| paladin-battalion | `github` | `DF3NDR/paladin-dev-env` | `40396108246` | `2026-10-26T20:38:16.685855Z` |
+| paladin-content | `github` | `DF3NDR/paladin-dev-env` | `40396108246` | `2026-10-26T20:39:38.747958Z` |
+| paladin-eval | `github` | `DF3NDR/paladin-dev-env` | `40396108246` | `2026-10-26T20:40:33.372806Z` |
+| paladin-herald | `github` | `DF3NDR/paladin-dev-env` | `40396108246` | `2026-10-26T20:37:56.377252Z` |
+| paladin-llm | `github` | `DF3NDR/paladin-dev-env` | `40396108246` | `2026-10-26T20:38:38.912132Z` |
+| paladin-memory | `github` | `DF3NDR/paladin-dev-env` | `40396108246` | `2026-10-26T20:38:47.098177Z` |
+| paladin-notifications | `github` | `DF3NDR/paladin-dev-env` | `40396108246` | `2026-10-26T20:39:22.778683Z` |
+| paladin-ports | `github` | `DF3NDR/paladin-dev-env` | `40396108246` | `2026-10-26T20:37:53.161967Z` |
+| paladin-storage | `github` | `DF3NDR/paladin-dev-env` | `40396108246` | `2026-10-26T20:39:49.735077Z` |
+| paladin-web | `github` | `DF3NDR/paladin-dev-env` | `40396108246` | `2026-10-26T20:39:20.084327Z` |
+
+The twelve uploads lie between 20:37:41Z and 20:42:14Z, inside the publish job's step window (20:36:55Z to 20:42:16Z), in the order of the `CRATES` array. Each version was published by the release run for the tag, on the tagged commit, through Trusted Publishing: the registry itself records the run id and SHA, which the workflow log could only have claimed.
+
+**Verdict.** SHIP-07's registry leg holds: every publishable crate resolves on the sparse index at `0.11.0`, unyanked, with the checksum recorded above. No row failed, so no D-18 read-only diagnosis applies. The independent live re-read at verify time (the Task 3 automated check, 2026-10-26T20:50Z, three minutes after the first read) found 12 of 12 derived crates with `vers == "0.11.0"` and `yanked == false`, and 12 table rows matching the row pattern.
 
 ---
 
@@ -854,3 +1161,120 @@ This is option 1 of the row-6 checkpoint, gated. Effect, exactly as decided:
 - **Row 7 re-read:** the nine `check-gates` guards, `check-changelogs`, `check-release-consistency.sh --tag v0.11.0`, the R7 greps, the EMPTY lines and the release-body size all hold on the redated tree (Local sweep row 73); the body is still 108926 bytes. The audit's row 7 SHA and result cells and its head-SHA paragraph were updated for this (the box line was not touched).
 - **PR #59 body:** carries no changelog date (Local sweep row 74); nothing to correct, nothing PATCHed (not authorised in this continuation).
 - **Ordering consequence, owner: the maintainer, then plan 47-07.** The tick (SHA-A2) predates the redate, so the commits after it are `c42e7100` (evidence), `c64dc37d` (restamp) and the audit/evidence commit that follows. The maintainer's one-line re-confirmation under the box, after CI is green on the redated head, makes the maintainer's commit the last commit again (D-13). Plan 47-07 verifies that commit; this plan writes no SUMMARY until then.
+
+### 2026-10-26 — Plan 47-06: the maintainer's re-confirmation commit SHA-A4 (orchestrator ruling)
+
+- **What was read (Local sweep row 75).** SHA-A4 `72e13f9583ffe2b89580049045ac094ed3d46dbf` is the remote tip of `claude/laughing-dirac-e0h2ax`, PR #59's `head.sha` and the child of SHA-A3. It is authored and committed by `Am0rfu5 <1178902+Am0rfu5@users.noreply.github.com>` at 2026-10-26T13:37:14Z, subject `docs(47): re-confirm the v0.11.0 sign-off on the redated head (maintainer)`. It changes one line of one file: line 67 of `47-ACCEPTANCE-AUDIT.md`, the sign-off box, from `- [X] **The \`v0.11.0\` tag may be cut**...` to `- [x] **The \`v0.11.0\` tag may be cut**...`; nothing else on the line or in the file. The ticked count (`^- \[[xX]\]`) is 1 at SHA-A3 and 1 at SHA-A4. `main` is `df24689c3d1fd52b0e730105c15b22c2c4ad1404` (D-02 holds); no `v0.11.0*` tag on origin.
+- **Deviation, recorded as such.** The orchestrator prescribed that the re-confirmation add the text line `Sign-off re-confirmed by the maintainer on the redated head ...`. That line is **not present** at SHA-A4 (`grep -c` prints 0). The maintainer's commit instead normalised the marker to the plan's original lowercase `[x]` form, with the commit subject stating the re-confirmation. The deviation is from the orchestrator-prescribed edit, not from plan 47-06; the re-confirmation step itself was orchestrator-prescribed to restore the D-13 ordering after the tick preceded the redate.
+- **Orchestrator ruling, verbatim** (authority: the orchestrator, on the maintainer's `reconfirmed 72e13f95…` reply received 2026-10-26T13:40Z): "the commit is accepted as the maintainer's re-confirmation on the redated head. Grounds: maintainer-authored, last commit on the branch and PR #59's head, parent is SHA-A3, one line of one file, that line is the sign-off box and it remains ticked, the commit subject states the re-confirmation, and the marker now matches the plan's original `[x]` form. The missing text line is a deviation from the orchestrator-prescribed edit, not from the plan (the re-confirmation step itself was orchestrator-prescribed to restore D-13 ordering after the tick preceded the redate). The maintainer retains a blocking decision at plan 47-07 Task 2 before any merge or tag."
+- **Role change for plan 47-07.** SHA-A4 is the final head; the checks plan 47-07 reads are the checks on SHA-A4. Everywhere plan 47-07 says `SHA-A2` ("the tick commit, the true final commit"), read `SHA-A4`. The lineage is SHA-H `c9456846`, SHA-R `d82d67ca`, SHA-A0 `d4e66b47` (pre-commit red), SHA-A1 `b2feb0a1` (pushed over it on `Option 1`), SHA-A2 `6ef9207a` (the maintainer's first tick, uppercase `[X]`), SHA-A3 `02f6ee2e` (the redate to 2026-10-26, all nine runs `success`), SHA-A4 `72e13f95` (the re-confirmation).
+- **Local branch not advanced.** The orchestrator expected local `HEAD` to equal SHA-A4. It read SHA-A3 `02f6ee2e` at this continuation's start and still does. This continuation made no ref change. The uncommitted working-tree files (this one, the resume file, the SUMMARY, `STATE.md`, `ROADMAP.md`) are unaffected by a later fast-forward, because SHA-A3..SHA-A4 touches only `47-ACCEPTANCE-AUDIT.md`, which is not modified locally. Plan 47-07 and plan 47-08 must fast-forward (or cut `chore/47-close` from `origin/claude/laughing-dirac-e0h2ax`) before they read or commit the audit file.
+- **Outstanding from the maintainer (not blocking this plan).** (1) The `Coverage` job's printed `Lines:` figure against the 82 percent floor (any run; the sandbox cannot read job logs; the `Coverage` job itself concluded `success` on SHA-A3 and the audit's coverage sentence is still marked maintainer-supplied). (2) The B-1 condensation read (47-02 Task 3, `B-1 maintainer read: requested`).
+- **Not done here, by design.** Nothing committed, pushed, tagged, merged, dispatched, re-run or cancelled; no GitHub write of any kind; the sign-off box was not touched (D-00a).
+
+### 2026-10-26 — Plan 47-07: the checks on SHA-A4 are green, the version is unclaimed, and the hand-off stops at the one-way decision
+
+- **Result (Plan 47-07 subsection above, Registry verification "Pre-tag guard").** All nine runs on SHA-A4 `72e13f95` concluded `success`; the 44 required contexts of ruleset 20868126 read 43 `success`, 1 `skipped` (`End-to-End Tests`, by design off `main`), 0 failure, 0 absent. `Check publish order` `success` in both `ci.yml` runs. Twelve of twelve publishable crates `ABSENT` at `0.11.0`; no `v0.11.0*` tag on the remote; `main` still `df24689c`.
+- **Deviation from plan 47-07's text, recorded once.** The plan's `SHA-A2` role is read as SHA-A4; the automated verify was run against the resume file's `- SHA-A4:` line (see the substitution paragraph in the Plan 47-07 subsection). Owner: nobody; a consequence of the redate.
+- **`mergeable_state` `unstable`.** Explained by the advisory `CodeQL` results check (`failure`, 24 high alerts, check run 121611604849), not required, unchanged since SHA-A0. Not triaged; owner the maintainer.
+- **Still outstanding from the maintainer, stated as outstanding.** (1) The `Coverage` job's printed `Lines:` figure against the 82 percent floor: unreadable here, no number recorded; the `Measure coverage` step's `success` is the floor gate's conclusion only. (2) The B-1 condensation read (`B-1 maintainer read: requested`).
+- **Unexercised on this tree.** `End-to-End Tests` and `Publish Dry Run` are `skipped` on every run so far and execute first on the merge commit (RESEARCH Pitfall 8 / A-6).
+- **Stamp date.** DATE `2026-10-26` equals the UTC date at the read (2026-10-26T15:42Z); the tag has to be cut before 2026-10-27T00:00Z or the maintainer replies `redate`.
+- **No GitHub write, no commit, no push** by this plan; the sign-off box was not touched (D-00a).
+
+### 2026-10-26 — Plan 47-07: the maintainer's Task 2 reply is `proceed`; the merge-and-tag hand-off is presented; the Coverage `Lines:` figure is tracked as a todo
+
+- **Decision, verbatim, received 2026-10-26T16:49Z (UTC), recorded 2026-10-26T16:51Z:** "Create a ToDo for the `Coverage Lines` or it will have to be picked up in the verification step.
+
+  Proceed with the PR `#59`  merge."
+- **Reading:** Task 2 (the one-way door) = `proceed`. Task 3 (`checkpoint:human-action`, `gate="blocking-human"`) is presented to the maintainer next and is not auto-approved; the merge, the wait for `ci.yml` on the merge commit, and the tag are the maintainer's acts (D-00b, D-00k).
+- **Disposition of the outstanding Coverage item.** The `Coverage` job's printed `Lines:` figure (82 percent floor, ADR-0006) is **still unread; no number is recorded here**. It is now tracked by `.planning/todos/pending/2026-10-26-record-v0-11-0-coverage-lines-figure.md` (created by the orchestrator at 2026-10-26T16:49Z, uncommitted, rides plan 47-08's commit; recheck by 2026-11-02, owner the maintainer). Failing that, it is picked up in the verification step. The `Measure coverage` step's `success` under `--fail-under-lines 82` remains the floor gate's conclusion only.
+- **Still outstanding and unanswered:** the B-1 condensation read (47-02 Task 3, `B-1 maintainer read: requested`). Not blocking.
+- **State re-read once before the hand-off (2026-10-26T16:50Z, read-only):** PR #59 `open`, not merged, `head.sha` `72e13f9583ffe2b89580049045ac094ed3d46dbf`, `mergeable` true, `mergeable_state` `unstable` (advisory CodeQL, unchanged); `main` `df24689c3d1fd52b0e730105c15b22c2c4ad1404`; no `v0.11.0*` tag ref on origin; local `HEAD` = SHA-A4, nothing ahead of it. `merge_commit_sha` `ad5e7f8e` is GitHub's test-merge preview only, not the target (plan 47-08 reads the real one after the merge).
+- **Time pressure.** The tag must be pushed before 2026-10-27T00:00Z (DATE `2026-10-26`); `ci.yml` on the merge commit takes about two hours (`End-to-End Tests` and `Publish Dry Run` run there for the first time). Otherwise the maintainer replies `redate`.
+- **No GitHub write, no commit, no push, no merge, no tag, no dispatch** by this plan; the sign-off box was not touched (D-00a).
+
+### 2026-10-26 — Plan 47-07: the maintainer's Task 3 reply, and the 41-character SHA in it
+
+- **Reply, verbatim, received 2026-10-26T20:32Z (UTC):** `tagged 770657919beadbd341a72be2d0107080017a803f0` then, on the next line, `77a37c1846e5ab6716a51b78fb39541bccd1a7ae`.
+- **Transcription defect.** The first token is 41 hex characters: a stray leading `7` before the real merge SHA `70657919beadbd341a72be2d0107080017a803f0`. It is not an object in the repository (`git cat-file -t` answers `Not a valid object name`); after removing the one character it is byte-identical to `git rev-parse 'v0.11.0^{commit}'`. The second token is the tag object SHA and is exact. The defect is in the paste, not in the tag: nothing was tagged wrongly. The SHAs recorded in this file come from the tag, never from the paste.
+- **Reading.** Reply kind `tagged` (not `red`, not `redate`). The two-part resume condition was re-read independently by plan 47-08 (above) and holds.
+
+### 2026-10-26 — Plan 47-08: the tag equals PR #59's merge commit; the release branch's remote ref is gone; the Coverage figure is still unread
+
+- **Equality holds** (subsection "Plan 47-08 — the tag sits on the merge commit"): the annotated tag `77a37c18` peels to `70657919`, which is PR #59's `merge_commit_sha`, `origin/main`, and has the two expected parents (`df24689c` and SHA-A4 `72e13f95`). The merge tree is identical to SHA-A4's tree. The tag (20:29:02Z) is 1 h 54 min after `ci.yml` concluded on the merge commit (18:35:02Z) and on DATE (2026-10-26).
+- **Remote release branch deleted after the merge.** `refs/heads/claude/laughing-dirac-e0h2ax` answers 404; the plan's "still points at SHA-A2" check (read as SHA-A4) has nothing to check. Not a defect: deleting the head branch after the merge is the maintainer's GitHub setting (D-00l). The commit is not lost: it is the merge's second parent and PR #59's recorded `head.sha`. Local `claude/laughing-dirac-e0h2ax` is still `72e13f95` with no stray commit.
+- **Coverage figure: disposition.** The `Coverage` job's printed `Lines:` figure (82 percent floor, ADR-0006) is **still unread; no number is recorded here**. Tracked by `.planning/todos/pending/2026-10-26-record-v0-11-0-coverage-lines-figure.md` (committed on this branch as `fd70e888`; recheck by 2026-11-02, owner the maintainer), otherwise picked up in the Phase 47 verification step. The `Coverage` job on the merge commit (job 121733645613) concluded `success` under `--fail-under-lines 82`; that remains the floor gate's conclusion only.
+- **Still outstanding from the maintainer:** the B-1 condensation read (47-02 Task 3, `B-1 maintainer read: requested`). Not blocking.
+
+### 2026-10-26 — Plan 47-10: the ready-to-close hand-off is written; the maintainer's `push ok` authorises the push and the documentation-only pull request
+
+- **Reply, verbatim, received about 2026-10-26T21:05Z (UTC) by the orchestrator, relayed to this plan:** `push ok`. Authorised, exactly as plan 47-10 prescribes: (1) `git push -u origin chore/47-close` and (2) opening the documentation-only pull request from `chore/47-close` to `main`. Nothing else: not a merge, not auto-merge, not a label, not extra reviewers, not a tag, a yank, a dispatch, or any touch of the GitHub Release. (The relay is the orchestrator's; the reply is recorded as relayed.)
+- **`47-READY-TO-CLOSE.md` written and committed** (`70af502b5`, the tracer): SC1, SC2 and SC3 each with one `Observed` line and an evidence pointer. SC1 carries a fourth live sparse-index re-read, 2026-10-26T21:06:04Z to 21:06:07Z, 12 of 12 derived crates at `0.11.0`, `yanked` false, 64-hex checksums, HTTP 200 for all twelve. SC2 re-read: `git ls-remote origin 'refs/tags/v0.11.0*'` prints `77a37c1846e5ab6716a51b78fb39541bccd1a7ae` and the peeled `70657919beadbd341a72be2d0107080017a803f0`; `refs/heads/main` is `70657919`; `GET /pulls/59` `merged: true`, `merge_commit_sha` `70657919`; two parents `df24689c` and `72e13f95`. SC3's Observed line names B1=a (condensed; full text at `SHA-PRE-B1` `700a92d8`) and says the maintainer's read is unanswered.
+- **Open items carried into the hand-off, unchanged:** the `Coverage` `Lines:` figure (todo `2026-10-26-record-v0-11-0-coverage-lines-figure.md`, recheck by 2026-11-02) and the B-1 condensation read. Neither is a blocker invented here or waived here.
+- **Documentation-only assertion (T-47-43), before the push:** `git diff --name-only v0.11.0 HEAD -- . ':!.planning'` prints nothing (0 files outside `.planning/`); `git diff --name-only v0.11.0 HEAD` lists only paths under `.planning/`.
+- `chore/47-close` did not exist on origin at this point (`git ls-remote --heads origin chore/47-close` printed nothing); `origin/main` is `70657919beadbd341a72be2d0107080017a803f0`.
+
+### 2026-10-26 — Plan 47-10: close-out branch pushed, documentation-only pull request opened
+
+- **Push 1 of 2 (plain, after the maintainer's `push ok`; first attempt, no retry needed).** `git push -u origin chore/47-close`, exit 0, output verbatim:
+
+  ```
+  remote:
+  remote: Create a pull request for 'chore/47-close' on GitHub by visiting:  
+  remote:      https://github.com/DF3NDR/paladin-dev-env/pull/new/chore/47-close  
+  remote:
+  To https://github.com/DF3NDR/paladin-dev-env
+   * [new branch]          chore/47-close -> chore/47-close
+  branch 'chore/47-close' set up to track 'origin/chore/47-close'.
+  ```
+
+  The pushed head was `37a5a08e2419e52961b9c1705ffffc45d8919645` (13 commits above the merge commit `70657919`). Before it, `git diff --name-only v0.11.0 HEAD -- . ':!.planning'` printed nothing and `git ls-remote --heads origin chore/47-close` printed nothing.
+- **Repository PR template check.** `.github/pull_request_template.md`, `.github/PULL_REQUEST_TEMPLATE.md`, `PULL_REQUEST_TEMPLATE.md` and `docs/PULL_REQUEST_TEMPLATE.md` do not exist (and neither does a `.github/PULL_REQUEST_TEMPLATE/` directory); the body follows the plan's template sections (what the branch carries, what to read, documentation-only, the maintainer's remaining acts).
+- **Pre-open check.** `GET repos/DF3NDR/paladin-dev-env/pulls?head=DF3NDR:chore/47-close&state=all` returned 0 pull requests.
+- **Pull request opened through REST** (`gh api -X POST repos/DF3NDR/paladin-dev-env/pulls -f title='docs(47): v0.11.0 release records and close-out' -f head=chore/47-close -f base=main -F body=@<file>`; the body was written to a temporary file, never shell-interpolated). Response: `{"draft":false,"html_url":"https://github.com/DF3NDR/paladin-dev-env/pull/60","number":60,"state":"open"}`.
+- **Read-back (`GET /pulls/60`, immediately after):**
+
+  | Field | Value |
+  |---|---|
+  | number | **60** |
+  | URL | https://github.com/DF3NDR/paladin-dev-env/pull/60 |
+  | title | `docs(47): v0.11.0 release records and close-out` |
+  | state / draft / merged | open / false / false |
+  | base / head ref | `main` / `chore/47-close` |
+  | head SHA | `37a5a08e2419e52961b9c1705ffffc45d8919645` |
+  | body length | 2435 characters (the file was 2469 bytes) |
+  | commits / changed files | 13 / 14 |
+  | labels / requested reviewers / auto_merge | 0 / 0 / null |
+  | `mergeable_state` | `blocked` |
+
+  `GET /pulls/60/files` lists 14 files, none outside `.planning/` (the count of paths not starting with `.planning/` is 0).
+- **Footer as stored.** GitHub's tooling normalised the attribution footer, as it did on PR #59: the stored body ends `---` then `_Generated by [Claude Code](https://claude.ai/code/session_01V29h6Ci8WaNwbddV7m7psR)_` in place of the two lines sent. Recorded, not re-PATCHed. No model name is in the title or body.
+- **Not done, by design.** No merge, no auto-merge, no label, no reviewer request, no tag, no dispatch, no re-run, no publish, no yank, no GitHub Release edit, no `/gsd-audit-milestone`, no `/gsd-complete-milestone`.
+- **Push 2 of 2** (the final branch state: this record, `47-10-SUMMARY.md`, STATE.md and ROADMAP.md) is recorded in `47-10-SUMMARY.md`, which is committed before it. After it `origin/chore/47-close` equals local `HEAD`; the pull request's head SHA moves with it.
+
+### 2026-10-26 — Verify step (`/gsd-verify-work 47`): the `Coverage` job's printed `Lines:` figure read and recorded
+
+- **Source.** ci.yml run 40368801098 (the push run on `main` at the merge commit `70657919beadbd341a72be2d0107080017a803f0`), job `Coverage` 121733645613 (`success`; started 2026-10-26T17:27:50Z, completed 17:39:27Z; step 8 `Measure coverage` `success`, 17:29:14Z to 17:39:05Z; step 9 `Coverage summary` `success`). Read 2026-10-26 at the verify step through the GitHub Actions job-logs API by way of the GitHub MCP server (`get_job_logs`, job 121733645613), which fetches the log server-side and is therefore not subject to the sandbox egress block on the Azure blob host that left the figure unreadable at 47-06, 47-07 and 47-08. This is the same log the Actions UI shows; the UI itself was not opened.
+- **`Coverage summary` step output, verbatim (the timestamps are the runner's):**
+
+  ```
+  2026-10-26T17:39:05.8417551Z Scope: --workspace --features integration-tests (the gated measurement)
+  2026-10-26T17:39:05.8418757Z Lines:     167104/180183 = 92.74%
+  2026-10-26T17:39:05.8419461Z Functions: 17296/20014 = 86.42%
+  ```
+
+- **Against the floor.** 92.74 percent is above the 82 percent workspace line-coverage floor (ADR-0006, D-00e), consistent with the `Measure coverage` step's `success` under `--fail-under-lines 82`. No escalation. The figure is now recorded; it was never expected or carried forward before this read (D-00e).
+- **Also observed in the same log, recorded and not acted on.** Step 11 `Upload coverage to Codecov` concluded `success` although the Codecov CLI logged `Upload queued for processing failed: {"message":"Token required - not valid tokenless upload"}` (the action ran with `CC_FAIL_ON_ERROR: false` and `Token length: 0`). The CLI also listed, as "coverage files", `.claude/gsd-core/references/edge-probe-fixtures/*/expected-coverage.json` and two `.planning/intel/classifications/*.json` files next to `lcov.info` and `coverage-summary.txt`. Neither is a gate, a Phase 47 deliverable, or part of the floor measurement; both are reported to the maintainer at the verify step for a decision outside this phase.
+- **Closes.** Todo `2026-10-26-record-v0-11-0-coverage-lines-figure.md` (moved out of `.planning/todos/pending/`), the "still outstanding" item (1) in the 47-07 and 47-08 entries above, and the second human-verification item of `47-VERIFICATION.md`. The audit's "Outside the table" paragraph is updated from "no figure" to the quoted figure.
+
+### 2026-10-26 — Verify step (`/gsd-verify-work 47`): the B-1 condensation read is answered by the maintainer
+
+- **Question.** Plan 47-02 Task 3's `- B-1 maintainer read: requested` line (B-1 condensation ledger above): whether the condensed root `CHANGELOG.md` entry, now `## [0.11.0] - 2026-10-26`, adds any claim beyond the uncondensed text at `700a92d86f3d6b2e24bbd2c163daec7c307297e0` or drops any breaking change, security note or removal. The mechanical proxy (ids, figures, code spans, byte-identical untouched subsections) was recorded as passing; the changed-meaning judgment was the maintainer's.
+- **Answer.** UAT test 1 of `47-UAT.md`, presented at the verify step on 2026-10-26, was answered `Pass` by the maintainer: the condensed entry adds no claim beyond the uncondensed text and drops no breaking change, security note or removal.
+- **Effect.** The `- B-1 maintainer read: requested` line is closed by this entry (append-only; the original line stands as written). The first human-verification item of `47-VERIFICATION.md` is satisfied. Nothing in the changelog is changed by this answer.
+
+### 2026-10-26 — Verify step: trailing whitespace trimmed in the plan 47-10 `git push` quotation (pre-commit red on PR #60)
+
+- The `pre-commit` workflow was red on `chore/47-close` from run 40407547679 (push, SHA `3c1632b0`) through run 40417054874 (pull_request, SHA `9b43f2c7`): the `trailing-whitespace` hook rewrote the four `remote:` lines of the verbatim `git push -u origin chore/47-close` output quoted in the entry "Plan 47-10: close-out branch pushed, documentation-only pull request opened" above (one line ended in a single space, two in eight; the hook strips the first and normalises the others to the Markdown two-space line break). Every other hook, including `cargo fmt` and `cargo clippy -D warnings`, passed. The two runs before it on this branch (SHAs `2c84434a`, `692112f7`) were cancelled as superseded, so the red first showed at `3c1632b0`.
+- Fixed by applying the hook's own change (`pre-commit run trailing-whitespace --all-files`) and committing it: the quotation now differs from the terminal output only in trailing spaces, which `git` printed as padding. No other line of this file changed. Append-only (D-00d) is kept: the 47-10 entry's text stands, and this note records the trim.

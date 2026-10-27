@@ -4,28 +4,28 @@ milestone: v0.11.0
 milestone_name: Crate Release
 current_phase: 47
 current_phase_name: v0.11.0 Crate Release
-status: executing
-stopped_at: "Hard stop at 47-05 Task 2: CI on SHA-A0 d4e66b47 pending; resume at plan 47-06 Task 1"
-last_updated: "2026-10-25T21:10:06.385Z"
-last_activity: 2026-10-25
-last_activity_desc: Phase 47 execution started
+status: completed
+stopped_at: "Phase 47 complete — v0.11.0 released and verified (47-UAT.md 2/2, 47-VERIFICATION.md passed); all 15 phases of milestone v0.11.0 complete; next: maintainer merges PR #60, then /gsd-audit-milestone v0.11.0 and /gsd-complete-milestone v0.11.0"
+last_updated: "2026-10-26T23:00:20.111Z"
+last_activity: 2026-10-26
+last_activity_desc: "Phase 47 verified and marked complete (47-UAT.md 2/2, 47-VERIFICATION.md passed); all 15 phases of milestone v0.11.0 complete, ready to close"
 progress:
   total_phases: 15
-  completed_phases: 14
+  completed_phases: 15
   total_plans: 174
-  completed_plans: 169
+  completed_plans: 174
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-10-23 after Phase 51)
+See: .planning/PROJECT.md (updated 2026-10-26 after Phase 47)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 47 — v0.11.0 Crate Release
+**Current focus:** Milestone v0.11.0 close-out — the maintainer merges PR #60 (`chore/47-close`, documentation-only), then `/gsd-audit-milestone v0.11.0` and `/gsd-complete-milestone v0.11.0`
 2026-10-14 from the web3sec handoff and sequenced before Phases 46-47 (the first of a series of
 consumer-driven phases). Phase 50 (Provider Parity & Configuration-Driven Model Swap, added
 2026-10-14 from the second web3sec handoff, `50-HANDOFF-web3sec-parity.md`) follows it, then Phase 51
@@ -43,7 +43,7 @@ delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-1
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 150/150 plans ([██████████] 97%) of the phases planned so far (38-45, 48-51);
+**Progress:** [████████████████████] 150/150 plans ([██████████] 100%) of the phases planned so far (38-45, 48-51);
 Phases 46 and 47 are not yet planned; Phase 49 closed 2026-10-14 (3/3 kept plans, 3 cancelled); Phase 50.1 sealed 2026-10-20;
 Phase 51 sealed 2026-10-23 (20/20 plans, verification `passed` 7/7, UAT 3/3, security 61/61 closed, ADR-0062); Phase 46 is next, then Phase 47.
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -62,16 +62,17 @@ under `milestones/`.
 
 ## Current Position
 
-Phase: 47 (v0.11.0 Crate Release) — EXECUTING
-Plan: 6 of 10
-Status: Ready to execute
-Last activity: 2026-10-25 — Phase 47 execution started
+Phase: 47 (v0.11.0 Crate Release) — COMPLETE (verified 2026-10-26)
+Plan: 10 of 10
+Status: ALL PHASES COMPLETE — milestone v0.11.0 ready to close; PR #60 (`chore/47-close`, documentation-only) is open for the maintainer to merge, then `/gsd-audit-milestone v0.11.0` and `/gsd-complete-milestone v0.11.0` are the maintainer's next commands
+Last activity: 2026-10-26 — Phase 47 verified and marked complete: `47-UAT.md` 2/2 passed (the maintainer's B-1 condensation read, and the `Coverage` job's `Lines: 167104/180183 = 92.74%` on the merge commit, read at the verify step through the GitHub job-logs API and recorded in `47-CI-EVIDENCE.md`, the acceptance audit and the completed todo); `47-VERIFICATION.md` `passed`; the api-coverage gate passed on `COVERAGE.md`'s no-external-API declaration; ROADMAP Phase 47 checkbox ticked, progress row 10/10 Complete; `.continue-here.md` removed. Observed and left for the maintainer: the Codecov upload step reports `success` while its CLI fails for want of a token. Next: merge PR #60, then `/gsd-audit-milestone v0.11.0` and `/gsd-complete-milestone v0.11.0`.
+Previous: 2026-10-26 — Plan 47-10 complete: 47-READY-TO-CLOSE.md written, chore/47-close pushed, docs-only PR #60 open (maintainer merges); phase verification and phase.complete 47 next
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 579
+- Total plans completed: 589
 - Average duration: —
 - Total execution time: —
 
@@ -131,6 +132,7 @@ Last activity: 2026-10-25 — Phase 47 execution started
 | 50.1 | 9 | - | - |
 | 51 | 20 | - | - |
 | 46 | 14 | - | - |
+| 47 | 10 | - | - |
 
 *Updated after each plan completion*
 
@@ -358,6 +360,11 @@ Last activity: 2026-10-25 — Phase 47 execution started
 | Phase 47 P03 | 50m | 3 tasks | 28 files |
 | Phase 47 P04 | 45m (final continuation) | 3 tasks | 3 files |
 | Phase 47 P05 | 8m | 2 tasks | 3 files |
+| Phase 47 P06 | not separable (maintainer waits and CI) | 3 tasks | 5 files |
+| Phase 47 P07 | not separable (maintainer decisions, merge, CI) | 3 tasks | 3 files |
+| Phase 47 P08 | 12m | 3 tasks | 5 files |
+| Phase 47 P09 | 5m | 2 tasks | 7 files |
+| Phase 47 P10 | 30m | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -420,6 +427,16 @@ Phases 22-37.1 is recorded in its own `NN-CONTEXT.md` (and the SUMMARY decision 
   the failed tag left in place and its GitHub Release bannered/pre-release, orphaned crate
   versions yanked by the maintainer only after the patch is registry-verified, one register row
   per crate in `docs/src/appendix/release-recovery.md` §5 (Phase 37.1 D-02).
+
+- **v0.11.0 released (Phase 47, 2026-10-26)** — the annotated tag `v0.11.0` peels to PR #59's merge
+  commit `70657919` (two-SHA rule held; the tag was cut 1 h 54 min after `ci.yml` went green on it);
+  all 12 publishable crates are live at `0.11.0` through Trusted Publishing by `release.yml` run
+  40396108246; the `Coverage` job on the merge commit printed `Lines: 167104/180183 = 92.74%` against
+  the 82 % floor. Maintainer decisions on the way: the root `[Unreleased]` was condensed in 12,000-byte
+  chunks under a ledger to fit the GitHub release-body limit (B-1, accepted by the maintainer's read
+  at UAT), the tokio advisory was cleared by a lockfile pin (B-2), the changelog stamps were redated
+  to 2026-10-26, and two re-seal rows the sandbox could not run (`paladin-web` 0.9.0 semver
+  baseline build; `make test`) were attributed to their CI twins. Close-out docs ride PR #60.
 
 The pre-close text of this section (Phase 33/32/29/28/23 decision digests and the tool-appended
 `[Phase ?]` bullets back to Phase 3) is in this file's git history at commit `6a08c293`.
@@ -648,6 +665,11 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: [Phase 47] 47-01: maintainer pre-build decision B1=a B2=a R7=a EMPTY=a SPACE=a DATE=2026-10-25 (reply 2026-10-25T18:19:21Z)
 - [Phase ?]: 47-02: B2=a applied (tokio 1.53.3, Cargo.lock only) and B1=a applied (root [Unreleased] 156528 -> 108926 bytes, SHA-PRE-B1 700a92d8); Added tightened in the Task 3 commit
 - [Phase 47]: 47-04: row 4 paladin-web and row 6 make test leg are CI-attributed by maintainer decision (D-00j halts); sign-off box stays unticked
+- [Phase 47]: 47-06: Option 1 for the pre-commit red on SHA-A0 (SHA-A1 pushed over it); accept-X for the uppercase tick; redate to 2026-10-26; the maintainer's re-confirmation SHA-A4 72e13f95 is the final head and plan 47-07 reads its checks on SHA-A4 where it says SHA-A2
+- [Phase ?]: [Phase 47] 47-07: Task 2 proceed (2026-10-26T16:49Z); Task 3 reply `tagged ...` (20:32Z) carried a 41-character first token (stray leading 7), recorded verbatim and not used; plan-text SHA-A2 read as SHA-A4 72e13f95
+- [Phase ?]: [Phase 47] 47-08: tag v0.11.0 (77a37c18) peels to merge commit 70657919 = PR #59 merge_commit_sha = origin/main, parents df24689c and SHA-A4; release.yml run 40396108246 green, publish job success; 12 of 12 crates at 0.11.0 unyanked with trustpub_data naming DF3NDR/paladin-dev-env; chore/47-close cut from the merge commit and not pushed
+- [Phase 47]: v0.11.0 released: tag `v0.11.0` on merge commit `70657919beadbd341a72be2d0107080017a803f0`, release run `40396108246`, 12/12 crates registry-verified at `0.11.0` (unyanked, sparse-index re-read 2026-10-26T20:53Z), Trusted Publishing — D-16: SHIP-07 was ticked on the live sparse-index table (12 of 12 derived crates at 0.11.0, yanked false, trustpub_data naming run 40396108246), not on the merge, the tag or the workflow log.
+- [Phase 47]: Phase 47 ends at ready-to-close: 47-READY-TO-CLOSE.md written, chore/47-close pushed and docs-only PR #60 opened on the maintainer's push ok; audit, milestone close and merge stay the maintainer's — D-17 and D-00l: the last plan ends at a hand-off; SC1-SC3 observed TRUE from evidence (SC3 under B1=a), the Coverage Lines figure and the B-1 read stated as open
 
 ### Pending Todos
 
@@ -673,8 +695,20 @@ carry-forward) was disposed by Phases 5-16 and is preserved in this file's git h
 `6a08c293`. Open concerns carried into the next milestone:
 
 - **Coverage is CI-attributed, not locally measurable** — this devcontainer has no Docker; the
-  82 % floor (ADR-0006) is read from the CI `coverage` job (90.44 % at PR #56). The local
-  reproduction walkthrough is the pending user-owned todo above.
+  82 % floor (ADR-0006) is read from the CI `coverage` job (90.44 % at PR #56; 92.74 % on the
+  v0.11.0 merge commit, read at the Phase 47 verify step through the GitHub job-logs API, which
+  reaches the log host the sandbox's own egress cannot). The local reproduction walkthrough is the
+  pending user-owned todo above.
+
+- **Codecov upload is failing silently** — on the v0.11.0 merge-commit run (40368801098, job
+  121733645613) the `Upload coverage to Codecov` step concluded `success` while the Codecov CLI
+  logged `Token required - not valid tokenless upload` (`Token length: 0`, `fail_ci_if_error`
+  unset), so nothing reaches Codecov and the step can never go red; the CLI also sweeps in
+  `.claude/gsd-core/references/edge-probe-fixtures/*/expected-coverage.json` and two
+  `.planning/intel/classifications/*.json` as "coverage files". The 82 % floor gate
+  (`cargo llvm-cov --fail-under-lines`) is unaffected. Observed at the Phase 47 verify step
+  (`47-CI-EVIDENCE.md` Findings, 2026-10-26). Maintainer decision: supply `CODECOV_TOKEN` and set
+  `fail_ci_if_error`, or drop the step.
 
 - **Tracing overhead** now accepted at +19.36 % / +16.19 % (Phase 45 re-measure, row 61 waived);
   serialisation is no longer the target — the target-off rows still cost +16-19 %, so any further
@@ -708,7 +742,9 @@ carry-forward) was disposed by Phases 5-16 and is preserved in this file's git h
 
 - **Open WINDOWS rows at Phase 46 close:** 13 (ids 56, 58, 62, 63, 64, 65, 66, 67, 68, 69, 73, 77,
   79, per `windows status`) -- none are Phase 46's; `/gsd-ship` blocks while `open_count > 0`, so
-  Phase 47 dispositions them or records an override.
+  Phase 47 dispositions them or records an override. **Phase 47 recorded them as not its own**
+  (`47-CI-EVIDENCE.md`, 2026-10-25) and released through PR #59 without `/gsd-ship`; they carry
+  into the v0.11.0 milestone audit undispositioned.
 
 - **Bookkeeping drift in the corpus acceptance audit** — the seven §11 judgment-tier sign-off boxes
   and the `v0.10.0` tag box in `.project/v0.10.0/09-program-acceptance-audit.md` are still `- [ ]`
@@ -724,7 +760,7 @@ carry-forward) was disposed by Phases 5-16 and is preserved in this file's git h
   superseded) — expected, documented in MILESTONES.md *Known Gaps*; do not "fix" by fabricating
   SUMMARYs.
 
-- cargo-semver-checks 0.50.0's CI-pinned --baseline-version 0.9.0 job is currently a no-op for every one of the 11 checked packages -- confirmed 2026-09-26 during Phase 38 plan 38-09's closeout measurement. The in-tree workspace version (0.10.1, the last real release) already differs from that two-milestones-old baseline by a pre-1.0 "major-equivalent" bump, so the tool skips all lint evaluation (0 checks, 254 skip) unconditionally. This will remain true for every plan in every phase of the v0.11.0 milestone until the version is bumped at the eventual release commit. Not fixed in 38-09 (ci.yml is not in that plan's files_modified) -- flag for whichever phase next touches ci.yml's semver job or performs the v0.11.0 version bump.
+- cargo-semver-checks 0.50.0's CI-pinned --baseline-version 0.9.0 job is currently a no-op for every one of the 11 checked packages -- confirmed 2026-09-26 during Phase 38 plan 38-09's closeout measurement. The in-tree workspace version (0.10.1, the last real release) already differs from that two-milestones-old baseline by a pre-1.0 "major-equivalent" bump, so the tool skips all lint evaluation (0 checks, 254 skip) unconditionally. This will remain true for every plan in every phase of the v0.11.0 milestone until the version is bumped at the eventual release commit. Not fixed in 38-09 (ci.yml is not in that plan's files_modified) -- flag for whichever phase next touches ci.yml's semver job or performs the v0.11.0 version bump. **Still a no-op at v0.11.0** (Phase 47 re-seal row 57, 2026-10-25: `0 checks, 254 skip` for 10 of 11 packages against 0.9.0; `paladin-web` attributed to its CI twin); now that `0.11.0` is published the baseline can move to it -- a v0.12 hygiene item.
 
 ### Quick Tasks Completed
 
@@ -873,9 +909,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-25T21:10:06.347Z
-**Stopped at:** Hard stop at 47-05 Task 2: CI on SHA-A0 d4e66b47 pending; resume at plan 47-06 Task 1
-**Resume file:** .planning/phases/47-v0-11-0-crate-release/.continue-here.md
+Last session: 2026-10-26
+Stopped at: Phase 47 complete and verified; milestone v0.11.0 ready to close (PR #60 open)
+Resume file: None
 
 ## Operator Next Steps
 

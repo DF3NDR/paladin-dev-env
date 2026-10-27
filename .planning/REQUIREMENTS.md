@@ -431,7 +431,7 @@ D-A..D-D of the handoff plus D-E (the seed-rule conflict found at filing) are se
 
 ### Release (SHIP, continued)
 
-- [ ] **SHIP-07**: v0.11.0 is released: all 12 publishable crates on crates.io at `0.11.0`, the tag
+- [x] **SHIP-07**: v0.11.0 is released: all 12 publishable crates on crates.io at `0.11.0`, the tag
   cut on a `main` merge commit, CHANGELOG and MIGRATION complete, and the publish-order gate green
 
 ## v2 Requirements
@@ -512,7 +512,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CURR-23 | Phase 46 | Complete |
 | CURR-24 | Phase 46 | Complete |
 | CURR-25 | Phase 46 | Complete |
-| SHIP-07 | Phase 47 | Pending |
+| SHIP-07 | Phase 47 | Complete |
 | ENTITY-01 | Phase 48 | Complete |
 | ENTITY-02 | Phase 48 | Complete |
 | ENTITY-03 | Phase 48 | Complete |

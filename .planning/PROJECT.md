@@ -1208,7 +1208,11 @@ while the code ships):
       SSE `done` → `Cancelled` (Phase 42)
 - [ ] Tracing overhead toward the ≤ 3 % bar — re-measured in Phase 45 at +19.36 % / +16.19 %
       (OBS-05, Verdict AMEND, row 61 waived by maintainer acceptance); the bar itself is not met
-- [ ] Docs currency and Treasurer docs; Nyquist hygiene; v2 debt lines; v0.11.0 crates.io release
+- [x] Docs currency and Treasurer docs — Phase 46 (CURR-22..25), sealed 2026-10-24; v0.11.0
+      crates.io release — Phase 47 (SHIP-07): all 12 publishable crates live at `0.11.0` through
+      Trusted Publishing, tag `v0.11.0` on the PR #59 merge commit `70657919`, `Coverage` 92.74 %
+      lines on that commit, sealed 2026-10-26. Nyquist hygiene for the archived phases 05-21 and
+      the v2 debt lines are dispositioned at the milestone audit, not by a phase
 
 Carried-in open items (tracked, not requirements):
 
@@ -2057,6 +2061,18 @@ pipeline with the `v0.10.0` tag left in place (Phase 37.1 D-02 — ✓ Good); an
 sign-off boxes in `.project/v0.10.0/09-program-acceptance-audit.md` are ticked by a human, never an
 agent (Phase 29 D-17, Phase 37 D-00a — ✓ Good).
 
+**Phase 47 release decisions (v0.11.0, 2026-10-26).** Recorded in `47-CONTEXT.md` (D-00a..D-14)
+and `47-CI-EVIDENCE.md`, not restated in full: the root `[Unreleased]` entry was condensed in
+12,000-byte chunks under a byte-identity ledger so the GitHub release body fits its size limit (B-1,
+D-08; the maintainer's own read at UAT confirmed no claim was added and no breaking change, security
+note or removal dropped — ✓ Good); the `tokio` RUSTSEC advisory that made `cargo deny` red was cleared
+by a lockfile pin (B-2); the changelog stamps were redated to the day of the tag; two re-seal rows
+the sandbox could not run (`paladin-web`'s 0.9.0 semver baseline build, `make test`) were attributed
+to their green CI twins by maintainer decision; the tag was cut on the `main` merge commit per the
+two-SHA rule, and the `Coverage` figure was read after the fact through the GitHub job-logs API
+rather than inferred (D-00e — ✓ Good). The Codecov upload step's silent failure is a carried
+concern (STATE.md *Blockers/Concerns*).
+
 ## Evolution
 
 This document evolves at phase transitions and milestone boundaries.
@@ -2077,6 +2093,15 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
+*Last updated: 2026-10-26 after **Phase 47: v0.11.0 Crate Release** completed and verified —
+SHIP-07 validated (REQUIREMENTS.md traceability Complete); 10/10 plans in 10 sequential waves;
+verification `passed`, UAT 2/2 (the maintainer's B-1 condensation read; `Coverage` on merge commit
+`70657919` `Lines: 167104/180183 = 92.74%` vs the 82 % floor, read through the job-logs API);
+`v0.11.0` tagged on the PR #59 merge commit, 12 crates live through Trusted Publishing. No
+requirement invalidated or emerged; "What This Is" unchanged. All 15 phases of milestone v0.11.0 are
+complete: next, merge PR #60, then `/gsd-audit-milestone v0.11.0` and `/gsd-complete-milestone
+v0.11.0`.*
+
 *Last updated: 2026-10-24 after **Phase 46: Docs Currency & Hygiene** completed and verified —
 CURR-22..25 validated (REQUIREMENTS.md traceability Complete); 14/14 plans in 6 waves; verification
 `passed` 4/4; code review 0 critical / 3 warning / 5 info; STATE advanced to Phase 47.*

@@ -1,5 +1,18 @@
 # Milestones
 
+## v0.11.0 Treasurer Spend Governance — release record (tag cut 2026-10-26)
+
+**Release:** `v0.11.0` on merge commit `70657919` (2026-10-26; release run `40396108246` green; all 12
+publishable crates registry-verified on crates.io at `0.11.0` via Trusted Publishing — registry table in
+`phases/47-v0-11-0-crate-release/47-CI-EVIDENCE.md`).
+**Release PR:** #59 from `claude/laughing-dirac-e0h2ax`, merged with a merge commit; 1126 commits / 1111
+files per GitHub (the sandbox clone is shallow).
+**Sign-off:** `47-ACCEPTANCE-AUDIT.md`, ticked by the maintainer at `6ef9207a` and re-confirmed on the redated head `72e13f95`.
+**Requirement closed by the release:** SHIP-07.
+
+*Milestone closeout fields (Shipped date, phase/plan/task totals, Closeout type, Audit) are written by
+`/gsd-complete-milestone v0.11.0`, which inserts its own entry; fold this release record into it then.*
+
 ## v0.10.0 Durable Agent Execution Runtime (Shipped: 2026-09-23)
 
 **Phases completed:** 19 phases (22-37.1, including inserted 22.1, 36.1 and 37.1), 231 plans

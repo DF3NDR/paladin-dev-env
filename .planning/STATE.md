@@ -1,16 +1,18 @@
 ---
 gsd_state_version: 1.0
 milestone: v0.11.1
-milestone_name: Dogfood Cleanup
+milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
+current_phase: 52
 status: planning
-last_updated: "2026-10-27T22:58:31.000Z"
+stopped_at: Phase 52 context gathered
+last_updated: "2026-10-28T16:11:48.942Z"
 last_activity: 2026-10-27
+last_activity_desc: Roadmap created (7 phases, 53/53 requirements mapped)
 progress:
-  total_phases: 7
+  total_phases: 1
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
-  percent: 0
 ---
 
 # Project State
@@ -684,15 +686,20 @@ Four pending todos were acknowledged as deferred at the v0.11.0 close (see *Defe
 - **Phase 53, verify first:** Phase 40's `40-REVIEW-FIX.md` already records WR-01…WR-04 (TENANT-04, -05, -06) as fixed
   (`ensure_thread_visible` in `submission.rs`, tenant check inside `RunSubmissionService::cancel`, a fixed run-store
   error message in `run_controller.rs`); the carried-gaps inventory lists them open. Plans prove-then-lock those three.
+
 - **Phase 53, decision point:** if the thread-tenant fix (or any security change) forces a persisted or public-surface
   break, the milestone becomes `v0.12.0`; record the decision before Phase 58 opens.
+
 - **Phase 55, FIXES-01 premise:** `content_filtering_service.rs` is commented out of `services/mod.rs` and is not valid
   Rust, so its `todo!()` is unreachable; the reachable stubs are twenty `todo!()` bodies in the SQLite and MySQL
   `ContentListRepository` impls in `paladin-storage`.
+
 - **Phase 55, FIXES-04:** `paladin-eval`'s `RunStatusValue` is not `#[non_exhaustive]`, so adding `Cancelled` trips the
   patch-level semver gate Phase 52 arms; settle shape-or-break at discuss-phase.
+
 - **Phase 56 depends on external inputs** (the maintainer's runs, the web3sec return, a Docker-capable machine for
   DOGF-05) that the roadmap cannot schedule; an unreturned DOGF-02 is held or re-homed with an owner and date.
+
 - **Phase 57:** `open_count: 0` also needs rows 64-66 (accepted ADR-0057 contracts) and 77 (Grok deferral) waived with a
   reason or re-homed; no requirement names them beyond REG-02's closing clause.
 
@@ -960,9 +967,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-10-27
-Stopped at: Roadmap for milestone v0.11.1 created (Phases 52-58, 53/53 requirements mapped); Phase 52 not started; awaiting orchestrator approval and commit
-Resume file: None
+Last session: 2026-10-28T16:11:48.902Z
+Stopped at: Phase 52 context gathered
+Resume file: .planning/phases/52-ci-release-pipeline-repair/52-CONTEXT.md
 
 ## Operator Next Steps
 

@@ -17,6 +17,7 @@ owner: repo maintainer
 source: Phase 48 discuss session, Base-layer disposition area (owner answer 2026-10-13)
 recheck_by: before the milestone after v0.11.0 is roadmapped
 decision_status: owner decided these items stay in Phase 48; the review itself is unscheduled
+resolves_phase: 55
 ---
 
 ## Problem

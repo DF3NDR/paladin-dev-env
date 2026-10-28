@@ -912,6 +912,161 @@ run_finalize "${DIR25}" "run1.md" --tag v3.0.6
 assert_contains "case25: downloads section still lists existing assets" "${DIR25}/run1.md" '`paladin-linux-amd64.tar.gz`'
 assert_not_contains "case25: no verification block when no sums file was attached" "${DIR25}/run1.md" "sha256sum -c"
 
+# --- Size-guard helpers (plan 52-04, CIREL-05, D-11). All measuring goes
+#     through python3 -I so the harness counts Unicode code points the same
+#     way scripts/release-body-fit.sh does, never bytes or `wc`. -------------
+
+# body_chars FILE -> prints the code-point count of FILE.
+body_chars() {
+    python3 -I -c 'import sys; print(len(open(sys.argv[1], "rb").read().decode("utf-8")))' "$1"
+}
+
+# tail_from_marker FILE OUT -> writes the bytes of FILE from the artifacts
+# marker onward (the artifact part of a composed body) to OUT.
+tail_from_marker() {
+    python3 -I -c '
+import sys
+data = open(sys.argv[1], "rb").read()
+marker = b"<!-- paladin:release-artifacts -->"
+at = data.find(marker)
+if at < 0:
+    sys.exit(1)
+open(sys.argv[2], "wb").write(data[at:])
+' "$1" "$2"
+}
+
+# count_literal FILE NEEDLE -> prints how many times NEEDLE occurs in FILE.
+count_literal() {
+    python3 -I -c 'import sys; print(open(sys.argv[1], "rb").read().decode("utf-8").count(sys.argv[2]))' "$1" "$2"
+}
+
+# make_long_curated OUT LINES -> writes a multi-line changelog-shaped section
+# of LINES bullet lines with one fenced block spanning lines 30-70.
+make_long_curated() {
+    python3 -I -c '
+import sys
+out, lines = sys.argv[1], int(sys.argv[2])
+rows = ["## [9.9.9] - 2026-10-28", ""]
+for n in range(1, lines + 1):
+    if n == 30:
+        rows.append("```text")
+    rows.append("- entry %03d: a changelog line padded out to a realistic length for a release" % n)
+    if n == 70:
+        rows.append("```")
+open(out, "w", encoding="utf-8").write("\n".join(rows) + "\n")
+' "$1" "$2"
+}
+
+SENTINEL_T="<!-- paladin:release-truncated -->"
+
+# --- Case 26: a composed body over PALADIN_RELEASE_BODY_LIMIT is re-fitted --
+#     only the curated section is cut (to limit minus the artifact part),
+#     the artifact part is byte-identical to the untruncated composition,
+#     the published body is within the limit, carries the footer exactly
+#     once, and the truncation is logged. -----------------------------------
+DIR26="${SCRATCH}/case26"
+mkdir -p "${DIR26}"
+write_gh_stub "${DIR26}"
+make_long_curated "${DIR26}/curated.md" 100
+printf '%s' "$(cat "${DIR26}/curated.md")"$'\n' > "${DIR26}/current_body"
+printf 'paladin-linux-amd64.tar.gz\npaladin-linux-arm64.tar.gz\n' > "${DIR26}/assets_file.txt"
+ASSETS26="$(cat "${DIR26}/assets_file.txt")"
+CURATED26="$(cat "${DIR26}/curated.md")"$'\n'
+
+ASSERTIONS=$((ASSERTIONS + 1))
+CURATED26_CHARS="$(body_chars "${DIR26}/curated.md")"
+if [ "${CURATED26_CHARS}" -gt 5500 ]; then
+    echo "PASS: case26 fixture curated section is ${CURATED26_CHARS} chars (> 5500)"
+else
+    echo "FAIL: case26 fixture curated section is only ${CURATED26_CHARS} chars"
+    FAILED=$((FAILED + 1))
+fi
+
+# The untruncated composition, for the artifact-part comparison.
+compose_to case26 untruncated.md "${CURATED26}" "abc123" "ghcr.io/df3ndr/paladin-dev-env:9.9.9" "450" \
+    "${ASSETS26}" "" "paladin-v9.9.9.cdx.json"
+tail_from_marker "${LAST_COMPOSE_FILE}" "${DIR26}/untruncated.tail"
+
+export PALADIN_RELEASE_BODY_LIMIT=4000
+export GITHUB_REPOSITORY=test/repo
+ASSERTIONS=$((ASSERTIONS + 1))
+if run_finalize "${DIR26}" "run1.md" --tag v9.9.9 --image-digest abc123 \
+    --image-ref "ghcr.io/df3ndr/paladin-dev-env:9.9.9" --image-size-mb 450 \
+    --assets-file "${DIR26}/assets_file.txt" --sbom-asset "paladin-v9.9.9.cdx.json"; then
+    echo "PASS: case26 over-limit finalize run exits 0"
+else
+    echo "FAIL: case26 over-limit finalize run did not exit 0"
+    sed 's/^/  | /' "${DIR26}/run1.md.log"
+    FAILED=$((FAILED + 1))
+fi
+cp "${DIR26}/current_body" "${DIR26}/published1.md"
+
+ASSERTIONS=$((ASSERTIONS + 1))
+PUBLISHED26_CHARS="$(body_chars "${DIR26}/published1.md")"
+if [ "${PUBLISHED26_CHARS}" -le 4000 ] && [ "${PUBLISHED26_CHARS}" -gt 0 ]; then
+    echo "PASS: case26 published body is ${PUBLISHED26_CHARS} chars (<= 4000)"
+else
+    echo "FAIL: case26 published body is ${PUBLISHED26_CHARS} chars, expected 1..4000"
+    FAILED=$((FAILED + 1))
+fi
+
+ASSERTIONS=$((ASSERTIONS + 1))
+SENTINEL26="$(count_literal "${DIR26}/published1.md" "${SENTINEL_T}")"
+if [ "${SENTINEL26}" = "1" ]; then
+    echo "PASS: case26 truncation sentinel appears exactly once"
+else
+    echo "FAIL: case26 expected the truncation sentinel once, got ${SENTINEL26}"
+    FAILED=$((FAILED + 1))
+fi
+
+tail_from_marker "${DIR26}/published1.md" "${DIR26}/published1.tail" || true
+assert_cmp "case26: the artifact part is byte-identical to the untruncated composition" \
+    "${DIR26}/untruncated.tail" "${DIR26}/published1.tail"
+assert_contains "case26: the curated heading survives the cut" "${DIR26}/published1.md" "## [9.9.9] - 2026-10-28"
+assert_contains "case26: the truncation is logged by size" "${DIR26}/run1.md.log" "release-body-fit: original"
+assert_not_contains "case26: the last curated entry was cut" "${DIR26}/published1.md" "entry 100:"
+
+ASSERTIONS=$((ASSERTIONS + 1))
+FENCES26="$(grep -c '^```' "${DIR26}/published1.md" || true)"
+if [ $((FENCES26 % 2)) -eq 0 ] && [ "${FENCES26}" -ge 2 ]; then
+    echo "PASS: case26 the cut inside the fenced block leaves the fences balanced (${FENCES26} fence lines)"
+else
+    echo "FAIL: case26 expected a balanced, non-zero number of fence lines, got ${FENCES26}"
+    FAILED=$((FAILED + 1))
+fi
+
+# --- Case 27: finalize is idempotent over its own truncated output -- two
+#     more runs publish a body byte-identical to the first, log no new
+#     truncation, and the footer stays singular. ----------------------------
+for RUN27 in 2 3; do
+    ASSERTIONS=$((ASSERTIONS + 1))
+    if run_finalize "${DIR26}" "run${RUN27}.md" --tag v9.9.9 --image-digest abc123 \
+        --image-ref "ghcr.io/df3ndr/paladin-dev-env:9.9.9" --image-size-mb 450 \
+        --assets-file "${DIR26}/assets_file.txt" --sbom-asset "paladin-v9.9.9.cdx.json"; then
+        echo "PASS: case27 re-run ${RUN27} exits 0"
+    else
+        echo "FAIL: case27 re-run ${RUN27} did not exit 0"
+        sed 's/^/  | /' "${DIR26}/run${RUN27}.md.log"
+        FAILED=$((FAILED + 1))
+    fi
+    assert_cmp "case27: re-run ${RUN27} publishes a body byte-identical to the first run" \
+        "${DIR26}/run1.md" "${DIR26}/run${RUN27}.md"
+    assert_not_contains "case27: re-run ${RUN27} logs no new truncation" \
+        "${DIR26}/run${RUN27}.md.log" "release-body-fit:"
+done
+assert_cmp "case27: the stub's round-tripped body equals the first publication" \
+    "${DIR26}/published1.md" "${DIR26}/current_body"
+
+ASSERTIONS=$((ASSERTIONS + 1))
+SENTINEL27="$(count_literal "${DIR26}/current_body" "${SENTINEL_T}")"
+if [ "${SENTINEL27}" = "1" ]; then
+    echo "PASS: case27 the footer appears exactly once after three runs"
+else
+    echo "FAIL: case27 expected one footer after three runs, got ${SENTINEL27}"
+    FAILED=$((FAILED + 1))
+fi
+unset PALADIN_RELEASE_BODY_LIMIT GITHUB_REPOSITORY
+
 # --- The real tree must never be mutated by this test: scripts/ and
 #     .github/workflows/ (this guard only invokes the stubbed GH_BIN, never
 #     the real `gh`, and never writes into the repo tree). -------------------

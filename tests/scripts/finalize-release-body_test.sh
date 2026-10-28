@@ -1067,6 +1067,225 @@ else
 fi
 unset PALADIN_RELEASE_BODY_LIMIT GITHUB_REPOSITORY
 
+# call_count FILE LINE -> prints how many lines of FILE equal LINE exactly.
+call_count() {
+    local count
+    count="$(grep -cx -- "$2" "$1" 2>/dev/null || true)"
+    echo "${count:-0}"
+}
+
+# --- Case 28a: under the default limit the size guard is a no-op -- the
+#     published body is byte-identical to the plain composition and nothing
+#     is logged about fitting. ------------------------------------------------
+DIR28A="${SCRATCH}/case28a"
+mkdir -p "${DIR28A}"
+write_gh_stub "${DIR28A}"
+printf '%s' "${CURATED1}" > "${DIR28A}/current_body"
+printf 'paladin-linux-amd64.tar.gz\npaladin-linux-arm64.tar.gz\n' > "${DIR28A}/assets_file.txt"
+unset PALADIN_RELEASE_BODY_LIMIT
+export GITHUB_REPOSITORY=test/repo
+compose_to case28a expected.md "${CURATED1}" "abc123" "ghcr.io/df3ndr/paladin-dev-env:1.2.3" "450" \
+    "$(cat "${DIR28A}/assets_file.txt")" "" "paladin-v1.2.3.cdx.json"
+ASSERTIONS=$((ASSERTIONS + 1))
+if run_finalize "${DIR28A}" "run1.md" --tag v1.2.3 --image-digest abc123 \
+    --image-ref "ghcr.io/df3ndr/paladin-dev-env:1.2.3" --image-size-mb 450 \
+    --assets-file "${DIR28A}/assets_file.txt" --sbom-asset "paladin-v1.2.3.cdx.json"; then
+    echo "PASS: case28a under-limit finalize run exits 0"
+else
+    echo "FAIL: case28a under-limit finalize run did not exit 0"
+    sed 's/^/  | /' "${DIR28A}/run1.md.log"
+    FAILED=$((FAILED + 1))
+fi
+assert_cmp "case28a: the published body is byte-identical to the plain composition" \
+    "${LAST_COMPOSE_FILE}" "${DIR28A}/current_body"
+assert_not_contains "case28a: no fit is logged for a body under the limit" "${DIR28A}/run1.md.log" "release-body-fit:"
+unset GITHUB_REPOSITORY
+
+# --- Case 28b: a curated section that already carries a create-time footer
+#     (written by the real helper under a small limit) is published unchanged
+#     by a finalize run under the limit: one footer, no re-fit. --------------
+DIR28B="${SCRATCH}/case28b"
+mkdir -p "${DIR28B}"
+write_gh_stub "${DIR28B}"
+make_long_curated "${DIR28B}/long.md" 100
+(
+    # shellcheck source=scripts/release-body-fit.sh
+    RELEASE_BODY_FIT_LIB_ONLY=1 source "${WORKSPACE_ROOT}/scripts/release-body-fit.sh"
+    PALADIN_RELEASE_BODY_LIMIT=1500 PALADIN_RELEASE_BODY_RESERVE=100 \
+        release_body_fit_for_create "${DIR28B}/long.md" "${DIR28B}/current_body" v9.9.9 test/repo
+) >"${DIR28B}/create-fit.log" 2>&1
+ASSERTIONS=$((ASSERTIONS + 1))
+FOOTER28B="$(count_literal "${DIR28B}/current_body" "${SENTINEL_T}")"
+if [ "${FOOTER28B}" = "1" ]; then
+    echo "PASS: case28b fixture is a create-time footered body (one sentinel)"
+else
+    echo "FAIL: case28b fixture should carry one sentinel, got ${FOOTER28B}"
+    sed 's/^/  | /' "${DIR28B}/create-fit.log"
+    FAILED=$((FAILED + 1))
+fi
+CURATED28B="$(cat "${DIR28B}/current_body"; printf x)"
+CURATED28B="${CURATED28B%x}"
+compose_to case28b expected.md "${CURATED28B}" "" "" "" "paladin-linux-amd64.tar.gz" "" ""
+printf 'paladin-linux-amd64.tar.gz\n' > "${DIR28B}/assets_file.txt"
+ASSERTIONS=$((ASSERTIONS + 1))
+if GITHUB_REPOSITORY=test/repo run_finalize "${DIR28B}" "run1.md" --tag v9.9.9 \
+    --assets-file "${DIR28B}/assets_file.txt"; then
+    echo "PASS: case28b finalize over a footered curated section exits 0"
+else
+    echo "FAIL: case28b finalize did not exit 0"
+    sed 's/^/  | /' "${DIR28B}/run1.md.log"
+    FAILED=$((FAILED + 1))
+fi
+assert_cmp "case28b: the footered curated section is published unchanged" \
+    "${LAST_COMPOSE_FILE}" "${DIR28B}/current_body"
+ASSERTIONS=$((ASSERTIONS + 1))
+FOOTER28B="$(count_literal "${DIR28B}/current_body" "${SENTINEL_T}")"
+if [ "${FOOTER28B}" = "1" ]; then
+    echo "PASS: case28b the footer is still singular after finalize"
+else
+    echo "FAIL: case28b expected one sentinel after finalize, got ${FOOTER28B}"
+    FAILED=$((FAILED + 1))
+fi
+assert_not_contains "case28b: no fit is logged" "${DIR28B}/run1.md.log" "release-body-fit:"
+
+# --- Case 28c: a composed body of exactly PALADIN_RELEASE_BODY_LIMIT chars is
+#     published untouched (the boundary is inclusive); one character less
+#     and it is fitted, still inside the limit with its artifact tail intact.
+UNTRUNCATED_CHARS="$(body_chars "${DIR26}/untruncated.md")"
+for LIMIT28C in "${UNTRUNCATED_CHARS}" "$((UNTRUNCATED_CHARS - 1))"; do
+    DIR28C="${SCRATCH}/case28c-${LIMIT28C}"
+    mkdir -p "${DIR28C}"
+    write_gh_stub "${DIR28C}"
+    cp "${DIR26}/curated.md" "${DIR28C}/current_body"
+    ASSERTIONS=$((ASSERTIONS + 1))
+    if PALADIN_RELEASE_BODY_LIMIT="${LIMIT28C}" GITHUB_REPOSITORY=test/repo run_finalize "${DIR28C}" "run1.md" \
+        --tag v9.9.9 --image-digest abc123 --image-ref "ghcr.io/df3ndr/paladin-dev-env:9.9.9" \
+        --image-size-mb 450 --assets-file "${DIR26}/assets_file.txt" --sbom-asset "paladin-v9.9.9.cdx.json"; then
+        echo "PASS: case28c finalize at limit ${LIMIT28C} exits 0"
+    else
+        echo "FAIL: case28c finalize at limit ${LIMIT28C} did not exit 0"
+        sed 's/^/  | /' "${DIR28C}/run1.md.log"
+        FAILED=$((FAILED + 1))
+    fi
+    if [ "${LIMIT28C}" = "${UNTRUNCATED_CHARS}" ]; then
+        assert_cmp "case28c: a body of exactly the limit is published byte-identical" \
+            "${DIR26}/untruncated.md" "${DIR28C}/current_body"
+        assert_not_contains "case28c: no fit is logged at exactly the limit" "${DIR28C}/run1.md.log" "release-body-fit:"
+    else
+        ASSERTIONS=$((ASSERTIONS + 1))
+        PUBLISHED28C="$(body_chars "${DIR28C}/current_body")"
+        if [ "${PUBLISHED28C}" -le "${LIMIT28C}" ]; then
+            echo "PASS: case28c a body one over the limit is fitted to ${PUBLISHED28C} chars (<= ${LIMIT28C})"
+        else
+            echo "FAIL: case28c published ${PUBLISHED28C} chars at limit ${LIMIT28C}"
+            FAILED=$((FAILED + 1))
+        fi
+        tail_from_marker "${DIR28C}/current_body" "${DIR28C}/published.tail" || true
+        assert_cmp "case28c: the artifact tail is intact when the curated part is fitted" \
+            "${DIR26}/untruncated.tail" "${DIR28C}/published.tail"
+        assert_contains "case28c: the fit is logged" "${DIR28C}/run1.md.log" "release-body-fit: original"
+    fi
+done
+
+# --- Case 29a: the artifact sections alone exceed the limit -> a named
+#     failure before `gh release edit`; nothing is published and no artifact
+#     section is dropped to make room. ---------------------------------------
+DIR29A="${SCRATCH}/case29a"
+mkdir -p "${DIR29A}"
+write_gh_stub "${DIR29A}"
+printf '%s' "${CURATED1}" > "${DIR29A}/current_body"
+printf 'paladin-linux-amd64.tar.gz\npaladin-linux-arm64.tar.gz\n' > "${DIR29A}/assets_file.txt"
+ASSERTIONS=$((ASSERTIONS + 1))
+if PALADIN_RELEASE_BODY_LIMIT=200 GITHUB_REPOSITORY=test/repo run_finalize "${DIR29A}" "run1.md" \
+    --tag v1.2.3 --image-digest abc123 --image-ref "ghcr.io/df3ndr/paladin-dev-env:1.2.3" \
+    --image-size-mb 450 --assets-file "${DIR29A}/assets_file.txt" --sbom-asset "paladin-v1.2.3.cdx.json"; then
+    echo "FAIL: case29a expected a non-zero exit when the artifact sections exceed the limit"
+    FAILED=$((FAILED + 1))
+else
+    echo "PASS: case29a artifact sections over the limit exit non-zero"
+fi
+assert_contains "case29a: the failure is named" "${DIR29A}/run1.md.log" "leaves no room"
+ASSERTIONS=$((ASSERTIONS + 1))
+if [ "$(call_count "${DIR29A}/call_log" EDIT)" = "0" ]; then
+    echo "PASS: case29a no release edit was attempted"
+else
+    echo "FAIL: case29a gh release edit was called despite the failure"
+    FAILED=$((FAILED + 1))
+fi
+assert_cmp "case29a: the stored release body is untouched" \
+    <(printf '%s' "${CURATED1}") "${DIR29A}/current_body"
+
+# --- Case 29b: an invalid limit is a named failure before `gh release edit`.
+DIR29B="${SCRATCH}/case29b"
+mkdir -p "${DIR29B}"
+write_gh_stub "${DIR29B}"
+printf '%s' "${CURATED1}" > "${DIR29B}/current_body"
+ASSERTIONS=$((ASSERTIONS + 1))
+if PALADIN_RELEASE_BODY_LIMIT=abc run_finalize "${DIR29B}" "run1.md" --tag v1.2.3; then
+    echo "FAIL: case29b expected a non-zero exit for a non-numeric limit"
+    FAILED=$((FAILED + 1))
+else
+    echo "PASS: case29b a non-numeric limit exits non-zero"
+fi
+assert_contains "case29b: the failure is named" "${DIR29B}/run1.md.log" "must be a positive integer"
+ASSERTIONS=$((ASSERTIONS + 1))
+if [ "$(call_count "${DIR29B}/call_log" EDIT)" = "0" ]; then
+    echo "PASS: case29b no release edit was attempted"
+else
+    echo "FAIL: case29b gh release edit was called despite the failure"
+    FAILED=$((FAILED + 1))
+fi
+
+# --- Case 29c: the artifact part leaves a budget too small for the footer
+#     (positive, but only a few characters) -> the same named failure, and no
+#     release edit. ----------------------------------------------------------
+DIR29C="${SCRATCH}/case29c"
+mkdir -p "${DIR29C}"
+write_gh_stub "${DIR29C}"
+cp "${DIR26}/curated.md" "${DIR29C}/current_body"
+ARTIFACT29C="$(body_chars "${DIR26}/untruncated.tail")"
+ASSERTIONS=$((ASSERTIONS + 1))
+if PALADIN_RELEASE_BODY_LIMIT="$((ARTIFACT29C + 30))" GITHUB_REPOSITORY=test/repo run_finalize "${DIR29C}" "run1.md" \
+    --tag v9.9.9 --image-digest abc123 --image-ref "ghcr.io/df3ndr/paladin-dev-env:9.9.9" \
+    --image-size-mb 450 --assets-file "${DIR26}/assets_file.txt" --sbom-asset "paladin-v9.9.9.cdx.json"; then
+    echo "FAIL: case29c expected a non-zero exit when the budget cannot hold the footer"
+    FAILED=$((FAILED + 1))
+else
+    echo "PASS: case29c a budget too small for the footer exits non-zero"
+fi
+assert_contains "case29c: the failure is named" "${DIR29C}/run1.md.log" "leaves no room"
+ASSERTIONS=$((ASSERTIONS + 1))
+if [ "$(call_count "${DIR29C}/call_log" EDIT)" = "0" ]; then
+    echo "PASS: case29c no release edit was attempted"
+else
+    echo "FAIL: case29c gh release edit was called despite the failure"
+    FAILED=$((FAILED + 1))
+fi
+
+# --- Case 29d: a missing size helper is a named failure before any gh call
+#     (the script copied somewhere its sibling helper does not exist). -------
+DIR29D="${SCRATCH}/case29d"
+mkdir -p "${DIR29D}/scripts"
+write_gh_stub "${DIR29D}"
+cp "${GUARD}" "${DIR29D}/scripts/finalize-release-body.sh"
+printf '%s' "${CURATED1}" > "${DIR29D}/current_body"
+ASSERTIONS=$((ASSERTIONS + 1))
+if FINALIZE_RELEASE_BODY_LIB_ONLY=0 GH_BIN="${DIR29D}/gh-stub.sh" bash "${DIR29D}/scripts/finalize-release-body.sh" \
+    --tag v1.2.3 --output "${DIR29D}/run1.md" >"${DIR29D}/run1.md.log" 2>&1; then
+    echo "FAIL: case29d expected a non-zero exit without the size helper"
+    FAILED=$((FAILED + 1))
+else
+    echo "PASS: case29d a missing size helper exits non-zero"
+fi
+assert_contains "case29d: the failure names the helper" "${DIR29D}/run1.md.log" "release-body-fit.sh not found"
+ASSERTIONS=$((ASSERTIONS + 1))
+if [ ! -e "${DIR29D}/call_log" ]; then
+    echo "PASS: case29d no gh call was made"
+else
+    echo "FAIL: case29d gh was called before the helper check"
+    FAILED=$((FAILED + 1))
+fi
+
 # --- The real tree must never be mutated by this test: scripts/ and
 #     .github/workflows/ (this guard only invokes the stubbed GH_BIN, never
 #     the real `gh`, and never writes into the repo tree). -------------------

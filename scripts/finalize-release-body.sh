@@ -72,6 +72,26 @@
 # uses to stub the GitHub API, so this script's own harness never touches
 # the network either.
 #
+# Size guard (CIREL-05, D-11): GitHub rejects a release body longer than
+# 125,000 characters, and the curated section `create-or-reuse-release.sh`
+# publishes can already sit near that cap before the artifact sections below
+# are appended. After composing, `_frb_fit_composed_body` measures the body
+# against PALADIN_RELEASE_BODY_LIMIT (default 125000, positive integer; the
+# same variable and the same one implementation, scripts/release-body-fit.sh,
+# the create step uses) and, only when it is over, re-fits JUST the curated
+# section to limit minus the artifact part, then recomposes. The artifact
+# sections are never shortened, dropped or reordered, and a body within the
+# limit is left byte-for-byte as composed (nothing logged). The cut is logged
+# by size (`release-body-fit: original N chars, ...`) and leaves a sentinel
+# footer in the body; the helper strips an existing footer before re-fitting,
+# so any number of re-runs publishes the same bytes with the footer once. If
+# the artifact sections alone leave no room for the footer plus one curated
+# character, the script fails by name (`the release artifact sections alone
+# need N chars; limit L leaves no room for the curated notes`) rather than
+# publish an over-limit body; an invalid PALADIN_RELEASE_BODY_LIMIT and a
+# missing release-body-fit.sh are named failures too. `${GITHUB_REPOSITORY}`
+# supplies the footer's changelog link (release.yml passes no --repo).
+#
 # Sourcing seam: set FINALIZE_RELEASE_BODY_LIB_ONLY=1 before sourcing this
 # file to load finalize_release_body_main (and its helpers, including the
 # pure compose_release_body) without executing it -- this file's own
@@ -107,6 +127,10 @@
 #         exit (a non-2xx response from `gh release edit` is already a hard
 #         failure -- no status-code introspection is needed here, unlike
 #         create-or-reuse-release.sh's create/reuse decision table).
+#         A size-guard failure (invalid PALADIN_RELEASE_BODY_LIMIT, missing
+#         release-body-fit.sh, artifact sections that leave no room, a fitted
+#         body still over the limit) is also a non-zero exit, always before
+#         `gh release edit`.
 
 set -euo pipefail
 

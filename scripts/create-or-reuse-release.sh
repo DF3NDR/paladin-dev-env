@@ -39,18 +39,36 @@
 # without executing it -- this file's own regression harness uses this to
 # exercise the function directly.
 #
+# Size guard (CIREL-05, D-11): GitHub rejects a release body over 125,000
+# characters with HTTP 422. On the create path only (lookup 404), a non-empty
+# --body-file longer than PALADIN_RELEASE_BODY_LIMIT characters (default
+# 125000) is first fitted by scripts/release-body-fit.sh -- cut at a line
+# boundary to at most limit - PALADIN_RELEASE_BODY_RESERVE characters (default
+# 5000), ending with a `<!-- paladin:release-truncated -->` footer that links
+# the full CHANGELOG.md at the tag. The original and final sizes are logged to
+# stderr (never the body text) and, under GitHub Actions, a `::warning` is
+# printed. The fit works on a temp copy; the caller's file is never edited. A
+# malformed limit or a body that is not valid UTF-8 is a named failure before
+# any create request. A re-run whose lookup returns 200 reuses the release and
+# never builds or fits a body, so a second run cannot truncate twice.
+#
 # Usage:  ./scripts/create-or-reuse-release.sh --tag <vX.Y.Z>
 #             [--repo <owner/name>] [--body-file <path>] [--name <title>]
 #             [--prerelease <true|false>]
 #         --tag is required. --repo defaults to $GITHUB_REPOSITORY.
 #         --body-file, when omitted, sends an empty release body.
+#         PALADIN_RELEASE_BODY_LIMIT / PALADIN_RELEASE_BODY_RESERVE (env)
+#         tune the size guard described above.
 #         --name defaults to "Release <tag>". --prerelease defaults to
 #         "true" when the tag contains a hyphen and "false" otherwise,
 #         matching the `contains(version, '-')` expression release.yml
 #         already uses. An unrecognised flag is a usage error.
 # Output: on success, prints `upload_url=<value>` and `version=<tag>` to
 #         stdout, and appends the same two lines to $GITHUB_OUTPUT when that
-#         variable is set and non-empty.
+#         variable is set and non-empty. When the size guard truncates a
+#         body, `release-body-fit: original N chars, target T chars, final M
+#         chars` goes to stderr (and a `::warning` annotation to stdout under
+#         GitHub Actions).
 # Exit:   0 on success; non-zero for any HTTP-status failure, a malformed
 #         response (missing/null upload_url), or a usage error.
 
@@ -184,6 +202,18 @@ create_or_reuse_release_main() {
         esac
     fi
 
+    # The shared size helper is resolved from this script's own location, never
+    # the caller's cwd. A missing helper is a named failure before any API call.
+    local WORKSPACE_ROOT FIT_LIB
+    WORKSPACE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    FIT_LIB="${WORKSPACE_ROOT}/scripts/release-body-fit.sh"
+    if [ ! -f "${FIT_LIB}" ]; then
+        echo "ERROR: scripts/release-body-fit.sh not found (looked at ${FIT_LIB})" >&2
+        return 1
+    fi
+    # shellcheck source=scripts/release-body-fit.sh
+    RELEASE_BODY_FIT_LIB_ONLY=1 source "${FIT_LIB}"
+
     local HTTP_STATUS="" HTTP_BODY="" RELEASE_JSON=""
 
     # --- Lookup by tag. -----------------------------------------------------
@@ -194,10 +224,33 @@ create_or_reuse_release_main() {
         RELEASE_JSON="${HTTP_BODY}"
     elif [ "${HTTP_STATUS}" = "404" ]; then
         # --- Create. ---------------------------------------------------------
+        # Fit an over-limit body into a temp copy first (the caller's file is
+        # never edited); a fit failure returns before any create request. The
+        # fit runs in this shell, not in a command substitution, so its
+        # `::warning` annotation reaches the runner on stdout.
+        local FITTED="" BODY_FOR_PAYLOAD="${BODY_FILE}"
+        if [ -n "${BODY_FILE}" ]; then
+            if [ ! -f "${BODY_FILE}" ]; then
+                echo "ERROR: --body-file not found: ${BODY_FILE}" >&2
+                return 1
+            fi
+            if ! FITTED="$(mktemp "${TMPDIR:-/tmp}/release-body-fitted.XXXXXX")"; then
+                echo "ERROR: could not create a temp file for the fitted release body" >&2
+                return 1
+            fi
+            if ! release_body_fit_for_create "${BODY_FILE}" "${FITTED}" "${TAG}" "${REPO}"; then
+                rm -f "${FITTED}"
+                return 1
+            fi
+            BODY_FOR_PAYLOAD="${FITTED}"
+        fi
+
         local PAYLOAD
-        if ! PAYLOAD=$(_cor_build_payload "${TAG}" "${NAME}" "${BODY_FILE}" "${PRERELEASE}"); then
+        if ! PAYLOAD=$(_cor_build_payload "${TAG}" "${NAME}" "${BODY_FOR_PAYLOAD}" "${PRERELEASE}"); then
+            [ -z "${FITTED}" ] || rm -f "${FITTED}"
             return 1
         fi
+        [ -z "${FITTED}" ] || rm -f "${FITTED}"
 
         _cor_gh_call POST "repos/${REPO}/releases" "${PAYLOAD}"
 

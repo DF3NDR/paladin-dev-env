@@ -427,6 +427,211 @@ else
     FAILED=$((FAILED + 1))
 fi
 
+# gen_body_file CHARS FILE -> exactly CHARS code points of numbered ASCII
+# lines (49 characters plus a newline each), generated with python3. Length
+# is always counted in code points with python3, never `wc -m`.
+gen_body_file() {
+    python3 -I - "$1" "$2" <<'PY'
+import sys
+n, path = int(sys.argv[1]), sys.argv[2]
+out, i, total = [], 0, 0
+while total < n:
+    out.append(("line %05d " % i).ljust(49, "x") + "\n")
+    i += 1
+    total += 50
+open(path, "w", encoding="utf-8", newline="").write("".join(out)[:n])
+PY
+}
+
+# payload_body_to_file DIR OUT -> writes the payload's .body (exact bytes) to OUT.
+payload_body_to_file() {
+    jq -j .body "$1/captured_payload" > "$2"
+}
+
+# body_prefix_then_footer IN OUT TAG REPO -> OUT is a newline-ended prefix of
+# IN, then a blank line, the sentinel and a footer naming the changelog URL.
+body_prefix_then_footer() {
+    python3 -I - "$1" "$2" "$3" "$4" <<'PY'
+import sys
+orig = open(sys.argv[1], "rb").read().decode("utf-8")
+got = open(sys.argv[2], "rb").read().decode("utf-8")
+tag, repo = sys.argv[3], sys.argv[4]
+S = "<!-- paladin:release-truncated -->"
+if got.count(S) != 1:
+    sys.exit(1)
+idx = got.index(S)
+kept = got[: idx - 1]
+url = "https://github.com/%s/blob/%s/CHANGELOG.md" % (repo, tag)
+ok = (
+    idx >= 1
+    and got[idx - 1] == "\n"
+    and kept.endswith("\n")
+    and len(kept) > 0
+    and orig.startswith(kept)
+    and url in got[idx:]
+    and got.endswith("\n")
+)
+sys.exit(0 if ok else 1)
+PY
+}
+
+# new_create_case DIR -> a 404-lookup / 201-create fixture directory.
+new_create_case() {
+    mkdir -p "$1"
+    write_gh_stub "$1"
+    echo "404" > "$1/lookup_status"
+    echo '{}' > "$1/lookup_body"
+    echo "201" > "$1/create_status"
+    echo '{"upload_url":"https://example.com/upload-fit"}' > "$1/create_body"
+}
+
+# --- Case 11 (D-11, CIREL-05): with the default limit (125000), a body of
+#     about 130,000 characters is cut to at most limit - reserve (120000)
+#     characters at a line boundary, ends with the sentinel footer naming
+#     CHANGELOG.md at the tag, and the size log never carries body text. -----
+unset PALADIN_RELEASE_BODY_LIMIT PALADIN_RELEASE_BODY_RESERVE
+DIR11="${SCRATCH}/case11"
+new_create_case "${DIR11}"
+BODY_FILE11="${DIR11}/body.md"
+gen_body_file 130000 "${BODY_FILE11}"
+cp "${BODY_FILE11}" "${BODY_FILE11}.orig"
+assert_silent "${DIR11}" "an over-limit body is truncated and still created" \
+    --tag v1.2.3 --repo test/repo --body-file "${BODY_FILE11}"
+assert_call_count "${DIR11}" "over-limit body makes exactly one create call" 1
+payload_body_to_file "${DIR11}" "${DIR11}/sent.md"
+ASSERTIONS=$((ASSERTIONS + 1))
+SENT11_LEN="$(python3 -I -c 'import sys; print(len(open(sys.argv[1], "rb").read().decode("utf-8")))' "${DIR11}/sent.md")"
+if [ "${SENT11_LEN}" -le 120000 ]; then
+    echo "PASS: case 11 payload .body is ${SENT11_LEN} characters (<= 120000)"
+else
+    echo "FAIL: case 11 payload .body is ${SENT11_LEN} characters, expected <= 120000"
+    FAILED=$((FAILED + 1))
+fi
+ASSERTIONS=$((ASSERTIONS + 1))
+if body_prefix_then_footer "${BODY_FILE11}" "${DIR11}/sent.md" v1.2.3 test/repo; then
+    echo "PASS: case 11 payload is a newline-ended prefix of the body, then the footer naming https://github.com/test/repo/blob/v1.2.3/CHANGELOG.md"
+else
+    echo "FAIL: case 11 payload is not <prefix at a line boundary> + sentinel footer with the changelog URL"
+    FAILED=$((FAILED + 1))
+fi
+ASSERTIONS=$((ASSERTIONS + 1))
+if grep -qF -- "release-body-fit: original 130000 chars" <<<"${LAST_OUTPUT}" \
+    && ! grep -qE -- '^line [0-9]{5} ' <<<"${LAST_OUTPUT}"; then
+    echo "PASS: case 11 logs the sizes and never a line of the body text"
+else
+    echo "FAIL: case 11 output lacks the size log or leaks body text"
+    echo "${LAST_OUTPUT}" | cut -c1-160 | head -10 | sed 's/^/  | /'
+    FAILED=$((FAILED + 1))
+fi
+ASSERTIONS=$((ASSERTIONS + 1))
+if cmp -s "${BODY_FILE11}" "${BODY_FILE11}.orig"; then
+    echo "PASS: case 11 left the caller's body file untouched"
+else
+    echo "FAIL: case 11 modified the caller's body file"
+    FAILED=$((FAILED + 1))
+fi
+
+# --- Case 12 (boundary): limit 2000, reserve 500. A body of exactly the limit
+#     is sent byte-identical; one character more is truncated to <= 1500. ----
+export PALADIN_RELEASE_BODY_LIMIT=2000 PALADIN_RELEASE_BODY_RESERVE=500
+DIR12A="${SCRATCH}/case12a"
+new_create_case "${DIR12A}"
+gen_body_file 2000 "${DIR12A}/body.md"
+cp "${DIR12A}/body.md" "${DIR12A}/body.orig"
+assert_silent "${DIR12A}" "a body of exactly the limit is created" \
+    --tag v1.2.3 --repo test/repo --body-file "${DIR12A}/body.md"
+assert_call_count "${DIR12A}" "at-limit body makes exactly one create call" 1
+ASSERTIONS=$((ASSERTIONS + 1))
+if jq -j .body "${DIR12A}/captured_payload" | cmp -s - "${DIR12A}/body.md"; then
+    echo "PASS: case 12 at-limit body is sent byte-identical"
+else
+    echo "FAIL: case 12 at-limit body was altered"
+    FAILED=$((FAILED + 1))
+fi
+ASSERTIONS=$((ASSERTIONS + 1))
+if cmp -s "${DIR12A}/body.md" "${DIR12A}/body.orig"; then
+    echo "PASS: case 12 at-limit run left the caller's body file untouched"
+else
+    echo "FAIL: case 12 at-limit run modified the caller's body file"
+    FAILED=$((FAILED + 1))
+fi
+DIR12B="${SCRATCH}/case12b"
+new_create_case "${DIR12B}"
+gen_body_file 2001 "${DIR12B}/body.md"
+cp "${DIR12B}/body.md" "${DIR12B}/body.orig"
+assert_silent "${DIR12B}" "a body one character over the limit is created" \
+    --tag v1.2.3 --repo test/repo --body-file "${DIR12B}/body.md"
+payload_body_to_file "${DIR12B}" "${DIR12B}/sent.md"
+ASSERTIONS=$((ASSERTIONS + 1))
+SENT12_LEN="$(python3 -I -c 'import sys; print(len(open(sys.argv[1], "rb").read().decode("utf-8")))' "${DIR12B}/sent.md")"
+if [ "${SENT12_LEN}" -le 1500 ] && body_prefix_then_footer "${DIR12B}/body.md" "${DIR12B}/sent.md" v1.2.3 test/repo; then
+    echo "PASS: case 12 one-over body is truncated to ${SENT12_LEN} characters (<= 1500) with the footer"
+else
+    echo "FAIL: case 12 one-over body is ${SENT12_LEN} characters or lacks the footer"
+    FAILED=$((FAILED + 1))
+fi
+ASSERTIONS=$((ASSERTIONS + 1))
+if cmp -s "${DIR12B}/body.md" "${DIR12B}/body.orig"; then
+    echo "PASS: case 12 one-over run left the caller's body file untouched"
+else
+    echo "FAIL: case 12 one-over run modified the caller's body file"
+    FAILED=$((FAILED + 1))
+fi
+
+# --- Case 13 (encoding): a multi-byte body whose BYTES exceed the limit but
+#     whose CHARACTERS do not is sent byte-identical (length is code points,
+#     not bytes). -------------------------------------------------------------
+DIR13="${SCRATCH}/case13"
+new_create_case "${DIR13}"
+python3 -I -c 'import sys; open(sys.argv[1], "w", encoding="utf-8", newline="").write("日" * 1500)' "${DIR13}/body.md"
+ASSERTIONS=$((ASSERTIONS + 1))
+BYTES13="$(wc -c < "${DIR13}/body.md" | tr -d ' ')"
+if [ "${BYTES13}" -gt 2000 ]; then
+    echo "PASS: case 13 body is ${BYTES13} bytes (> 2000) but 1500 characters"
+else
+    echo "FAIL: case 13 body is only ${BYTES13} bytes"
+    FAILED=$((FAILED + 1))
+fi
+assert_silent "${DIR13}" "a multi-byte body under the character limit is created" \
+    --tag v1.2.3 --repo test/repo --body-file "${DIR13}/body.md"
+ASSERTIONS=$((ASSERTIONS + 1))
+if jq -j .body "${DIR13}/captured_payload" | cmp -s - "${DIR13}/body.md"; then
+    echo "PASS: case 13 multi-byte body is sent byte-identical"
+else
+    echo "FAIL: case 13 multi-byte body was altered"
+    FAILED=$((FAILED + 1))
+fi
+unset PALADIN_RELEASE_BODY_LIMIT PALADIN_RELEASE_BODY_RESERVE
+
+# --- Case 14 (named failures, T-52-10): an invalid limit and an invalid-UTF-8
+#     body each fail by name BEFORE any create call. A lookup-200 re-run never
+#     builds or fits a body at all, so it cannot truncate twice. -------------
+DIR14A="${SCRATCH}/case14a"
+new_create_case "${DIR14A}"
+gen_body_file 500 "${DIR14A}/body.md"
+export PALADIN_RELEASE_BODY_LIMIT=abc
+assert_fire "${DIR14A}" "a non-numeric PALADIN_RELEASE_BODY_LIMIT is a named failure" "must be a positive integer" \
+    --tag v1.2.3 --repo test/repo --body-file "${DIR14A}/body.md"
+unset PALADIN_RELEASE_BODY_LIMIT
+assert_call_count "${DIR14A}" "an invalid limit makes no create call" 0
+DIR14B="${SCRATCH}/case14b"
+new_create_case "${DIR14B}"
+printf 'valid start \377\376 invalid tail\n' > "${DIR14B}/body.md"
+assert_fire "${DIR14B}" "an invalid-UTF-8 body is a named failure" "not valid UTF-8" \
+    --tag v1.2.3 --repo test/repo --body-file "${DIR14B}/body.md"
+assert_call_count "${DIR14B}" "an invalid-UTF-8 body makes no create call" 0
+DIR14C="${SCRATCH}/case14c"
+mkdir -p "${DIR14C}"
+write_gh_stub "${DIR14C}"
+echo "200" > "${DIR14C}/lookup_status"
+echo '{"upload_url":"https://example.com/upload-14c"}' > "${DIR14C}/lookup_body"
+printf 'valid start \377\376 invalid tail\n' > "${DIR14C}/body.md"
+export PALADIN_RELEASE_BODY_LIMIT=abc
+assert_silent "${DIR14C}" "a lookup-200 re-run reuses the release without ever fitting a body" \
+    --tag v1.2.3 --repo test/repo --body-file "${DIR14C}/body.md"
+unset PALADIN_RELEASE_BODY_LIMIT
+assert_call_count "${DIR14C}" "a lookup-200 re-run makes no create call" 0
+
 # --- Missing --tag: usage error. -------------------------------------------
 DIR_MISSING_TAG="${SCRATCH}/case-missing-tag"
 mkdir -p "${DIR_MISSING_TAG}"

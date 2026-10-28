@@ -11,11 +11,11 @@
 # grep, comm, sort and diff only.
 #
 # ROW-LEVEL (D-04): the comparison is the SET of `crate | type` PAIRS, not
-# just crate names -- a §9.2 or §10.2 row and an allowlist entry naming DIFFERENT
+# just crate names -- a §11.2 row and an allowlist entry naming DIFFERENT
 # types under the SAME crate must fail. The set is a DEDUPLICATED set, never
-# a row count against an entry count: `paladin-ai | Settings` is
-# deliberately marked `Y` on separate §9.2 and §10.2 rows that all legitimately
-# mirror the SAME allowlist entry -- they must collapse to one set member.
+# a row count against an entry count: two `Y` rows under §11.2 that name the
+# same crate and type legitimately mirror the SAME allowlist entry -- they
+# must collapse to one set member.
 #
 # Inputs are resolved relative to the workspace root (derived from this
 # script's own location, never the caller's cwd), and may be overridden via
@@ -67,11 +67,17 @@ trap 'rm -rf "${SCRATCH}"' EXIT
 MIGRATION_PAIRS="${SCRATCH}/migration-deliberate-pairs.txt"
 ALLOWLIST_PAIRS="${SCRATCH}/allowlist-pairs.txt"
 
-# Register side: scoped to the §9.2 and §10.2 sections only (MIGRATION.md is a
-# two-part guide: §10.2 is the v0.11 register, §9.2 the v0.10 one, both read
-# by this gate so a deliberate break cannot hide under a heading the window
-# does not read), so a "Y" elsewhere in the
-# document can't leak in. Data rows are selected by a leading pipe
+# Register side: scoped to the §11.2 section only. MIGRATION.md is a
+# three-part guide, newest first. §11.2 is the open v0.11.0 -> v0.11.1
+# register and the only one this gate reads: a deliberate break landing in
+# v0.11.1 must add a §11.2 row and an allowlist entry in the same commit.
+# §10.2 (v0.10.1 -> v0.11.0) and §9.2 (v0.9.0 -> v0.10.0) are frozen records
+# of breaks already shipped against older baselines, which the published
+# 0.11.0 now contains, so they are no longer read; a `Y` there, or anywhere
+# else outside the window, can't leak in. The window ends at the `## 11.3 `
+# heading, which is its terminator and MUST exist: without it the awk range
+# would run on through §10 and §9 and read the frozen registers as if they
+# were open (the harness pins this). Data rows are selected by a leading pipe
 # immediately followed by a backtick, which excludes the table header and
 # its `---` separator row. Field 2 is the crate (trimmed of
 # spaces/tabs/backticks); field 3's FIRST backtick-quoted identifier is the
@@ -88,7 +94,7 @@ ALLOWLIST_PAIRS="${SCRATCH}/allowlist-pairs.txt"
 # register or an empty allowlist is a legal state -- both empty is the
 # set-equal baseline this check shipped with) while still failing on exit 2
 # (a real error).
-awk '/^## (9|10)\.2 /{flag=1; next} /^## (9|10)\.3 /{flag=0} flag' "${MIGRATION_FILE}" \
+awk '/^## 11\.2 /{flag=1; next} /^## 11\.3 /{flag=0} flag' "${MIGRATION_FILE}" \
     | { grep -E '^\| `' || test $? -eq 1; } \
     | awk -F'|' '{
         crate=$2; gsub(/^[ \t`]+|[ \t`]+$/, "", crate);
@@ -119,14 +125,14 @@ awk '/^## (9|10)\.2 /{flag=1; next} /^## (9|10)\.3 /{flag=0} flag' "${MIGRATION_
       }' \
     | sort -u > "${ALLOWLIST_PAIRS}"
 
-echo "MIGRATION.md §9.2 and §10.2 deliberate-breaking crate|type pairs:"
+echo "MIGRATION.md §11.2 deliberate-breaking crate|type pairs:"
 cat "${MIGRATION_PAIRS}"
 echo "Allowlist crate|type pairs:"
 cat "${ALLOWLIST_PAIRS}"
 
 STATUS=0
 if ! diff -u "${MIGRATION_PAIRS}" "${ALLOWLIST_PAIRS}"; then
-    echo "::error::Allowlist and MIGRATION.md §9.2 and §10.2 deliberate-breaking crate|type pairs are not set-equal (see diff above)."
+    echo "::error::Allowlist and MIGRATION.md §11.2 deliberate-breaking crate|type pairs are not set-equal (see diff above)."
     STATUS=1
 fi
 
@@ -179,5 +185,5 @@ fi
 if [ "${STATUS}" -ne 0 ]; then
     exit 1
 fi
-echo "Allowlist is set-equal to the MIGRATION.md §9.2 and §10.2 deliberate-breaking registers (crate|type pairs)."
+echo "Allowlist is set-equal to the MIGRATION.md §11.2 deliberate-breaking register (crate|type pairs)."
 echo "Every crate-wide cargo-semver-checks allow is mirrored by an allowlist entry (crate|lint pairs)."

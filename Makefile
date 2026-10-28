@@ -210,7 +210,7 @@ check-codeql-dismissals: ## Verify CODEQL-DISMISSALS.md is schema-complete, non-
 	@./scripts/check-codeql-dismissals.sh
 
 .PHONY: check-migration-allowlist
-check-migration-allowlist: ## Verify MIGRATION.md §9.2 register is set-equal to .cargo/semver-checks-allowlist.toml (row-level, PRIM-05)
+check-migration-allowlist: ## Verify the MIGRATION.md §11.2 register is set-equal to .cargo/semver-checks-allowlist.toml (row-level, PRIM-05; crate-wide allows mirrored)
 	@./scripts/check-migration-allowlist.sh
 
 .PHONY: check-publish-order

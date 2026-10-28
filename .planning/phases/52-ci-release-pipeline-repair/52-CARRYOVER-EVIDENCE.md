@@ -1,0 +1,153 @@
+# Phase 52 Plan 03: Carry-over evidence (CIREL-06, CIREL-07)
+
+Evidence for the two Phase 47 carry-overs that need GitHub access: closing issue #41 (D-15) and
+triaging the advisory CodeQL alerts into `CODEQL-DISMISSALS.md` (D-13, D-14). Raw API JSON was kept
+in the session scratchpad only; this file holds the extracted values. Every value below was read
+from the public GitHub API during plan 52-03, on 2026-10-28, through the sandbox proxy, with no
+credential. CodeQL stays advisory-only (`.github/workflows/codeql.yml` is untouched and is not a
+required check).
+
+## Issue #41
+
+### Public facts
+
+| Fact | Value | Source URL | Read at (UTC) |
+|------|-------|------------|---------------|
+| Issue #41 title | `Automatic Releases on GitHub` | https://api.github.com/repos/DF3NDR/paladin-dev-env/issues/41 | 2026-10-28T22:36:01Z |
+| Issue #41 state before this plan | `open`, `state_reason` null, `comments` 0 | https://api.github.com/repos/DF3NDR/paladin-dev-env/issues/41 | 2026-10-28T22:36:01Z |
+| Release URL | https://github.com/DF3NDR/paladin-dev-env/releases/tag/v0.11.0 (`tag_name` `v0.11.0`, `draft` false, `prerelease` false) | https://api.github.com/repos/DF3NDR/paladin-dev-env/releases/tags/v0.11.0 | 2026-10-28T22:36:02Z |
+| Release `published_at` | `2026-10-26T20:29:52Z` | https://api.github.com/repos/DF3NDR/paladin-dev-env/releases/tags/v0.11.0 | 2026-10-28T22:36:02Z |
+| Release body length | 109810 characters (`jq '.body \| length'`) | https://api.github.com/repos/DF3NDR/paladin-dev-env/releases/tags/v0.11.0 | 2026-10-28T22:36:02Z |
+| Release assets (10, sorted) | `SHA256SUMS`, `paladin-linux-amd64.tar.gz`, `paladin-linux-amd64.tar.gz.sha256`, `paladin-linux-arm64.tar.gz`, `paladin-linux-arm64.tar.gz.sha256`, `paladin-macos-amd64.tar.gz`, `paladin-macos-amd64.tar.gz.sha256`, `paladin-macos-arm64.tar.gz`, `paladin-macos-arm64.tar.gz.sha256`, `paladin-v0.11.0.cdx.json` | https://api.github.com/repos/DF3NDR/paladin-dev-env/releases/tags/v0.11.0 | 2026-10-28T22:36:02Z |
+| Run 40396108246 | workflow `Release`, event `push`, `head_branch` `v0.11.0`, `conclusion` `success`, URL https://github.com/DF3NDR/paladin-dev-env/actions/runs/40396108246 | https://api.github.com/repos/DF3NDR/paladin-dev-env/actions/runs/40396108246 | 2026-10-28T22:36:02Z |
+| Run `head_sha` | `70657919beadbd341a72be2d0107080017a803f0` (the PR #59 merge commit) | https://api.github.com/repos/DF3NDR/paladin-dev-env/actions/runs/40396108246 | 2026-10-28T22:36:02Z |
+| Job `Create Release` | `success` | https://api.github.com/repos/DF3NDR/paladin-dev-env/actions/runs/40396108246/jobs?per_page=100 | 2026-10-28T22:36:02Z |
+| Jobs `Build Binaries (...)` | four matrix jobs, all `success`: `Build Binaries (macos-latest, aarch64-apple-darwin, paladin-macos-arm64)`, `Build Binaries (ubuntu-latest, x86_64-unknown-linux-gnu, paladin-linux-amd64)`, `Build Binaries (macos-latest, x86_64-apple-darwin, paladin-macos-amd64)`, `Build Binaries (ubuntu-latest, aarch64-unknown-linux-gnu, paladin-linux-arm64)` | https://api.github.com/repos/DF3NDR/paladin-dev-env/actions/runs/40396108246/jobs?per_page=100 | 2026-10-28T22:36:02Z |
+| Job `Generate SBOM` | `success` | https://api.github.com/repos/DF3NDR/paladin-dev-env/actions/runs/40396108246/jobs?per_page=100 | 2026-10-28T22:36:02Z |
+| Job `Finalize Release Body` | `success` | https://api.github.com/repos/DF3NDR/paladin-dev-env/actions/runs/40396108246/jobs?per_page=100 | 2026-10-28T22:36:02Z |
+| Job `Publish to crates.io` | `success` | https://api.github.com/repos/DF3NDR/paladin-dev-env/actions/runs/40396108246/jobs?per_page=100 | 2026-10-28T22:36:02Z |
+
+The run holds 12 jobs in total (`total_count` 12, all `success`). The table lists eight of them
+(`Create Release`, the four `Build Binaries` matrix jobs, `Generate SBOM`, `Finalize Release Body`,
+`Publish to crates.io`). The other four are `Verify Tag From Main`, `Pre-Publish Consistency Gate`,
+`Test Suite` and `Build and Push Docker Images`.
+
+Difference from the `<interfaces>` expectation: every expected value was confirmed. The one
+refinement is that `Build Binaries` is a four-target matrix, so the API reports four jobs whose
+names carry a parenthesised suffix. The comment says `Build Binaries` (four-target matrix) for
+that reason; no other wording changed from RESEARCH "Code Examples 6".
+
+### Evidence comment (saved verbatim, as submitted)
+
+```
+Closing as completed: `release.yml` now produces the GitHub Release for every version tag.
+Release: https://github.com/DF3NDR/paladin-dev-env/releases/tag/v0.11.0 (published 2026-10-26T20:29:52Z,
+10 assets: paladin-{linux,macos}-{amd64,arm64}.tar.gz each with a .sha256, SHA256SUMS, paladin-v0.11.0.cdx.json CycloneDX SBOM).
+Produced by the `release.yml` jobs `Create Release`, `Build Binaries` (four-target matrix), `Generate SBOM` and `Finalize Release Body`
+(run 40396108246 on merge commit 70657919), with crates published by `Publish to crates.io`.
+```
+
+The platform appended a trailer line to the posted comment (`_Generated by [Claude Code](https://claude.ai/code)_`);
+it is not part of the saved text above.
+
+### Write attempt
+
+Only the sandbox's own token was used. No other credential was sought. Token-shaped strings are
+redacted below (none appeared).
+
+| # (UTC) | Command | Outcome |
+|---------|---------|---------|
+| 1 (2026-10-28T22:36:22Z) | `gh issue comment 41 --repo DF3NDR/paladin-dev-env --body-file <scratch comment file>` | exit 1. First error line: `HTTP 403: GitHub GraphQL is not available from Claude Code sessions; use the REST API (gh api repos/{owner}/{repo}/...)`. This is a transport refusal (`gh issue comment` is a GraphQL call), not an authorization verdict. `gh auth status` in the same session: exit 1, `The token in GH_TOKEN is invalid.` |
+| 2 (2026-10-28T22:36:39Z) | `gh api --method POST /repos/DF3NDR/paladin-dev-env/issues/41/comments --input <scratch payload holding the saved text as {"body": ...}>` (the REST equivalent of row 1, same token, the route the refusal named) | exit 0. Comment posted: https://github.com/DF3NDR/paladin-dev-env/issues/41#issuecomment-6482461863 (comment id 6482461863, `created_at` 2026-10-28T22:36:39Z). |
+| 3 (time not captured: denied before the command ran, between 22:36:39Z and 22:37:01Z) | `gh api --method PATCH /repos/DF3NDR/paladin-dev-env/issues/41 -f state=closed -f state_reason=completed` (the REST equivalent of `gh issue close 41 --repo DF3NDR/paladin-dev-env --reason completed`) | NOT EXECUTED. The Claude Code permission system denied the call (reason: External System Writes). It was not retried and no workaround was attempted. |
+
+Public re-read after the attempts (https://api.github.com/repos/DF3NDR/paladin-dev-env/issues/41 and
+`.../issues/41/comments`, 2026-10-28T22:37:01Z): `state` is `open`, `state_reason` null, `closed_at`
+null, `comments` 1 (the comment id 6482461863 above). So the evidence comment is present and the
+issue is NOT closed.
+
+### What the maintainer still has to run for #41
+
+The evidence comment is already posted. Do NOT post it again. Only the close remains:
+
+```bash
+gh issue close 41 --repo DF3NDR/paladin-dev-env --reason completed
+```
+
+Fallback if the comment has to be re-posted on another day (for example after a deletion):
+`gh issue comment 41 --repo DF3NDR/paladin-dev-env --body-file <file holding the fenced text above>`.
+
+## CodeQL alert intake
+
+### Sandbox pull attempts
+
+| Time (UTC) | Command | Result |
+|------------|---------|--------|
+| 2026-10-28T22:37:08Z | `gh api "/repos/DF3NDR/paladin-dev-env/code-scanning/alerts?state=open&ref=refs/heads/main&per_page=100" --paginate` | exit 1, HTTP 403 `Resource not accessible by integration` |
+| 2026-10-28T22:37:08Z | the same with `ref=refs/pull/59/head` | exit 1, HTTP 403 `Resource not accessible by integration` |
+| 2026-10-28T22:37:08Z | unauthenticated `curl` of the same two URLs | HTTP 403 `Resource not accessible by integration` for both |
+
+The sandbox cannot read code-scanning alerts, so the alert numbers are a maintainer hand-off
+(PD-03-1). No alert row is written before the maintainer's reply.
+
+### Maintainer command (run both refs, paste the tab-separated output)
+
+```bash
+gh api "/repos/DF3NDR/paladin-dev-env/code-scanning/alerts?state=open&ref=refs/heads/main&per_page=100" --paginate \
+  --jq '.[] | [.number, .rule.id, .rule.security_severity_level, .most_recent_instance.ref, (.most_recent_instance.location.path + ":" + (.most_recent_instance.location.start_line|tostring))] | @tsv'
+
+gh api "/repos/DF3NDR/paladin-dev-env/code-scanning/alerts?state=open&ref=refs/pull/59/head&per_page=100" --paginate \
+  --jq '.[] | [.number, .rule.id, .rule.security_severity_level, .most_recent_instance.ref, (.most_recent_instance.location.path + ":" + (.most_recent_instance.location.start_line|tostring))] | @tsv'
+```
+
+An alert open on both refs appears on both; list each `number` once when pasting. If neither ref
+has an open alert, reply `alerts: none`.
+
+### Pre-triage from public check-run annotations (no alert numbers)
+
+PR #59 (merged: true) had `head_sha` `72e13f9583ffe2b89580049045ac094ed3d46dbf` and
+`merge_commit_sha` `70657919beadbd341a72be2d0107080017a803f0`
+(https://api.github.com/repos/DF3NDR/paladin-dev-env/pulls/59, read 2026-10-28T22:37:15Z).
+On that head, check run 121611604849 `CodeQL` (completed 2026-10-26T13:51:39Z, `conclusion`
+`failure`, https://github.com/DF3NDR/paladin-dev-env/runs/121611604849) reports
+`24 new alerts including 24 high severity security vulnerabilities`, with 24 annotations (read from
+https://api.github.com/repos/DF3NDR/paladin-dev-env/check-runs/121611604849/annotations at
+2026-10-28T22:37:22Z). All 24 are titled `Cleartext logging of sensitive information`
+(rule `rust/cleartext-logging`). The check run's summary adds: "Alerts not introduced by this pull
+request might have been detected because the code changes were too large", so this list is the
+PR-diff view, and the maintainer's open-alert list stays the authority. Lines are as of the PR
+head, and the current tree may differ.
+
+| # | path:line (at PR head) | sink named by the annotation |
+|---|------------------------|------------------------------|
+| 1 | `crates/paladin-llm/src/config/layers.rs:700` | `resolve_secret_placeholder(...)` |
+| 2 | `crates/paladin-llm/src/config/layers.rs:750` | `resolve_secret_placeholder(...)` |
+| 3 | `crates/paladin-memory/src/citadel/file_citadel.rs:175` | `... .uuid` |
+| 4 | `crates/paladin-memory/src/services/rag_retrieval_service.rs:360` | `... .to_string()` |
+| 5 | `examples/citadel_autosave.rs:81` | `paladin.uuid` |
+| 6 | `examples/citadel_autosave.rs:116` | `&...` |
+| 7 | `examples/citadel_autosave.rs:130` | `&...` |
+| 8 | `examples/citadel_restore.rs:76` | `paladin.uuid` |
+| 9 | `examples/citadel_restore.rs:135` | `restored_paladin.uuid` |
+| 10 | `examples/citadel_restore.rs:141` | `paladin.uuid` |
+| 11 | `examples/citadel_restore.rs:142` | `restored_paladin.uuid` |
+| 12 | `examples/paladin_with_config.rs:196` | `... .user_name` |
+| 13 | `src/application/services/paladin/paladin_builder.rs:1518` | `... .user_name(...)` (several sinks) |
+| 14 | `src/application/services/paladin/paladin_builder.rs:1591` | `... .user_name(...)` (several sinks) |
+| 15 | `src/application/services/paladin/paladin_builder.rs:1558` | `... .user_name(...)` (several sinks) |
+| 16 | `src/application/services/paladin/prompt_generation_service.rs:112` | `... .user_name(...)` (several sinks) |
+| 17 | `src/application/services/paladin/prompt_generation_service.rs:119` | `... .user_name(...)` (several sinks) |
+| 18 | `src/application/services/paladin/prompt_generation_service.rs:169` | `... .user_name(...)` (several sinks) |
+| 19 | `src/bin/paladin-server.rs:472` | `... .len()` |
+| 20 | `src/config/treasurer.rs:1555` | `... .keys()` |
+| 21 | `src/config/treasurer.rs:1556` | `... .keys()` |
+| 22 | `src/config/treasurer.rs:1566` | `... .keys()` |
+| 23 | `src/config/treasurer.rs:1567` | `... .keys()` |
+| 24 | `src/config/treasurer.rs:1583` | `... .keys()` |
+
+The same PR head also has check run 121604229662 `CodeQL Analysis (Rust)` (`conclusion` `success`,
+5 annotations, all workflow warnings or notices about the Actions runner, not code-scanning alerts).
+
+Two entries deserve a careful look when triaging because the sink text could be a real secret path
+rather than a heuristic hit: `crates/paladin-llm/src/config/layers.rs:700` and `:750` (the sink is
+`resolve_secret_placeholder(...)`). This is a note for Task 3, not a disposition.

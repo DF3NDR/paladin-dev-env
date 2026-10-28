@@ -613,22 +613,27 @@ gh issue close 41 --repo DF3NDR/paladin-dev-env --reason completed
 | A7 | cargo-semver-checks output in CI may contain ANSI codes (`CARGO_TERM_COLOR=always`); the tripwire strips them defensively. | Code Examples 1 | None if stripped; a false positive otherwise. |
 | A8 | A future toolchain bump may require a newer `cargo-semver-checks` pin. | Pitfall 9 | Gate error rather than silent pass; low. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Is the semver check meant to become a required check?** (Discrepancy 2)
    - Known: it is advisory in both the live ruleset and `cicd.md`; D-08 assumes required.
    - Unclear: whether the maintainer wants it blocking.
    - Recommendation: make it required (additive ruleset PUT plus `cicd.md` row); ask the user to confirm in plan review since the phase goal says the gates should "actually check something".
+   - RESOLVED: 52-06 PD-06-1 makes `Semver Checks (vs v0.11.0)` required in the committed ruleset record and `cicd.md` (46 contexts). It is a planner default awaiting user confirmation, with a named veto path: the user confirms or vetoes at handover H-01 (52-08), and a veto is applied by 52-08 Task 3, which removes the context from the committed record and sets the docs back to advisory (45 contexts).
 
 2. **Remove all six crate-wide allow tables (28 lines) or only the two named manifests?** (Discrepancy 1)
    - Known: the script forces all six if the allowlist is emptied; all six are measured redundant.
    - Recommendation: remove all six; treat as covered by D-02 "every redundant crate-wide allow". No user input strictly needed, but the plan should call it out.
+   - RESOLVED: 52-05 PD-05-1 removes all six tables (28 lines) after an in-phase re-measurement, called out as a scope clarification of CIREL-02 under D-02, not a widening.
 
 3. **Who closes #41 and applies the CodeQL dismissals/ruleset PUT?** The sandbox `GH_TOKEN` is invalid and code-scanning reads return 403. Plan both an "executor tries, falls back" path and a maintainer hand-over checklist with exact commands (Phase 47 D-03 posture).
+   - RESOLVED: the executor tries first and the maintainer is the fallback. 52-03 Task 1 attempts the #41 comment and close and the alert read with the sandbox token (PD-03-2); 52-03 Task 2 has the maintainer close #41 if the sandbox could not. The ruleset PUT, the CodeQL platform dismissals and any still-open #41 are 52-08 handover items H-01, H-04 and H-05, each with its exact command and read-back.
 
 4. **What exact alerts are the "24"?** Only the maintainer can list them. The CIREL-06 rows cannot be authored before that list exists; make the list intake the first task of that plan and put it on a `checkpoint:human-action`.
+   - RESOLVED: 52-03 Task 2 is a blocking `checkpoint:human-action` at which the maintainer pastes the open-alert list for both refs (PD-03-1). The reply is recorded verbatim, and 52-03 Task 3 triages only that list.
 
 5. **Footer link/anchor and limit variable name** are explicitly discretionary; recommended defaults are in Pattern 5.
+   - RESOLVED: 52-02 PD-02-3 uses `PALADIN_RELEASE_BODY_LIMIT` (default 125000) and `PALADIN_RELEASE_BODY_RESERVE` (default 5000), and the footer links `CHANGELOG.md` at the tag rather than a heading anchor.
 
 ## Environment Availability
 

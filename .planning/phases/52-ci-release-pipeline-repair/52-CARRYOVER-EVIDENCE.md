@@ -77,6 +77,22 @@ gh issue close 41 --repo DF3NDR/paladin-dev-env --reason completed
 Fallback if the comment has to be re-posted on another day (for example after a deletion):
 `gh issue comment 41 --repo DF3NDR/paladin-dev-env --body-file <file holding the fenced text above>`.
 
+### Final public state (re-read in Task 3)
+
+The maintainer replied `issue41: closed`. The public API was re-read once, unauthenticated, after the
+reply (https://api.github.com/repos/DF3NDR/paladin-dev-env/issues/41, 2026-10-28T23:21:02Z, exit 0):
+
+| Field | Value |
+|-------|-------|
+| `state` | `closed` |
+| `state_reason` | `completed` |
+| `closed_at` | `2026-10-28T23:09:45Z` |
+| `closed_by` | `Am0rfu5` (the maintainer, not the sandbox) |
+| `comments` | 1 (the evidence comment above, id 6482461863) |
+
+Issue #41 is closed with the evidence comment present, so no handover item H-05 is needed. The
+"What the maintainer still has to run for #41" block above is superseded by this result.
+
 ## CodeQL alert intake
 
 ### Sandbox pull attempts
@@ -151,3 +167,259 @@ The same PR head also has check run 121604229662 `CodeQL Analysis (Rust)` (`conc
 Two entries deserve a careful look when triaging because the sink text could be a real secret path
 rather than a heuristic hit: `crates/paladin-llm/src/config/layers.rs:700` and `:750` (the sink is
 `resolve_secret_placeholder(...)`). This is a note for Task 3, not a disposition.
+
+### Maintainer-supplied list
+
+Received at the plan's checkpoint (Task 2). The orchestrator saved the reply at 2026-10-28T23:16:37Z
+(file modification time of the saved copy); the maintainer's own close of issue #41 is dated
+2026-10-28T23:09:45Z by the public API. The reply is reproduced below exactly as saved (the
+tab separators of the `@tsv` output were flattened to runs of spaces in transit). The maintainer
+pasted only the `refs/heads/main` command's output; no separate `refs/pull/59/head` block came
+back, and every row carries `refs/heads/main`.
+
+````
+`issue41: closed`
+
+
+```
+86      RUSTSEC-2026-0187               refs/heads/main Cargo.lock:1
+85      RUSTSEC-2026-0369               refs/heads/main Cargo.lock:1
+84      RUSTSEC-2026-0368               refs/heads/main Cargo.lock:1
+83      RUSTSEC-2026-0367               refs/heads/main Cargo.lock:1
+81      rust/cleartext-logging  high    refs/heads/main crates/paladin-llm/src/config/layers.rs:750
+80      rust/cleartext-logging  high    refs/heads/main crates/paladin-llm/src/config/layers.rs:700
+79      rust/cleartext-logging  high    refs/heads/main src/application/services/paladin/paladin_builder.rs:1558
+78      rust/cleartext-logging  high    refs/heads/main examples/paladin_with_config.rs:196
+77      rust/cleartext-logging  high    refs/heads/main examples/citadel_restore.rs:135
+76      rust/cleartext-logging  high    refs/heads/main examples/citadel_autosave.rs:116
+70      RUSTSEC-2024-0449               refs/heads/main Cargo.lock:1
+69      rust/cleartext-logging  high    refs/heads/main src/config/treasurer.rs:1583
+68      rust/cleartext-logging  high    refs/heads/main src/config/treasurer.rs:1567
+67      rust/cleartext-logging  high    refs/heads/main src/config/treasurer.rs:1566
+66      rust/cleartext-logging  high    refs/heads/main src/config/treasurer.rs:1556
+65      rust/cleartext-logging  high    refs/heads/main src/config/treasurer.rs:1555
+63      rust/hard-coded-cryptographic-value     critical        refs/heads/main src/infrastructure/security/encryption.rs:340
+62      rust/hard-coded-cryptographic-value     critical        refs/heads/main src/infrastructure/security/encryption.rs:333
+61      rust/hard-coded-cryptographic-value     critical        refs/heads/main src/infrastructure/security/encryption.rs:281
+60      rust/hard-coded-cryptographic-value     critical        refs/heads/main src/infrastructure/security/encryption.rs:172
+54      rust/cleartext-transmission     high    refs/heads/main crates/paladin-content/src/adapters/input/news_api_fetcher.rs:143
+53      rust/hard-coded-cryptographic-value     critical        refs/heads/main src/core/platform/manager/user_service.rs:724
+52      rust/hard-coded-cryptographic-value     critical        refs/heads/main src/core/platform/manager/user_service.rs:719
+51      rust/cleartext-logging  high    refs/heads/main src/infrastructure/adapters/scheduling/tokio_cron_adapter.rs:202
+50      rust/cleartext-logging  high    refs/heads/main src/infrastructure/adapters/scheduling/tokio_cron_adapter.rs:166
+49      rust/cleartext-logging  high    refs/heads/main src/bin/paladin-server.rs:472
+47      rust/cleartext-logging  high    refs/heads/main src/application/services/paladin/prompt_generation_service.rs:169
+46      rust/cleartext-logging  high    refs/heads/main src/application/services/paladin/prompt_generation_service.rs:119
+45      rust/cleartext-logging  high    refs/heads/main src/application/services/paladin/prompt_generation_service.rs:112
+44      rust/cleartext-logging  high    refs/heads/main src/application/services/paladin/paladin_builder.rs:1591
+43      rust/cleartext-logging  high    refs/heads/main src/application/services/paladin/paladin_builder.rs:1518
+42      rust/cleartext-logging  high    refs/heads/main src/application/services/orchestration/mod.rs:807
+41      rust/cleartext-logging  high    refs/heads/main src/application/services/orchestration/mod.rs:797
+40      rust/cleartext-logging  high    refs/heads/main crates/paladin-memory/src/services/rag_retrieval_service.rs:360
+39      rust/cleartext-logging  high    refs/heads/main crates/paladin-memory/src/citadel/file_citadel.rs:175
+37      rust/cleartext-logging  high    refs/heads/main examples/citadel_restore.rs:142
+36      rust/cleartext-logging  high    refs/heads/main examples/citadel_restore.rs:141
+34      rust/cleartext-logging  high    refs/heads/main examples/citadel_restore.rs:76
+33      rust/cleartext-logging  high    refs/heads/main examples/citadel_autosave.rs:130
+31      rust/cleartext-logging  high    refs/heads/main examples/citadel_autosave.rs:81
+30      rust/cleartext-logging  high    refs/heads/main examples/battalion_checkpoint_recovery.rs:87
+28      rust/hard-coded-cryptographic-value     critical        refs/heads/main src/core/platform/manager/user_service.rs:1582
+26      RUSTSEC-2026-0249               refs/heads/main Cargo.lock:1
+25      RUSTSEC-2026-0221               refs/heads/main Cargo.lock:1
+24      RUSTSEC-2026-0205               refs/heads/main Cargo.lock:1
+23      GHSA-7gcf-g7xr-8hxj             refs/heads/main Cargo.lock:1
+21      RUSTSEC-2026-0195               refs/heads/main Cargo.lock:1
+19      RUSTSEC-2026-0194               refs/heads/main Cargo.lock:1
+17      RUSTSEC-2026-0187               refs/heads/main Cargo.lock:1
+14      RUSTSEC-2024-0436               refs/heads/main Cargo.lock:1
+13      RUSTSEC-2025-0134               refs/heads/main Cargo.lock:1
+11      RUSTSEC-2025-0119               refs/heads/main Cargo.lock:1
+10      CVE-2025-62518          refs/heads/main Cargo.lock:1
+9       RUSTSEC-2025-0057               refs/heads/main Cargo.lock:1
+6       CVE-2023-49092          refs/heads/main Cargo.lock:1
+4       RUSTSEC-2021-0141               refs/heads/main Cargo.lock:1
+2       CVE-2025-62518          refs/heads/main Cargo.lock:1
+```
+````
+
+Count: **57 alerts** in the pasted list (the roadmap said 24; the relayed summary of the reply said
+60, but the saved paste holds 57 rows with 57 distinct alert numbers, and the saved paste is the
+authority). They split into **37** CodeQL rule alerts (29 `rust/cleartext-logging`, 7
+`rust/hard-coded-cryptographic-value`, 1 `rust/cleartext-transmission`) and **20** dependency-advisory
+alerts on `Cargo.lock:1` whose "rule id" is a RUSTSEC / CVE / GHSA identifier. The roadmap's 24 is the
+set of 24 annotations on PR #59's head (all `rust/cleartext-logging`); every one of those 24 locations
+appears in this list, and the list adds 13 more CodeQL alerts (28, 30, 41, 42, 50, 51, 52, 53, 54, 60,
+61, 62, 63) plus the 20 advisory alerts. Alerts 2 and 10 share CVE-2025-62518, and alerts 17 and 86
+share RUSTSEC-2026-0187: each stays its own alert number.
+
+The advisory-type alerts are not CodeQL results. `.github/workflows/ci.yml` (job `osv-scanner`) runs
+OSV-Scanner on `Cargo.lock` and uploads its SARIF with `github/codeql-action/upload-sarif`, which is why
+they sit in the same code-scanning alert store.
+
+
+## CodeQL triage
+
+One line per alert in `### Maintainer-supplied list`, in the order pasted. Every CodeQL rule alert's
+source line was opened on the current tree (the file and line shown) before its disposition was set.
+Dispositions: **registered** (a full eleven-field `[[dismissal]]` row with `review_date = "2027-06-30"`
+in `CODEQL-DISMISSALS.md`), **already registered** (one of the six earlier rows, untouched), or
+**out of CodeQL register scope** (the 20 advisory alerts, see the decision below the table). No alert
+was **fixed**: none of the 31 newly triaged CodeQL alerts is a genuine leak that a few-line,
+signature-neutral change would remove, so no fix commit exists and no `cargo` gate was run for a fix.
+
+| Alert | Rule | path:line (current tree) | Disposition | One-line rationale | Fix commit / row |
+|-------|------|--------------------------|-------------|--------------------|------------------|
+| 86 | `RUSTSEC-2026-0187` | `Cargo.lock:1` | out of CodeQL register scope | lopdf 0.34.0; governing control: SECURITY-EXCEPTIONS.md row RUSTSEC-2026-0187 | none (not a CodeQL row) |
+| 85 | `RUSTSEC-2026-0369` | `Cargo.lock:1` | out of CodeQL register scope | zip 3.0.0; governing control: SECURITY-EXCEPTIONS.md row RUSTSEC-2026-0369 | none (not a CodeQL row) |
+| 84 | `RUSTSEC-2026-0368` | `Cargo.lock:1` | out of CodeQL register scope | zip 3.0.0; governing control: SECURITY-EXCEPTIONS.md row RUSTSEC-2026-0368 | none (not a CodeQL row) |
+| 83 | `RUSTSEC-2026-0367` | `Cargo.lock:1` | out of CodeQL register scope | zip 3.0.0; governing control: SECURITY-EXCEPTIONS.md row RUSTSEC-2026-0367 | none (not a CodeQL row) |
+| 81 | `rust/cleartext-logging` | `crates/paladin-llm/src/config/layers.rs:750` | registered (used in tests) | redaction regression test's own failure message; fixture values only | row, alert_number 81; no fix commit |
+| 80 | `rust/cleartext-logging` | `crates/paladin-llm/src/config/layers.rs:700` | registered (used in tests) | panic message in a test; `SecretSource` Debug is redacted | row, alert_number 80; no fix commit |
+| 79 | `rust/cleartext-logging` | `src/application/services/paladin/paladin_builder.rs:1558` | registered (false positive) | temperature, model id and provider name in a sampling warning | row, alert_number 79; no fix commit |
+| 78 | `rust/cleartext-logging` | `examples/paladin_with_config.rs:196` | registered (won't fix) | accurate flow, but the value is a hard-coded demo literal in an example binary | row, alert_number 78; no fix commit |
+| 77 | `rust/cleartext-logging` | `examples/citadel_restore.rs:135` | registered (false positive) | restored Paladin UUID printed by an example binary | row, alert_number 77; no fix commit |
+| 76 | `rust/cleartext-logging` | `examples/citadel_autosave.rs:116` | registered (false positive) | Paladin UUID in a state file name printed by an example binary | row, alert_number 76; no fix commit |
+| 70 | `RUSTSEC-2024-0449` | `Cargo.lock:1` | out of CodeQL register scope | unsafe-libyaml 0.2.11; governing control: SECURITY-EXCEPTIONS.md row RUSTSEC-2024-0449 | none (not a CodeQL row) |
+| 69 | `rust/cleartext-logging` | `src/config/treasurer.rs:1583` | registered (used in tests) | assertion message naming a literal fixture tenant in a test | row, alert_number 69; no fix commit |
+| 68 | `rust/cleartext-logging` | `src/config/treasurer.rs:1567` | registered (used in tests) | assertion message naming a literal fixture label in a test | row, alert_number 68; no fix commit |
+| 67 | `rust/cleartext-logging` | `src/config/treasurer.rs:1566` | registered (used in tests) | assertion message naming a literal fixture label in a test | row, alert_number 67; no fix commit |
+| 66 | `rust/cleartext-logging` | `src/config/treasurer.rs:1556` | registered (used in tests) | assertion message over a value-free error string in a test | row, alert_number 66; no fix commit |
+| 65 | `rust/cleartext-logging` | `src/config/treasurer.rs:1555` | registered (used in tests) | assertion message over a value-free error string in a test | row, alert_number 65; no fix commit |
+| 63 | `rust/hard-coded-cryptographic-value` | `src/infrastructure/security/encryption.rs:340` | registered (used in tests) | wrong-size all-zero test key inside `#[cfg(test)]` | row, alert_number 63; no fix commit |
+| 62 | `rust/hard-coded-cryptographic-value` | `src/infrastructure/security/encryption.rs:333` | registered (used in tests) | all-zero test key inside `#[cfg(test)]` | row, alert_number 62; no fix commit |
+| 61 | `rust/hard-coded-cryptographic-value` | `src/infrastructure/security/encryption.rs:281` | registered (false positive) | zero buffer overwritten by `OsRng.fill_bytes` on the next line (production) | row, alert_number 61; no fix commit |
+| 60 | `rust/hard-coded-cryptographic-value` | `src/infrastructure/security/encryption.rs:172` | registered (false positive) | zero buffer overwritten by `OsRng.fill_bytes` on the next line (production) | row, alert_number 60; no fix commit |
+| 54 | `rust/cleartext-transmission` | `crates/paladin-content/src/adapters/input/news_api_fetcher.rs:143` | registered (false positive) | scheme is a literal `https://`; key-in-query follow-up recorded in deferred-items.md | row, alert_number 54; no fix commit |
+| 53 | `rust/hard-coded-cryptographic-value` | `src/core/platform/manager/user_service.rs:724` | registered (used in tests) | deliberately wrong test password inside `#[cfg(test)]` | row, alert_number 53; no fix commit |
+| 52 | `rust/hard-coded-cryptographic-value` | `src/core/platform/manager/user_service.rs:719` | registered (used in tests) | test password fixture inside `#[cfg(test)]` | row, alert_number 52; no fix commit |
+| 51 | `rust/cleartext-logging` | `src/infrastructure/adapters/scheduling/tokio_cron_adapter.rs:202` | registered (false positive) | job label and `JobId` in an info log | row, alert_number 51; no fix commit |
+| 50 | `rust/cleartext-logging` | `src/infrastructure/adapters/scheduling/tokio_cron_adapter.rs:166` | registered (false positive) | job label and job UUID in a debug log | row, alert_number 50; no fix commit |
+| 49 | `rust/cleartext-logging` | `src/bin/paladin-server.rs:472` | already registered (false positive) | `.len()` of the API-key map in the startup banner; row already present, unchanged | existing row, alert_number 49 |
+| 47 | `rust/cleartext-logging` | `src/application/services/paladin/prompt_generation_service.rs:169` | already registered (false positive) | same flow as 45; row already present, unchanged | existing row, alert_number 47 |
+| 46 | `rust/cleartext-logging` | `src/application/services/paladin/prompt_generation_service.rs:119` | already registered (false positive) | same flow as 45; row already present, unchanged | existing row, alert_number 46 |
+| 45 | `rust/cleartext-logging` | `src/application/services/paladin/prompt_generation_service.rs:112` | already registered (false positive) | builder `user_name` over-approximation; row already present, unchanged | existing row, alert_number 45 |
+| 44 | `rust/cleartext-logging` | `src/application/services/paladin/paladin_builder.rs:1591` | registered (false positive) | `specialist_agents.len()` count | row, alert_number 44; no fix commit |
+| 43 | `rust/cleartext-logging` | `src/application/services/paladin/paladin_builder.rs:1518` | registered (false positive) | builder display name (`"Agent"` or `data.name`), never `user_name` | row, alert_number 43; no fix commit |
+| 42 | `rust/cleartext-logging` | `src/application/services/orchestration/mod.rs:807` | registered (false positive) | orchestration session UUID plus an integer duration | row, alert_number 42; no fix commit |
+| 41 | `rust/cleartext-logging` | `src/application/services/orchestration/mod.rs:797` | registered (false positive) | orchestration session UUID (correlation id, not an auth session) | row, alert_number 41; no fix commit |
+| 40 | `rust/cleartext-logging` | `crates/paladin-memory/src/services/rag_retrieval_service.rs:360` | already registered (false positive) | Paladin UUID in a debug log; row already present, unchanged | existing row, alert_number 40 |
+| 39 | `rust/cleartext-logging` | `crates/paladin-memory/src/citadel/file_citadel.rs:175` | registered (false positive) | Paladin UUID and state file path in `FileCitadel::save_paladin` info log | row, alert_number 39; no fix commit |
+| 37 | `rust/cleartext-logging` | `examples/citadel_restore.rs:142` | registered (false positive) | restored Paladin UUID printed by an example binary | row, alert_number 37; no fix commit |
+| 36 | `rust/cleartext-logging` | `examples/citadel_restore.rs:141` | registered (false positive) | original Paladin UUID printed by an example binary | row, alert_number 36; no fix commit |
+| 34 | `rust/cleartext-logging` | `examples/citadel_restore.rs:76` | registered (false positive) | Paladin UUID printed by an example binary | row, alert_number 34; no fix commit |
+| 33 | `rust/cleartext-logging` | `examples/citadel_autosave.rs:130` | registered (false positive) | literal state dir plus Paladin UUID printed by an example binary | row, alert_number 33; no fix commit |
+| 31 | `rust/cleartext-logging` | `examples/citadel_autosave.rs:81` | registered (false positive) | Paladin UUID printed by an example binary | row, alert_number 31; no fix commit |
+| 30 | `rust/cleartext-logging` | `examples/battalion_checkpoint_recovery.rs:87` | registered (false positive) | Paladin UUID printed by an example binary | row, alert_number 30; no fix commit |
+| 28 | `rust/hard-coded-cryptographic-value` | `src/core/platform/manager/user_service.rs:1582` | already registered (used in tests) | test-fixture literal in `#[cfg(test)]`; row already present, unchanged | existing row, alert_number 28 |
+| 26 | `RUSTSEC-2026-0249` | `Cargo.lock:1` | out of CodeQL register scope | smartstring 1.0.1; governing control: SECURITY-EXCEPTIONS.md row RUSTSEC-2026-0249 | none (not a CodeQL row) |
+| 25 | `RUSTSEC-2026-0221` | `Cargo.lock:1` | out of CodeQL register scope | event-listener 5.4.1 (patched >= 5.4.2, informational `unsound`); governing control: NONE: no row, no allowlist entry | none (not a CodeQL row) |
+| 24 | `RUSTSEC-2026-0205` | `Cargo.lock:1` | out of CodeQL register scope | scc 2.4.0 (patched >= 3.8.4, informational `unsound`); governing control: NONE: no row, no allowlist entry | none (not a CodeQL row) |
+| 23 | `GHSA-7gcf-g7xr-8hxj` | `Cargo.lock:1` | out of CodeQL register scope | not identified: no local RustSec record carries this GHSA id; governing control: NONE found | none (not a CodeQL row) |
+| 21 | `RUSTSEC-2026-0195` | `Cargo.lock:1` | out of CodeQL register scope | quick-xml (a < 0.41 instance, 0.32.0, is in Cargo.lock); governing control: SECURITY-EXCEPTIONS.md row RUSTSEC-2026-0195 | none (not a CodeQL row) |
+| 19 | `RUSTSEC-2026-0194` | `Cargo.lock:1` | out of CodeQL register scope | quick-xml (a < 0.41 instance, 0.32.0, is in Cargo.lock); governing control: SECURITY-EXCEPTIONS.md row RUSTSEC-2026-0194 | none (not a CodeQL row) |
+| 17 | `RUSTSEC-2026-0187` | `Cargo.lock:1` | out of CodeQL register scope | lopdf 0.34.0; governing control: SECURITY-EXCEPTIONS.md row RUSTSEC-2026-0187 | none (not a CodeQL row) |
+| 14 | `RUSTSEC-2024-0436` | `Cargo.lock:1` | out of CodeQL register scope | paste 1.0.15; governing control: SECURITY-EXCEPTIONS.md row RUSTSEC-2024-0436 | none (not a CodeQL row) |
+| 13 | `RUSTSEC-2025-0134` | `Cargo.lock:1` | out of CodeQL register scope | rustls-pemfile 2.2.0; governing control: SECURITY-EXCEPTIONS.md row RUSTSEC-2025-0134 | none (not a CodeQL row) |
+| 11 | `RUSTSEC-2025-0119` | `Cargo.lock:1` | out of CodeQL register scope | number_prefix 0.4.0; governing control: SECURITY-EXCEPTIONS.md row RUSTSEC-2025-0119 | none (not a CodeQL row) |
+| 10 | `CVE-2025-62518` | `Cargo.lock:1` | out of CodeQL register scope | CVE-2025-62518 is an alias of RUSTSEC-2025-0111 (tokio-tar 0.3.1 in Cargo.lock) and of RUSTSEC-2025-0110 (astral-tokio-tar, not in Cargo.lock); governing control: SECURITY-EXCEPTIONS.md row RUSTSEC-2025-0111, by alias | none (not a CodeQL row) |
+| 9 | `RUSTSEC-2025-0057` | `Cargo.lock:1` | out of CodeQL register scope | fxhash 0.2.1; governing control: SECURITY-EXCEPTIONS.md row RUSTSEC-2025-0057 | none (not a CodeQL row) |
+| 6 | `CVE-2023-49092` | `Cargo.lock:1` | out of CodeQL register scope | CVE-2023-49092 is an alias of RUSTSEC-2023-0071 (rsa 0.9.10 in Cargo.lock); governing control: SECURITY-EXCEPTIONS.md row RUSTSEC-2023-0071, by alias | none (not a CodeQL row) |
+| 4 | `RUSTSEC-2021-0141` | `Cargo.lock:1` | out of CodeQL register scope | dotenv 0.15.0; governing control: SECURITY-EXCEPTIONS.md row RUSTSEC-2021-0141 | none (not a CodeQL row) |
+| 2 | `CVE-2025-62518` | `Cargo.lock:1` | out of CodeQL register scope | same alias as alert 10 (the two alerts cannot be told apart offline); governing control: SECURITY-EXCEPTIONS.md row RUSTSEC-2025-0111, by alias | none (not a CodeQL row) |
+
+**Advisory-type alerts (20): decision.** The plan's dispositions are fixed or registered, and it does not
+say what to do with alerts that are not CodeQL results. These 20 are OSV-Scanner findings uploaded as
+SARIF; `CODEQL-DISMISSALS.md` describes itself as the register for CodeQL alerts, and a RUSTSEC / CVE
+identifier is not a CodeQL rule id. They are therefore recorded here as out of that register's scope,
+with no row written and no platform dismissal proposed, and the reasons are:
+
+- 17 of the 20 map to a row in `SECURITY-EXCEPTIONS.md` (by advisory id, or by alias for CVE-2025-62518
+  and CVE-2023-49092), which is the governance register that already holds an owner, review date, scope
+  and compensating control for them and is enforced by `scripts/check-advisory-register.sh`. A second row
+  in the CodeQL register would put two sources of truth on the same risk.
+- 3 of the 20 have no governing row: alert 25 (`RUSTSEC-2026-0221`, `event-listener` 5.4.1, patched at
+  >= 5.4.2) and alert 24 (`RUSTSEC-2026-0205`, `scc` 2.4.0, patched at >= 3.8.4) are informational
+  `unsound` advisories on crates that are in `Cargo.lock` today (an offline `cargo audit --no-fetch` against
+  the local advisory database, last commit 2026-10-27, warns on both and fails on neither), and alert 23
+  (`GHSA-7gcf-g7xr-8hxj`) could not be identified offline (no record in the local advisory database
+  carries that id, and `api.osv.dev` is not reachable from the sandbox). Dismissing a real, ungoverned
+  finding to make a list look finished would be the failure this register exists to prevent, so these
+  three stay open and are carried to the handover (see `deferred-items.md`).
+- Leaving the 17 governed alerts open on the platform is the current state, not a new one. If the
+  maintainer prefers them dismissed in the alert store, each can be dismissed with the comment
+  "Governed in SECURITY-EXCEPTIONS.md"; that is a separate maintainer decision and is not part of this
+  plan's commands below.
+
+**Edge notes.** The six earlier rows (28, 40, 45, 46, 47, 49) are kept byte for byte (D-14). Two of them
+carry a `path` line number that no longer matches the alert's current location: alert 40's row says
+`rag_retrieval_service.rs:106` while the alert now reports `:360`, and alert 49's row says
+`paladin-server.rs:387` while the alert reports `:472`. The guard's reachability clause only checks that
+the file exists, so both stay green; the stale anchors are recorded in `deferred-items.md` rather than
+edited. The six alerts are also still **open** in the list, so the platform side of those six rows has
+not happened yet; their dismissal commands are in the second group below.
+
+
+## Platform dismissal commands
+
+A register row without the matching platform dismissal is the governance failure the register header
+warns about, so each registered alert has one command. Plan 52-08 hands these over as H-04. Nothing
+here was run: the sandbox token cannot write code-scanning alerts, and the sandbox made no further
+GitHub writes. Run them as the maintainer after reading the rows.
+
+### New rows added by Phase 52 (31 alerts)
+
+```bash
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/30 -f state=dismissed -f dismissed_reason="false positive" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/31 -f state=dismissed -f dismissed_reason="false positive" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/33 -f state=dismissed -f dismissed_reason="false positive" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/34 -f state=dismissed -f dismissed_reason="false positive" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/36 -f state=dismissed -f dismissed_reason="false positive" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/37 -f state=dismissed -f dismissed_reason="false positive" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/39 -f state=dismissed -f dismissed_reason="false positive" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/41 -f state=dismissed -f dismissed_reason="false positive" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/42 -f state=dismissed -f dismissed_reason="false positive" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/43 -f state=dismissed -f dismissed_reason="false positive" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/44 -f state=dismissed -f dismissed_reason="false positive" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/50 -f state=dismissed -f dismissed_reason="false positive" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/51 -f state=dismissed -f dismissed_reason="false positive" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/52 -f state=dismissed -f dismissed_reason="used in tests" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/53 -f state=dismissed -f dismissed_reason="used in tests" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/54 -f state=dismissed -f dismissed_reason="false positive" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/60 -f state=dismissed -f dismissed_reason="false positive" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/61 -f state=dismissed -f dismissed_reason="false positive" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/62 -f state=dismissed -f dismissed_reason="used in tests" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/63 -f state=dismissed -f dismissed_reason="used in tests" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/65 -f state=dismissed -f dismissed_reason="used in tests" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/66 -f state=dismissed -f dismissed_reason="used in tests" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/67 -f state=dismissed -f dismissed_reason="used in tests" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/68 -f state=dismissed -f dismissed_reason="used in tests" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/69 -f state=dismissed -f dismissed_reason="used in tests" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/76 -f state=dismissed -f dismissed_reason="false positive" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/77 -f state=dismissed -f dismissed_reason="false positive" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/78 -f state=dismissed -f dismissed_reason="won't fix" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/79 -f state=dismissed -f dismissed_reason="false positive" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/80 -f state=dismissed -f dismissed_reason="used in tests" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/81 -f state=dismissed -f dismissed_reason="used in tests" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+```
+
+### Earlier rows whose alerts are still open on the platform (6 alerts)
+
+These six rows existed before this plan, but their alerts appear in the maintainer's open list, so the
+platform dismissal behind each row is still outstanding. The reasons are copied from the existing rows.
+
+```bash
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/28 -f state=dismissed -f dismissed_reason="used in tests" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/40 -f state=dismissed -f dismissed_reason="false positive" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/45 -f state=dismissed -f dismissed_reason="false positive" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/46 -f state=dismissed -f dismissed_reason="false positive" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/47 -f state=dismissed -f dismissed_reason="false positive" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+gh api --method PATCH /repos/DF3NDR/paladin-dev-env/code-scanning/alerts/49 -f state=dismissed -f dismissed_reason="false positive" -f dismissed_comment='Governed in CODEQL-DISMISSALS.md (Phase 52)'
+```
+
+### Reconciliation (the command from the register header)
+
+After the dismissals, compare the dismissed set with the register's 37 rows:
+
+```bash
+gh api "/repos/DF3NDR/paladin-dev-env/code-scanning/alerts?state=dismissed&per_page=100" --paginate
+```

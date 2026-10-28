@@ -1,16 +1,14 @@
 #!/usr/bin/env bash
 # check-migration-allowlist.sh
 #
-# Local, offline mirror of the CI step "Verify allowlist is set-equal to the
-# MIGRATION.md §9.2 and §10.2 registers" in .github/workflows/ci.yml's `semver` job
-# (PRIM-05). That step exists only inline in ci.yml -- there is no local
-# script and no make target, so it cannot be sampled after a single task
-# commit without hand-copying the step into a shell. This script is that
-# copy: the awk/grep logic below is copied VERBATIM from ci.yml (including
-# the tolerant `|| test $? -eq 1` grep idiom and the field-6-to-NF marker
-# scan) so it produces exactly the same pair sets CI produces. Do not
-# "improve" the parsing here without also updating ci.yml, or the two will
-# silently diverge.
+# Single implementation of the semver-allowlist set-equality gate (PRIM-05;
+# Phase 52 D-06 / CIREL-03). CI runs this file as the step "Check semver
+# allowlist is set-equal to the MIGRATION.md register" of the required
+# `License & Dependency Policy` job in .github/workflows/ci.yml (the inline
+# awk copy that used to live in the `semver` job was deleted), and the same
+# script backs `make check-migration-allowlist` and `make check-gates`, so a
+# local run and CI produce exactly the same pair sets. It is offline: awk,
+# grep, comm, sort and diff only.
 #
 # ROW-LEVEL (D-04): the comparison is the SET of `crate | type` PAIRS, not
 # just crate names -- a §9.2 or §10.2 row and an allowlist entry naming DIFFERENT
@@ -21,23 +19,22 @@
 #
 # Inputs are resolved relative to the workspace root (derived from this
 # script's own location, never the caller's cwd), and may be overridden via
-# MIGRATION_FILE / ALLOWLIST_FILE -- the only permitted departure from the
-# CI step, added so this guard's own regression test can point it at
-# fixtures without ever touching the real tree. A missing input file is a
-# named non-zero failure, never a silently-empty comparison. Both pair lists
-# are written to a `mktemp -d` scratch directory (never a fixed /tmp path,
-# so concurrent runs cannot collide) and are printed before the diff,
-# matching the CI step's own reporting.
+# MIGRATION_FILE / ALLOWLIST_FILE -- fixture seams for this guard's own
+# regression harness, so it can point the script at fixtures without ever
+# touching the real tree. A missing input file is a named non-zero failure,
+# never a silently-empty comparison. Both pair lists are written to a
+# `mktemp -d` scratch directory (never a fixed /tmp path, so concurrent runs
+# cannot collide) and are printed before the diff.
 #
-# LOCAL-ONLY EXTENSION (not in the ci.yml step): after the pair comparison,
-# every lint id a crate allows crate-wide in its
+# CRATE-WIDE ALLOW MIRROR (CI runs it as part of this same step): after the
+# pair comparison, every lint id a crate allows crate-wide in its
 # `[package.metadata.cargo-semver-checks.lints]` table (value "allow") must
 # appear in at least one allowlist `[[entry]]` for that same crate. Without
 # it the Cargo.toml allows -- which silence the tool for the whole crate,
 # not for one item -- are a convention, not a gate. Manifests are read from
 # `${MANIFEST_ROOT}/Cargo.toml` and `${MANIFEST_ROOT}/crates/*/Cargo.toml`;
 # MANIFEST_ROOT defaults to the workspace root and is overridable for the
-# same reason as the two files above.
+# same reason as the two files above (fixture seam).
 #
 # Usage:  ./scripts/check-migration-allowlist.sh
 #         MIGRATION_FILE=/path/to/MIGRATION.md \
@@ -133,7 +130,7 @@ if ! diff -u "${MIGRATION_PAIRS}" "${ALLOWLIST_PAIRS}"; then
     STATUS=1
 fi
 
-# Crate-wide allows side (local-only extension, see the header). The
+# Crate-wide allows side (the crate-wide-allow mirror, see the header). The
 # allowlist side is every `crate | lint` pair named by an [[entry]]; the
 # manifest side is every `crate | lint` pair a Cargo.toml allows in its
 # cargo-semver-checks lints table. A manifest lint with no allowlist pair is

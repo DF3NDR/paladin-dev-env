@@ -310,40 +310,48 @@ jobs:
       - name: Check workspace at MSRV (all features, all targets)
         run: cargo check --workspace --all-features --all-targets
 
-  # cargo-semver-checks (X-10.5, D-06). Guards every pre-existing public Rust
-  # API against the PUBLISHED v0.9.0 baseline on crates.io. Two things the
-  # tool's own defaults get wrong for this repo, both overridden explicitly
-  # below (RESEARCH.md Pitfalls 1-2):
+  # cargo-semver-checks (X-10.5, D-06; re-pinned in Phase 52, CIREL-01/D-01).
+  # Guards every pre-existing public Rust API against the PUBLISHED v0.11.0
+  # baseline on crates.io. The whole check lives in scripts/check-semver.sh,
+  # the single implementation that this job and `make check-semver` both run,
+  # so the command a maintainer runs locally is the command CI runs. Three
+  # things the tool's own defaults get wrong for this repo, all overridden
+  # explicitly by that script (RESEARCH.md Pitfalls 1-2):
   #   - Baseline: the tool defaults to "latest published", not a fixed
-  #     version. `--baseline-version 0.9.0` pins the comparison so an
+  #     version. `--baseline-version 0.11.0` pins the comparison so an
   #     out-of-band crates.io patch release cannot silently move it.
+  #   - Release type: the tool infers it from the version delta, and 0.x
+  #     inference reads any manifest bump past the baseline as a
+  #     major-equivalent change that SKIPS every lint (`0 checks: 0 pass,
+  #     254 skip`, exit 0). `--release-type patch` fixes the type by flag so
+  #     the gate stays armed whatever version the manifests carry, and the
+  #     script fails any package that evaluated zero checks.
   #   - Package identity: this workspace's `crates/*` directory names differ
   #     from their published crates.io package names -- `crates/paladin-core`
-  #     publishes as `paladin-ai-core`. Every publishable crate below is
-  #     addressed by its PUBLISHED name, not its directory name; a
-  #     directory-named `--package` flag would match zero packages and report
-  #     a silent, meaningless pass (the exact failure mode this job exists to
-  #     prevent, T-22-12).
-  # `--default-features` (verified locally against every one of the 11
-  # packages before landing this job): without it, cargo-semver-checks's own
-  # "enable everything except unstable/nightly" heuristic pulls in every
-  # optional feature combination at once, which trips a PRE-EXISTING,
-  # unrelated compile break -- `paladin-memory`'s `qdrant` adapter fails to
-  # build rustdoc against the `qdrant-client` 1.18.0 resolved today (pinned
+  #     publishes as `paladin-ai-core`. Every package is addressed by its
+  #     PUBLISHED name, read from the CRATES array in
+  #     scripts/publish-crates.sh (all twelve published packages), never from
+  #     a second list here; a directory-named `--package` flag would match
+  #     zero packages and report a silent, meaningless pass (the exact failure
+  #     mode this job exists to prevent, T-22-12).
+  # `--default-features`: without it, cargo-semver-checks's own "enable
+  # everything except unstable/nightly" heuristic pulls in every optional
+  # feature combination at once, which trips a PRE-EXISTING, unrelated
+  # compile break -- `paladin-memory`'s `qdrant` adapter fails to build
+  # rustdoc against the `qdrant-client` 1.18.0 resolved today (pinned
   # `^1.14`), because that version added a required `memory` field to
   # `VectorParams`. That defect belongs to whichever phase next touches the
   # Sanctum/Qdrant adapter, not this one (deferred:
-  # .planning/phases/22-battlefield-state-superstep-engine/22-deferred-items.md)
-  # -- Phase 22 does not touch `paladin-memory`'s qdrant module at all.
+  # .planning/phases/22-battlefield-state-superstep-engine/22-deferred-items.md).
   # Checking under each crate's own default features is also arguably the
   # more correct semver-gate scope: it is the build a crates.io consumer gets
-  # by just adding the dependency, and it is what every one of the 11
-  # packages was verified to pass cleanly against the 0.9.0 baseline with.
+  # by just adding the dependency, and it is what every one of the twelve
+  # packages passes cleanly against the 0.11.0 baseline with.
   # No `needs:` edge; the job writes no baseline/artifact file into the
   # working tree, so re-running it on an unchanged commit reaches an
   # identical verdict every time.
   semver:
-    name: Semver Checks (vs v0.9.0)
+    name: Semver Checks (vs v0.11.0)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -366,39 +374,13 @@ jobs:
         with:
           tool: cargo-semver-checks@0.50.0
 
-      # Every publishable crate, addressed by its crates.io PACKAGE name (see
-      # the job comment above) -- never a `crates/` directory path.
-      #
-      # `paladin-eval` (the twelfth publishable crate, ADR-0048, landed
-      # Phase 28) is DELIBERATELY EXCLUDED from this list. It first shipped
-      # in this same v0.10.0 cycle and has no published 0.9.0 baseline on
-      # crates.io to diff against -- `cargo semver-checks check-release
-      # --baseline-version 0.9.0` would ERROR for a nonexistent baseline,
-      # not skip cleanly. It is still registered in
-      # `scripts/publish-crates.sh`'s dependency-ordered array and the
-      # `Makefile`'s `publish-dry-run` target; this omission is scoped to
-      # the semver-diff check only.
-      - name: Check semver against the published v0.9.0 baseline
-        run: |
-          set -euo pipefail
-          PACKAGES=(
-            paladin-ai
-            paladin-ai-core
-            paladin-ports
-            paladin-battalion
-            paladin-herald
-            paladin-llm
-            paladin-memory
-            paladin-storage
-            paladin-notifications
-            paladin-content
-            paladin-web
-          )
-          for pkg in "${PACKAGES[@]}"; do
-            echo "::group::cargo semver-checks -- ${pkg} vs 0.9.0"
-            cargo semver-checks check-release --package "${pkg}" --default-features --baseline-version 0.9.0
-            echo "::endgroup::"
-          done
+      # Every published crate (all twelve, paladin-eval included), addressed
+      # by its crates.io PACKAGE name and read from scripts/publish-crates.sh
+      # (see the job comment above). The script takes no event data; it
+      # prints one check line per package, fails any package that evaluated
+      # zero checks, and annotates the run with every package's count.
+      - name: Check semver against the published v0.11.0 baseline
+        run: ./scripts/check-semver.sh
 
       # X-10.5 set-equality gate: every allowlist entry in
       # .cargo/semver-checks-allowlist.toml must correspond to a MIGRATION.md

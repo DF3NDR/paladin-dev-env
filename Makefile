@@ -248,6 +248,18 @@ check-release-consistency: ## Verify a release tag's version matches every publi
 check-consumer-surface: ## Compile and run the consumer-surface muster (ADOPT-04); not part of check-gates (it builds)
 	@$(CARGO) test --test consumer_surface_muster
 
+.PHONY: check-semver
+# Deliberately NOT part of check-gates: the members of check-gates are offline
+# script guards that finish in about a second, while this target builds rustdoc
+# JSON for every published crate and downloads each 0.11.0 baseline from
+# crates.io (roughly 1.5 minutes per crate with a cold cache). It runs the same
+# script as CI's `semver` job (display name "Semver Checks (vs v0.11.0)"), so a
+# red local run is the same red CI would report (D-01, CIREL-01). One package:
+# `./scripts/check-semver.sh --package paladin-eval`. On a small disk set
+# SEMVER_PRUNE_LOCAL_CACHE=1 to clear target/semver-checks/local-* between crates.
+check-semver: ## Run cargo-semver-checks for every publishable crate against the published 0.11.0 baseline (D-01; builds, needs crates.io)
+	@./scripts/check-semver.sh
+
 .PHONY: check-gates
 check-gates: check-changelogs check-crate-names check-advisory-register check-workflow-suppressions check-workflow-triggers check-codeql-dismissals check-migration-allowlist check-publish-order check-dependency-allowlist ## Run all offline release-gate guards
 

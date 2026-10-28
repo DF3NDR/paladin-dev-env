@@ -21,11 +21,14 @@
 #   create other                     -> hard failure naming the status
 #
 # The release body is data, never shell text: the request payload is built
-# structurally with `jq -n --arg` from the body file's literal contents (a
-# line that is exactly `EOF`, or one containing backticks and `$(...)`,
-# reaches the API unchanged) and sent to `gh api` on stdin via `--input -`.
-# Commit-subject text must never be interpolated into a command line or into
-# $GITHUB_OUTPUT.
+# structurally with `jq -n --rawfile body <file>`, so jq reads the body file
+# itself and no byte of the body ever crosses a process argument list (a
+# single argument is capped at 131,072 bytes by the kernel, so passing a long
+# changelog with `--arg` fails with "Argument list too long"; D-09, CIREL-05).
+# A line that is exactly `EOF`, or one containing backticks and `$(...)`,
+# reaches the API unchanged, and the payload is sent to `gh api` on stdin via
+# `--input -`. Commit-subject text must never be interpolated into a command
+# line or into $GITHUB_OUTPUT.
 #
 # The `gh` executable is resolved through GH_BIN (default: `gh`) -- this is
 # the seam this script's regression harness uses to stub the GitHub API with
@@ -88,24 +91,22 @@ _cor_gh_call() {
 # _cor_build_payload TAG NAME BODY_FILE PRERELEASE
 #
 # Prints a JSON release-creation payload to stdout, built structurally with
-# `jq -n --arg` so BODY_FILE's contents (commit-subject-derived text) reach
-# the API as data, never as interpolated shell/command text.
+# `jq -n` so BODY_FILE's contents (commit-subject-derived text) reach the API
+# as data, never as interpolated shell/command text. jq reads the body file
+# itself through `--rawfile`, so the body never crosses argv. An empty
+# BODY_FILE argument sends an empty body (jq reads /dev/null).
 _cor_build_payload() {
     local tag="$1" name="$2" body_file="$3" prerelease="$4"
-    local body_text=""
 
-    if [ -n "${body_file}" ]; then
-        if [ ! -f "${body_file}" ]; then
-            echo "ERROR: --body-file not found: ${body_file}" >&2
-            return 1
-        fi
-        body_text="$(cat "${body_file}")"
+    if [ -n "${body_file}" ] && [ ! -f "${body_file}" ]; then
+        echo "ERROR: --body-file not found: ${body_file}" >&2
+        return 1
     fi
 
     jq -n \
         --arg tag_name "${tag}" \
         --arg name "${name}" \
-        --arg body "${body_text}" \
+        --rawfile body "${body_file:-/dev/null}" \
         --argjson draft false \
         --argjson prerelease "${prerelease}" \
         '{tag_name: $tag_name, name: $name, body: $body, draft: $draft, prerelease: $prerelease}'

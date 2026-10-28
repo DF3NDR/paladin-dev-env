@@ -367,6 +367,66 @@ assert_silent "${DIR9}" "lookup 200 with a response body larger than the pipe bu
     --tag v1.2.3 --repo test/repo
 assert_call_count "${DIR9}" "large-body lookup 200 makes no create call" 0
 
+# --- Case 10 (D-10, CIREL-05): a release body larger than the 131,072-byte
+#     single-argument limit of execve (MAX_ARG_STRLEN). The body is generated
+#     at test time in ${SCRATCH} (no committed fixture): about 3,000 numbered
+#     ASCII lines plus a final multi-byte line. PALADIN_RELEASE_BODY_LIMIT is
+#     raised to 500000 so the size guard does not shorten it -- this case
+#     proves the body travels file -> jq --rawfile -> stdin, never argv, and
+#     arrives byte-identical. Against a builder that passes the body as
+#     `jq --arg body`, exec fails with "Argument list too long" (exit 126) and
+#     no create call is ever made. ------------------------------------------
+DIR10="${SCRATCH}/case10"
+mkdir -p "${DIR10}"
+write_gh_stub "${DIR10}"
+echo "404" > "${DIR10}/lookup_status"
+echo '{}' > "${DIR10}/lookup_body"
+echo "201" > "${DIR10}/create_status"
+echo '{"upload_url":"https://example.com/upload-10"}' > "${DIR10}/create_body"
+BODY_FILE10="${DIR10}/body.md"
+awk 'BEGIN { for (i = 1; i <= 3000; i++) printf "- changelog line %05d: a commit subject of ordinary length for the release body\n", i }' > "${BODY_FILE10}"
+printf '%s\n' '- multi-byte tail: caf\303\251 \342\200\224 \346\227\245\346\234\254\350\252\236 \360\237\232\200' > "${BODY_FILE10}.tail"
+# printf '%s' keeps the octal escapes literal; decode them with printf %b.
+printf '%b' "$(cat "${BODY_FILE10}.tail")" >> "${BODY_FILE10}"
+printf '\n' >> "${BODY_FILE10}"
+rm -f "${BODY_FILE10}.tail"
+ASSERTIONS=$((ASSERTIONS + 1))
+BODY10_BYTES="$(wc -c < "${BODY_FILE10}" | tr -d ' ')"
+if [ "${BODY10_BYTES}" -gt 131072 ]; then
+    echo "PASS: case 10 body is ${BODY10_BYTES} bytes (> 131072, over the single-argument limit)"
+else
+    echo "FAIL: case 10 body is only ${BODY10_BYTES} bytes -- it must exceed 131072 to exercise the argv limit"
+    FAILED=$((FAILED + 1))
+fi
+cp "${BODY_FILE10}" "${BODY_FILE10}.orig"
+export PALADIN_RELEASE_BODY_LIMIT=500000
+assert_silent "${DIR10}" "a body larger than 131072 bytes is created without crossing argv" \
+    --tag v1.2.3 --repo test/repo --body-file "${BODY_FILE10}"
+unset PALADIN_RELEASE_BODY_LIMIT
+assert_call_count "${DIR10}" "oversized-argv body makes exactly one create call" 1
+ASSERTIONS=$((ASSERTIONS + 1))
+BODY10_LEN="$(jq -r '.body | length' "${DIR10}/captured_payload" 2>/dev/null || echo 0)"
+if [ "${BODY10_LEN}" -gt 131072 ]; then
+    echo "PASS: case 10 payload .body length is ${BODY10_LEN} (> 131072)"
+else
+    echo "FAIL: case 10 payload .body length is ${BODY10_LEN}, expected > 131072"
+    FAILED=$((FAILED + 1))
+fi
+ASSERTIONS=$((ASSERTIONS + 1))
+if jq -j .body "${DIR10}/captured_payload" 2>/dev/null | cmp -s - "${BODY_FILE10}"; then
+    echo "PASS: case 10 payload body is byte-identical to the body file"
+else
+    echo "FAIL: case 10 payload body differs from the body file"
+    FAILED=$((FAILED + 1))
+fi
+ASSERTIONS=$((ASSERTIONS + 1))
+if cmp -s "${BODY_FILE10}" "${BODY_FILE10}.orig"; then
+    echo "PASS: case 10 left the caller's body file untouched"
+else
+    echo "FAIL: case 10 modified the caller's body file"
+    FAILED=$((FAILED + 1))
+fi
+
 # --- Missing --tag: usage error. -------------------------------------------
 DIR_MISSING_TAG="${SCRATCH}/case-missing-tag"
 mkdir -p "${DIR_MISSING_TAG}"

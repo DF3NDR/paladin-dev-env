@@ -28,7 +28,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
       against the published `0.11.0` baseline, is named for that baseline, and reports a non-zero
       check count (today: `Semver Checks (vs v0.9.0)`, `0 checks: 0 pass, 254 skip`) — inventory D1
 
-- [ ] **CIREL-02**: The crate-wide semver allows in `crates/paladin-core/Cargo.toml` and
+- [x] **CIREL-02**: The crate-wide semver allows in `crates/paladin-core/Cargo.toml` and
       `crates/paladin-battalion/Cargo.toml` (`struct_missing`, `enum_missing`, `module_missing`,
       `enum_variant_missing`, `function_missing`) and their mirrored
       `.cargo/semver-checks-allowlist.toml` entries are removed, and the semver job stays green — D2
@@ -306,7 +306,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | CIREL-01 | Phase 52 | Complete |
-| CIREL-02 | Phase 52 | Pending |
+| CIREL-02 | Phase 52 | Complete |
 | CIREL-03 | Phase 52 | Complete |
 | CIREL-04 | Phase 52 | Pending |
 | CIREL-05 | Phase 52 | Complete |

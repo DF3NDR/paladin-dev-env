@@ -322,7 +322,7 @@ Plans:
 **Wave 2** *(blocked on Wave 1 completion)*
 
 - [x] 52-04-PLAN.md — Finalize-release-body size guard, idempotent re-fit of the curated part (CIREL-05)
-- [ ] 52-05-PLAN.md — All six crate-wide semver allow tables removed, measured; MIGRATION.md §11 opened with an empty §11.2 register the gate reads (CIREL-01, CIREL-02, CIREL-03)
+- [x] 52-05-PLAN.md — All six crate-wide semver allow tables removed, measured; MIGRATION.md §11 opened with an empty §11.2 register the gate reads (CIREL-01, CIREL-02, CIREL-03)
 - [ ] 52-06-PLAN.md — Publish Dry Run on every PR, End-to-End Tests under the `release` label; trigger register, committed ruleset record and release docs (publish-order reading) updated (CIREL-04, CIREL-09)
 
 **Wave 3** *(blocked on Wave 2 completion)*

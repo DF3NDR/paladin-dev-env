@@ -5,15 +5,15 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 52
 current_phase_name: ci-release-pipeline-repair
 status: executing
-stopped_at: Completed 52-02-PLAN.md
-last_updated: "2026-10-28T21:48:48.703Z"
+stopped_at: Completed 52-03-PLAN.md
+last_updated: "2026-10-28T23:28:08.702Z"
 last_activity: 2026-10-28
 last_activity_desc: Phase 52 execution started
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 8
-  completed_plans: 2
+  completed_plans: 3
 ---
 
 # Project State
@@ -50,11 +50,11 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 ## Current Position
 
 Phase: 52 (ci-release-pipeline-repair) — EXECUTING
-Plan: 3 of 8
+Plan: 4 of 8
 Status: Ready to execute
 Last activity: 2026-10-28 — Phase 52 execution started
 
-Progress: [███░░░░░░░] 25% (0 of 7 phases)
+Progress: [████░░░░░░] 38% (0 of 7 phases)
 
 ## Performance Metrics
 
@@ -355,6 +355,7 @@ Progress: [███░░░░░░░] 25% (0 of 7 phases)
 | Phase 47 P10 | 30m | 2 tasks | 5 files |
 | Phase 52 P01 | 40min | 2 tasks | 5 files |
 | Phase 52 P02 | 30min | 3 tasks | 5 files |
+| Phase 52 P03 | 51min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -662,6 +663,8 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 47]: Phase 47 ends at ready-to-close: 47-READY-TO-CLOSE.md written, chore/47-close pushed and docs-only PR #60 opened on the maintainer's push ok; audit, milestone close and merge stay the maintainer's — D-17 and D-00l: the last plan ends at a hand-off; SC1-SC3 observed TRUE from evidence (SC3 under B1=a), the Coverage Lines figure and the B-1 read stated as open
 - [Phase ?]: 52-01: semver loop lives in tested scripts/check-semver.sh (zero-check tripwire); allowlist gate runs from required cargo-deny job; --release-type patch fixed by flag
 - [Phase ?]: Phase 52-02: release body travels file -> jq --rawfile -> stdin; one shared scripts/release-body-fit.sh (limit 125000, reserve 5000, code points) truncates at a line boundary with sentinel footer; empty limit var means default
+- [Phase 52]: 52-03: the 20 OSV-Scanner advisory alerts are out of the CodeQL register's scope (17 governed by SECURITY-EXCEPTIONS.md, 3 ungoverned left open for the maintainer)
+- [Phase 52]: 52-03: 31 new CODEQL-DISMISSALS rows merged in ascending alert_number order between existing blocks; no alert fixed; platform dismissal commands handed over as H-04
 
 ### Pending Todos
 
@@ -972,8 +975,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-10-28T21:48:48.678Z
-Stopped at: Completed 52-02-PLAN.md
+Last session: 2026-10-28T23:28:08.687Z
+Stopped at: Completed 52-03-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

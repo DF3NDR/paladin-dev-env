@@ -43,11 +43,11 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
       through argv (`jq --rawfile` or stdin), with a regression test whose body exceeds 131,072
       bytes, so no manual changelog condensation is ever needed again — D4
 
-- [ ] **CIREL-06**: The 24 advisory CodeQL alerts on the release PR heads are triaged into
+- [x] **CIREL-06**: The 24 advisory CodeQL alerts on the release PR heads are triaged into
       `CODEQL-DISMISSALS.md` (each dismissed with a reason or fixed); the advisory-only posture is
       unchanged — D7
 
-- [ ] **CIREL-07**: GitHub issue `DF3NDR/paladin-dev-env#41` is closed with a reference to the
+- [x] **CIREL-07**: GitHub issue `DF3NDR/paladin-dev-env#41` is closed with a reference to the
       `v0.11.0` GitHub Release created by `release.yml`, or restated with what is still missing — D6
 
 - [ ] **CIREL-08**: The eight crate-level `#![allow(rustdoc::…)]` lines (`paladin-ports` ×2,
@@ -310,8 +310,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CIREL-03 | Phase 52 | Complete |
 | CIREL-04 | Phase 52 | Pending |
 | CIREL-05 | Phase 52 | Complete |
-| CIREL-06 | Phase 52 | Pending |
-| CIREL-07 | Phase 52 | Pending |
+| CIREL-06 | Phase 52 | Complete |
+| CIREL-07 | Phase 52 | Complete |
 | CIREL-08 | Phase 55 | Pending |
 | CIREL-09 | Phase 52 | Pending |
 | TENANT-03 | Phase 53 | Pending |

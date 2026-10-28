@@ -317,7 +317,7 @@ Plans:
 
 - [x] 52-01-PLAN.md — Semver gate re-pinned to 0.11.0 at patch through `scripts/check-semver.sh` (twelve crates, zero-check tripwire); allowlist gate moved into the required job (CIREL-01, CIREL-03)
 - [x] 52-02-PLAN.md — Release body via `jq --rawfile`, shared character-counting size helper, create-time truncation; >131,072-byte regression proven red first (CIREL-05)
-- [ ] 52-03-PLAN.md — CodeQL alert triage into CODEQL-DISMISSALS.md and issue #41 close, with maintainer intake checkpoint (CIREL-06, CIREL-07)
+- [x] 52-03-PLAN.md — CodeQL alert triage into CODEQL-DISMISSALS.md and issue #41 close, with maintainer intake checkpoint (CIREL-06, CIREL-07)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

@@ -307,7 +307,17 @@ below.*
   3. On a pull request, before merge, `check-migration-allowlist`, `End-to-End Tests` and `Publish Dry Run` all run and report (on every PR or under a `release` label), so the first run on a tree is no longer after the merge.
   4. `scripts/create-or-reuse-release.sh` builds a release body larger than 131,072 bytes without passing it through argv, proven by a regression test whose body exceeds that size, so no manual changelog condensation is ever needed again.
   5. Each of the 24 advisory CodeQL alerts on the release PR heads carries a dismissal reason in `CODEQL-DISMISSALS.md` (or is fixed) with the register check green and the advisory-only posture unchanged; GitHub issue `DF3NDR/paladin-dev-env#41` is closed with a reference to the `v0.11.0` GitHub Release (or restated with what is still missing); and the publish-order gate reading (`ci.yml` `Check publish order` plus the dependency-ordered publish job) is recorded as accepted in the release documentation.
-**Plans**: TBD
+**Plans**: 8 plans
+
+Plans:
+- [ ] 52-01-PLAN.md — Semver gate re-pinned to 0.11.0 at patch through `scripts/check-semver.sh` (twelve crates, zero-check tripwire); allowlist gate moved into the required job (CIREL-01, CIREL-03)
+- [ ] 52-02-PLAN.md — Release body via `jq --rawfile`, shared character-counting size helper, create-time truncation; >131,072-byte regression proven red first (CIREL-05)
+- [ ] 52-03-PLAN.md — CodeQL alert triage into CODEQL-DISMISSALS.md and issue #41 close, with maintainer intake checkpoint (CIREL-06, CIREL-07)
+- [ ] 52-04-PLAN.md — Finalize-release-body size guard, idempotent re-fit of the curated part (CIREL-05)
+- [ ] 52-05-PLAN.md — All six crate-wide semver allow tables removed, measured; MIGRATION.md §11 opened with an empty §11.2 register the gate reads (CIREL-01, CIREL-02, CIREL-03)
+- [ ] 52-06-PLAN.md — Publish Dry Run on every PR, End-to-End Tests under the `release` label; trigger register, committed ruleset record and release docs (publish-order reading) updated (CIREL-04, CIREL-09)
+- [ ] 52-07-PLAN.md — Semver red proof: local leaf-crate break, then scratch-branch draft PR after the maintainer's go-ahead (CIREL-01)
+- [ ] 52-08-PLAN.md — Phase gate run, folded coverage-reproduction record, maintainer hand-off checklist (ruleset PUT, label run, CodeQL dismissals) and outcomes (CIREL-01, CIREL-04, CIREL-06, CIREL-07)
 **Scope notes**:
 - The re-pin must make the tool evaluate lints at the patch release type (an explicit `--release-type` or the manifest bump): the `0.9.0` baseline went blind because the manifest version delta was major-equivalent, so a re-pin that again reads zero checks is not done. From here on a public-API change in a later phase fails red at patch level; Phase 53's and Phase 55's signature or enum changes are judged by this gate and feed the `v0.11.1`-versus-`v0.12.0` decision.
 - The one known finding against `0.10.1` (`enum_struct_variant_field_added` on `RunOutcome::Halted.cause`) is expected to disappear at the `0.11.0` baseline; any other finding the real gate now surfaces is triaged in this phase (fix, or a registered allowlist entry with its `MIGRATION.md` row), not carried.

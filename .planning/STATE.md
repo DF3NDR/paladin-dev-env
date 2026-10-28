@@ -5,15 +5,15 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 52
 current_phase_name: ci-release-pipeline-repair
 status: executing
-stopped_at: Completed 52-01-PLAN.md
-last_updated: "2026-10-28T19:29:41.732Z"
+stopped_at: Completed 52-02-PLAN.md
+last_updated: "2026-10-28T21:48:48.703Z"
 last_activity: 2026-10-28
 last_activity_desc: Phase 52 execution started
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 8
-  completed_plans: 1
+  completed_plans: 2
 ---
 
 # Project State
@@ -50,11 +50,11 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 ## Current Position
 
 Phase: 52 (ci-release-pipeline-repair) — EXECUTING
-Plan: 2 of 8
+Plan: 3 of 8
 Status: Ready to execute
 Last activity: 2026-10-28 — Phase 52 execution started
 
-Progress: [█░░░░░░░░░] 13% (0 of 7 phases)
+Progress: [███░░░░░░░] 25% (0 of 7 phases)
 
 ## Performance Metrics
 
@@ -354,6 +354,7 @@ Progress: [█░░░░░░░░░] 13% (0 of 7 phases)
 | Phase 47 P09 | 5m | 2 tasks | 7 files |
 | Phase 47 P10 | 30m | 2 tasks | 5 files |
 | Phase 52 P01 | 40min | 2 tasks | 5 files |
+| Phase 52 P02 | 30min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -660,6 +661,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 47]: v0.11.0 released: tag `v0.11.0` on merge commit `70657919beadbd341a72be2d0107080017a803f0`, release run `40396108246`, 12/12 crates registry-verified at `0.11.0` (unyanked, sparse-index re-read 2026-10-26T20:53Z), Trusted Publishing — D-16: SHIP-07 was ticked on the live sparse-index table (12 of 12 derived crates at 0.11.0, yanked false, trustpub_data naming run 40396108246), not on the merge, the tag or the workflow log.
 - [Phase 47]: Phase 47 ends at ready-to-close: 47-READY-TO-CLOSE.md written, chore/47-close pushed and docs-only PR #60 opened on the maintainer's push ok; audit, milestone close and merge stay the maintainer's — D-17 and D-00l: the last plan ends at a hand-off; SC1-SC3 observed TRUE from evidence (SC3 under B1=a), the Coverage Lines figure and the B-1 read stated as open
 - [Phase ?]: 52-01: semver loop lives in tested scripts/check-semver.sh (zero-check tripwire); allowlist gate runs from required cargo-deny job; --release-type patch fixed by flag
+- [Phase ?]: Phase 52-02: release body travels file -> jq --rawfile -> stdin; one shared scripts/release-body-fit.sh (limit 125000, reserve 5000, code points) truncates at a line boundary with sentinel footer; empty limit var means default
 
 ### Pending Todos
 
@@ -970,8 +972,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-10-28T19:29:41.716Z
-Stopped at: Completed 52-01-PLAN.md
+Last session: 2026-10-28T21:48:48.678Z
+Stopped at: Completed 52-02-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

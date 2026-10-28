@@ -39,7 +39,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 - [ ] **CIREL-04**: `End-to-End Tests` and `Publish Dry Run` run before merge (on PRs or on a
       `release` label), not only on `main` pushes — D3
 
-- [ ] **CIREL-05**: `scripts/create-or-reuse-release.sh` builds the release body without passing it
+- [x] **CIREL-05**: `scripts/create-or-reuse-release.sh` builds the release body without passing it
       through argv (`jq --rawfile` or stdin), with a regression test whose body exceeds 131,072
       bytes, so no manual changelog condensation is ever needed again — D4
 
@@ -309,7 +309,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CIREL-02 | Phase 52 | Pending |
 | CIREL-03 | Phase 52 | Complete |
 | CIREL-04 | Phase 52 | Pending |
-| CIREL-05 | Phase 52 | Pending |
+| CIREL-05 | Phase 52 | Complete |
 | CIREL-06 | Phase 52 | Pending |
 | CIREL-07 | Phase 52 | Pending |
 | CIREL-08 | Phase 55 | Pending |

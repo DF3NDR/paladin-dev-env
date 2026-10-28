@@ -5,15 +5,15 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 52
 current_phase_name: ci-release-pipeline-repair
 status: executing
-stopped_at: Completed 52-03-PLAN.md
-last_updated: "2026-10-28T23:28:08.702Z"
+stopped_at: Completed 52-04-PLAN.md
+last_updated: "2026-10-28T23:40:21.132Z"
 last_activity: 2026-10-28
 last_activity_desc: Phase 52 execution started
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 8
-  completed_plans: 3
+  completed_plans: 4
 ---
 
 # Project State
@@ -50,11 +50,11 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 ## Current Position
 
 Phase: 52 (ci-release-pipeline-repair) — EXECUTING
-Plan: 4 of 8
+Plan: 5 of 8
 Status: Ready to execute
 Last activity: 2026-10-28 — Phase 52 execution started
 
-Progress: [████░░░░░░] 38% (0 of 7 phases)
+Progress: [█████░░░░░] 50% (0 of 7 phases)
 
 ## Performance Metrics
 
@@ -356,6 +356,7 @@ Progress: [████░░░░░░] 38% (0 of 7 phases)
 | Phase 52 P01 | 40min | 2 tasks | 5 files |
 | Phase 52 P02 | 30min | 3 tasks | 5 files |
 | Phase 52 P03 | 51min | 3 tasks | 5 files |
+| Phase 52 P04 | 25min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -665,6 +666,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: Phase 52-02: release body travels file -> jq --rawfile -> stdin; one shared scripts/release-body-fit.sh (limit 125000, reserve 5000, code points) truncates at a line boundary with sentinel footer; empty limit var means default
 - [Phase 52]: 52-03: the 20 OSV-Scanner advisory alerts are out of the CodeQL register's scope (17 governed by SECURITY-EXCEPTIONS.md, 3 ungoverned left open for the maintainer)
 - [Phase 52]: 52-03: 31 new CODEQL-DISMISSALS rows merged in ascending alert_number order between existing blocks; no alert fixed; platform dismissal commands handed over as H-04
+- [Phase ?]: 52-04: finalize size guard re-fits only the curated section to limit minus the artifact part via the shared release-body-fit.sh; artifact sections never altered
 
 ### Pending Todos
 
@@ -975,8 +977,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-10-28T23:28:08.687Z
-Stopped at: Completed 52-03-PLAN.md
+Last session: 2026-10-28T23:40:21.117Z
+Stopped at: Completed 52-04-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

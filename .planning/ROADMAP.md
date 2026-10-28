@@ -104,6 +104,7 @@ frozen at 311 lines that two milestones made invisible.
 | **Security Tooling** | 18-21 | ✅ **Shipped v0.9.0 (2026-09-01)** — [archive](milestones/v0.9.0-ROADMAP.md) | Forward work — not ingest-derived. Added 2026-08-24 per *Roadmap Extension Protocol* item 1, closing the Rust-SAST gap the v0.8.0 milestone audit left as its one genuinely open item; extended 2026-08-25 with Phases 19-21 (publish credential, publish operations, release artifacts). |
 | **Durable Agent Execution Runtime** | 22-37.1 | ✅ **Shipped v0.10.0 (2026-09-23)** — [archive](milestones/v0.10.0-ROADMAP.md). Released to crates.io as `0.10.1` (tag `v0.10.1` on merge commit `f7dae267`, 2026-09-21) after the `v0.10.0` tag published 3 of 12 crates — see MILESTONES.md. Phases 22-29 complete 2026-09-10; Phases 30-33 added 2026-09-14, complete 2026-09-16; Phases 34-37 added 2026-09-17, Phase 36.1 and 37.1 inserted; all 19 phases complete 2026-09-23 | Forward work — not ingest-derived. Added 2026-09-01, sourced from the user-authored design corpus in `.project/v0.10.0/` (program overview `00`, epic PRDs `01`-`07`, traceability matrix `08`) rather than the historical `.project/Milestone_*` ingest. **Extended 2026-09-14** with Phases 30-33 (Token Economy — Commissary anchoring, lossless accounting, primitive unification, Commissary adoption), sourced from `.project/Milestone_13-Token-Economy/` (overview + Epics 1-4). Milestone 14 (Treasurer, `.project/Milestone_14-Treasurer/`) is reserved, not roadmapped. **Extended 2026-09-17** with Phases 34-37 (Release Readiness — documentation currency audit, mdBook currency, rustdoc zero-warning bar & examples currency, the crate release) — operator-instructed pre-tag work, not corpus-sourced. |
 | **Treasurer Spend Governance** | 38-51 | ✅ **Shipped v0.11.0 (2026-10-27)** — [archive](milestones/v0.11.0-ROADMAP.md). Tag `v0.11.0` on merge commit `70657919` (2026-10-26, release run `40396108246`), all 12 publishable crates on crates.io at `0.11.0` — one tag, no patch needed; see MILESTONES.md. Phases 38-45 complete by 2026-10-12; Phases 48-51 (and the inserted 50.1) added 2026-10-12..19 and complete by 2026-10-23; Phases 46-47 complete 2026-10-24/26; all 15 phases closed 2026-10-27 | Forward work — not ingest-derived. Sourced from `.project/Milestone_14-Treasurer/` (overview + Epic 1 PRD `prd-treasurer-spend-governance.md`, R1-R6), the supporting scope in PROJECT.md *Current Milestone*, and `.planning/research/SUMMARY.md` (2026-09-24). Operator-confirmed full governance (per-tenant + per-API-key), 2026-09-24. Extended 2026-10-12 with Phase 48 (Base Entity Rename) and 2026-10-14 with Phase 49 (Downstream Adoption of v0.10.1, from the web3sec handoff), both sequenced before Phases 46-47; extended again 2026-10-14 with Phase 50 (Provider Parity & Configuration-Driven Model Swap, from the second web3sec handoff), also sequenced before Phases 46-47; extended again 2026-10-19 with Phase 50.1 (Consumer-Surface Readiness for v0.11.0, inserted from the fourth web3sec handoff), sequenced after Phase 50 and before Phase 51. |
+| **Dogfood Cleanup** | 52-58 | 🚧 **In progress (v0.11.1, opened 2026-10-27)** — 7 phases, 53 requirements; a patch release unless a security fix forces `v0.12.0` (decision point in Phase 53) | Forward work — not ingest-derived. Sourced from `.project/v0.11.1/` (`01-carried-gaps-inventory.md` rows A1…G4, `02-dogfood-findings-log.md` entries DF-nn, `03-suggestions-and-scoping.md`) and PROJECT.md *Current Milestone*. Cleanup and bug-fix only: no new ports, adapters or HTTP routes except where a security fix needs one; stubs are fenced, not finished. Phase 56's detailed scope is filled from the findings log once the maintainer's runs and the web3sec return arrive. |
 
 **The ingest is complete.** All 263 documents in `.project/` are covered — 199 classified across
 five runs and 64 `tasks-*.md` measured deterministically by `intel/task-completion-state.md`. There
@@ -249,7 +250,26 @@ Phase artifacts: `milestones/v0.11.0-phases/`
 
 </details>
 
-**Next milestone:** not yet defined — run `/gsd-new-milestone`; new phases start at **Phase 52**.
+**🚧 v0.11.1 Dogfood Cleanup (Phases 52-58) — in progress**
+
+*Goal: close the security, correctness, release-process and first-run gaps v0.11.0 left behind, plus whatever dogfooding v0.11.0 surfaces, so the `v0.11.1` tag ships with `WINDOWS.md` `open_count: 0` and a milestone audit that reads `passed` rather than `tech_debt`. Cleanup only: no new features, and no new ports, adapters or HTTP routes except where a security fix needs one. If Phase 53's decision point forces a persisted or public-surface break, the milestone version becomes `v0.12.0` and every `0.11.1` below reads `0.12.0`.*
+
+- [ ] **Phase 52: CI & Release Pipeline Repair** - Re-pin the semver gate to the published `0.11.0` baseline so it checks something, drop the crate-wide allows, run the migration-allowlist, end-to-end and publish-dry-run gates before merge, fix the release-body argv cap, and clear the CodeQL, issue #41 and publish-order carry-overs
+- [ ] **Phase 53: Tenant Isolation Closure** - One visibility gate for every `/v1/threads/*` route, run submission and fork refusing a foreign tenant's thread, tenant-checked job reads and cancel, redacted run-row errors, and a boot-time refusal when a configured Treasurer is not attached to the worker pool (the only S1 cluster; records the patch-versus-`v0.12.0` decision)
+- [ ] **Phase 54: First-Run Usability** - Refuse unexpanded `${VAR}` HTTP auth keys at boot and make the examples honest, bring every install snippet, version line and `k8s/` label to the current release behind a `check-version-strings` gate, and fix the changelog, ADR, count and API-surface-snapshot nits a new user trips on
+- [ ] **Phase 55: Correctness Fixes, Test Hygiene & Lint Bar** - No `todo!()` reachable in a published crate (held by a grep guard), the unfinished content/base-layer items each given a keep/fence/remove decision, the Failed-vs-Halted, `Cancelled`, `claude-opus-4-8` seed and unpriced-model-warning fixes, hermetic and non-flaky tests, and a warning-free lint and rustdoc bar with the eight crate-level rustdoc allows removed
+- [ ] **Phase 56: Dogfood Findings** - Triage the maintainer's runs, the web3sec return and two deliberate walk-throughs into the findings log, disposition every `DF-nn`, and fix every promoted S1/S2 finding before the tag (detailed scope is unknown today and is filled from `.project/v0.11.1/02-dogfood-findings-log.md`)
+- [ ] **Phase 57: Register Hygiene Close-Out** - `WINDOWS.md` at `open_count: 0`, zero undispositioned review warnings across Phases 38-51, SUMMARY frontmatter and debug sessions reconciled, the Phase 40 judgment-tier read recorded, and the three `zip` RustSec exceptions re-checked, so the audit can read `passed`
+- [ ] **Phase 58: Crate Release** - Lockstep version bump held by the gate, `MIGRATION.md` consumer statement, a pre-tag milestone audit that reads `passed`, and the `v0.11.1` tag through `release.yml` with no manual step and all twelve crates on crates.io
+
+**v0.11.1 exit criteria (the milestone's definition of done — carried by Phase 58 and re-read at the tag):**
+
+- `WINDOWS.md` reads `open_count: 0` — every row fixed, waived with a reason, or re-homed with an owner and a date (the v0.10.0 Phase 36.1 bar that v0.11.0 did not meet).
+- The milestone audit reads `passed`, not `tech_debt`.
+- Zero undispositioned review warnings across Phases 38-51 (today: Phase 40's WR-01…04 and IN-04).
+- `v0.11.1` ships end to end through `release.yml` with no manual step (no changelog condensation, no hand-run publish), and the semver job reports a non-zero check count.
+- `README.md`, the `docs/src` install snippets, the `k8s/` labels and `openapi.json` all read `0.11.1`, enforced by a gate rather than a sweep.
+- Every finding in `.project/v0.11.1/02-dogfood-findings-log.md` has a disposition (in, out with a reason, or duplicate); none is `open` at the tag.
 
 ## Phase Details
 
@@ -274,8 +294,120 @@ mid-milestone and the inserted Phase 50.1 — are archived in
 [`v0.11.0-REQUIREMENTS.md`](milestones/v0.11.0-REQUIREMENTS.md) and
 [`v0.11.0-MILESTONE-AUDIT.md`](milestones/v0.11.0-MILESTONE-AUDIT.md). Only phases in the current
 and future milestones are detailed below, which is what keeps this file a constant size per
-milestone. No phase is currently detailed: the next milestone has not been defined, and its
-phases start at Phase 52.*
+milestone. Phases 52-58 — the v0.11.1 "Dogfood Cleanup" milestone, in progress — are detailed
+below.*
+
+### Phase 52: CI & Release Pipeline Repair
+**Goal**: Every later phase in this milestone, and the `v0.11.1` release itself, runs under CI and release gates that actually check something: the semver job compares against the published `0.11.0` baseline instead of reading `0 checks`, the migration-allowlist, end-to-end and publish-dry-run gates fire before the irreversible merge, and the release-body builder can no longer fail on a long changelog.
+**Depends on**: Nothing (first phase of the milestone; v0.11.0 is closed and archived)
+**Requirements**: CIREL-01, CIREL-02, CIREL-03, CIREL-04, CIREL-05, CIREL-06, CIREL-07, CIREL-09
+**Success Criteria** (what must be TRUE):
+  1. The CI semver job is named for the `0.11.0` baseline, covers all twelve publishable crates (`paladin-eval` included), and its log reports a non-zero check count instead of `0 checks: 0 pass, 254 skip`; a throwaway public-API break on a scratch branch turns it red, which proves it evaluates lints rather than skipping them.
+  2. The crate-wide semver allows in `crates/paladin-core/Cargo.toml` and `crates/paladin-battalion/Cargo.toml` and their mirrored `.cargo/semver-checks-allowlist.toml` entries are gone, and the semver job stays green.
+  3. On a pull request, before merge, `check-migration-allowlist`, `End-to-End Tests` and `Publish Dry Run` all run and report (on every PR or under a `release` label), so the first run on a tree is no longer after the merge.
+  4. `scripts/create-or-reuse-release.sh` builds a release body larger than 131,072 bytes without passing it through argv, proven by a regression test whose body exceeds that size, so no manual changelog condensation is ever needed again.
+  5. Each of the 24 advisory CodeQL alerts on the release PR heads carries a dismissal reason in `CODEQL-DISMISSALS.md` (or is fixed) with the register check green and the advisory-only posture unchanged; GitHub issue `DF3NDR/paladin-dev-env#41` is closed with a reference to the `v0.11.0` GitHub Release (or restated with what is still missing); and the publish-order gate reading (`ci.yml` `Check publish order` plus the dependency-ordered publish job) is recorded as accepted in the release documentation.
+**Plans**: TBD
+**Scope notes**:
+- The re-pin must make the tool evaluate lints at the patch release type (an explicit `--release-type` or the manifest bump): the `0.9.0` baseline went blind because the manifest version delta was major-equivalent, so a re-pin that again reads zero checks is not done. From here on a public-API change in a later phase fails red at patch level; Phase 53's and Phase 55's signature or enum changes are judged by this gate and feed the `v0.11.1`-versus-`v0.12.0` decision.
+- The one known finding against `0.10.1` (`enum_struct_variant_field_added` on `RunOutcome::Halted.cause`) is expected to disappear at the `0.11.0` baseline; any other finding the real gate now surfaces is triaged in this phase (fix, or a registered allowlist entry with its `MIGRATION.md` row), not carried.
+- CIREL-08 (the eight crate-level `#![allow(rustdoc::…)]`) is deliberately mapped to Phase 55, not here: removing them can surface an unbounded number of rustdoc warnings across five crates and the facade, and that must not delay arming the gates every other phase relies on.
+
+### Phase 53: Tenant Isolation Closure
+**Goal**: A principal of one tenant can no longer enumerate, read, run against or mutate another tenant's threads, runs or jobs, and a configured Treasurer can no longer be silently dropped by worker-pool wiring. This is the milestone's only S1 cluster, and it is bounded.
+**Depends on**: Phase 52 (the armed semver gate judges the fixes' public-surface effect)
+**Requirements**: TENANT-03, TENANT-04, TENANT-05, TENANT-06, TENANT-07, TENANT-08, TENANT-09, TENANT-10
+**Success Criteria** (what must be TRUE):
+  1. A bearer of tenant B calling any `/v1/threads/*` route (list, get, state, history, resume, fork, delete) on tenant A's thread gets the same 404 a missing thread yields, `GET /v1/threads` omits A's threads, and a route matrix built from the router's own OpenAPI document fails on any future `/v1/threads/{id}*` route that skips the one visibility gate.
+  2. Tenant B cannot run against or fork tenant A's thread (`POST /v1/runs {thread_id}` and `POST /v1/threads/{id}/fork` answer 404), cannot read A's job through `GET /agents/{id}/jobs/{job_id}`, and a library caller of `RunSubmissionService::cancel` presenting a foreign tenant is refused at the service layer with no HTTP controller in the path.
+  3. A corrupt or half-attributed run row, and any `Serialization` error, reaches an API client as a fixed redacted error with no backend text, while a foreign tenant still receives the missing-run 404 (hidden equals missing).
+  4. With a Treasurer configured, `paladin-server` refuses to boot unless the worker pool was built through `with_engine_factory` (a test proves the refusal); reserved literals are rejected as tenant and API-key names at config load; and boot logs exactly one `warn!` listing schedules with `NULL created_by`, with no backfill route.
+  5. The patch-versus-minor decision is recorded in this phase before Phase 58 opens: either the fixes stay additive (semver job green at patch level, no `MIGRATION.md` break; a tenant column on threads is a migration, not a break) or the one deliberate break is named, registered in `MIGRATION.md` and the allowlist, and the milestone version becomes `v0.12.0`.
+**Plans**: TBD
+**Scope notes**:
+- **Re-verify against the tree first.** Phase 40's `40-REVIEW-FIX.md` records WR-01…WR-04 (TENANT-04, -05, -06) as fixed: `ensure_thread_visible` is in `src/application/services/run/submission.rs`, `RunSubmissionService::cancel` enforces the tenant in the service, and `run_controller.rs` returns a fixed run-store error message. The carried-gaps inventory (built from `40-REVIEW.md` alone) lists them open. For those three requirements the plan starts by proving the criterion against the tree and adds the regression test where one is missing; only what fails is rebuilt. TENANT-03, -07, -08, -09 and -10 are expected to be real work.
+- **Decision point (v0.11.1 or v0.12.0).** A tenant column on threads, or a signature change on a published type, may force a persisted or public-surface break. Decide when the break is known, not at the tag: if it is forced by this security fix it is the one deliberate break (`MIGRATION.md` §11, mirrored allowlist entry) and the version is `v0.12.0`; a break not forced by security is reshaped or dropped instead. Shared-gate design (derive the tenant from a thread's runs versus record it on the thread) is a discuss-phase question.
+- No new HTTP routes: the fixes route existing handlers through the gate.
+
+### Phase 54: First-Run Usability
+**Goal**: A new user who copies from the README, the docs, `config.example.yml` or `k8s/` gets a working first run: no example loads a placeholder as a credential, every install snippet and version line reads the current release, and a gate, not a one-off sweep, keeps it that way.
+**Depends on**: Phase 53 (FIRST-01 and TENANT-09 both extend `AuthConfig` load-time validation, so sequencing keeps those changes in one reviewed order), and through it Phase 52's armed gates
+**Requirements**: FIRST-01, FIRST-02, FIRST-03, FIRST-04, FIRST-05, FIRST-06, FIRST-07, FIRST-08, FIRST-09
+**Success Criteria** (what must be TRUE):
+  1. Starting `paladin-server` with an `http.auth.api_keys[].key` that is an unexpanded `${…}` placeholder, as `config.example.yml` and `k8s/server/configmap.yaml` carry today, exits at config load with an error naming the key; both examples no longer carry a loadable placeholder key, and the configmap header no longer claims load-time expansion.
+  2. Every install snippet and version line a user copies from reads the workspace's current version: `README.md` (the `"0.5"` pin and `Current version`), `docs/src/appendix/sentinel.md`, `crate-map.md`, `feature-flags.md`, and the `version:` labels in `k8s/server/deployment.yaml` and `worker-deployment.yaml`; historical rows inside the migration guide are exempt.
+  3. `make check-gates` and CI fail when any user-facing version string (README, `docs/src`, `k8s/`, `openapi.json`) lags the workspace version, shown by a deliberately stale string turning the gate red.
+  4. The `[0.11.1]` entries of the `paladin-memory` and `paladin-content` changelogs correct the `[0.11.0]` "No functional change" wording with the one-way `paladin.node` → `paladin.data` persisted-key change; ADR-0056 and the treasurer tests' doc comment cite ADR-0057 (check-only) rather than a reservation; and the stale "ten crates" counts, the `cargo-release` version line and the dangling `[Unreleased]` link at `CHANGELOG.md:3396` are corrected.
+  5. `.project/current-exports.txt` is regenerated by `make api-surface` on the pinned nightly and carries the `UnsupportedParameter` / `check_reasoning` rows; the node-cache guide states that the server attaches no node cache (the PACE-04 stampede lock is a library builder only) and documents the cache-key version and the `key_prefix` rotation for a provider-level default-effort change.
+**Plans**: TBD
+**Scope notes**:
+- Version strings are held to the workspace manifest version: they read `0.11.0` while the manifest does, and the same gate is what forces the lockstep bump to `0.11.1` in Phase 58, where a stale string is a red gate rather than a missed sweep.
+- The API-surface snapshot is regenerated here and again by whichever later phase moves the public surface (the CLAUDE.md pre-commit protocol); Phase 58 re-checks it on the release commit.
+- `${VAR}` expansion is out by decision (2026-10-27): no new secret-handling path; the LLM `api_key: "${OPENAI_API_KEY}"` indirection is a separate, working mechanism and is untouched.
+
+### Phase 55: Correctness Fixes, Test Hygiene & Lint Bar
+**Goal**: Nothing in a published crate panics from an unfinished stub or misreports a status, the unfinished content/base-layer code is fenced with a recorded decision, and the test suite and lint bar are hermetic, non-flaky and warning-free, so the later phases and the release run on a clean baseline.
+**Depends on**: Phase 52 (the armed semver gate judges the public-signature changes here) and Phase 53 (FIXES-06's boot warning sits beside TENANT-08's boot assertion)
+**Requirements**: FIXES-01, FIXES-02, FIXES-03, FIXES-04, FIXES-05, FIXES-06, TESTS-01, TESTS-02, TESTS-03, TESTS-04, TESTS-05, TESTS-06, CIREL-08
+**Success Criteria** (what must be TRUE):
+  1. No `todo!()` or `unimplemented!()` is reachable outside `#[cfg(test)]` in any published crate (doc-comment examples excepted), held by a grep guard in the gates that fails on a planted one; the previously panicking stubs return a typed error or are gone, and every kept-but-unfinished content / general-data base-layer or content-processing item (`Field`, `Collection`, `element`, the two versioning services, `planning_service.rs:417`, `file_content_fetcher.rs`) has a recorded keep / fence / remove decision and refuses cleanly with rustdoc saying it is unfinished.
+  2. A `DispatchBudget::Unpriced` outcome on an agent-kind run records `Halted`, not `Failed` (or the Treasurer guide documents why the mapping is not a local change); an eval scenario can assert `run_status: cancelled`; the `claude-opus-4-8` seeded `reasoning` flag matches the Phase 50.1 probe record; and server boot warns once per model reachable by a metered principal that has no `treasurer.pricing` row, without refusing workflow assistants.
+  3. `cargo test` passes in a sandbox with no network, including the two `run_api_wiring::tests::build_run_api_persists_*` tests against a scripted port; `cancel_tests::local_cancel_signals_token` waits on a dispatch-registration signal rather than a fixed sleep and survives repeated runs under parallel load; and WINDOWS row 73 is dispositioned.
+  4. Single-feature `cargo clippy --tests` on `paladin-llm` is warning-free, the Phase 51 lint leftovers are cleared, and `cargo doc` is warning-free under both CI bars with the eight crate-level `#![allow(rustdoc::…)]` lines removed and `doc-coverage-report.md` regenerated.
+  5. The self-hosted provider pair (`ollama`, `openai-compatible`) is defined once, or 51 IN-01 is closed as not-reproducing with the evidence recorded, and the `commander.rs` "TODO: Enhance MockPaladinPort" stubs are deleted or point at `tests/integration/commander_error_paths_test.rs`.
+**Plans**: TBD
+**Scope notes**:
+- **FIXES-01 reachability (measured at roadmap time).** The file the requirement names, `crates/paladin-content/src/services/content_filtering_service.rs`, is commented out of `services/mod.rs` (`// pub mod content_filtering_service;`) and is not valid Rust (`content..contains(keyword)`), so that `ContentFilter` panic is not reachable today. The compiled, reachable stubs are the twenty `todo!()` bodies in `impl ContentListRepository` for `SqliteStore` (`crates/paladin-storage/src/sqlite_content_repository.rs`, feature `sqlite`) and `MySqlContentRepository` (`mysql_content_repository.rs`, feature `mysql`); all return `Result<_, RepositoryError>`, so a typed `Err` is a body-only change. The grep guard is the real bar; plan-phase re-measures (feature-gated sites included) before sizing.
+- **Semver decision for FIXES-04.** `RunStatusValue` in `paladin-eval` is not `#[non_exhaustive]`, so adding `Cancelled` is a variant addition the Phase 52 gate will flag at patch level, and the scope guard forbids a `MIGRATION.md` break that is not forced by security. Settle at discuss-phase: shape it without a public-enum change, carry it as a registered break (which makes the milestone `v0.12.0`), or move FIXES-04 to the next milestone with a recorded reason. The same question applies to any other public signature the FIXES items touch.
+- **Ordering.** TESTS-01 (a hermetic scripted port for the agent-kind run path) lands before FIXES-03, whose regression test rides on it.
+- **CIREL-08 placement.** Removing the eight rustdoc allows shares its bar and files with TESTS-03 and TESTS-04 (the `reasoning.rs` redundant links and the `cache_key.rs` link are the same warning class); the all-features CI test job stays out by decision.
+
+### Phase 56: Dogfood Findings
+**Goal**: The defects v0.11.0 actually shows when used for real, in the maintainer's own runs, on the published `0.11.0` crates and in the web3sec consumer's return, are found, logged, dispositioned and, where S1 or S2, fixed before the tag.
+**Depends on**: Phase 55 (so findings can be deduplicated against fixes already made); the maintainer's runs and the web3sec return may arrive earlier and are appended to the log as they come
+**Requirements**: DOGF-01, DOGF-02, DOGF-03, DOGF-04, DOGF-05, DOGF-06
+**Success Criteria** (what must be TRUE):
+  1. Every `DF-nn` entry in `.project/v0.11.1/02-dogfood-findings-log.md`, including the pre-seeded DF-01…DF-04, carries a disposition (`in v0.11.1`, `out` with a reason, or `duplicate of`); none reads `open`.
+  2. The web3sec consumer's return against `v0.11.0` (`47-HANDOFF-web3sec.md` §6: commit SHA, D-2 choice, gate totals, divergences) is triaged into the log with one entry per divergence; if the return has not arrived, DOGF-02 is re-homed with a named owner and a date by the maintainer.
+  3. Each section of `config.example.yml` round-trips through the config loader with every optional key present, as a passing test, and every key the loader rejects or silently ignores is logged as a finding.
+  4. The first-run path is walked on the published `0.11.0` crates (README Quick Example → `cargo add` → `basic_paladin`, then `paladin-cli onboarding` and `setup-check` against one real provider key) and every stumble is logged as a finding; the maintainer's local `make coverage` walk of `docs/src/contributing/testing-guide.md` on a Docker-capable machine closes todo `2026-08-13-verify-local-coverage-reproduction` with the measured figure.
+  5. Every finding promoted to `in v0.11.1` at severity S1 or S2 is fixed and verified before this phase closes, in plans here or in decimal phases (`56.1`+) inserted once the findings are known; none remains open.
+**Plans**: TBD
+**Scope notes**:
+- **Detailed scope is unknown today.** This phase is a fixed frame around unknown content: its plans are written from `.project/v0.11.1/02-dogfood-findings-log.md` once the maintainer's runs and the web3sec return have arrived. Today the log holds only DF-01…DF-04, all pre-seeded from reading the tree and all already owned by earlier phases (DF-01 → FIRST-01, DF-02 → FIRST-02/03, DF-03 → FIXES-01, DF-04 → TENANT-03…05 and TENANT-07), so they are dispositioned here `in v0.11.1` with a pointer to that owner.
+- Decimal fix phases inserted under this phase (`/gsd-phase --insert`) inherit DOGF-06 and do not change the requirement mapping.
+- DOGF-04 and DOGF-05 need the maintainer's machine, a real provider key and (DOGF-05) Docker; they are human-gated checkpoints, not agent-run steps. If the web3sec return is still outstanding when everything else is done, the maintainer either holds the tag or re-homes DOGF-02, since SHIP-10 admits only fixed, waived-with-reason or re-homed-with-owner-and-date.
+- A finding that collides with an accepted contract (inventory §H: ADR-0057 check-only boundary, streamed-call overshoot, agent-loop no-Waypoint, the OBS-05 waiver) is logged with the ADR reference and dispositioned `out`, not reopened. Provider measurement work (Ollama / OpenAI-compatible probes, quota-body capture) enters only if a run hands over a captured body.
+
+### Phase 57: Register Hygiene Close-Out
+**Goal**: Every register the milestone audit reads agrees with the tree: no open `WINDOWS.md` row, no undispositioned review warning, no stale frontmatter or diagnosed-but-fixed debug session, and no unchecked advisory exception, so the audit can read `passed` rather than `tech_debt`.
+**Depends on**: Phase 56 (dogfood findings and fixes can mint or close `WINDOWS.md` rows) and Phase 53 (the Phase 40 warnings close on its evidence)
+**Requirements**: REG-01, REG-02, REG-03, REG-04, REG-05, REG-06
+**Success Criteria** (what must be TRUE):
+  1. `windows status` reports `open_count: 0`: rows 56, 68, 69 and 79 are dispositioned with their superseding evidence, rows 58, 62, 63, 67 and 73 are closed on the evidence of Phases 53-55 or waived with a reason, every other open row is waived with a reason or re-homed with an owner and a date, and any row minted by Phases 52-56 is included.
+  2. A sweep of every `NN-REVIEW.md` for Phases 38-51 shows a disposition beside each warning; Phase 40's WR-01…WR-04 and IN-04 are closed (by `40-REVIEW-FIX.md` and the Phase 53 regression tests, TENANT-07 for IN-04, TENANT-09 for IN-01) or waived with a reason, leaving zero undispositioned review warnings.
+  3. The Phase 45 and Phase 51 SUMMARY `requirements-completed` frontmatter carries STORE-02 and REASON-02/03/05/06, and the three `diagnosed` sessions in `.planning/debug/` (kimi fallback profile, openai `max_completion_tokens`, vendor token usage fidelity) are archived as resolved.
+  4. A bounded human read of the Phase 40 judgment-tier prohibitions that carry LLM-judge verdicts is recorded in that phase's register, and the Phase 42 subset is recorded as accepted as-is.
+  5. The three `zip 3.0.0` RustSec exceptions in `SECURITY-EXCEPTIONS.md` are re-checked against the current `utoipa-swagger-ui` release and either lifted or re-dated with the check recorded, with `make security` green.
+**Plans**: TBD
+**Scope notes**:
+- Mostly planning-register work with little code. Inventory F1 (nine phases NOT-VALIDATED) was found already closed at the milestone open (all fifteen Phase 38-51 `VALIDATION.md` files read `status: validated`) and is not a requirement.
+- The open rows at the v0.11.0 close are 56, 58, 62-69, 73, 77 and 79. Rows 64-66 are accepted contracts (ADR-0057, inventory §H) and row 77 is the owner's Grok vendor-cost deferral; REG-02's `open_count: 0` clause requires each to be waived with a written reason or re-homed with an owner and a date even though no other requirement names them.
+
+### Phase 58: Crate Release
+**Goal**: `v0.11.1` is cut through the repaired pipeline: version strings bumped in lockstep and held by the gate, the consumer upgrade story stated honestly, the milestone audit read as `passed` before the tag, and all twelve crates on crates.io with no manual step.
+**Depends on**: Phase 57 (and Phase 53's recorded version decision)
+**Requirements**: SHIP-08, SHIP-09, SHIP-10
+**Success Criteria** (what must be TRUE):
+  1. The workspace, all twelve publishable manifests and the changelogs read `0.11.1`, and `make check-gates` (including `check-version-strings`), `make clean-code`, `make security` and `make api-surface` are green on the release commit, with every user-facing version string (README, `docs/src`, `k8s/`, `openapi.json`) reading `0.11.1` because the gate demands it, not because a sweep remembered.
+  2. `MIGRATION.md` states that a `0.11.0` consumer takes `0.11.1` without adaptation, or records the one deliberate break, in which case the version is `v0.12.0` and not a quietly breaking patch.
+  3. The milestone audit over Phases 52-57 reads `passed`, not `tech_debt`: every carried item is fixed, waived with a reason, or re-homed with an owner and a date; `windows status` still reads `open_count: 0`; and no review warning in Phases 38-51 is undispositioned.
+  4. `v0.11.1` is tagged on `main` and ships through `release.yml` end to end with no manual step (no changelog condensation, no hand-run publish), and the semver job read a non-zero check count on the release pull request.
+  5. All twelve publishable crates are on crates.io at `0.11.1`, unyanked and published through Trusted Publishing as read from the registry after the run, and the GitHub Release exists with its assets.
+**Plans**: TBD
+**Scope notes**:
+- Suggested ordering: lockstep bump (the Phase 54 gate goes red until every string moves) → release pull request with the Phase 52 gates on → pre-tag audit of Phases 52-57 reads `passed` → tag via `release.yml` → registry read. Phase 58's own proof is the post-tag registry read, so the audit is not circular. The merge, the tag and the publish remain maintainer-gated checkpoints, as in Phase 47.
+- If Phase 53 recorded a forced break, every version in this phase reads `0.12.0` and SHIP-09 records the break instead of the no-adaptation statement.
 
 
 ## Progress
@@ -300,6 +432,13 @@ phases start at Phase 52.*
 | 18-21 | v0.9.0 | 25/25 | ✅ Shipped | 2026-09-01 |
 | 22-37.1 | v0.10.0 | 231/231 (228 executed, 3 superseded) | ✅ Shipped | 2026-09-23 |
 | 38-51 | v0.11.0 | 174/174 | ✅ Shipped | 2026-10-27 |
+| 52. CI & Release Pipeline Repair | v0.11.1 | 0/TBD | Not started | - |
+| 53. Tenant Isolation Closure | v0.11.1 | 0/TBD | Not started | - |
+| 54. First-Run Usability | v0.11.1 | 0/TBD | Not started | - |
+| 55. Correctness Fixes, Test Hygiene & Lint Bar | v0.11.1 | 0/TBD | Not started | - |
+| 56. Dogfood Findings | v0.11.1 | 0/TBD | Not started | - |
+| 57. Register Hygiene Close-Out | v0.11.1 | 0/TBD | Not started | - |
+| 58. Crate Release | v0.11.1 | 0/TBD | Not started | - |
 
 **v0.8.0 shipped 2026-08-24:** 14 phases, 149 plans, 65/65 requirements, 1,014 commits
 (`be2ff05..48ac11a5`). Audit status `tech_debt` — no blockers; see

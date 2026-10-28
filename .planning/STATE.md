@@ -3,10 +3,10 @@ gsd_state_version: 1.0
 milestone: v0.11.1
 milestone_name: Dogfood Cleanup
 status: planning
-last_updated: "2026-10-27T22:44:40.705Z"
+last_updated: "2026-10-27T22:58:31.000Z"
 last_activity: 2026-10-27
 progress:
-  total_phases: 0
+  total_phases: 7
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -22,10 +22,10 @@ See: .planning/PROJECT.md (updated 2026-10-27 at the v0.11.1 milestone open)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Milestone v0.11.1 "Dogfood Cleanup" — defining requirements and roadmap
-from `.project/v0.11.1/` (carried-gaps inventory, dogfood findings log, scoping notes); new phases
-start at **Phase 52**. Decisions at open: OpenAI Responses API out, `${VAR}` auth keys refused at
-boot, research skipped.
+**Current focus:** Milestone v0.11.1 "Dogfood Cleanup" — roadmap created from `.project/v0.11.1/`
+(carried-gaps inventory, dogfood findings log, scoping notes): 7 phases (52-58), 53/53 requirements
+mapped. Next: Phase 52 (CI & Release Pipeline Repair). Decisions at open: OpenAI Responses API out,
+`${VAR}` auth keys refused at boot, research skipped.
 
 **Previous milestone:** v0.11.0 "Treasurer Spend Governance" closed 2026-10-27 — 15 phases
 (38-51, with 50.1 inserted and 48-51 added mid-milestone from a code survey and three web3sec
@@ -46,10 +46,12 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 52 of 58 — CI & Release Pipeline Repair (not started)
 Plan: —
-Status: Defining requirements
-Last activity: 2026-10-27 — Milestone v0.11.1 started
+Status: Ready to plan Phase 52
+Last activity: 2026-10-27 — Roadmap created (7 phases, 53/53 requirements mapped)
+
+Progress: [░░░░░░░░░░] 0% (0 of 7 phases)
 
 ## Performance Metrics
 
@@ -677,6 +679,23 @@ Four pending todos were acknowledged as deferred at the v0.11.0 close (see *Defe
 
 ### Blockers/Concerns
 
+**v0.11.1 roadmap-time findings (2026-10-27, measured against the tree while drafting the roadmap):**
+
+- **Phase 53, verify first:** Phase 40's `40-REVIEW-FIX.md` already records WR-01…WR-04 (TENANT-04, -05, -06) as fixed
+  (`ensure_thread_visible` in `submission.rs`, tenant check inside `RunSubmissionService::cancel`, a fixed run-store
+  error message in `run_controller.rs`); the carried-gaps inventory lists them open. Plans prove-then-lock those three.
+- **Phase 53, decision point:** if the thread-tenant fix (or any security change) forces a persisted or public-surface
+  break, the milestone becomes `v0.12.0`; record the decision before Phase 58 opens.
+- **Phase 55, FIXES-01 premise:** `content_filtering_service.rs` is commented out of `services/mod.rs` and is not valid
+  Rust, so its `todo!()` is unreachable; the reachable stubs are twenty `todo!()` bodies in the SQLite and MySQL
+  `ContentListRepository` impls in `paladin-storage`.
+- **Phase 55, FIXES-04:** `paladin-eval`'s `RunStatusValue` is not `#[non_exhaustive]`, so adding `Cancelled` trips the
+  patch-level semver gate Phase 52 arms; settle shape-or-break at discuss-phase.
+- **Phase 56 depends on external inputs** (the maintainer's runs, the web3sec return, a Docker-capable machine for
+  DOGF-05) that the roadmap cannot schedule; an unreturned DOGF-02 is held or re-homed with an owner and date.
+- **Phase 57:** `open_count: 0` also needs rows 64-66 (accepted ADR-0057 contracts) and 77 (Grok deferral) waived with a
+  reason or re-homed; no requirement names them beyond REG-02's closing clause.
+
 **No blockers at the v0.11.0 close (2026-10-27).** All 15 phases `passed`; audit `tech_debt`
 with 0 gaps, 8/8 seams, 8/8 flows; `WINDOWS.md` `open_count: 13` (the rows are dispositioned as
 accepted debt with owners in `milestones/v0.11.0-MILESTONE-AUDIT.md`, not closed). The per-phase
@@ -802,6 +821,7 @@ close notes this section carried for Phases 38-51 are archived with their phases
 - Phase 51 added: Adjustable Reasoning Effort — a provider-neutral `ReasoningEffort` on `LlmRequest`, `PaladinData`, the YAML agent definition and `llm.<provider>` config (request → agent → provider → vendor default), translated exactly to each vendor's native wire form or refused before the HTTP call with `LlmError::UnsupportedParameter`; compile-enforced `ReasoningWire` per compat preset, model-aware mapping in the native adapters, levels from Phase 50's model-profile registry, Kimi silent-no-op regression test, requested/effective effort on the response and trace stream, `Budget(n)` bounds, live per-vendor invalid-effort probes, ADR amending 0004, mdBook "Reasoning effort" page (REASON-01..07 minted, fortieth prefix; source `51-HANDOFF-web3sec-reasoning-effort.md`; runs after 50, before 46-47; ships in v0.11.0)
 - Phase 50.1 inserted after Phase 50: Consumer-Surface Readiness for v0.11.0 — the Aegis family (`Aegis`, `ErrorHandlerSpec`, `TimeoutPolicy`, `StateDelta`, `NodeError`, `NodeErrorSource`, `TimeoutKind`, `NodeId`, `Transience`) on the facade so §9.8 DR-1/2/8/9 compile without `paladin-ai-core`; one `*Config::new(..)` shape plus `with_timeout_seconds` / `with_base_url` on the shared knob builders as a registered clean break (resolves the 2026-10-16 harmonisation todo by owner decision 2026-10-18); the consumer-surface muster extended to handoff Appendix B with a red proof; four MIGRATION §9.8 gaps (pre-`v0.10.0` P31/P32/P33 pointers, lost in-adapter 429 retry + Cadence recipe, decorator `model_profile` forwarding, adapter-wide context window following the seeded default); a facade pacing-only path; `claude-opus-4-8` / `deepseek-v4-pro` seeds under the seed rule (D-E: listing-only evidence conflicts with `seeded.rs`'s measured-end-to-end rule — probe re-run, listing tier, or decline). SURFACE-01..06 minted, forty-first prefix; source `50.1-HANDOFF-web3sec-consumer-surface.md`; runs after 50, before 51, because 51 extends the same nine `*Config` types (owner decision 2026-10-18, filed 2026-10-19)
 - Milestone v0.11.0 closed 2026-10-27: Phases 38-51 archived to `milestones/v0.11.0-*`; ROADMAP.md collapsed; next phases start at 52
+- Milestone v0.11.1 "Dogfood Cleanup" roadmap created 2026-10-27: Phases 52-58 — CI & Release Pipeline Repair (52), Tenant Isolation Closure (53), First-Run Usability (54), Correctness Fixes / Test Hygiene / Lint Bar (55), Dogfood Findings (56, scope filled from the findings log), Register Hygiene Close-Out (57), Crate Release (58); 53 requirements mapped (CIREL-08 placed in 55 beside TESTS-03/04); integer phases only, no insertions yet
 
 ## Deferred Items
 
@@ -941,10 +961,15 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 ## Session Continuity
 
 Last session: 2026-10-27
-Stopped at: Milestone v0.11.0 completed and archived (`chore: archive v0.11.0 milestone`); no active phase
+Stopped at: Roadmap for milestone v0.11.1 created (Phases 52-58, 53/53 requirements mapped); Phase 52 not started; awaiting orchestrator approval and commit
 Resume file: None
 
 ## Operator Next Steps
+
+- **Milestone v0.11.1 roadmap is drafted (2026-10-27):** `.planning/ROADMAP.md` (Phases 52-58) and the
+  `REQUIREMENTS.md` traceability table are written and uncommitted. After approval, start with
+  `/gsd-discuss-phase 52` (or `/gsd-plan-phase 52`). Phase 56 stays a frame until the findings log has content;
+  append maintainer-run and web3sec findings to `.project/v0.11.1/02-dogfood-findings-log.md` as they arrive.
 
 - **Milestone v0.11.0 is closed (2026-10-27).** Archive: `milestones/v0.11.0-ROADMAP.md`,
   `v0.11.0-REQUIREMENTS.md`, `v0.11.0-MILESTONE-AUDIT.md`, `v0.11.0-phases/`; record:

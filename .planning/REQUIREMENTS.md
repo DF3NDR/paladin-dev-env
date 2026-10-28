@@ -53,6 +53,12 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 ### Tenant Isolation (TENANT, continuing from v0.11.0's TENANT-01…02)
 
+*Roadmap-time finding (2026-10-27): Phase 40's `40-REVIEW-FIX.md` records WR-01…WR-04 as fixed
+(`ensure_thread_visible` in `submission.rs`, service-layer tenant check on cancel, fixed run-store
+error text), which the inventory built from `40-REVIEW.md` alone did not see. TENANT-04, -05 and -06
+are therefore prove-against-the-tree-and-add-the-missing-regression-test requirements; only what
+fails is rebuilt.*
+
 - [ ] **TENANT-03**: Every `/v1/threads/*` handler (list, get, state, history, resume, fork, delete)
       resolves the thread through one visibility gate (as `run_controller::load_visible_run` does), so
       a principal of another tenant gets 404 and cannot enumerate or read another tenant's threads or
@@ -109,10 +115,14 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 ### Correctness Fixes (FIXES)
 
-- [ ] **FIXES-01**: `ContentFilter::filter_content_list` and its sibling constructor in
-      `crates/paladin-content/src/services/content_filtering_service.rs` (ten `todo!()` fields) return
-      a typed error or are removed; no `todo!()` / `unimplemented!()` is reachable outside
-      `#[cfg(test)]` in any published crate, held by a grep guard — B2, DF-03
+- [ ] **FIXES-01**: No `todo!()` / `unimplemented!()` is reachable outside `#[cfg(test)]` in any
+      published crate, held by a grep guard in `make check-gates`. Measured at roadmap time: the
+      twenty reachable sites are the `impl ContentListRepository` bodies for `SqliteStore` and
+      `MySqlContentRepository` in `paladin-storage` (`sqlite_content_repository.rs`,
+      `mysql_content_repository.rs`; both return `Result<_, RepositoryError>`, so a typed `Err` is
+      body-only); the `content_filtering_service.rs` file the inventory names is commented out of
+      `services/mod.rs` and not compiled — delete it or keep it fenced, it is not the reachable panic
+      — B2, DF-03 (target corrected 2026-10-27 at roadmap time)
 - [ ] **FIXES-02**: The unfinished content / general-data base-layer items (`Field`, `Collection`,
       `element`, `FieldVersionService`, `CollectionVersioningService`) and the content-processing
       stubs (`planning_service.rs:417` placeholder output, `file_content_fetcher.rs` ingestion
@@ -245,13 +255,80 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| (filled by the roadmapper) | | |
+| CIREL-01 | Phase 52 | Pending |
+| CIREL-02 | Phase 52 | Pending |
+| CIREL-03 | Phase 52 | Pending |
+| CIREL-04 | Phase 52 | Pending |
+| CIREL-05 | Phase 52 | Pending |
+| CIREL-06 | Phase 52 | Pending |
+| CIREL-07 | Phase 52 | Pending |
+| CIREL-08 | Phase 55 | Pending |
+| CIREL-09 | Phase 52 | Pending |
+| TENANT-03 | Phase 53 | Pending |
+| TENANT-04 | Phase 53 | Pending |
+| TENANT-05 | Phase 53 | Pending |
+| TENANT-06 | Phase 53 | Pending |
+| TENANT-07 | Phase 53 | Pending |
+| TENANT-08 | Phase 53 | Pending |
+| TENANT-09 | Phase 53 | Pending |
+| TENANT-10 | Phase 53 | Pending |
+| FIRST-01 | Phase 54 | Pending |
+| FIRST-02 | Phase 54 | Pending |
+| FIRST-03 | Phase 54 | Pending |
+| FIRST-04 | Phase 54 | Pending |
+| FIRST-05 | Phase 54 | Pending |
+| FIRST-06 | Phase 54 | Pending |
+| FIRST-07 | Phase 54 | Pending |
+| FIRST-08 | Phase 54 | Pending |
+| FIRST-09 | Phase 54 | Pending |
+| FIXES-01 | Phase 55 | Pending |
+| FIXES-02 | Phase 55 | Pending |
+| FIXES-03 | Phase 55 | Pending |
+| FIXES-04 | Phase 55 | Pending |
+| FIXES-05 | Phase 55 | Pending |
+| FIXES-06 | Phase 55 | Pending |
+| TESTS-01 | Phase 55 | Pending |
+| TESTS-02 | Phase 55 | Pending |
+| TESTS-03 | Phase 55 | Pending |
+| TESTS-04 | Phase 55 | Pending |
+| TESTS-05 | Phase 55 | Pending |
+| TESTS-06 | Phase 55 | Pending |
+| DOGF-01 | Phase 56 | Pending |
+| DOGF-02 | Phase 56 | Pending |
+| DOGF-03 | Phase 56 | Pending |
+| DOGF-04 | Phase 56 | Pending |
+| DOGF-05 | Phase 56 | Pending |
+| DOGF-06 | Phase 56 | Pending |
+| REG-01 | Phase 57 | Pending |
+| REG-02 | Phase 57 | Pending |
+| REG-03 | Phase 57 | Pending |
+| REG-04 | Phase 57 | Pending |
+| REG-05 | Phase 57 | Pending |
+| REG-06 | Phase 57 | Pending |
+| SHIP-08 | Phase 58 | Pending |
+| SHIP-09 | Phase 58 | Pending |
+| SHIP-10 | Phase 58 | Pending |
 
 **Coverage:**
 - v1 requirements: 53 total
-- Mapped to phases: 0
-- Unmapped: 53 ⚠️
+- Mapped to phases: 53
+- Unmapped: 0
+
+| Phase | Requirements | Count |
+|-------|--------------|-------|
+| 52. CI & Release Pipeline Repair | CIREL-01, CIREL-02, CIREL-03, CIREL-04, CIREL-05, CIREL-06, CIREL-07, CIREL-09 | 8 |
+| 53. Tenant Isolation Closure | TENANT-03, TENANT-04, TENANT-05, TENANT-06, TENANT-07, TENANT-08, TENANT-09, TENANT-10 | 8 |
+| 54. First-Run Usability | FIRST-01, FIRST-02, FIRST-03, FIRST-04, FIRST-05, FIRST-06, FIRST-07, FIRST-08, FIRST-09 | 9 |
+| 55. Correctness Fixes, Test Hygiene & Lint Bar | CIREL-08, FIXES-01, FIXES-02, FIXES-03, FIXES-04, FIXES-05, FIXES-06, TESTS-01, TESTS-02, TESTS-03, TESTS-04, TESTS-05, TESTS-06 | 13 |
+| 56. Dogfood Findings | DOGF-01, DOGF-02, DOGF-03, DOGF-04, DOGF-05, DOGF-06 | 6 |
+| 57. Register Hygiene Close-Out | REG-01, REG-02, REG-03, REG-04, REG-05, REG-06 | 6 |
+| 58. Crate Release | SHIP-08, SHIP-09, SHIP-10 | 3 |
+
+Mapping note: CIREL-08 (the eight crate-level `#![allow(rustdoc::…)]` removals) sits in Phase 55 with
+TESTS-03/TESTS-04, not in Phase 52 with the rest of CIREL — it shares their lint and rustdoc bar and
+files, and its warning count is unbounded, so it must not delay arming the CI gates Phase 52 delivers.
+DOGF-06's fixes may land in decimal phases (56.1+) inserted under Phase 56; they inherit this mapping.
 
 ---
 *Requirements defined: 2026-10-27*
-*Last updated: 2026-10-27 after initial definition from `.project/v0.11.1/`*
+*Last updated: 2026-10-27 after roadmap creation (Phases 52-58; 53/53 requirements mapped)*

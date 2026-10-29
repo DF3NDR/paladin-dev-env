@@ -7,8 +7,11 @@
 # prefix someone invents would be dark again, so the filter matches every
 # branch instead of a maintained allowlist. A push to a branch that also
 # has an open PR against main will therefore run CI twice (once per
-# trigger); the `concurrency` group below with `cancel-in-progress`
-# absorbs that duplication, so no trigger is being dropped to avoid it.
+# trigger). The two runs sit in different `concurrency` groups below (the
+# group is the bare branch name on pull_request and `refs/heads/<branch>` on
+# push), so they do not cancel each other; `cancel-in-progress` collapses
+# repeated runs of the SAME event only. No trigger is being dropped to avoid
+# the duplication.
 on:
   push:
     branches: [ '**' ]
@@ -19,14 +22,22 @@ on:
   # naming a ref that no longer exists is exactly the stale surface the
   # trigger-policy register in docs/src/contributing/branching-model.md
   # exists to catch.
+  # `labeled` (Phase 52, D-05/D-07): applying the maintainer-only `release`
+  # label to a PR re-runs CI so `End-to-End Tests` runs on that PR before the
+  # irreversible merge. `types:` cannot filter by label name, so ANY label event
+  # re-runs the whole file, including the long Docker build (accepted, PD-06-3).
   pull_request:
+    types: [ opened, synchronize, reopened, labeled ]
     branches: [ main, 'release/**' ]
   workflow_dispatch:
 
 concurrency:
-  # Collapses the duplicate push+pull_request runs the trigger comment above
-  # describes. `head_ref` is set only on pull_request; on push it is empty and
-  # this falls back to `ref`, so both runs for one branch share a group.
+  # Collapses repeated runs of the same event for one branch (a new push, or
+  # a `labeled` event, cancels the older in-flight run on non-main refs).
+  # `head_ref` is set only on pull_request and is the bare branch name; on push
+  # it is empty and this falls back to `ref` (`refs/heads/<branch>`), so the
+  # push run and the pull_request run for one branch are in DIFFERENT groups
+  # and run side by side.
   # Not cancel-in-progress on main: a completed run on the default branch is a
   # release-history record, not just a PR signal.
   group: ci-${{ github.head_ref || github.ref }}
@@ -150,13 +161,10 @@ jobs:
       # SHIP-06/SC3 (Phase 37.1, plan 37.1-03): this gate is cheap and
       # offline (pure `cargo metadata` analysis, no build) but must still
       # run pre-merge on every pull request, not only after a merge to
-      # main. It is wired here rather than into the existing
-      # `publish-dry-run` job below (see that job's own comment) because
-      # that job is deliberately gated to push events on the default
-      # branch and widening its trigger is out of this phase's scope --
-      # this job already runs on every push and pull_request with no
-      # job-level `if:` condition, so adding a step here reaches pre-merge
-      # CI with no trigger-surface change at all.
+      # main. It stays here, beside the other offline gates, because it is
+      # cheap and needs no build; `publish-dry-run` now also runs on every PR
+      # (Phase 52, D-05). This job runs on every push and pull_request with no
+      # job-level `if:` condition.
       - name: Check publish order
         run: ./scripts/check-publish-order.sh
 
@@ -1915,10 +1923,14 @@ jobs:
     name: End-to-End Tests
     runs-on: ubuntu-latest
     needs: [integration-tests]
-    # use this under normal behavior
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    # use this for troubleshooting e2e tests
-    # if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    # Phase 52 D-05/D-07: runs on pushes to main, and on a PR only when the
+    # maintainer has applied the `release` label (element match over the labels
+    # array via contains(), never a substring test). A skipped job reports
+    # success to the required-check evaluation, so a label-less PR is not blocked.
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'pull_request' &&
+      contains(github.event.pull_request.labels.*.name, 'release'))
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -2052,12 +2064,12 @@ jobs:
           name: benchmark-regression-signal
           path: benchmark-signal/
 
-  # Publish dry-run: verify all crates are publishable (main branch only)
+  # Publish dry-run: verify all crates are publishable. Runs on every push and
+  # pull request (Phase 52, D-05); `needs: [lint, test]`.
   publish-dry-run:
     name: Publish Dry Run
     runs-on: ubuntu-latest
     needs: [lint, test]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - name: Checkout code
         uses: actions/checkout@v5

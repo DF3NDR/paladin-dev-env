@@ -1,7 +1,7 @@
 ---
 phase: 52
 slug: ci-release-pipeline-repair
-status: local-proven; CI half open (H-03)
+status: ci-proven
 created: 2026-10-29
 ---
 
@@ -12,8 +12,9 @@ created: 2026-10-29
 > assumed. This file records one scripted mutation, its transcript, and the restoration of the tree. No mutated source
 > is committed to the phase branch and the mutation script is kept outside the repository. The CI half of the proof (a
 > red `Semver Checks (vs v0.11.0)` job on the scratch branch) was authorised by the maintainer (`Push-ok`) and the
-> scratch branch is pushed; the red job had not concluded when the bounded poll ended, so that one observation is open
-> as handover item H-03 (see `## Experiment 2 -- CI` and `## Close-out`).
+> scratch branch is pushed. The red job had not concluded when plan 52-07's bounded poll ended; plan 52-08 read it
+> afterwards (`completed`, `failure`, `paladin-storage ... 1 fail`) and recorded it under `## Experiment 2 -- CI`. Only
+> the remote scratch-branch deletion (H-03 step 3) remains, as a maintainer item (see `## Close-out`).
 
 Tree: 5f8e3300b1552f9736e3ca8167816ba687ea197b (git tree object `b026cbc14b1b01a68e58c89b8c69072004a9f020`), branch `claude/laughing-dirac-e0h2ax`
 
@@ -326,6 +327,28 @@ The local run (Experiment 1) already shows the red mechanism on exactly this bre
 warn, 31 skip`, `function_missing` on `paladin_storage::cron::cron_field_count`. What CI has not yet shown is the same
 line from the real `semver` job; that is the one open observation.
 
+### CI red job, observed (closes H-03 step 1)
+
+Read by the executor of plan 52-08 at 2026-10-29T04:21:28Z, unauthenticated public API, HTTP 200 on both reads
+(`GET /repos/DF3NDR/paladin-dev-env/actions/jobs/123234542712` and
+`GET /repos/DF3NDR/paladin-dev-env/check-runs/123234542712/annotations`):
+
+- job: <https://github.com/DF3NDR/paladin-dev-env/actions/runs/40808979632/job/123234542712> (`Semver Checks (vs v0.11.0)`),
+  `head_sha` `6f3d8d7845780d40e6f49b05127b06a60fecce96`
+- status `completed`, conclusion `failure`, started `2026-10-29T02:54:47Z`, completed `2026-10-29T03:09:13Z`
+- step 6 `Check semver against the published v0.11.0 baseline`: `failure`; steps 1-5 `success`
+- annotations: `failure | Semver Checks | paladin-storage: lint failure (exit 100)`, and the `Semver check counts
+  (vs 0.11.0, patch)` notice whose `paladin-storage` line reads, verbatim:
+
+```text
+semver: paladin-storage: 223 checks: 222 pass, 1 fail, 0 warn, 31 skip -- lint failure (exit 100)
+```
+
+The other eleven crate lines in that notice read `223 checks: 223 pass, 31 skip`, the same as the green baseline
+above. So CI shows the same red as Experiment 1: only `paladin-storage` fails, with `222 pass, 1 fail`, and the
+dependents `paladin-eval` and `paladin-ai` stay clean. The gate is proven able to fail in CI by a real public-API
+break (CIREL-01, ROADMAP Phase 52 success criterion 1).
+
 ## Close-out
 
 | Step | Command | Outcome |
@@ -335,9 +358,10 @@ line from the real `semver` job; that is the one open observation.
 | remote branch | **not deleted** | the scratch run is still the only red evidence; deleting the branch now would cancel it. Remote ref still `6f3d8d7845780d40e6f49b05127b06a60fecce96` at 2026-10-29T03:03Z (`git ls-remote`) |
 | mutation script | kept outside the repository | verbatim copy in Experiment 1; never tracked |
 
-### H-03 -- open: capture the red semver job, then delete the scratch branch (CIREL-01, D-04)
+### H-03 -- step 1 closed (see `### CI red job, observed`); step 3 (remote branch deletion) is the maintainer's (CIREL-01, D-04)
 
-Reason: the job had not concluded when the bounded poll ended, and `gh pr create` was refused. Commands, in order:
+Reason at the time of writing: the job had not concluded when the bounded poll ended, and `gh pr create` was refused.
+Step 1 was closed by plan 52-08 (failure, read-only public API read recorded above). Original commands, in order:
 
 1. Read the red job and its annotations (public, no token). It should read `completed`, `failure`, with a `::error`
    annotation naming `paladin-storage` and an `... 1 fail ...` line:

@@ -102,7 +102,7 @@ blocked until rebased. Apply it when the next PR to merge carries this phase.
 Evidence goes: your pasted read-backs in the checkpoint reply; plan 52-08 Task 3 re-reads the public ruleset before it
 sets `done`.
 
-Status: open
+Status: done -- PD-06-1 confirmed. The maintainer ran the PUT from their own shell at 2026-10-29T19:33:35Z (response: id 20868126, `enforcement` `active`, `updated_at` `2026-10-29T19:33:35.453Z`) and pasted the read-backs `3` and `46`. Public re-read after the paste: 3 rulesets; 46 contexts; both new names present (count 2); the live context set is identical to `.github/rulesets/protect-main-branch.json` (sorted `diff` empty).
 
 ### H-02 -- First-PR observation: `Publish Dry Run` and the `release` label run of `End-to-End Tests` (D-05, D-07, CIREL-04)
 
@@ -134,7 +134,7 @@ Reply format: `H-02: <PR URL> dry-run <success|failure> e2e-unlabelled <skipped|
 
 Evidence goes: `52-CI-EVIDENCE.md` `## First PR run` (a failure is written there as a finding for `/gsd-verify-work`).
 
-Status: open
+Status: done -- PR #61 <https://github.com/DF3NDR/paladin-dev-env/pull/61>. Unlabelled `pull_request` run 40928112540: `Publish Dry Run` success (job 123647995031), `End-to-End Tests` skipped (job 123653075412); that run then read `cancelled` when the label event superseded it. Labelled run 40932320347: `End-to-End Tests` success (job 123663512686, 12m25s), `Publish Dry Run` success (job 123658055531). The `release` label did not exist in the repository and was created first (`gh label create release`).
 
 ### H-03 -- Semver red-proof close-out (D-04, CIREL-01)
 
@@ -169,7 +169,7 @@ git ls-remote --heads origin scratch/52-semver-red-proof
 
 Evidence goes: your reply (`H-03: done` with the empty read-back, or `n/a`/`defer <reason>`).
 
-Status: open
+Status: done -- `git push origin --delete scratch/52-semver-red-proof` printed `- [deleted]`; `git ls-remote --heads origin scratch/52-semver-red-proof` printed nothing (2026-10-29). Step 2 (draft PR) skipped; the `push` run is the proof.
 
 ### H-04 -- CodeQL platform dismissals and reconciliation (D-13, CIREL-06)
 
@@ -210,7 +210,7 @@ alerts 25, 24, 23; see "Carried deferred items" below).
 
 Evidence goes: your pasted dismissed-alert list in the reply.
 
-Status: open
+Status: done -- all 37 `PATCH` calls returned `dismissed` with the row's reason; `state=dismissed` read-back lists exactly the 37 register rows with identical reasons (`diff` empty: 24 `false positive`, 12 `used in tests`, 1 `won't fix`); 0 CodeQL alerts remain open; the 20 OSV-Scanner alerts remain open by design.
 
 ### H-05 -- Issue #41 close (D-15, CIREL-07)
 
@@ -252,7 +252,7 @@ Reply format: `H-06: <local Lines %> at <SHA>` or `H-06: defer <reason>`.
 
 Evidence goes: the folded-todo section of `52-CI-EVIDENCE.md` (Task 3 adds the figure and verdict).
 
-Status: open
+Status: deferred -- owner: maintainer, on a Docker-capable machine; reason: this sandbox has no Docker daemon and no `cargo-llvm-cov` (re-probed 2026-10-29). The todo stays pending (`resolves_phase: 56`).
 
 ### H-07 -- Phase 58 pre-tag audit pointer (D-00f, D-12)
 
@@ -262,7 +262,7 @@ phase, and this file's final statuses. The first live exercise of the release-bo
 
 Reply: `H-07: ack`.
 
-Status: open
+Status: done -- acknowledged.
 
 ### H-08 -- Phase branch required checks green (D-00a, CIREL-04)
 
@@ -294,7 +294,7 @@ could not run (clippy, `cargo check`, doc-check, `api-surface`, the two guard te
 
 Reply format: `H-08: green` or `H-08: <failing check names>`.
 
-Status: open
+Status: done -- `push` run 40899368946 on the final head `5e993f681`: all 39 jobs `success` except `End-to-End Tests` and `Benchmark Regression Signal (Non-Blocking)` `skipped`; `Workflow Lint`, `License & Dependency Policy`, `Semver Checks (vs v0.11.0)`, `Publish Dry Run`, `Code Quality`, `API Surface Tracking`, `Integration Tests`, `Coverage` all `success`. `Build MDBook` `success` on the PR (`docs.yml` run 40928112482, job 123638982883).
 
 ## Carried deferred items
 
@@ -312,4 +312,37 @@ From `deferred-items.md` (plan 52-03). None was fixed in Phase 52; each needs an
 
 ## Maintainer reply
 
-(not yet received; plan 52-08 Task 3 records it here verbatim, with token-shaped strings redacted)
+Received 2026-10-29 (the maintainer answered the checklist in a Claude Code session; every act below except the H-01
+PUT was executed from that session with the maintainer's repository token, which holds `admin`; the H-01 PUT was run by
+the maintainer directly; all were read back live).
+
+```
+H-01: applied -- PUT run from the maintainer's shell (updated_at 2026-10-29T19:33:35.453Z); read-backs 3, 46 (pasted), 2 (public re-read)
+H-02: https://github.com/DF3NDR/paladin-dev-env/pull/61 dry-run success e2e-unlabelled skipped e2e-labelled https://github.com/DF3NDR/paladin-dev-env/actions/runs/40932320347 success
+H-03: done -- `- [deleted] scratch/52-semver-red-proof`; `git ls-remote --heads origin scratch/52-semver-red-proof` -> (empty)
+H-04: done -- 37 dismissed; register vs platform diff empty; open CodeQL alerts 0; open OSV alerts 20
+H-05: ack
+H-06: defer (no Docker-capable machine; resolves in Phase 56)
+H-07: ack
+H-08: green (push run 40899368946 on 5e993f681; Build MDBook success on docs.yml run 40928112482)
+```
+
+Read-backs as pasted:
+
+- H-02, before the label (run 40928112540): `Publish Dry Run ('completed', 'success')`, `End-to-End Tests ('completed',
+  'skipped')`; after the label (run 40932320347): `End-to-End Tests ('completed', 'success')`, `Publish Dry Run
+  ('completed', 'success')`. The predecessor run then read `completed cancelled` (superseded by the label event, D-07).
+- H-03: `To https://github.com/DF3NDR/paladin-dev-env.git` / ` - [deleted]           scratch/52-semver-red-proof`; the
+  `ls-remote` read-back printed nothing.
+- H-04: the dismissed list (`state=dismissed`, paginated), sorted, was byte-identical to the register's 37
+  `<number>|<reason>` rows: 28 used in tests; 30, 31, 33, 34, 36, 37, 39, 40, 41, 42, 43, 44, 45, 46, 47, 49, 50, 51 false
+  positive; 52, 53 used in tests; 54, 60, 61 false positive; 62, 63, 65, 66, 67, 68, 69 used in tests; 76, 77 false
+  positive; 78 won't fix; 79 false positive; 80, 81 used in tests.
+- H-08: run 40899368946 `completed success`, `non-success: []` over all 39 jobs.
+
+- H-01: the maintainer's pasted PUT response carried `"updated_at": "2026-10-29T19:33:35.453Z"` and the 46-entry
+  `required_status_checks` list, followed by `3` and `46`. The sandbox permission classifier had refused the same PUT
+  earlier in the session, so the maintainer ran it directly; the third read-back (both new names present, `2`) and the
+  record-versus-live set comparison (identical) were made by public re-read immediately after the paste.
+
+Nothing remains for the maintainer on this checklist. Merge of PR #61 is the maintainer's act and is outside it.

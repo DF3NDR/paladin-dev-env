@@ -117,3 +117,22 @@ the phase branch (floor held on `0c2b4a2bd`), with 92.74 % on `70657919` as the 
 `52-HANDOVER.md` carries the procedure for a Docker-capable machine. No coverage gate or threshold changed in this
 phase (`scripts/coverage.sh` and the `coverage` job in `ci.yml` are untouched by this plan); the todo stays pending
 (resolves_phase 56).
+
+## First PR run
+
+H-02 of `52-HANDOVER.md`, observed 2026-10-29 on PR #61 (<https://github.com/DF3NDR/paladin-dev-env/pull/61>, head
+`5e993f681cbb9dbf6575ae56674d252d7e80dcf1`, the phase branch into `main`). Reads are from the Actions API with the
+maintainer's token; job ids are quoted so each line is re-checkable.
+
+| Step | Run | Job | Conclusion |
+|------|-----|-----|------------|
+| No label: `Publish Dry Run` | 40928112540 (`pull_request`) | 123647995031 | `success` |
+| No label: `End-to-End Tests` | 40928112540 | 123653075412 | `skipped` (job-level `if:` false; reports success to the required-check gate, as on PR #59) |
+| `release` label applied (maintainer act; the label did not exist and was created first with `gh label create release`) | run 40928112540 then read `completed cancelled`: the `labeled` event started a new run and `cancel-in-progress` cancelled the older one on the same ref (D-07, accepted) | | |
+| Labelled: `Publish Dry Run` | 40932320347 (`pull_request`, `labeled`) | 123658055531 | `success` (4m37s) |
+| Labelled: `End-to-End Tests` | 40932320347 | 123663512686 | `success` (12m25s) |
+| `Build MDBook` (docs.yml, PR-only) | 40928112482 | 123638982883 | `success` |
+
+No finding: `Publish Dry Run` passed at the already-published `0.11.0` version (RESEARCH A6 did not materialise), and the
+`labeled` trigger produced the e2e run without any workflow change. The labelled run's remaining jobs were still
+`in_progress` at 2026-10-29T19:10Z; its `End-to-End Tests` conclusion is the H-02 record and does not depend on them.

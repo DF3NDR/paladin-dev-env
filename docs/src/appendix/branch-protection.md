@@ -82,7 +82,7 @@ rather than server-confirmed state would provide no real assurance.
 
 #### The required-check set
 
-`protect-main-branch.json` requires all 44 of the following status-check contexts to pass before a
+`protect-main-branch.json` requires all 46 of the following status-check contexts to pass before a
 pull request into `main` can merge:
 
 `API Surface Tracking`, `Benchmark Compile Check`, `Build & Test (all-features)`, `Build & Test
@@ -96,8 +96,18 @@ pull request into `main` can merge:
 Isolation (paladin-memory)`, `Crate Isolation (paladin-notifications)`, `Crate Isolation
 (paladin-ports)`, `Crate Isolation (paladin-storage)`, `Crate Isolation (paladin-web)`, `Docker
 Integration Tests`, `End-to-End Tests`, `Example Muster (Feature Matrix)`, `Feature Matrix Summary`,
-`Integration Tests`, `License & Dependency Policy`, `OSV Scanner`, `Security Audit`, `Unit Tests
-(beta)`, `Unit Tests (stable)`, `Workflow Lint`, `pre-commit run --all-files`.
+`Integration Tests`, `License & Dependency Policy`, `OSV Scanner`, `Publish Dry Run`, `Security
+Audit`, `Semver Checks (vs v0.11.0)`, `Unit Tests (beta)`, `Unit Tests (stable)`, `Workflow Lint`,
+`pre-commit run --all-files`.
+
+**Updated 2026-10-28 (Phase 52, D-08).** `Publish Dry Run` and `Semver Checks (vs v0.11.0)` were
+added to the committed payload, so the committed set is now 46 contexts. `End-to-End Tests` was
+already required and needs no change: it runs on a pull request only when the maintainer has applied
+the `release` label, and a job skipped by its job-level `if:` reports success to required-check
+evaluation, so a label-less pull request is not blocked, while a labelled pull request runs it and
+its failure blocks the merge (precedent: PR #59 merged with it skipped). The change takes effect
+only after the maintainer applies it with the `PUT` under "Updating an already-applied ruleset"
+below and reads the ruleset back; until then the live ruleset still carries the previous 44.
 
 **Two jobs are deliberately excluded from the required set: `Docker Build` and `Kubernetes Smoke
 Test`.** Both still run on every push and pull request — they simply do not block the merge button.
@@ -114,7 +124,7 @@ The trunk ruleset and the tag ruleset deliberately carry different bypass postur
 plainly, not as an inconsistency to "fix":
 
 - **`protect-main-branch.json` carries no administrative bypass.** It gates the only path into
-  `main`: a pull request with all 44 required checks green. A merge gate any account — including an
+  `main`: a pull request with all 46 required checks green. A merge gate any account — including an
   administrator — can bypass at will is not a gate, only a suggestion.
 - **`protect-release-tags.json` retains a bypass actor** (`actor_id: 5`, `RepositoryRole` = Admin,
   `bypass_mode: always`), because it restricts **creation** of a `refs/tags/v*` ref, not a merge.
@@ -232,7 +242,7 @@ gh api -X DELETE /repos/DF3NDR/paladin-dev-env/rulesets/<id>
 ## The correct release flow under this policy
 
 ```bash
-# 1. Open a PR for your changes and get it merged into main (all 44 required checks must pass).
+# 1. Open a PR for your changes and get it merged into main (all 46 required checks must pass).
 # 2. Update your local main.
 git checkout main
 git pull --ff-only origin main

@@ -331,7 +331,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 52-08-PLAN.md — Phase gate run, folded coverage-reproduction record, maintainer hand-off checklist (ruleset PUT, label run, CodeQL dismissals) and outcomes (CIREL-01, CIREL-04, CIREL-06, CIREL-07)
+- [x] 52-08-PLAN.md — Phase gate run, folded coverage-reproduction record, maintainer hand-off checklist (ruleset PUT, label run, CodeQL dismissals) and outcomes (CIREL-01, CIREL-04, CIREL-06, CIREL-07)
 
 **Scope notes**:
 

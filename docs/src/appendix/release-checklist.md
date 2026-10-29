@@ -29,6 +29,8 @@ This checklist defines the required release path from code freeze through publis
   VERSION=x.y.z`) and re-tag; see [Release Automation](release-automation.md#body-source).
 - Ensure notable breaking changes are explicitly called out.
 - Verify release notes map to merged changes.
+- A changelog section over the release-body size limit is truncated automatically and logged (see
+  [Release Automation](release-automation.md#body-source)); do not hand-condense it.
 
 ## 3. Version Bump
 
@@ -45,6 +47,10 @@ Run and require success for:
 - cargo clippy --workspace -- -D warnings
 - cargo doc --workspace --no-deps
 - cargo audit
+- `make check-semver` (cargo-semver-checks for every publishable crate against the published 0.11.0
+  baseline at patch level)
+- The release PR carries the `release` label before review (a maintainer act), so `End-to-End
+  Tests` runs before the merge; `Publish Dry Run` and `Semver Checks (vs v0.11.0)` run on every PR.
 
 ## 5. Dry-Run Publish Validation
 
@@ -64,9 +70,8 @@ Use:
 - `cargo publish --workspace --dry-run` (or `make publish-dry-run`)
 
 `paladin-doc-examples` is skipped automatically because it is marked `publish = false`.
-`paladin-eval` is included here even though the `semver` CI job excludes it from the
-published-baseline diff (it has no published `0.9.0` baseline to diff against — ADR-0048); its
-dry-run packaging and dependency resolution are still verified like every other crate.
+The `semver` CI job checks all twelve crates, `paladin-eval` included, against the published 0.11.0
+baseline; the dry-run packaging and dependency resolution of every crate are verified here too.
 
 The workspace form resolves intra-workspace dependencies from local paths instead of against the
 crates.io registry, so every crate — including one that depends on a sibling not yet

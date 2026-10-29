@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 14
+open_count: 15
 waived_count: 39
 fixed_count: 30
-total_count: 83
-last_updated: 2026-10-28T19:29:42.085Z
+total_count: 84
+last_updated: 2026-10-29T01:38:56.452Z
 ---
 
 # Broken Windows Ledger
@@ -98,6 +98,7 @@ last_updated: 2026-10-28T19:29:42.085Z
 | 81 | 46 | todo | benches/engine_benchmarks.rs |  | Deferred debt line: clone/lock-contention work (383 .clone() calls and nine orchestrator locks at ingest), previously blocked on benchmark evidence. | waived | Waived at Phase 46 (D-19): the benchmark blocker is gone -- benches/engine_benchmarks.rs (bench_waypoint_save, bench_superstep_cost, bench_superstep_cost_sink_variants) and benches/config_benchmarks.rs exist and run. No benchmark attributes a regression to cloning or lock wait; this is not proof that no contention exists. The one standing overhead, the accepted tracing cost in WINDOWS rows 35/61 (+19.36% log_sink / +16.19% composite against a 120.00us untraced baseline, row 61), sits in the dispatcher/sink path, the first place a clone, channel or lock cost would show and the first place to look. Re-open when a bench regression is attributed to cloning or lock wait. | 2026-10-24T13:47:11.673Z | 2026-10-24T13:47:17.245Z |
 | 82 | 46 | deviation | .planning/decisions/0015-core-ports-dependency-allowlist.md |  | Deferred debt line: paladin-core / paladin-ports dependency allowlists (declared 6 / 7, shipping 14 / 10 at ingest). Fixed: ADR-0015 rebaselined to the measured sets with the purity invariant; Phase 46 (D-20/D-21) re-measured 14 / 12 (log added to paladin-ports, ADR-0015 amendment 2026-10-24) and pinned them with scripts/check-dependency-allowlist.sh in make check-gates and CI's cargo-deny job. | fixed |  | 2026-10-24T13:47:17.331Z | 2026-10-24T13:47:20.422Z |
 | 83 | 52 | unrun-verify | .github/workflows/ci.yml |  | actionlint not runnable in sandbox; CI Workflow Lint job gates the 52-01 ci.yml edits (A-52-03) | open |  | 2026-10-28T19:29:42.085Z |  |
+| 84 | 52 | unrun-verify | .github/workflows/ci.yml |  | actionlint not installed in sandbox; 52-06 ci.yml edits (labeled type, e2e/publish-dry-run conditions) await CI Workflow Lint job | open |  | 2026-10-29T01:38:56.452Z |  |
 
 ````json
 [
@@ -1095,6 +1096,18 @@ last_updated: 2026-10-28T19:29:42.085Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-10-28T19:29:42.085Z",
+    "resolved_at": null
+  },
+  {
+    "id": 84,
+    "kind": "unrun-verify",
+    "phase": "52",
+    "file": ".github/workflows/ci.yml",
+    "line": null,
+    "description": "actionlint not installed in sandbox; 52-06 ci.yml edits (labeled type, e2e/publish-dry-run conditions) await CI Workflow Lint job",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-10-29T01:38:56.452Z",
     "resolved_at": null
   }
 ]

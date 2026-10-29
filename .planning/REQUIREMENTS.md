@@ -36,7 +36,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 - [x] **CIREL-03**: `check-migration-allowlist` runs in `ci.yml` on every PR, not only under
       `make check-gates` — D3
 
-- [ ] **CIREL-04**: `End-to-End Tests` and `Publish Dry Run` run before merge (on PRs or on a
+- [x] **CIREL-04**: `End-to-End Tests` and `Publish Dry Run` run before merge (on PRs or on a
       `release` label), not only on `main` pushes — D3
 
 - [x] **CIREL-05**: `scripts/create-or-reuse-release.sh` builds the release body without passing it
@@ -55,7 +55,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
       with `cargo doc` warning-free, and `doc-coverage-report.md` is regenerated — D10 (the
       all-features CI test job stays out by decision)
 
-- [ ] **CIREL-09**: The publish-order gate reading (`ci.yml` `Check publish order` plus the
+- [x] **CIREL-09**: The publish-order gate reading (`ci.yml` `Check publish order` plus the
       dependency-ordered publish job, no separate `release.yml` step) is recorded as accepted in the
       release documentation — D5
 
@@ -308,12 +308,12 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CIREL-01 | Phase 52 | Complete |
 | CIREL-02 | Phase 52 | Complete |
 | CIREL-03 | Phase 52 | Complete |
-| CIREL-04 | Phase 52 | Pending |
+| CIREL-04 | Phase 52 | Complete |
 | CIREL-05 | Phase 52 | Complete |
 | CIREL-06 | Phase 52 | Complete |
 | CIREL-07 | Phase 52 | Complete |
 | CIREL-08 | Phase 55 | Pending |
-| CIREL-09 | Phase 52 | Pending |
+| CIREL-09 | Phase 52 | Complete |
 | TENANT-03 | Phase 53 | Pending |
 | TENANT-04 | Phase 53 | Pending |
 | TENANT-05 | Phase 53 | Pending |

@@ -327,7 +327,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 52-07-PLAN.md — Semver red proof: local leaf-crate break, then scratch-branch draft PR after the maintainer's go-ahead (CIREL-01)
+- [x] 52-07-PLAN.md — Semver red proof: local leaf-crate break, then scratch-branch draft PR after the maintainer's go-ahead (CIREL-01)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

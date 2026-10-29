@@ -5,15 +5,15 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 52
 current_phase_name: ci-release-pipeline-repair
 status: executing
-stopped_at: Completed 52-06-PLAN.md
-last_updated: "2026-10-29T01:38:56.104Z"
+stopped_at: Completed 52-07-PLAN.md (CI red job pending, H-03)
+last_updated: "2026-10-29T03:05:37.093Z"
 last_activity: 2026-10-28
 last_activity_desc: Phase 52 execution started
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 8
-  completed_plans: 6
+  completed_plans: 7
 ---
 
 # Project State
@@ -50,11 +50,11 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 ## Current Position
 
 Phase: 52 (ci-release-pipeline-repair) — EXECUTING
-Plan: 7 of 8
+Plan: 8 of 8
 Status: Ready to execute
 Last activity: 2026-10-28 — Phase 52 execution started
 
-Progress: [████████░░] 75% (0 of 7 phases)
+Progress: [█████████░] 88% (0 of 7 phases)
 
 ## Performance Metrics
 
@@ -359,6 +359,7 @@ Progress: [████████░░] 75% (0 of 7 phases)
 | Phase 52 P04 | 25min | 2 tasks | 2 files |
 | Phase 52 P05 | 14min | 2 tasks | 12 files |
 | Phase 52 P06 | 35min | 3 tasks | 7 files |
+| Phase 52 P07 | 70min | 3 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -671,6 +672,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 52-04: finalize size guard re-fits only the curated section to limit minus the artifact part via the shared release-body-fit.sh; artifact sections never altered
 - [Phase ?]: Phase 52-05: all six crate-wide semver allow tables (28 lines) removed after measuring 12/12 packages at 223 checks pass vs 0.11.0 (--release-type patch); MIGRATION.md section 11 opened with an empty X-10 register and the allowlist gate reads only 11.2 to 11.3
 - [Phase ?]: 52-06: Publish Dry Run runs on every PR; End-to-End Tests runs on main pushes and release-labelled PRs (labeled activity type); committed ruleset record is 46 contexts, live PUT is maintainer handover H-01 (PD-06-1 awaiting user confirmation)
+- [Phase 52]: 52-07: semver red proof via leaf-crate cron_field_count pub->pub(crate); local RED-PROVEN (222 pass/1 fail, function_missing); CI red job capture and remote scratch-branch delete handed over as H-03 (gh pr create refused, GraphQL 403)
 
 ### Pending Todos
 
@@ -981,8 +983,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-10-29T01:38:56.089Z
-Stopped at: Completed 52-06-PLAN.md
+Last session: 2026-10-29T03:05:37.077Z
+Stopped at: Completed 52-07-PLAN.md (CI red job pending, H-03)
 Resume file: None
 
 ## Operator Next Steps

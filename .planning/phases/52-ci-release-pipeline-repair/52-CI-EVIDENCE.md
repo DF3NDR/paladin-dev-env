@@ -136,3 +136,5 @@ maintainer's token; job ids are quoted so each line is re-checkable.
 No finding: `Publish Dry Run` passed at the already-published `0.11.0` version (RESEARCH A6 did not materialise), and the
 `labeled` trigger produced the e2e run without any workflow change. The labelled run's remaining jobs were still
 `in_progress` at 2026-10-29T19:10Z; its `End-to-End Tests` conclusion is the H-02 record and does not depend on them.
+
+Executor re-read, plan 52-08 Task 3, 2026-10-29T23:18Z (public API): jobs 123647995031, 123653075412, 123658055531 and 123663512686 read `success`, `skipped`, `success`, `success` as tabled above. Run 40932320347 reads `cancelled` at run level only because `Docker Build` and `Kubernetes Smoke Test` in it were cancelled by a later push; its `End-to-End Tests` job is `success`.

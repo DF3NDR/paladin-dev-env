@@ -104,6 +104,8 @@ sets `done`.
 
 Status: done -- PD-06-1 confirmed. The maintainer ran the PUT from their own shell at 2026-10-29T19:33:35Z (response: id 20868126, `enforcement` `active`, `updated_at` `2026-10-29T19:33:35.453Z`) and pasted the read-backs `3` and `46`. Public re-read after the paste: 3 rulesets; 46 contexts; both new names present (count 2); the live context set is identical to `.github/rulesets/protect-main-branch.json` (sorted `diff` empty).
 
+Executor re-read (plan 52-08 Task 3, 2026-10-29T23:18Z, public API, unauthenticated): `GET /repos/DF3NDR/paladin-dev-env/rulesets` returned 3 rulesets; `GET .../rulesets/20868126` HTTP 200, `enforcement` `active`, 46 required contexts, `Publish Dry Run` and `Semver Checks (vs v0.11.0)` both present, and the sorted live context set equals the sorted contexts of the committed `.github/rulesets/protect-main-branch.json`. PD-06-1 is confirmed, so the veto branch of Task 3 did not run and the committed record and docs were left unchanged.
+
 ### H-02 -- First-PR observation: `Publish Dry Run` and the `release` label run of `End-to-End Tests` (D-05, D-07, CIREL-04)
 
 On a PR into `main` whose head contains this phase (the PR from the phase branch, once it exists):
@@ -135,6 +137,8 @@ Reply format: `H-02: <PR URL> dry-run <success|failure> e2e-unlabelled <skipped|
 Evidence goes: `52-CI-EVIDENCE.md` `## First PR run` (a failure is written there as a finding for `/gsd-verify-work`).
 
 Status: done -- PR #61 <https://github.com/DF3NDR/paladin-dev-env/pull/61>. Unlabelled `pull_request` run 40928112540: `Publish Dry Run` success (job 123647995031), `End-to-End Tests` skipped (job 123653075412); that run then read `cancelled` when the label event superseded it. Labelled run 40932320347: `End-to-End Tests` success (job 123663512686, 12m25s), `Publish Dry Run` success (job 123658055531). The `release` label did not exist in the repository and was created first (`gh label create release`).
+
+Executor re-read (plan 52-08 Task 3, 2026-10-29T23:18Z, public API, unauthenticated): run 40928112540 job 123647995031 `Publish Dry Run` `success` and job 123653075412 `End-to-End Tests` `skipped`; run 40932320347 job 123663512686 `End-to-End Tests` `success` and job 123658055531 `Publish Dry Run` `success`. Both runs read `cancelled` at run level: 40928112540 was superseded by the label event, and 40932320347 has only `Docker Build` and `Kubernetes Smoke Test` `cancelled` (a later push to the branch superseded it); the H-02 jobs themselves are the `success`/`skipped` conclusions above.
 
 ### H-03 -- Semver red-proof close-out (D-04, CIREL-01)
 
@@ -170,6 +174,8 @@ git ls-remote --heads origin scratch/52-semver-red-proof
 Evidence goes: your reply (`H-03: done` with the empty read-back, or `n/a`/`defer <reason>`).
 
 Status: done -- `git push origin --delete scratch/52-semver-red-proof` printed `- [deleted]`; `git ls-remote --heads origin scratch/52-semver-red-proof` printed nothing (2026-10-29). Step 2 (draft PR) skipped; the `push` run is the proof.
+
+Executor re-read (plan 52-08 Task 3, 2026-10-29T23:18Z, public API, unauthenticated): `git ls-remote --heads origin scratch/52-semver-red-proof` printed nothing (exit 0).
 
 ### H-04 -- CodeQL platform dismissals and reconciliation (D-13, CIREL-06)
 
@@ -228,6 +234,8 @@ curl -fsS https://api.github.com/repos/DF3NDR/paladin-dev-env/issues/41 | python
 Expected: `closed completed 2026-10-28T23:09:45Z 1`.
 
 Status: done
+
+Executor re-read (plan 52-08 Task 3, 2026-10-29T23:18Z, public API, unauthenticated): `GET /repos/DF3NDR/paladin-dev-env/issues/41` printed `closed completed 2026-10-28T23:09:45Z 1`. The maintainer replied `H-05: ack`; `done` rests on this read-back, not on the reply word.
 
 ### H-06 -- Local `make coverage` on a Docker-capable machine (folded todo 2026-08-13)
 
@@ -296,6 +304,8 @@ Reply format: `H-08: green` or `H-08: <failing check names>`.
 
 Status: done -- `push` run 40899368946 on the final head `5e993f681`: all 39 jobs `success` except `End-to-End Tests` and `Benchmark Regression Signal (Non-Blocking)` `skipped`; `Workflow Lint`, `License & Dependency Policy`, `Semver Checks (vs v0.11.0)`, `Publish Dry Run`, `Code Quality`, `API Surface Tracking`, `Integration Tests`, `Coverage` all `success`. `Build MDBook` `success` on the PR (`docs.yml` run 40928112482, job 123638982883).
 
+Executor re-read (plan 52-08 Task 3, 2026-10-29T23:18Z, public API, unauthenticated): run 40899368946 (`push`, `5e993f681`) `completed success`, 39 jobs, only `End-to-End Tests` and `Benchmark Regression Signal (Non-Blocking)` `skipped`; docs.yml run 40928112482 job 123638982883 `Build MDBook` `success`. For the later phase-branch head `716923cac`, `push` run 40952344198 is `completed success` (39 jobs, same two `skipped`; `Workflow Lint`, `License & Dependency Policy`, `Semver Checks (vs v0.11.0)`, `Publish Dry Run` `success`), the PR run 40952352062 is `completed success` (39 jobs, none skipped or failed), and `Build MDBook` in docs.yml run 40952352226 is `success`.
+
 ## Carried deferred items
 
 From `deferred-items.md` (plan 52-03). None was fixed in Phase 52; each needs an owner outside this phase.
@@ -344,5 +354,7 @@ Read-backs as pasted:
   `required_status_checks` list, followed by `3` and `46`. The sandbox permission classifier had refused the same PUT
   earlier in the session, so the maintainer ran it directly; the third read-back (both new names present, `2`) and the
   record-versus-live set comparison (identical) were made by public re-read immediately after the paste.
+
+Intake note (plan 52-08 Task 3, 2026-10-29T23:18Z): this reply reached the plan as the maintainer's own commits `3deb0b829` and `716923cac` on the phase branch, which wrote the statuses above and this block directly into the artifacts; it is kept as the maintainer wrote it. A scan for token-shaped strings (`ghp_`, `github_pat_`, `AKIA`, `sk-`, bearer values) found none, so nothing was redacted.
 
 Nothing remains for the maintainer on this checklist. Merge of PR #61 is the maintainer's act and is outside it.

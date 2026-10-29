@@ -1,7 +1,7 @@
 ---
 phase: 52
 slug: ci-release-pipeline-repair
-status: local-proven
+status: local-proven; CI half open (H-03)
 created: 2026-10-29
 ---
 
@@ -10,9 +10,10 @@ created: 2026-10-29
 > CIREL-01 and ROADMAP Phase 52 success criterion 1 require the re-armed semver gate to be shown able to fail. A gate
 > that read `0 checks` for a whole release cycle and still exited 0 must be proven red by a real public-API break, not
 > assumed. This file records one scripted mutation, its transcript, and the restoration of the tree. No mutated source
-> is committed and the mutation script is kept outside the repository; this file is the only artifact. The CI half of
-> the proof (a red `Semver Checks (vs v0.11.0)` job on a real PR run) is recorded below as pending the maintainer's
-> decision at plan 52-07's Task 2 checkpoint.
+> is committed to the phase branch and the mutation script is kept outside the repository. The CI half of the proof (a
+> red `Semver Checks (vs v0.11.0)` job on the scratch branch) was authorised by the maintainer (`Push-ok`) and the
+> scratch branch is pushed; the red job had not concluded when the bounded poll ended, so that one observation is open
+> as handover item H-03 (see `## Experiment 2 -- CI` and `## Close-out`).
 
 Tree: 5f8e3300b1552f9736e3ca8167816ba687ea197b (git tree object `b026cbc14b1b01a68e58c89b8c69072004a9f020`), branch `claude/laughing-dirac-e0h2ax`
 
@@ -234,9 +235,131 @@ paladin-ai             223 checks: 223 pass, 31 skip
 `paladin-storage` read `223 checks: 223 pass, 31 skip` there and `223 checks: 222 pass, 1 fail, 0 warn, 31 skip` in
 Experiment 1, with the same toolchain, baseline and flags: the only difference is the one visibility edit.
 
-## CI half
+### Green baseline, CI (real run on the phase branch)
 
-Not yet recorded. Plan 52-07 Task 2 is a blocking decision checkpoint (who pushes `scratch/52-semver-red-proof` and the
-phase branch and opens the draft PR). Until the maintainer answers, nothing has been pushed and no pull request exists.
-`## Experiment 2 -- CI` and `## Close-out` are written by Task 3 after the answer; if the CI half is deferred, it is
-handover item H-03.
+The green phase-branch job, observed through the unauthenticated public Actions API after the push of `0c2b4a2bd`:
+
+- run: <https://github.com/DF3NDR/paladin-dev-env/actions/runs/40807444391> (`ci.yml`, `push`, branch `claude/laughing-dirac-e0h2ax`)
+- job: <https://github.com/DF3NDR/paladin-dev-env/actions/runs/40807444391/job/123230155353>
+  (`Semver Checks (vs v0.11.0)`), `head_sha` `0c2b4a2bd56c20566bece912a74644b75e5cc2b6`
+- status `completed`, conclusion `success`, started `2026-10-29T02:44:43Z`, completed `2026-10-29T02:54:13Z`
+- annotation `notice`, title `Semver check counts (vs 0.11.0, patch)` (read from
+  `GET /repos/DF3NDR/paladin-dev-env/check-runs/123230155353/annotations`, HTTP 200, no authentication). The twelve
+  non-zero check lines, verbatim:
+
+```text
+semver: paladin-ai-core: 223 checks: 223 pass, 31 skip
+semver: paladin-ports: 223 checks: 223 pass, 31 skip
+semver: paladin-herald: 223 checks: 223 pass, 31 skip
+semver: paladin-battalion: 223 checks: 223 pass, 31 skip
+semver: paladin-llm: 223 checks: 223 pass, 31 skip
+semver: paladin-memory: 223 checks: 223 pass, 31 skip
+semver: paladin-web: 223 checks: 223 pass, 31 skip
+semver: paladin-notifications: 223 checks: 223 pass, 31 skip
+semver: paladin-content: 223 checks: 223 pass, 31 skip
+semver: paladin-storage: 223 checks: 223 pass, 31 skip
+semver: paladin-eval: 223 checks: 223 pass, 31 skip
+semver: paladin-ai: 223 checks: 223 pass, 31 skip
+```
+
+All twelve lines match the local table above (N = 223, N >= 1). For contrast, the earlier green run on `95659216a`
+(<https://github.com/DF3NDR/paladin-dev-env/actions/runs/40789100661>, job 123170114869) read `212`-`223` checks per
+crate because the crate-wide allow lines were still in force then (removed by plan 52-05); the `0c2b4a2bd` run above is
+the baseline of record. That run's `ci.yml` was still in progress (Docker Build, Publish Dry Run, Coverage) when this
+was written; only the semver job is relied on here.
+
+## Experiment 2 -- CI
+
+Authorisation (maintainer, via the orchestrator, 2026-10-29 UTC): `Push-ok` (option 1 of the plan's Task 2).
+
+Scratch commit, built from the clean phase-branch HEAD `0c2b4a2bd56c20566bece912a74644b75e5cc2b6` (tree
+`01ccee49ed0407f23fe69b7db9d931ad9ca5feeb`):
+
+| Step | Command | Result |
+|---|---|---|
+| branch | `git switch -c scratch/52-semver-red-proof` | exit 0 |
+| break | `sed -i 's/^pub fn cron_field_count/pub(crate) fn cron_field_count/' crates/paladin-storage/src/cron.rs` (the same single substitution as the script); `grep -c '^pub(crate) fn cron_field_count'` printed `1` | applied |
+| commit | `git commit` subject `chore(scratch): deliberate semver break for the Phase 52 red proof -- DO NOT MERGE`; one file, `1 insertion(+), 1 deletion(-)` | exit 0, SHA `6f3d8d7845780d40e6f49b05127b06a60fecce96` |
+| push scratch | `git push origin scratch/52-semver-red-proof` (2026-10-29T02:53:08Z) | exit 0, `[new branch] scratch/52-semver-red-proof -> scratch/52-semver-red-proof` |
+| back | `git switch -` | exit 0, on `claude/laughing-dirac-e0h2ax` |
+| push phase | `git push origin claude/laughing-dirac-e0h2ax` | exit 0, `Everything up-to-date` (`0c2b4a2bd` was already on origin) |
+| draft PR | `gh pr create --draft --base main --head scratch/52-semver-red-proof --title "DO NOT MERGE: Phase 52 semver red proof" --body "Throwaway branch for D-04; closed unmerged."` | **refused, exit 1** (verbatim below) |
+
+The `gh pr create` refusal, verbatim:
+
+```text
+HTTP 403: GitHub GraphQL is not available from Claude Code sessions; use the REST API (gh api repos/{owner}/{repo}/...). For review threads, auto-merge, and draft/ready-for-review use the CCR routes on api.github.com: GET /repos/{owner}/{repo}/pulls/{n}/ccr/review_threads, POST /repos/{owner}/{repo}/pulls/{n}/ccr/comments/{comment_id}/resolve (or /unresolve), PUT or DELETE /repos/{owner}/{repo}/pulls/{n}/ccr/auto_merge, POST /repos/{owner}/{repo}/pulls/{n}/ccr/ready_for_review, POST /repos/{owner}/{repo}/pulls/{n}/ccr/convert_to_draft. (https://api.github.com/graphql)
+```
+
+The maintainer's `Push-ok` covered one `gh pr create --draft` attempt and printing the compare URL on refusal, so no
+REST-API workaround was attempted. Compare URL for the maintainer (open as a **draft**, title and body as above):
+
+    https://github.com/DF3NDR/paladin-dev-env/compare/main...scratch/52-semver-red-proof?expand=1
+
+No pull request exists, so the run on the scratch branch is the `push` event run, which the plan names as the fallback.
+Its `ci.yml` run, read through the public Actions API:
+
+- run: <https://github.com/DF3NDR/paladin-dev-env/actions/runs/40808979632> (`ci.yml`, `push`, branch
+  `scratch/52-semver-red-proof`, `head_sha` `6f3d8d7845780d40e6f49b05127b06a60fecce96`)
+- job: <https://github.com/DF3NDR/paladin-dev-env/actions/runs/40808979632/job/123234542712>
+  (`Semver Checks (vs v0.11.0)`, job id 123234542712)
+- observed at 2026-10-29T03:03:38Z: status `in_progress`, conclusion `null`, started `2026-10-29T02:54:47Z`; steps 1-5
+  (set up, checkout, toolchain, cache, install `cargo-semver-checks`) `success`, step 6 `Check semver against the
+  published v0.11.0 baseline` `in_progress`. The comparable green job took 9 min 30 s (02:44:43 to 02:54:13), so the
+  scratch job was expected to conclude within minutes of the poll ending.
+- **Red job conclusion and failing check line: pending, not observed.** Eight polls spaced 70 s apart (02:53:52Z to
+  03:02:17Z) plus one final read (03:03:38Z) all showed the semver job `queued` or `in_progress`; the bounded 10-minute
+  window then ended. No conclusion is claimed here. Handover item H-03 carries the capture.
+
+Ancestry and containment, checked after the push:
+
+```text
+git merge-base --is-ancestor 6f3d8d7845780d40e6f49b05127b06a60fecce96 HEAD      -> exit 1   (not an ancestor)
+git log --format=%s HEAD | grep -cF 'deliberate semver break'                   -> 0
+git diff --quiet -- crates/                                                      -> exit 0
+git diff --stat 0c2b4a2bd~1..HEAD -- crates/                                     -> (empty)
+git ls-files | grep -c red_proof_semver.sh                                       -> 0
+git status --porcelain | wc -l                                                   -> 0
+```
+
+The local run (Experiment 1) already shows the red mechanism on exactly this break: `223 checks: 222 pass, 1 fail, 0
+warn, 31 skip`, `function_missing` on `paladin_storage::cron::cron_field_count`. What CI has not yet shown is the same
+line from the real `semver` job; that is the one open observation.
+
+## Close-out
+
+| Step | Command | Outcome |
+|---|---|---|
+| local branch | `git branch -D scratch/52-semver-red-proof` | exit 0, `Deleted branch scratch/52-semver-red-proof (was 6f3d8d784)`; `git show-ref --verify refs/heads/scratch/52-semver-red-proof` exit 1 |
+| draft PR | not opened (refused, above) | nothing to close; opening it is part of H-03 if the maintainer wants a `pull_request` run |
+| remote branch | **not deleted** | the scratch run is still the only red evidence; deleting the branch now would cancel it. Remote ref still `6f3d8d7845780d40e6f49b05127b06a60fecce96` at 2026-10-29T03:03Z (`git ls-remote`) |
+| mutation script | kept outside the repository | verbatim copy in Experiment 1; never tracked |
+
+### H-03 -- open: capture the red semver job, then delete the scratch branch (CIREL-01, D-04)
+
+Reason: the job had not concluded when the bounded poll ended, and `gh pr create` was refused. Commands, in order:
+
+1. Read the red job and its annotations (public, no token). It should read `completed`, `failure`, with a `::error`
+   annotation naming `paladin-storage` and an `... 1 fail ...` line:
+
+   ```bash
+   curl -fsS "https://api.github.com/repos/DF3NDR/paladin-dev-env/actions/jobs/123234542712" | python3 -c 'import json,sys; j=json.load(sys.stdin); print(j["status"], j["conclusion"], j["html_url"])'
+   curl -fsS "https://api.github.com/repos/DF3NDR/paladin-dev-env/check-runs/123234542712/annotations" | python3 -c 'import json,sys; [print(a["annotation_level"], "|", a["title"], "|", a["message"]) for a in json.load(sys.stdin)]'
+   ```
+
+   Record the job URL `https://github.com/DF3NDR/paladin-dev-env/actions/runs/40808979632/job/123234542712`, its
+   conclusion and the `paladin-storage` check line under `## Experiment 2 -- CI`, and set the frontmatter `status:`
+   to `ci-proven`. If the job is `success`, the gate is NOT proven red in CI and this is a Phase 52 blocker.
+2. Optional, only if a `pull_request`-event run is wanted in addition to the `push` run above (it costs another full
+   pipeline): open the draft PR from
+   `https://github.com/DF3NDR/paladin-dev-env/compare/main...scratch/52-semver-red-proof?expand=1`
+   (title `DO NOT MERGE: Phase 52 semver red proof`, body `Throwaway branch for D-04; closed unmerged.`, draft), then
+   `gh pr close <n> --delete-branch`.
+3. Only after step 1 has been recorded, delete the remote scratch branch (skip if step 2's `--delete-branch` already
+   did):
+
+   ```bash
+   git push origin --delete scratch/52-semver-red-proof
+   ```
+
+   The local branch is already deleted.

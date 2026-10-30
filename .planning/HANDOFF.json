@@ -1,35 +1,50 @@
 {
   "version": "1.0",
-  "timestamp": "2026-10-30T16:40:47.432Z",
+  "timestamp": "2026-10-30T23:37:35.575Z",
   "phase": "53",
   "phase_name": "Tenant Isolation Closure",
   "phase_dir": ".planning/phases/53-tenant-isolation-closure",
   "plan": 0,
   "task": 1,
   "total_tasks": 4,
-  "status": "paused",
+  "status": "resumed",
   "stage": "discuss",
   "completed_tasks": [
-    {"id": 1, "name": "Discuss-phase scouting: prior context, inventory rows A1-A8, 40-REVIEW/40-REVIEW-FIX, ADR-0054, code survey; four gray areas presented and all four selected", "status": "in_progress", "progress": "Paused by the user at the first question of area 1 (thread ownership source). No decision recorded yet. Checkpoint committed as 7bd43f550."}
+    {
+      "id": 1,
+      "name": "Discuss-phase scouting: prior context, inventory rows A1-A8, 40-REVIEW/40-REVIEW-FIX, ADR-0054, code survey; four gray areas presented and all four selected",
+      "status": "in_progress",
+      "progress": "Paused by the user at the first question of area 1 (thread ownership source). No decision recorded yet. Checkpoint committed as 7bd43f550."
+    },
+    {
+      "id": 2,
+      "name": "53-SPEC.md written (9 requirements) and 53-CONTEXT.md written (--auto); checkpoint and .continue-here.md removed",
+      "status": "done"
+    }
   ],
   "remaining_tasks": [
-    {"id": 1, "name": "Discuss area: Thread ownership source + version call (derive from runs vs record on thread; decides v0.11.1 vs v0.12.0)", "status": "in_progress"},
-    {"id": 2, "name": "Discuss area: Gate shape + run-less threads", "status": "not_started"},
-    {"id": 3, "name": "Discuss area: Corrupt row / Serialization policy (TENANT-06)", "status": "not_started"},
-    {"id": 4, "name": "Discuss area: Jobs, boot assertion, small guards (TENANT-07/08/09/10)", "status": "not_started"},
-    {"id": 5, "name": "Write 53-CONTEXT.md and 53-DISCUSSION-LOG.md, delete the checkpoint, commit, record session in STATE.md", "status": "not_started"},
-    {"id": 6, "name": "/gsd-plan-phase 53", "status": "not_started"}
+    {
+      "id": 6,
+      "name": "/gsd-plan-phase 53 (auto-advancing)",
+      "status": "in_progress"
+    }
   ],
   "blockers": [],
   "async_jobs": [],
-  "human_actions_pending": [
-    {"action": "Answer the pending discuss-phase question: where does a thread's tenant come from for the visibility gate (derive from runs / record on thread / derive now, record later)", "context": "This answer is the roadmap's v0.11.1-vs-v0.12.0 decision point: recording a tenant is a public break on paladin-ai-core (Waypoint) and paladin-ports (ThreadSummary, WaypointPort); deriving keeps the patch version", "blocking": true}
-  ],
+  "human_actions_pending": [],
   "decisions": [
-    {"decision": "Pending todos not folded into Phase 53 (coverage reproduction -> Phase 56; base-item review, web3sec bump, OpenAI Responses API are keyword-only matches)", "rationale": "None concern tenant isolation; three were already reviewed-not-folded in Phase 52", "phase": "53"},
-    {"decision": "Phase 40 WR-01..WR-04 fixes verified present in the tree (ensure_thread_visible in submission.rs; service-layer tenant check in RunSubmissionService::cancel; internal_repo_error fixed 'run store error' 500)", "rationale": "Roadmap scope note: TENANT-04/05/06 are prove-then-lock, only what fails is rebuilt", "phase": "53"}
+    {
+      "decision": "Pending todos not folded into Phase 53 (coverage reproduction -> Phase 56; base-item review, web3sec bump, OpenAI Responses API are keyword-only matches)",
+      "rationale": "None concern tenant isolation; three were already reviewed-not-folded in Phase 52",
+      "phase": "53"
+    },
+    {
+      "decision": "Phase 40 WR-01..WR-04 fixes verified present in the tree (ensure_thread_visible in submission.rs; service-layer tenant check in RunSubmissionService::cancel; internal_repo_error fixed 'run store error' 500)",
+      "rationale": "Roadmap scope note: TENANT-04/05/06 are prove-then-lock, only what fails is rebuilt",
+      "phase": "53"
+    }
   ],
   "uncommitted_files": [],
-  "next_action": "Run /gsd-discuss-phase 53; accept the Resume offer from 53-DISCUSS-CHECKPOINT.json and answer the thread-ownership question",
-  "context_notes": "Scouting established: there is no threads table (a thread is only waypoints.thread_id and runs.thread_id); Waypoint, ThreadSummary, WaypointPort and JobRecord are all-pub-field public types without #[non_exhaustive], so recording a tenant on them is a semver break under Phase 52's patch-level gate. Derive-from-runs (what ensure_thread_visible already does) is the recommended default and keeps v0.11.1. run_controller::published_run_id_operations is the OpenAPI route-matrix precedent for success criterion 1. build_run_api always pairs with_engine_factory and with_treasurer but nothing asserts the pairing (TENANT-08). get_job ignores principal and agent id (TENANT-07). AuthConfig::validate is the config-load site for reserved literals open-access / unattributed / anonymous (TENANT-09). RunScheduleRepositoryPort::list(limit, cursor) can walk schedules for the NULL created_by warn (TENANT-10)."
+  "next_action": "Planning is running via /gsd-plan-phase 53 --auto; if interrupted, re-run it",
+  "context_notes": "Pause handoff superseded 2026-10-30: discussion resumed and completed under --auto; see 53-SPEC.md and 53-CONTEXT.md."
 }

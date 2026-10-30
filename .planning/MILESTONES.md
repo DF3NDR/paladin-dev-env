@@ -1,17 +1,170 @@
 # Milestones
 
-## v0.11.0 Treasurer Spend Governance — release record (tag cut 2026-10-26)
+## v0.11.0 Treasurer Spend Governance (Shipped: 2026-10-27)
 
-**Release:** `v0.11.0` on merge commit `70657919` (2026-10-26; release run `40396108246` green; all 12
-publishable crates registry-verified on crates.io at `0.11.0` via Trusted Publishing — registry table in
-`phases/47-v0-11-0-crate-release/47-CI-EVIDENCE.md`).
-**Release PR:** #59 from `claude/laughing-dirac-e0h2ax`, merged with a merge commit; 1126 commits / 1111
-files per GitHub (the sandbox clone is shallow).
-**Sign-off:** `47-ACCEPTANCE-AUDIT.md`, ticked by the maintainer at `6ef9207a` and re-confirmed on the redated head `72e13f95`.
-**Requirement closed by the release:** SHIP-07.
+**Phases completed:** 15 phases (38-51, including the inserted 50.1; Phases 48-51 were added
+2026-10-12..2026-10-19 after the roadmap's original 38-47 and sequenced before 46-47), 174 plans,
+281 tasks (the `**Tasks:**` roll-up of the 174 SUMMARY files)
+**Requirements:** 63/66 satisfied (PRICE-01…03, LEDGR-01…04, TENANT-01…02, ALLOW-01…05,
+PACE-01…05, LEGACY-01…04, STORE-01…03, PLAT-07…09, OBS-05, CURR-22…25, SHIP-07, ENTITY-01…05,
+ADOPT-04…05, PARITY-01…08, SURFACE-01…06, REASON-01…07); ADOPT-01…03 superseded at source by the
+owner's 2026-10-14 scope cut (see *Known Gaps*)
+**Timeline:** 2026-09-24 → 2026-10-27 (34 days). Commits: 1,126 on the release PR #59 per GitHub
+plus the `chore/47-close` PR #60 and the close itself; the shallow sandbox clone reaches 737 of
+them since the v0.10.0 post-close merge `df24689c`
+**Git range:** `df24689c` (v0.10.0 post-close merge; the frozen `main` base, Phase 47 D-02) →
+`70657919` (release merge, PR #59, tag `v0.11.0`) → `a49200da` (PR #60 close-docs merge); the
+archive commit lands on `claude/laughing-dirac-e0h2ax`
+**Closeout type:** override_closeout — 0 unverified phases (all 15 `VERIFICATION.md` files read
+`passed`, `init.manager` `all_phases_verified: true`); 0 phase-completion overrides (174/174
+SUMMARYs); 3 superseded requirements; **9 open artifacts acknowledged** at the pre-close audit
+(three `debug/` sessions whose root causes Phase 50 plans 50-19..50-23 fixed but whose files stay
+`diagnosed` because the sessions were scoped `find_root_cause_only`; two UAT rows the tool reads
+as gaps that are not — Phase 41's `41-UAT-RUNBOOK.md` and Phase 42's `passed` UAT with 0 pending;
+four pending todos) — see STATE.md *Deferred Items*
+**Audit:** `milestones/v0.11.0-MILESTONE-AUDIT.md` (status `tech_debt` — 63/66 requirements,
+15/15 phases, 8/8 integration seams wired, 8/8 E2E flows, 0 gaps; 15/15 phases Nyquist-compliant
+after the 2026-10-27 `/gsd-validate-phase` sweep; debt items recorded with owners)
+**Tag:** `v0.11.0` (annotated object `77a37c18`) on `main` merge commit `70657919` (2026-10-26),
+release run `40396108246` green, all 12 publishable crates registry-verified on crates.io at
+`0.11.0` through Trusted Publishing (`47-CI-EVIDENCE.md` registry table). One tag, one release —
+no patch was needed. `Coverage` on the merge commit: `Lines: 167104/180183 = 92.74%` (floor 82 %,
+ADR-0006). Sign-off: `47-ACCEPTANCE-AUDIT.md`, ticked by the maintainer at `6ef9207a` and
+re-confirmed on the redated head `72e13f95`.
 
-*Milestone closeout fields (Shipped date, phase/plan/task totals, Closeout type, Audit) are written by
-`/gsd-complete-milestone v0.11.0`, which inserts its own entry; fold this release record into it then.*
+**Delivered:** Paladin now governs what it spends. An output-side Treasurer prices every model call
+in the operator's currency with exact fixed-point arithmetic, settles it into a durable spend ledger
+attributed to the tenant and API key that caused it, refuses a run at admission when a rolling
+allowance is exhausted, halts an in-flight run cleanly and resumably at its next superstep
+boundary, and paces outbound calls against provider 429s in-process and fleet-wide through Redis.
+Around it the milestone took the clean breaks the v0.10 line had been carrying (the legacy
+Battalion error/retry/timeout surfaces, `PaladinError::LlmError(String)`, `Node<T>` → `Entity<T>`),
+made any agent movable between nine LLM providers by configuration alone with exact-or-refuse
+reasoning effort, pinned the one downstream consumer's surface in a compile-time muster, swapped
+the terminal MinIO pin for RustFS, brought the docs and migration guide to currency, and shipped
+all twelve crates to crates.io as `0.11.0` on a single tag.
+
+**Key accomplishments:**
+
+- **Exact pricing and a durable spend ledger (Phases 38-39).** ADR-0052/0053 were recorded before
+  any code; then an i64 nano-unit fixed-point cost engine (`Cost`, `PriceTable`, `cost_of_call`,
+  `CostTally`), an operator-only `treasurer:` price table parsed by a hand-rolled exact-decimal
+  parser (no floats, nothing bundled), and a `PricingLlmAdapter` decorator that prices each
+  response from its own served model even across a `FallbackLlmAdapter` hop. Cost reaches
+  `ExecutionMetadata.cost_estimate`, `PaladinResult.cost`, `TraceEvent::{NodeFinished,RunFinished}`
+  and all three heralds. `TreasuryLedgerPort` ships with in-memory, SQLite and Postgres adapters
+  under one contract suite; the engine settles exactly one aggregated row per superstep attempt
+  and the agent loop one per priced call, with `PlatformRunsOnly` preventing double charges;
+  `GET /runs*` and the agent-execute routes serve a shared `CostDto` derived from the ledger.
+- **Tenant identity and admission-time allowances (Phases 40-41).** An API key's tenant travels
+  config → `Principal` → `Run.submitted_by` → migration 008 → the run-read gate; `GET /v1/runs` is
+  tenant-scoped inside each adapter's keyset query; `AuthConfig::validate()` refuses every
+  malformed or tenantless key at boot (ADR-0054). Rolling tumbling-window allowances per tenant
+  and per API key with an optional lifetime cap are evaluated read-only, in fixed order and
+  fail-closed on every principal-bearing route that starts spend; exhaustion answers
+  `429 allowance_exhausted` with a store-clock `Retry-After` before any row exists; schedules
+  remember their creator (migration 010) and skip a tick whose creator is exhausted; a
+  warn-threshold crossing claims exactly one durable notice per scope/limit/window/ceiling
+  across replicas (sixteen-way race proven) and surfaces once as a trace event, a herald line and
+  a signed `allowance_warning` webhook (ADR-0056).
+- **Mid-run halt, typed and resumable (Phase 42).** A new `SpendGuard` port checked at the
+  `WarEngine` superstep boundary halts a graph run that would overspend, records a typed
+  `halt_reason` durably (migration 013), keeps the Halted Waypoint as the fork point and proves
+  fork-as-resume end to end; the Treasurer derives a per-run `TokenBudget` from the tightest
+  remaining allowance at the model's dearest price so agent-kind runs end with
+  `StopReason::AllowanceHalted`; unpriced models are refused `422 model_unpriced`; the SSE `done`
+  event finally says `cancelled` for a caller-cancelled run and carries the Treasurer reason for a
+  halted one on the live, degraded and replay paths (ADR-0057; the Phase 27 D-14 collapse closed).
+- **Cadence — rate pacing and the stampede lock (Phase 43).** A per-(provider, model)
+  `CadencePort` gate honours the provider's own `Retry-After` as a floor, bounds reset-derived
+  estimates, spreads released waiters without undercutting a provider delay and surfaces any gate
+  longer than `max_wait` as a typed error; no adapter retries a 429 inside its own loop any more.
+  `RedisCadence` runs one atomic Lua script per operation on the server clock and is proven by a
+  mandatory live CI job; `ResilientCadence` turns a Redis outage into a degradation with
+  multiplied local delays and automatic recovery; the port's set-if-absent lock with fencing
+  tokens lets `WarEngine::with_cadence` coalesce identical cache misses through
+  `NodeCachePort::put_fenced` (ADR-0058). Cadence joined the ubiquitous language.
+- **Two registered clean breaks (Phases 44, 48).** Campaign, Formation and Phalanx now bound
+  every Paladin attempt through one crate-private `run_with_aegis` runner under
+  `BattalionConfig.aegis`, surface timeouts as structured `BattalionError::Node`, and classify
+  failures only through `PaladinError::transience()`; the legacy `RetryPolicy`/`ErrorStrategy`/
+  `NodeError`, both timeout variants and `LlmError(String)` are gone and a v0.10 document still
+  deserialises (ADR-0059). The base wrapper `Node<T>` became `Entity<T>` with payload `data`,
+  read-aliased so every captured v0.10 JSON fixture and a real Citadel snapshot load byte for
+  byte, "node" reserved for the graph sense and pinned by `tests/entity_rename_guard.rs`
+  (ADR-0060). Every break was measured with cargo-semver-checks against the published `0.10.1`
+  and registered in `MIGRATION.md` and the allowlist.
+- **Provider parity, consumer surface and exact reasoning effort (Phases 49, 50, 50.1, 51).**
+  Any agent moves between nine providers by configuration only or `PaladinBuilder` refuses at
+  build naming provider, model and parameter (ADR-0061 amending ADR-0004): one wire-time filter,
+  a dated per-model `ModelProfile` registry seeded solely from scrubbed live probes
+  (2026-10-15, -20, -22; 718 effort rows), `LlmProviderFactory::create_from_config` with all nine
+  adapter/config pairs on the facade, typed `LlmError::Refusal`, `LlmResponse.reasoning`,
+  per-hop models in fallback chains, vendor-total reconciliation of token usage (the Grok
+  undercount fixed), `max_completion_tokens` on OpenAI, and a 17-case × 9-fixture conformance
+  suite. The web3sec consumer's surface is a compile-only muster proven red first, with the Aegis
+  family on the facade, nine `*Config::new(api_key, model)` shapes harmonised and MIGRATION §9.8
+  as the consumer's spec. `ReasoningEffort` is sent exactly in each vendor's native wire form or
+  refused before HTTP with `LlmError::UnsupportedParameter`; `LlmPort::check_reasoning` lets
+  `PaladinBuilder::build` pre-judge it; Kimi's silent no-op is a regression test (ADR-0062).
+- **RustFS, platform deviations and observability (Phase 45).** `rustfs/rustfs:1.0.0` replaces
+  the terminal quay.io MinIO pin in local mode, every CI job, the compose stack and the Kubernetes
+  manifest, proven by an 11-case `FileStoragePort` contract suite that cannot pass vacuously
+  (ADR-0055); code-registered `Runnable::Agent` runs stream SSE events and enqueue webhook
+  deliveries like graph runs (row 31 closed); `LogTraceSink` skips serialisation for a filtered
+  target and reuses a bounded buffer, re-measured at +19.36 % / +16.19 % and accepted by the
+  maintainer against PRD 07's ≤ 3 % bar (row 61 waived).
+- **Docs currency and a one-tag release (Phases 46-47).** The release pages name twelve crates,
+  `MIGRATION.md` gained a frozen section 10 (v0.10.1 → v0.11.0) above the byte-identical v0.10
+  record, a Treasurer book page and configuration reference landed, eight v0.10.0 Nyquist files
+  left `draft`, and the three roadmap-level v2 debt lines became WINDOWS rows. Phase 47 measured
+  the candidate end to end, reproduced both release blockers offline (a 156,528-byte release body
+  the payload builder rejects; `cargo deny` red on RUSTSEC-2026-0386), fixed them with a ledgered
+  condensation and a lockfile pin, bumped with `cargo release version`, re-sealed on the final
+  tree, and had the maintainer merge PR #59 and push `v0.11.0` onto its merge commit: run
+  `40396108246` green, 12/12 crates live, coverage 92.74 %, SHIP-07 ticked on a live sparse-index
+  read.
+
+### Known Gaps
+
+- **ADOPT-01…03 — superseded, deliberately unticked.** The consumer does not move to `v0.10.1`;
+  by the owner's 2026-10-14 decision it moves once, straight to `v0.11.0`, after Phases 50 and 51
+  (todo `2026-10-14-web3sec-single-bump-to-v0-11-0.md`, folded with `47-HANDOFF-web3sec.md`).
+  Recorded at source in `milestones/v0.11.0-REQUIREMENTS.md` (note under *Downstream adoption*;
+  traceability rows read `Superseded (scope cut 2026-10-14)`) and in `49-VERIFICATION.md`.
+
+**Known deferred items:** the audit's `tech_debt` register, with owners — 13 open `WINDOWS.md`
+rows (56, 58, 62-69, 73, 77, 79: the untenanted `/v1/threads/*` routes, no `${VAR}` expansion in
+the config loader, pre-Phase-41 schedules with NULL `created_by`, the four accepted Phase 42
+check-only/streaming/unpriced limitations, two Phase 48 unrun-verify rows superseded in practice
+by Phase 47's green gates, the sandbox-red `build_run_api_per*` tests, Grok's unparsed
+`cost_in_usd_ticks`, the Claude-run 50.1 probe); the integration checker's two warnings — G1, no
+aggregate HTTP spend route (per-tenant/key/model spend is CLI and library only), and G2, nothing
+asserts the engine-factory wiring that attaches settlement, spend guard and cancel probe; the
+Phase 47 carried findings (crate changelogs that say "No functional change" for the persisted-key
+change, the dangling `[Unreleased]` link, the release-body builder still failing above 131,072
+bytes, the semver baseline re-pin to 0.11.0, `check-migration-allowlist` not in `ci.yml`, stale
+`v0.10.0` labels in `k8s/`, the 24 untriaged advisory CodeQL alerts); the Codecov upload step
+that reports `success` while its CLI fails for want of a token; REASON-06's Anthropic `Budget(n)`
+override-only and Gemini 2.5 `Unmeasured` policies (owner-accepted 2026-10-23); the three
+RustSec `zip` advisories carried as `SECURITY-EXCEPTIONS.md` rows with a 2026-12-31 review date;
+the four pending todos (local coverage reproduction, carried since v0.8.0; the base-item review
+behind ENTITY-04; the web3sec single bump; OpenAI Responses API for the pro tier); five
+SUMMARY-frontmatter hygiene omissions (STORE-02, REASON-02/03/05/06); and, from
+`security.instructions.md`, the webhook SSRF guard's unpinned resolve-then-connect.
+
+### Release record
+
+**`v0.11.0` — one tag, all twelve crates.** Annotated tag `v0.11.0` (object `77a37c18`) peels to
+`main` merge commit `70657919beadbd341a72be2d0107080017a803f0` (PR #59 `release: v0.11.0 —
+Treasurer Spend Governance`, merged with a merge commit per the two-SHA rule, Phase 47 D-00c).
+Release run `40396108246` and its `Publish to crates.io` job concluded `success`; the registry was
+re-read four times on the sparse index (`yanked = false`, `trustpub_data` present) — 12 of 12 at
+`0.11.0`. Post-tag documentation reached `main` through `chore/47-close` (PR #60, merge
+`a49200da`). Carried from the v0.10.0 record: the three yanked `0.10.0` orphans remain yanked and
+the `v0.10.0` tag remains in place; the crates a consumer installs are `0.10.1` → `0.11.0`.
+
+---
 
 ## v0.10.0 Durable Agent Execution Runtime (Shipped: 2026-09-23)
 
@@ -121,6 +274,7 @@ documented to currency and published to crates.io at one coherent version.
   `CRATES` order from the tag ref. The outcome it was written to secure is delivered by SHIP-06
   (`v0.10.1`). Recorded at source in `milestones/v0.10.0-REQUIREMENTS.md` (amend-at-source note
   dated 2026-09-22) and in `37-VERIFICATION.md`.
+
 - **Phase 37 plans 37-09..37-11 — superseded, never executed.** Their scope (post-publish
   verification and milestone-close recording for `v0.10.0`) moved into Phase 37.1; the plan files
   carry dated supersession notes and no SUMMARY, which is why `init.manager` reads Phase 37 as

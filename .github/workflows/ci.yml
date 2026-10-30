@@ -7,8 +7,11 @@
 # prefix someone invents would be dark again, so the filter matches every
 # branch instead of a maintained allowlist. A push to a branch that also
 # has an open PR against main will therefore run CI twice (once per
-# trigger); the `concurrency` group below with `cancel-in-progress`
-# absorbs that duplication, so no trigger is being dropped to avoid it.
+# trigger). The two runs sit in different `concurrency` groups below (the
+# group is the bare branch name on pull_request and `refs/heads/<branch>` on
+# push), so they do not cancel each other; `cancel-in-progress` collapses
+# repeated runs of the SAME event only. No trigger is being dropped to avoid
+# the duplication.
 on:
   push:
     branches: [ '**' ]
@@ -19,14 +22,22 @@ on:
   # naming a ref that no longer exists is exactly the stale surface the
   # trigger-policy register in docs/src/contributing/branching-model.md
   # exists to catch.
+  # `labeled` (Phase 52, D-05/D-07): applying the maintainer-only `release`
+  # label to a PR re-runs CI so `End-to-End Tests` runs on that PR before the
+  # irreversible merge. `types:` cannot filter by label name, so ANY label event
+  # re-runs the whole file, including the long Docker build (accepted, PD-06-3).
   pull_request:
+    types: [ opened, synchronize, reopened, labeled ]
     branches: [ main, 'release/**' ]
   workflow_dispatch:
 
 concurrency:
-  # Collapses the duplicate push+pull_request runs the trigger comment above
-  # describes. `head_ref` is set only on pull_request; on push it is empty and
-  # this falls back to `ref`, so both runs for one branch share a group.
+  # Collapses repeated runs of the same event for one branch (a new push, or
+  # a `labeled` event, cancels the older in-flight run on non-main refs).
+  # `head_ref` is set only on pull_request and is the bare branch name; on push
+  # it is empty and this falls back to `ref` (`refs/heads/<branch>`), so the
+  # push run and the pull_request run for one branch are in DIFFERENT groups
+  # and run side by side.
   # Not cancel-in-progress on main: a completed run on the default branch is a
   # release-history record, not just a PR signal.
   group: ci-${{ github.head_ref || github.ref }}
@@ -150,13 +161,10 @@ jobs:
       # SHIP-06/SC3 (Phase 37.1, plan 37.1-03): this gate is cheap and
       # offline (pure `cargo metadata` analysis, no build) but must still
       # run pre-merge on every pull request, not only after a merge to
-      # main. It is wired here rather than into the existing
-      # `publish-dry-run` job below (see that job's own comment) because
-      # that job is deliberately gated to push events on the default
-      # branch and widening its trigger is out of this phase's scope --
-      # this job already runs on every push and pull_request with no
-      # job-level `if:` condition, so adding a step here reaches pre-merge
-      # CI with no trigger-surface change at all.
+      # main. It stays here, beside the other offline gates, because it is
+      # cheap and needs no build; `publish-dry-run` now also runs on every PR
+      # (Phase 52, D-05). This job runs on every push and pull_request with no
+      # job-level `if:` condition.
       - name: Check publish order
         run: ./scripts/check-publish-order.sh
 
@@ -165,6 +173,39 @@ jobs:
       # itself and does not call `make check-gates`, so the gate needs its own step.
       - name: Check core/ports dependency allowlist (ADR-0015)
         run: ./scripts/check-dependency-allowlist.sh
+
+      # Phase 52 D-06 / CIREL-03: scripts/check-migration-allowlist.sh is the
+      # single implementation of the semver-allowlist set-equality gate (the
+      # inline awk copy that used to live in the `semver` job was deleted). It
+      # runs here because this job is required and runs on every push and
+      # pull_request with no job-level `if:`, so the gate blocks a merge. It is
+      # offline (awk, grep, comm, sort, diff only).
+      - name: Check semver allowlist is set-equal to the MIGRATION.md register
+        run: ./scripts/check-migration-allowlist.sh
+
+      # Moved here from the `semver` job in Phase 52 (D-06) so it blocks a
+      # merge from a required job.
+      # D-01: MIGRATION.md's §9 sections previously carried a placeholder
+      # marker naming the requirement or phase that owned closing it -- every
+      # prior phase's own verification had to recalibrate around "a marker
+      # owned by a later phase" (28-17-SUMMARY.md, 29-RESEARCH.md). This step
+      # makes the absence permanent so the pattern cannot recur in v0.11: any
+      # future edit that reintroduces the four-letter placeholder token
+      # anywhere in MIGRATION.md fails CI. Any prose describing this
+      # convention -- including this comment -- must paraphrase the token
+      # (e.g. "marker", "placeholder"), never spell it out, or it would
+      # immediately re-trip the grep below.
+      - name: Verify MIGRATION.md carries no unfilled placeholder marker
+        run: |
+          set -euo pipefail
+          test -f MIGRATION.md
+          COUNT=$(grep -c 'TBD' MIGRATION.md || true)
+          if [ "${COUNT:-0}" -gt 0 ]; then
+            echo "::error::MIGRATION.md still carries ${COUNT} unfilled placeholder marker(s) -- every §9 section must be substantive before release. Offending lines:"
+            grep -n 'TBD' MIGRATION.md
+            exit 1
+          fi
+          echo "MIGRATION.md carries no unfilled placeholder marker."
 
       # Closes a pre-existing gap (D-09b, plan 15.1-09): the sibling
       # check-workflow-suppressions_test.sh regression harness has existed
@@ -310,40 +351,48 @@ jobs:
       - name: Check workspace at MSRV (all features, all targets)
         run: cargo check --workspace --all-features --all-targets
 
-  # cargo-semver-checks (X-10.5, D-06). Guards every pre-existing public Rust
-  # API against the PUBLISHED v0.9.0 baseline on crates.io. Two things the
-  # tool's own defaults get wrong for this repo, both overridden explicitly
-  # below (RESEARCH.md Pitfalls 1-2):
+  # cargo-semver-checks (X-10.5, D-06; re-pinned in Phase 52, CIREL-01/D-01).
+  # Guards every pre-existing public Rust API against the PUBLISHED v0.11.0
+  # baseline on crates.io. The whole check lives in scripts/check-semver.sh,
+  # the single implementation that this job and `make check-semver` both run,
+  # so the command a maintainer runs locally is the command CI runs. Three
+  # things the tool's own defaults get wrong for this repo, all overridden
+  # explicitly by that script (RESEARCH.md Pitfalls 1-2):
   #   - Baseline: the tool defaults to "latest published", not a fixed
-  #     version. `--baseline-version 0.9.0` pins the comparison so an
+  #     version. `--baseline-version 0.11.0` pins the comparison so an
   #     out-of-band crates.io patch release cannot silently move it.
+  #   - Release type: the tool infers it from the version delta, and 0.x
+  #     inference reads any manifest bump past the baseline as a
+  #     major-equivalent change that SKIPS every lint (`0 checks: 0 pass,
+  #     254 skip`, exit 0). `--release-type patch` fixes the type by flag so
+  #     the gate stays armed whatever version the manifests carry, and the
+  #     script fails any package that evaluated zero checks.
   #   - Package identity: this workspace's `crates/*` directory names differ
   #     from their published crates.io package names -- `crates/paladin-core`
-  #     publishes as `paladin-ai-core`. Every publishable crate below is
-  #     addressed by its PUBLISHED name, not its directory name; a
-  #     directory-named `--package` flag would match zero packages and report
-  #     a silent, meaningless pass (the exact failure mode this job exists to
-  #     prevent, T-22-12).
-  # `--default-features` (verified locally against every one of the 11
-  # packages before landing this job): without it, cargo-semver-checks's own
-  # "enable everything except unstable/nightly" heuristic pulls in every
-  # optional feature combination at once, which trips a PRE-EXISTING,
-  # unrelated compile break -- `paladin-memory`'s `qdrant` adapter fails to
-  # build rustdoc against the `qdrant-client` 1.18.0 resolved today (pinned
+  #     publishes as `paladin-ai-core`. Every package is addressed by its
+  #     PUBLISHED name, read from the CRATES array in
+  #     scripts/publish-crates.sh (all twelve published packages), never from
+  #     a second list here; a directory-named `--package` flag would match
+  #     zero packages and report a silent, meaningless pass (the exact failure
+  #     mode this job exists to prevent, T-22-12).
+  # `--default-features`: without it, cargo-semver-checks's own "enable
+  # everything except unstable/nightly" heuristic pulls in every optional
+  # feature combination at once, which trips a PRE-EXISTING, unrelated
+  # compile break -- `paladin-memory`'s `qdrant` adapter fails to build
+  # rustdoc against the `qdrant-client` 1.18.0 resolved today (pinned
   # `^1.14`), because that version added a required `memory` field to
   # `VectorParams`. That defect belongs to whichever phase next touches the
   # Sanctum/Qdrant adapter, not this one (deferred:
-  # .planning/phases/22-battlefield-state-superstep-engine/22-deferred-items.md)
-  # -- Phase 22 does not touch `paladin-memory`'s qdrant module at all.
+  # .planning/phases/22-battlefield-state-superstep-engine/22-deferred-items.md).
   # Checking under each crate's own default features is also arguably the
   # more correct semver-gate scope: it is the build a crates.io consumer gets
-  # by just adding the dependency, and it is what every one of the 11
-  # packages was verified to pass cleanly against the 0.9.0 baseline with.
+  # by just adding the dependency, and it is what every one of the twelve
+  # packages passes cleanly against the 0.11.0 baseline with.
   # No `needs:` edge; the job writes no baseline/artifact file into the
   # working tree, so re-running it on an unchanged commit reaches an
   # identical verdict every time.
   semver:
-    name: Semver Checks (vs v0.9.0)
+    name: Semver Checks (vs v0.11.0)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -366,150 +415,13 @@ jobs:
         with:
           tool: cargo-semver-checks@0.50.0
 
-      # Every publishable crate, addressed by its crates.io PACKAGE name (see
-      # the job comment above) -- never a `crates/` directory path.
-      #
-      # `paladin-eval` (the twelfth publishable crate, ADR-0048, landed
-      # Phase 28) is DELIBERATELY EXCLUDED from this list. It first shipped
-      # in this same v0.10.0 cycle and has no published 0.9.0 baseline on
-      # crates.io to diff against -- `cargo semver-checks check-release
-      # --baseline-version 0.9.0` would ERROR for a nonexistent baseline,
-      # not skip cleanly. It is still registered in
-      # `scripts/publish-crates.sh`'s dependency-ordered array and the
-      # `Makefile`'s `publish-dry-run` target; this omission is scoped to
-      # the semver-diff check only.
-      - name: Check semver against the published v0.9.0 baseline
-        run: |
-          set -euo pipefail
-          PACKAGES=(
-            paladin-ai
-            paladin-ai-core
-            paladin-ports
-            paladin-battalion
-            paladin-herald
-            paladin-llm
-            paladin-memory
-            paladin-storage
-            paladin-notifications
-            paladin-content
-            paladin-web
-          )
-          for pkg in "${PACKAGES[@]}"; do
-            echo "::group::cargo semver-checks -- ${pkg} vs 0.9.0"
-            cargo semver-checks check-release --package "${pkg}" --default-features --baseline-version 0.9.0
-            echo "::endgroup::"
-          done
-
-      # X-10.5 set-equality gate: every allowlist entry in
-      # .cargo/semver-checks-allowlist.toml must correspond to a MIGRATION.md
-      # §9.2 or §10.2 row marked deliberate-breaking (`Y`), and every such row must
-      # have a matching allowlist entry. Reads both files directly -- a
-      # missing file fails this step rather than silently treating either
-      # side as an empty set.
-      #
-      # ROW-LEVEL (D-04): the comparison is the SET of `crate | type` PAIRS,
-      # not just crate names -- a §9.2 or §10.2 row and an allowlist entry naming
-      # DIFFERENT types under the SAME crate must fail. The set is a
-      # DEDUPLICATED set, never a row count against an entry count:
-      # `paladin-ai | Settings` is deliberately marked `Y` on two separate
-      # §9.2 rows (the `agent_runtime` field, Phase 26, and the
-      # `trace`/`web_server` fields, Phase 28) that both legitimately mirror
-      # the SAME allowlist entry -- they must collapse to one set member, not
-      # report a false 10-rows-vs-9-entries mismatch.
-      - name: Verify allowlist is set-equal to the MIGRATION.md §9.2 and §10.2 registers
-        run: |
-          set -euo pipefail
-          test -f .cargo/semver-checks-allowlist.toml
-          test -f MIGRATION.md
-
-          # Register side: scoped to the §9.2 and §10.2 sections only
-          # (MIGRATION.md is a two-part guide: §10.2 is the v0.11 register, §9.2
-          # the v0.10 one, both read so a deliberate break cannot hide under a
-          # heading the window does not read), so a "Y" elsewhere in the
-          # document can't leak in. Data rows are selected
-          # by a leading pipe immediately followed by a backtick, which
-          # excludes the table header and its `---` separator row. Field 2
-          # is the crate (trimmed of spaces/tabs/backticks); field 3's FIRST
-          # backtick-quoted identifier is the type, so a long parenthetical
-          # like "StopReason (defined in ...)" still reduces to `StopReason`.
-          # The deliberate-breaking marker is located by scanning fields 6
-          # through NF (never a fixed column) for a trimmed value that is
-          # exactly "Y" or begins with "Y" followed by a space, em dash or
-          # hyphen: one register row's Mitigation cell contains a literal `|`
-          # inside a backticked span, which under naive `-F'|'` splitting
-          # shifts that row's marker one field to the right -- scanning the
-          # range instead of a fixed column is what keeps that row from
-          # being silently skipped. All trimming happens inside awk (no sed
-          # backreferences) to keep this script shellcheck-clean.
-          # Both greps below tolerate exit 1 (no matches: an empty register or
-          # an empty allowlist is a legal state — both empty is the set-equal
-          # baseline this check shipped with) while still failing on exit 2
-          # (a real error). Under `set -euo pipefail` a bare no-match grep
-          # kills the step before it prints anything, which is exactly how
-          # this step failed on its first-ever run.
-          awk '/^## (9|10)\.2 /{flag=1; next} /^## (9|10)\.3 /{flag=0} flag' MIGRATION.md \
-            | { grep -E '^\| `' || test $? -eq 1; } \
-            | awk -F'|' '{
-                crate=$2; gsub(/^[ \t`]+|[ \t`]+$/, "", crate);
-                type=$3; ident="";
-                if (match(type, /`[^`]+`/)) ident = substr(type, RSTART+1, RLENGTH-2);
-                deliberate="";
-                for (k = 6; k <= NF; k++) {
-                  v = $k; gsub(/^[ \t]+|[ \t]+$/, "", v);
-                  if (v == "Y" || v ~ /^Y[ \t—-]/) { deliberate = "Y"; break }
-                }
-                if (deliberate == "Y") print crate " | " ident
-              }' \
-            | sort -u > /tmp/migration-deliberate-pairs.txt
-
-          # Allowlist side: each [[entry]]'s `migration_row = "crate | type"`
-          # value is split on the pipe (with surrounding whitespace), and the
-          # type portion has backticks stripped and is reduced to its first
-          # whitespace-delimited token -- e.g. `require_authentication (fn)`
-          # reduces to `require_authentication`, matching the register side's
-          # reduction of `` `require_authentication` (fn) `` to the same
-          # identifier. Same shellcheck-cleanliness reasoning as the register
-          # side: all trimming happens inside awk, never a sed backreference.
-          { grep -E '^\s*migration_row\s*=' .cargo/semver-checks-allowlist.toml || test $? -eq 1; } \
-            | awk -F'"' '{print $2}' \
-            | awk -F' *\\| *' '{
-                crate=$1; type=$2; gsub(/`/, "", type); sub(/ .*$/, "", type);
-                print crate " | " type
-              }' \
-            | sort -u > /tmp/allowlist-pairs.txt
-
-          echo "MIGRATION.md §9.2 and §10.2 deliberate-breaking crate|type pairs:"
-          cat /tmp/migration-deliberate-pairs.txt
-          echo "Allowlist crate|type pairs:"
-          cat /tmp/allowlist-pairs.txt
-
-          if ! diff -u /tmp/migration-deliberate-pairs.txt /tmp/allowlist-pairs.txt; then
-            echo "::error::Allowlist and MIGRATION.md §9.2 and §10.2 deliberate-breaking crate|type pairs are not set-equal (see diff above)."
-            exit 1
-          fi
-          echo "Allowlist is set-equal to the MIGRATION.md §9.2 and §10.2 deliberate-breaking registers (crate|type pairs)."
-
-      # D-01: MIGRATION.md's §9 sections previously carried a placeholder
-      # marker naming the requirement or phase that owned closing it -- every
-      # prior phase's own verification had to recalibrate around "a marker
-      # owned by a later phase" (28-17-SUMMARY.md, 29-RESEARCH.md). This step
-      # makes the absence permanent so the pattern cannot recur in v0.11: any
-      # future edit that reintroduces the four-letter placeholder token
-      # anywhere in MIGRATION.md fails CI. Any prose describing this
-      # convention -- including this comment -- must paraphrase the token
-      # (e.g. "marker", "placeholder"), never spell it out, or it would
-      # immediately re-trip the grep below.
-      - name: Verify MIGRATION.md carries no unfilled placeholder marker
-        run: |
-          set -euo pipefail
-          test -f MIGRATION.md
-          COUNT=$(grep -c 'TBD' MIGRATION.md || true)
-          if [ "${COUNT:-0}" -gt 0 ]; then
-            echo "::error::MIGRATION.md still carries ${COUNT} unfilled placeholder marker(s) -- every §9 section must be substantive before release. Offending lines:"
-            grep -n 'TBD' MIGRATION.md
-            exit 1
-          fi
-          echo "MIGRATION.md carries no unfilled placeholder marker."
+      # Every published crate (all twelve, paladin-eval included), addressed
+      # by its crates.io PACKAGE name and read from scripts/publish-crates.sh
+      # (see the job comment above). The script takes no event data; it
+      # prints one check line per package, fails any package that evaluated
+      # zero checks, and annotates the run with every package's count.
+      - name: Check semver against the published v0.11.0 baseline
+        run: ./scripts/check-semver.sh
 
   # Unit tests
   test:
@@ -2011,10 +1923,14 @@ jobs:
     name: End-to-End Tests
     runs-on: ubuntu-latest
     needs: [integration-tests]
-    # use this under normal behavior
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    # use this for troubleshooting e2e tests
-    # if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    # Phase 52 D-05/D-07: runs on pushes to main, and on a PR only when the
+    # maintainer has applied the `release` label (element match over the labels
+    # array via contains(), never a substring test). A skipped job reports
+    # success to the required-check evaluation, so a label-less PR is not blocked.
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'pull_request' &&
+      contains(github.event.pull_request.labels.*.name, 'release'))
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -2148,12 +2064,12 @@ jobs:
           name: benchmark-regression-signal
           path: benchmark-signal/
 
-  # Publish dry-run: verify all crates are publishable (main branch only)
+  # Publish dry-run: verify all crates are publishable. Runs on every push and
+  # pull request (Phase 52, D-05); `needs: [lint, test]`.
   publish-dry-run:
     name: Publish Dry Run
     runs-on: ubuntu-latest
     needs: [lint, test]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - name: Checkout code
         uses: actions/checkout@v5

@@ -58,11 +58,11 @@ blocking a merge into `main`.
 | `lint` | Code Quality | `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo doc` warnings | Required |
 | `actionlint` | Workflow Lint | Lints every `.github/workflows/*.yml` file with `actionlint` | Required |
 | `security-audit` | Security Audit | `cargo audit` against the RustSec advisory database, exceptions from `.cargo/audit.toml` | Required |
-| `cargo-deny` | License & Dependency Policy | `cargo deny check` plus the repository's own policy scripts (changelogs, crate names, advisory register, workflow-suppression and workflow-trigger guards, CodeQL dismissal register, shell-guard regression tests) | Required |
+| `cargo-deny` | License & Dependency Policy | `cargo deny check` plus the repository's own policy scripts (changelogs, crate names, advisory register, workflow-suppression and workflow-trigger guards, CodeQL dismissal register, semver allowlist / MIGRATION.md §11.2 set-equality and the MIGRATION.md placeholder-marker check, shell-guard regression tests) | Required |
 | `osv-scanner` | OSV Scanner | Google OSV database scan of `Cargo.lock`; SARIF uploaded for PR annotation | Required |
 | `api-surface` | API Surface Tracking | `cargo public-api` diff against `.project/current-exports.txt`, plus deprecation-warning checks | Required |
 | `msrv` | MSRV (Rust 1.88) | `cargo check --workspace --all-features --all-targets` at the pinned MSRV | Advisory |
-| `semver` | Semver Checks (vs v0.9.0) | `cargo-semver-checks` for every publishable crate against the published v0.9.0 baseline | Advisory |
+| `semver` | Semver Checks (vs v0.11.0) | `scripts/check-semver.sh` running `cargo-semver-checks` for all twelve publishable crates against the published 0.11.0 baseline at `--release-type patch`, failing on zero checks | Required |
 | `test` | Unit Tests (stable / beta) | `cargo test --workspace --lib --bins` and `cargo test --workspace --doc`, matrixed over stable and beta | Required |
 | `examples` | Example Muster (Feature Matrix) | Builds all 47 `examples/*.rs` targets across a 4-invocation feature matrix | Required |
 | `crate-isolation` | Crate Isolation (`<crate>`) | Each of the 10 matrixed workspace crates builds and tests independently, with and without default features | Required |
@@ -80,9 +80,18 @@ blocking a merge into `main`.
 | `bench-check` | Benchmark Compile Check | `cargo bench --workspace --no-run` (compiles every `[[bench]]` target; runs none) | Required |
 | `docker` | Docker Build | Multi-arch image build and the 500 MB size budget; wall-clock is reported, not enforced | Advisory |
 | `kubernetes-smoke` | Kubernetes Smoke Test | Deploys to a `kind` cluster and checks pod readiness | Advisory |
-| `e2e-tests` | End-to-End Tests | Full Docker Compose stack end-to-end test; push-to-`main` only | Required |
+| `e2e-tests` | End-to-End Tests | Full Docker Compose stack end-to-end test; pushes to `main`, and pull requests carrying the `release` label (skipped otherwise; a skip reports success) | Required |
 | `benchmark-regression-signal` | Benchmark Regression Signal (Non-Blocking) | Criterion regression check on PRs/dispatch; `continue-on-error: true` | Advisory |
-| `publish-dry-run` | Publish Dry Run | `cargo publish --workspace --dry-run`; push-to-`main` only | Advisory |
+| `publish-dry-run` | Publish Dry Run | `cargo publish --workspace --dry-run`; every push and pull request | Required |
+
+The committed ruleset record lists 46 required contexts: `Publish Dry Run` and `Semver Checks (vs
+v0.11.0)` were added in Phase 52 (D-08). The live ruleset changes only when the maintainer applies
+the committed file with the `PUT` documented in [Branch Protection](../appendix/branch-protection.md),
+so the **Required** marks on those two rows describe the committed record until that step is done.
+`End-to-End Tests` needs no ruleset change: a job skipped by its job-level `if:` reports success to
+required-check evaluation (PR #59 merged that way), so a pull request without the `release` label is
+not blocked, while a labelled pull request runs it and its failure blocks the merge. The `labeled`
+activity type re-runs the whole `ci.yml` when a label is applied, including the long Docker build.
 
 The `coverage` floor is not inlined in the workflow — the job delegates to the same script
 `make coverage` runs locally:

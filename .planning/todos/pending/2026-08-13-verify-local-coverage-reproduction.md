@@ -11,6 +11,7 @@ owner: repo maintainer
 deferred_past: v0.10.0
 recheck_by: 2026-10-16
 dispositioned_by: Phase 36.1 (2026-09-18)
+resolves_phase: 56
 ---
 
 ## Problem

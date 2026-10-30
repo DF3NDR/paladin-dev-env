@@ -21,11 +21,14 @@
 #   create other                     -> hard failure naming the status
 #
 # The release body is data, never shell text: the request payload is built
-# structurally with `jq -n --arg` from the body file's literal contents (a
-# line that is exactly `EOF`, or one containing backticks and `$(...)`,
-# reaches the API unchanged) and sent to `gh api` on stdin via `--input -`.
-# Commit-subject text must never be interpolated into a command line or into
-# $GITHUB_OUTPUT.
+# structurally with `jq -n --rawfile body <file>`, so jq reads the body file
+# itself and no byte of the body ever crosses a process argument list (a
+# single argument is capped at 131,072 bytes by the kernel, so passing a long
+# changelog with `--arg` fails with "Argument list too long"; D-09, CIREL-05).
+# A line that is exactly `EOF`, or one containing backticks and `$(...)`,
+# reaches the API unchanged, and the payload is sent to `gh api` on stdin via
+# `--input -`. Commit-subject text must never be interpolated into a command
+# line or into $GITHUB_OUTPUT.
 #
 # The `gh` executable is resolved through GH_BIN (default: `gh`) -- this is
 # the seam this script's regression harness uses to stub the GitHub API with
@@ -36,18 +39,36 @@
 # without executing it -- this file's own regression harness uses this to
 # exercise the function directly.
 #
+# Size guard (CIREL-05, D-11): GitHub rejects a release body over 125,000
+# characters with HTTP 422. On the create path only (lookup 404), a non-empty
+# --body-file longer than PALADIN_RELEASE_BODY_LIMIT characters (default
+# 125000) is first fitted by scripts/release-body-fit.sh -- cut at a line
+# boundary to at most limit - PALADIN_RELEASE_BODY_RESERVE characters (default
+# 5000), ending with a `<!-- paladin:release-truncated -->` footer that links
+# the full CHANGELOG.md at the tag. The original and final sizes are logged to
+# stderr (never the body text) and, under GitHub Actions, a `::warning` is
+# printed. The fit works on a temp copy; the caller's file is never edited. A
+# malformed limit or a body that is not valid UTF-8 is a named failure before
+# any create request. A re-run whose lookup returns 200 reuses the release and
+# never builds or fits a body, so a second run cannot truncate twice.
+#
 # Usage:  ./scripts/create-or-reuse-release.sh --tag <vX.Y.Z>
 #             [--repo <owner/name>] [--body-file <path>] [--name <title>]
 #             [--prerelease <true|false>]
 #         --tag is required. --repo defaults to $GITHUB_REPOSITORY.
 #         --body-file, when omitted, sends an empty release body.
+#         PALADIN_RELEASE_BODY_LIMIT / PALADIN_RELEASE_BODY_RESERVE (env)
+#         tune the size guard described above.
 #         --name defaults to "Release <tag>". --prerelease defaults to
 #         "true" when the tag contains a hyphen and "false" otherwise,
 #         matching the `contains(version, '-')` expression release.yml
 #         already uses. An unrecognised flag is a usage error.
 # Output: on success, prints `upload_url=<value>` and `version=<tag>` to
 #         stdout, and appends the same two lines to $GITHUB_OUTPUT when that
-#         variable is set and non-empty.
+#         variable is set and non-empty. When the size guard truncates a
+#         body, `release-body-fit: original N chars, target T chars, final M
+#         chars` goes to stderr (and a `::warning` annotation to stdout under
+#         GitHub Actions).
 # Exit:   0 on success; non-zero for any HTTP-status failure, a malformed
 #         response (missing/null upload_url), or a usage error.
 
@@ -88,24 +109,22 @@ _cor_gh_call() {
 # _cor_build_payload TAG NAME BODY_FILE PRERELEASE
 #
 # Prints a JSON release-creation payload to stdout, built structurally with
-# `jq -n --arg` so BODY_FILE's contents (commit-subject-derived text) reach
-# the API as data, never as interpolated shell/command text.
+# `jq -n` so BODY_FILE's contents (commit-subject-derived text) reach the API
+# as data, never as interpolated shell/command text. jq reads the body file
+# itself through `--rawfile`, so the body never crosses argv. An empty
+# BODY_FILE argument sends an empty body (jq reads /dev/null).
 _cor_build_payload() {
     local tag="$1" name="$2" body_file="$3" prerelease="$4"
-    local body_text=""
 
-    if [ -n "${body_file}" ]; then
-        if [ ! -f "${body_file}" ]; then
-            echo "ERROR: --body-file not found: ${body_file}" >&2
-            return 1
-        fi
-        body_text="$(cat "${body_file}")"
+    if [ -n "${body_file}" ] && [ ! -f "${body_file}" ]; then
+        echo "ERROR: --body-file not found: ${body_file}" >&2
+        return 1
     fi
 
     jq -n \
         --arg tag_name "${tag}" \
         --arg name "${name}" \
-        --arg body "${body_text}" \
+        --rawfile body "${body_file:-/dev/null}" \
         --argjson draft false \
         --argjson prerelease "${prerelease}" \
         '{tag_name: $tag_name, name: $name, body: $body, draft: $draft, prerelease: $prerelease}'
@@ -183,6 +202,18 @@ create_or_reuse_release_main() {
         esac
     fi
 
+    # The shared size helper is resolved from this script's own location, never
+    # the caller's cwd. A missing helper is a named failure before any API call.
+    local WORKSPACE_ROOT FIT_LIB
+    WORKSPACE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    FIT_LIB="${WORKSPACE_ROOT}/scripts/release-body-fit.sh"
+    if [ ! -f "${FIT_LIB}" ]; then
+        echo "ERROR: scripts/release-body-fit.sh not found (looked at ${FIT_LIB})" >&2
+        return 1
+    fi
+    # shellcheck source=scripts/release-body-fit.sh
+    RELEASE_BODY_FIT_LIB_ONLY=1 source "${FIT_LIB}"
+
     local HTTP_STATUS="" HTTP_BODY="" RELEASE_JSON=""
 
     # --- Lookup by tag. -----------------------------------------------------
@@ -193,10 +224,33 @@ create_or_reuse_release_main() {
         RELEASE_JSON="${HTTP_BODY}"
     elif [ "${HTTP_STATUS}" = "404" ]; then
         # --- Create. ---------------------------------------------------------
+        # Fit an over-limit body into a temp copy first (the caller's file is
+        # never edited); a fit failure returns before any create request. The
+        # fit runs in this shell, not in a command substitution, so its
+        # `::warning` annotation reaches the runner on stdout.
+        local FITTED="" BODY_FOR_PAYLOAD="${BODY_FILE}"
+        if [ -n "${BODY_FILE}" ]; then
+            if [ ! -f "${BODY_FILE}" ]; then
+                echo "ERROR: --body-file not found: ${BODY_FILE}" >&2
+                return 1
+            fi
+            if ! FITTED="$(mktemp "${TMPDIR:-/tmp}/release-body-fitted.XXXXXX")"; then
+                echo "ERROR: could not create a temp file for the fitted release body" >&2
+                return 1
+            fi
+            if ! release_body_fit_for_create "${BODY_FILE}" "${FITTED}" "${TAG}" "${REPO}"; then
+                rm -f "${FITTED}"
+                return 1
+            fi
+            BODY_FOR_PAYLOAD="${FITTED}"
+        fi
+
         local PAYLOAD
-        if ! PAYLOAD=$(_cor_build_payload "${TAG}" "${NAME}" "${BODY_FILE}" "${PRERELEASE}"); then
+        if ! PAYLOAD=$(_cor_build_payload "${TAG}" "${NAME}" "${BODY_FOR_PAYLOAD}" "${PRERELEASE}"); then
+            [ -z "${FITTED}" ] || rm -f "${FITTED}"
             return 1
         fi
+        [ -z "${FITTED}" ] || rm -f "${FITTED}"
 
         _cor_gh_call POST "repos/${REPO}/releases" "${PAYLOAD}"
 

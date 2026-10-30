@@ -8,13 +8,20 @@
 # under a single `mktemp -d` scratch directory removed on exit via a trap,
 # the guard is pointed at fixtures via MIGRATION_FILE/ALLOWLIST_FILE (the
 # guard's only permitted departure from the CI step it mirrors), and a
-# closing assertion double-checks the real tree was never mutated.
+# closing assertion compares a BEFORE/AFTER snapshot of the real register
+# files to prove this harness wrote nothing (a plain "is the tree clean"
+# check would fail whenever the register is mid-edit and uncommitted).
 #
 # Failing cases are asserted FIRST, matching the "prove it fails" house
 # convention, before either passing case is treated as evidence the guard
 # works at all. The final case runs the guard against the real,
-# unmodified tree -- the live PRIM-05 evidence that the pair sets match and that every crate-wide cargo-semver-checks allow in a Cargo.toml
-# is mirrored by an allowlist entry.
+# unmodified tree -- the live PRIM-05 evidence that both pair lists are empty
+# (the §11.2 register and the allowlist hold zero rows and zero entries since
+# Phase 52) and that no crate-wide cargo-semver-checks allow survives in a
+# Cargo.toml. MIGRATION.md is three parts, newest first: §11 (v0.11.0 ->
+# v0.11.1) is the open part and the only register the guard reads; §10 and §9
+# are frozen records, so cases 12a-12f pin that the window reads §11.2 up to
+# its §11.3 terminator and nothing else.
 #
 # Usage:  ./tests/scripts/check-migration-allowlist_test.sh
 #         Or via `make test-shell-guards`.
@@ -40,28 +47,58 @@ trap cleanup EXIT
 FAILED=0
 ASSERTIONS=0
 
-# write_migration FILE BODY -> wraps BODY between a §9.2 header and a §9.3
-# header, matching the section-scoping the guard's awk relies on.
+# snapshot_real_tree -> prints a fingerprint of the two real register files:
+# their `git status --porcelain` line(s) plus a checksum of each. Taken BEFORE
+# any case runs and again at the end; the two must be identical, which proves
+# this harness wrote nothing even while the register is mid-edit and
+# uncommitted (a bare "git status is empty" check cannot tell).
+snapshot_real_tree() {
+    (
+        cd "${WORKSPACE_ROOT}" || exit 1
+        git status --porcelain -- MIGRATION.md .cargo/semver-checks-allowlist.toml
+        cksum MIGRATION.md .cargo/semver-checks-allowlist.toml
+    )
+}
+SNAPSHOT_BEFORE="$(snapshot_real_tree)"
+
+# write_migration FILE BODY -> wraps BODY between a §11.2 header and a §11.3
+# header, matching the section-scoping the guard's awk relies on: §11.2 is the
+# open v0.11.1 register, the only one the guard reads, and the `## 11.3 `
+# heading is the terminator of its window.
 write_migration() {
     local file="$1" body="$2"
     {
-        echo "## 9.2 Rust API changes (compile-affecting; the X-10 register)"
+        echo "## 11.2 Rust API changes (compile-affecting; the X-10 register)"
         echo ""
         echo "| Crate | Type | Change | Mitigation | Deliberate breaking? | Req |"
         echo "| --- | --- | --- | --- | --- | --- |"
         printf '%s\n' "${body}"
         echo ""
-        echo "## 9.3 Toolchain & dependencies"
+        echo "## 11.3 Toolchain & dependencies"
     } > "${file}"
 }
 
-# write_migration_two_parts FILE BODY10 BODY9 -> the two-part layout MIGRATION.md
-# has since Phase 46 (D-01): a §10.1 / §10.2 / §10.3 trio above a §9.2 / §9.3
-# pair. BODY10 goes under §10.2 and BODY9 under §9.2, each below the table
-# header, so the guard's `(9|10)` window is exercised on both registers.
-write_migration_two_parts() {
-    local file="$1" body10="$2" body9="$3"
+# write_migration_three_parts FILE BODY11 BODY10 BODY9 [omit-11.3] -> the
+# three-part layout MIGRATION.md has since Phase 52 (D-03): a §11.1 / §11.2 /
+# §11.3 trio above a frozen §10.1 / §10.2 / §10.3 trio above a frozen §9.2 /
+# §9.3 pair. BODY11 goes under §11.2, BODY10 under §10.2 and BODY9 under §9.2,
+# each below the table header. A fourth argument of `omit-11.3` leaves out the
+# `## 11.3 ` heading, so the §11.2 window has no terminator (case 12d).
+write_migration_three_parts() {
+    local file="$1" body11="$2" body10="$3" body9="$4" omit="${5:-}"
     {
+        echo "## 11.1 Behavioral changes (user-visible without code changes)"
+        echo ""
+        echo "## 11.2 Rust API changes (compile-affecting; the X-10 register)"
+        echo ""
+        echo "| Crate | Type | Change | Mitigation | Deliberate breaking? | Req |"
+        echo "| --- | --- | --- | --- | --- | --- |"
+        printf '%s\n' "${body11}"
+        echo ""
+        if [ "${omit}" != "omit-11.3" ]; then
+            echo "## 11.3 Toolchain & dependencies"
+            echo ""
+        fi
         echo "## 10.1 Behavioral changes (user-visible without code changes)"
         echo ""
         echo "## 10.2 Rust API changes (compile-affecting; the X-10 register)"
@@ -82,7 +119,7 @@ write_migration_two_parts() {
     } > "${file}"
 }
 
-# migration_row CRATE TYPE MARKER -> a single well-formed §9.2 data row.
+# migration_row CRATE TYPE MARKER -> a single well-formed register data row.
 # MARKER is the raw contents of the "Deliberate breaking?" cell.
 migration_row() {
     local crate="$1" type="$2" marker="$3"
@@ -275,50 +312,110 @@ write_allowlist "${f_allow}" "$(allowlist_entry paladin-fixture Widget)"
 write_manifest "${f_root}" paladin-fixture struct_missing
 assert_silent "${f_mig}" "${f_allow}" "every crate-wide allowed lint is mirrored for its own crate" "${f_root}"
 
-# --- 10a. A Y row under §10.2 with its allowlist entry -> 0 (the §10.2
+# --- 10a. A Y row under §11.2 with its allowlist entry -> 0 (the §11.2
 #          register is read). ---------------------------------------------------
 f_mig="${SCRATCH}/case10a-migration.md"
 f_allow="${SCRATCH}/case10a-allowlist.toml"
-write_migration_two_parts "${f_mig}" "$(migration_row paladin-fixture Widget Y)" ""
+write_migration_three_parts "${f_mig}" "$(migration_row paladin-fixture Widget Y)" "" ""
 write_allowlist "${f_allow}" "$(allowlist_entry paladin-fixture Widget)"
-assert_silent "${f_mig}" "${f_allow}" "a Y row under §10.2 with its allowlist entry (10.2 register is read)"
+assert_silent "${f_mig}" "${f_allow}" "a Y row under §11.2 with its allowlist entry (11.2 register is read)"
 
-# --- 10b. A Y row under §10.2 with NO allowlist entry -> non-zero (an
-#          unregistered deliberate break cannot hide under §10.2). -------------
+# --- 10b. A Y row under §11.2 with NO allowlist entry -> non-zero (an
+#          unregistered deliberate break cannot hide under §11.2). -------------
 f_mig="${SCRATCH}/case10b-migration.md"
 f_allow="${SCRATCH}/case10b-allowlist.toml"
-write_migration_two_parts "${f_mig}" "$(migration_row paladin-fixture Widget Y)" ""
+write_migration_three_parts "${f_mig}" "$(migration_row paladin-fixture Widget Y)" "" ""
 write_allowlist "${f_allow}" ""
-assert_fire "${f_mig}" "${f_allow}" "a Y row under §10.2 with no allowlist entry"
+assert_fire "${f_mig}" "${f_allow}" "a Y row under §11.2 with no allowlist entry"
 
-# --- 10c. Y rows for the same crate|type under BOTH §10.2 and §9.2, one
-#          allowlist entry -> 0 (the pair set collapses across the two
-#          registers, as the four in-place rows require). ----------------------
-f_mig="${SCRATCH}/case10c-migration.md"
-f_allow="${SCRATCH}/case10c-allowlist.toml"
-write_migration_two_parts "${f_mig}" "$(migration_row paladin-fixture Widget Y)" "$(migration_row paladin-fixture Widget Y)"
+# --- 12a. Y rows ONLY under the frozen §10.2 and §9.2, empty allowlist -> 0
+#          (the frozen registers record breaks already shipped against older
+#          baselines, which 0.11.0 now contains; they are no longer read). -----
+f_mig="${SCRATCH}/case12a-migration.md"
+f_allow="${SCRATCH}/case12a-allowlist.toml"
+write_migration_three_parts "${f_mig}" "" "$(migration_row paladin-fixture Widget Y)" "$(migration_row paladin-other Gadget Y)"
+write_allowlist "${f_allow}" ""
+assert_silent "${f_mig}" "${f_allow}" "Y rows only under the frozen §10.2 and §9.2 with an empty allowlist (frozen registers are not read)"
+
+# --- 12b. A Y row under §11.2 plus Y rows under the frozen §10.2/§9.2, only
+#          the §11.2 entry -> 0. ------------------------------------------------
+f_mig="${SCRATCH}/case12b-migration.md"
+f_allow="${SCRATCH}/case12b-allowlist.toml"
+write_migration_three_parts "${f_mig}" "$(migration_row paladin-fixture Widget Y)" "$(migration_row paladin-fixture Old10 Y)" "$(migration_row paladin-other Old9 Y)"
 write_allowlist "${f_allow}" "$(allowlist_entry paladin-fixture Widget)"
-assert_silent "${f_mig}" "${f_allow}" "Y rows for one crate|type under both §10.2 and §9.2 collapse to one set member"
+assert_silent "${f_mig}" "${f_allow}" "a §11.2 Y row with its entry passes beside Y rows under the frozen §10.2 and §9.2"
 
-# --- 10d. A Y row placed under §10.1 (outside the register window) with no
+# --- 12c. A Y row placed under §11.1 (outside the register window), no
 #          allowlist entry -> 0 (not read). -------------------------------------
-f_mig="${SCRATCH}/case10d-migration.md"
-f_allow="${SCRATCH}/case10d-allowlist.toml"
+f_mig="${SCRATCH}/case12c-migration.md"
+f_allow="${SCRATCH}/case12c-allowlist.toml"
 {
-    echo "## 10.1 Behavioral changes (user-visible without code changes)"
+    echo "## 11.1 Behavioral changes (user-visible without code changes)"
     echo ""
     echo "| Crate | Type | Change | Mitigation | Deliberate breaking? | Req |"
     echo "| --- | --- | --- | --- | --- | --- |"
     migration_row paladin-fixture Widget Y
     echo ""
-    echo "## 10.2 Rust API changes (compile-affecting; the X-10 register)"
+    echo "## 11.2 Rust API changes (compile-affecting; the X-10 register)"
     echo ""
-    echo "## 10.3 Toolchain & dependencies"
+    echo "## 11.3 Toolchain & dependencies"
 } > "${f_mig}"
 write_allowlist "${f_allow}" ""
-assert_silent "${f_mig}" "${f_allow}" "a Y row under §10.1 is outside the register window and is not read"
+assert_silent "${f_mig}" "${f_allow}" "a Y row under §11.1 is outside the register window and is not read"
 
-# --- 11. The REAL tree -> exit 0 (live PRIM-05 evidence: 15 pairs = 15 pairs). -
+# --- 12d. Pitfall 3: a §11.2 table with NO `## 11.3 ` heading, followed by a
+#          frozen §10.2 Y row and an empty allowlist -> non-zero. Without its
+#          terminator the window runs on into the frozen registers, so the §10.2
+#          row is read and has no entry. ------------------------------------------
+f_mig="${SCRATCH}/case12d-migration.md"
+f_allow="${SCRATCH}/case12d-allowlist.toml"
+write_migration_three_parts "${f_mig}" "" "$(migration_row paladin-fixture Widget Y)" "" omit-11.3
+write_allowlist "${f_allow}" ""
+assert_fire "${f_mig}" "${f_allow}" "a §11.2 window with no §11.3 terminator runs into the frozen §10.2 register"
+if ! grep -qF "paladin-fixture | Widget" <<<"${LAST_OUTPUT}"; then
+    echo "FAIL: expected the frozen §10.2 pair 'paladin-fixture | Widget' to be read and named, got:"
+    echo "${LAST_OUTPUT}" | sed 's/^/  | /'
+    FAILED=$((FAILED + 1))
+fi
+
+# --- 12e. Two §11.2 rows, allowlist entries listed in the REVERSE order -> 0
+#          (set equality is order-independent). -----------------------------------
+f_mig="${SCRATCH}/case12e-migration.md"
+f_allow="${SCRATCH}/case12e-allowlist.toml"
+rows="$(migration_row paladin-fixture Alpha Y)
+$(migration_row paladin-fixture Omega Y)"
+write_migration_three_parts "${f_mig}" "${rows}" "" ""
+write_allowlist "${f_allow}" "$(allowlist_entry paladin-fixture Omega)
+$(allowlist_entry paladin-fixture Alpha)"
+assert_silent "${f_mig}" "${f_allow}" "allowlist entries in the reverse order of their §11.2 rows are still set-equal"
+
+# --- 12f. The REAL MIGRATION.md carries `## 11.3 ` after `## 11.2 ` (the
+#          window's terminator exists), both before the frozen `# 10.` part,
+#          and holds no data row between them (the open register is empty). ------
+ASSERTIONS=$((ASSERTIONS + 1))
+real_mig="${WORKSPACE_ROOT}/MIGRATION.md"
+l112="$(grep -n '^## 11\.2 ' "${real_mig}" | head -n1 | cut -d: -f1)"
+l113="$(grep -n '^## 11\.3 ' "${real_mig}" | head -n1 | cut -d: -f1)"
+l10="$(grep -n '^# 10\. ' "${real_mig}" | head -n1 | cut -d: -f1)"
+if [ -z "${l112}" ] || [ -z "${l113}" ] || [ -z "${l10}" ]; then
+    echo "FAIL: real MIGRATION.md is missing '## 11.2 ' (${l112:-none}), '## 11.3 ' (${l113:-none}) or '# 10. ' (${l10:-none})"
+    FAILED=$((FAILED + 1))
+elif ! { [ "${l112}" -lt "${l113}" ] && [ "${l113}" -lt "${l10}" ]; }; then
+    echo "FAIL: real MIGRATION.md order is wrong: '## 11.2 ' at ${l112}, '## 11.3 ' at ${l113}, '# 10. ' at ${l10}"
+    FAILED=$((FAILED + 1))
+else
+    window_rows="$(sed -n "$((l112 + 1)),$((l113 - 1))p" "${real_mig}" | { grep -c '^| `' || true; })"
+    if [ "${window_rows}" -ne 0 ]; then
+        echo "FAIL: real MIGRATION.md has ${window_rows} data row(s) between '## 11.2 ' and '## 11.3 ' (expected an empty register)"
+        FAILED=$((FAILED + 1))
+    else
+        echo "PASS (shape): real MIGRATION.md has '## 11.3 ' (line ${l113}) after '## 11.2 ' (line ${l112}), before '# 10.' (line ${l10}), with no data row between"
+    fi
+fi
+
+# --- 11. The REAL tree -> exit 0 with ZERO pairs on both sides (live evidence:
+#         the §11.2 register and the allowlist are both empty, and no
+#         crate-wide allow survives in any Cargo.toml). -----------------------
 ASSERTIONS=$((ASSERTIONS + 1))
 LAST_OUTPUT="$("${GUARD}" 2>&1)"
 LAST_STATUS=$?
@@ -328,17 +425,27 @@ if [ "${LAST_STATUS}" -ne 0 ]; then
     FAILED=$((FAILED + 1))
 else
     pair_count="$(grep -c ' | ' <<<"${LAST_OUTPUT}" || true)"
-    echo "PASS (silent): the real tree is set-equal (guard reported ${pair_count} pair line(s) across both lists)"
+    if [ "${pair_count}" -ne 0 ]; then
+        echo "FAIL: expected zero pair lines on both sides for the real tree, guard reported ${pair_count}:"
+        echo "${LAST_OUTPUT}" | sed 's/^/  | /'
+        FAILED=$((FAILED + 1))
+    else
+        echo "PASS (silent): the real tree is set-equal with zero pairs on both sides"
+    fi
 fi
 
-# --- The real tree must never be mutated by this test. ----------------------
+# --- The real tree must never be mutated by this test: the AFTER snapshot of
+#     the two register files must equal the BEFORE snapshot taken at the top. --
 ASSERTIONS=$((ASSERTIONS + 1))
-git_status="$(cd "${WORKSPACE_ROOT}" && git status --porcelain -- MIGRATION.md .cargo/semver-checks-allowlist.toml)"
-if [ -z "${git_status}" ]; then
-    echo "PASS (no mutation): git status --porcelain -- MIGRATION.md .cargo/semver-checks-allowlist.toml is empty"
+SNAPSHOT_AFTER="$(snapshot_real_tree)"
+if [ "${SNAPSHOT_BEFORE}" = "${SNAPSHOT_AFTER}" ]; then
+    echo "PASS (no mutation): the BEFORE and AFTER snapshots of MIGRATION.md and the allowlist are identical"
 else
-    echo "FAIL: MIGRATION.md or the allowlist was mutated by this test run:"
-    echo "${git_status}" | sed 's/^/  | /'
+    echo "FAIL: MIGRATION.md or the allowlist changed while this test ran:"
+    echo "  before:"
+    echo "${SNAPSHOT_BEFORE}" | sed 's/^/  | /'
+    echo "  after:"
+    echo "${SNAPSHOT_AFTER}" | sed 's/^/  | /'
     FAILED=$((FAILED + 1))
 fi
 

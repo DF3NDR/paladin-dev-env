@@ -98,6 +98,19 @@ planning documents proposed.
 No package named for a separate CLI binary exists in this workspace; no publish-order row exists
 for one.
 
+**Publish-order gate reading (accepted 2026-10-28, Phase 52, CIREL-09).** The publish order is
+enforced in two parts, and together they are the gate. First, `ci.yml`'s `Check publish order` step
+(`scripts/check-publish-order.sh`, in the required `License & Dependency Policy` job) runs on every
+push and pull request. Second, `release.yml`'s `publish-crates` job publishes in
+`scripts/publish-crates.sh`'s dependency-first `CRATES` order and depends on the
+`Pre-Publish Consistency Gate` (`check-release-consistency`), which requires the whole `ci.yml` run
+on the tagged merge commit to have concluded `success`; the CI publish-order check has therefore
+already passed on that exact commit before any crate is published. A separate publish-order step in
+`release.yml` would re-run the same offline check on the same commit, so none is added, and
+`release.yml` has no such step. The evidence pointer is the Phase 47 A-SC3 reading in
+`.planning/milestones/v0.11.0-phases/47-v0-11-0-crate-release/47-01-PLAN.md` and
+`47-08-SUMMARY.md`.
+
 **Packaging note:** the workspace-root `Cargo.toml` (`paladin-ai`'s package root, since the facade
 crate's manifest lives at the repository root) carries a `package.include` allowlist. Without it,
 `cargo package` bundles the entire repository tree — `docs/`, `.planning/`, `.claude/` and
@@ -128,7 +141,11 @@ half of the release is done by hand through a PR instead.
    `make release` does not automate this step, and `make release-check` fails without it.
 5. Run `make release-check` locally (format, lint, full tests, audit, release build) — it must
    pass end-to-end before opening the PR.
-6. Open a PR from the branch to `main`; merge once green.
+6. Open a PR from the branch to `main`, then apply the `release` label to it before requesting
+   review. Applying the label is a maintainer act; there is no auto-labeller. The label makes
+   `End-to-End Tests` run on the PR, so it reports before the irreversible merge; `Publish Dry Run`
+   and `Semver Checks (vs v0.11.0)` run on every PR with no label. Adding the label re-runs the whole
+   `ci.yml`, including the roughly 63-minute Docker build. Merge once every required check is green.
 7. Create an annotated tag `v<version>` on the merge commit and push it directly to `origin`. A
    branch push to `main` is blocked by the ruleset above, but tag creation carries a
    repository-admin bypass on the separate "Protect release tags" ruleset, so this step succeeds
@@ -203,6 +220,17 @@ string, because `scripts/finalize-crate-changelogs.sh` legitimately produces one
 prerelease; presence of the heading is the pass signal, not presence of content. The eleven per-crate
 changelogs that ship inside the published crates contribute nothing to the release body — they are
 a separate, per-package artifact, not release notes.
+
+**Size limit.** GitHub caps a release body at about 125,000 characters. `scripts/create-or-reuse-release.sh`
+hands the body to `jq` as a file (`--rawfile`, never argv), and `scripts/release-body-fit.sh`
+measures it in Unicode characters, not bytes. Above `PALADIN_RELEASE_BODY_LIMIT` (default `125000`)
+the body is cut at a line boundary to the limit minus `PALADIN_RELEASE_BODY_RESERVE` (default
+`5000`, room for the artifact sections appended later). An open code fence is closed. A footer
+behind the `<!-- paladin:release-truncated -->` sentinel points at `CHANGELOG.md` at the tag for the
+full text. The original and final sizes are logged, so a truncation is never silent.
+`scripts/finalize-release-body.sh` re-fits only the curated part if the composed body (curated text
+plus artifact sections) would exceed the limit, and fails by name rather than drop an artifact
+section. No manual condensation of the changelog section is needed.
 
 ### Artifact inventory
 

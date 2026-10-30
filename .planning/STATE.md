@@ -1,72 +1,60 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.11.0
-milestone_name: Crate Release
-current_phase: 47
-current_phase_name: v0.11.0 Crate Release
-status: completed
-stopped_at: "Phase 47 complete — v0.11.0 released and verified (47-UAT.md 2/2, 47-VERIFICATION.md passed); all 15 phases of milestone v0.11.0 complete; next: maintainer merges PR #60, then /gsd-audit-milestone v0.11.0 and /gsd-complete-milestone v0.11.0"
-last_updated: "2026-10-26T23:00:20.111Z"
-last_activity: 2026-10-26
-last_activity_desc: "Phase 47 verified and marked complete (47-UAT.md 2/2, 47-VERIFICATION.md passed); all 15 phases of milestone v0.11.0 complete, ready to close"
+milestone: v0.11.1
+milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
+current_phase: 52
+current_phase_name: ci-release-pipeline-repair
+status: verifying
+stopped_at: Completed 52-08-PLAN.md
+last_updated: "2026-10-29T23:20:29.247Z"
+last_activity: 2026-10-28
+last_activity_desc: Phase 52 execution started
 progress:
-  total_phases: 15
-  completed_phases: 15
-  total_plans: 174
-  completed_plans: 174
+  total_phases: 1
+  completed_phases: 1
+  total_plans: 8
+  completed_plans: 8
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-10-26 after Phase 47)
+See: .planning/PROJECT.md (updated 2026-10-27 at the v0.11.1 milestone open)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Milestone v0.11.0 close-out — the maintainer merges PR #60 (`chore/47-close`, documentation-only), then `/gsd-audit-milestone v0.11.0` and `/gsd-complete-milestone v0.11.0`
-2026-10-14 from the web3sec handoff and sequenced before Phases 46-47 (the first of a series of
-consumer-driven phases). Phase 50 (Provider Parity & Configuration-Driven Model Swap, added
-2026-10-14 from the second web3sec handoff, `50-HANDOFF-web3sec-parity.md`) follows it, then Phase 51
-(Adjustable Reasoning Effort, added 2026-10-14 from the third web3sec handoff,
-`51-HANDOFF-web3sec-reasoning-effort.md`, depends on Phase 50's PARITY-02..06), before Phase 46
-(Docs Currency & Hygiene) resumes.
-Phase 45 was resequenced ahead of, Phase 45 D-01). Milestone v0.11.0: 14 phases (38-51; Phase 51 added 2026-10-14 from the third web3sec
-handoff, `51-HANDOFF-web3sec-reasoning-effort.md`, sequenced after 50 and before 46-47; Phase 50 added 2026-10-14 from the second web3sec
-handoff, `50-HANDOFF-web3sec-parity.md`, sequenced after 49 and before 46-47; Phase 49 added 2026-10-14 from the web3sec
-handoff, `49-HANDOFF-web3sec.md`, sequenced before 46-47; Phase 48
-added 2026-10-12 after a code survey of the two senses of "node", sequenced before 46-47 because
-it is a public-API break the v0.11 migration guide and tag must carry), 60/60 requirements
-mapped (REASON-01..07, PARITY-01..08 and ADOPT-01..05 minted 2026-10-14); Phases 38-45 and 48 all sealed (Phase 48 sealed 2026-10-14: 9/9 plans, verification `passed`, UAT 3/3, security verified, Nyquist validated; Phase 40 verified 2026-09-30 once Phase 45's RustFS swap
-delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-10-12 when the
-operator signed off its four human UAT items). Source of truth:
-`.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
+**Current focus:** Phase 52 — ci-release-pipeline-repair
+(carried-gaps inventory, dogfood findings log, scoping notes): 7 phases (52-58), 53/53 requirements
+mapped. Next: Phase 52 (CI & Release Pipeline Repair). Decisions at open: OpenAI Responses API out,
+`${VAR}` auth keys refused at boot, research skipped.
 
-**Progress:** [████████████████████] 150/150 plans ([██████████] 100%) of the phases planned so far (38-45, 48-51);
-Phases 46 and 47 are not yet planned; Phase 49 closed 2026-10-14 (3/3 kept plans, 3 cancelled); Phase 50.1 sealed 2026-10-20;
-Phase 51 sealed 2026-10-23 (20/20 plans, verification `passed` 7/7, UAT 3/3, security 61/61 closed, ADR-0062); Phase 46 is next, then Phase 47.
-**Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
-(22-37.1), 231 plans, 574 tasks, 88/89 requirements (SHIP-05 superseded by SHIP-06), 1,678 commits
-(`495483ef..6a08c293`, 2026-09-01 → 2026-09-23). Archived to `milestones/v0.10.0-ROADMAP.md`,
-`v0.10.0-REQUIREMENTS.md`, `v0.10.0-MILESTONE-AUDIT.md` (status `tech_debt`, 0 gaps) and
-`v0.10.0-phases/`. Released as two tags: `v0.10.0` on merge commit `1d4a9724` (2026-09-18;
-published 3 of 12 crates, since yanked) and `v0.10.1` on merge commit `f7dae267` (2026-09-21; run
-`35659477719`, all 12 publishable crates on crates.io at `0.10.1`). Closeout type
-`override_closeout` — see *Deferred Items*. Full record: MILESTONES.md.
+**Previous milestone:** v0.11.0 "Treasurer Spend Governance" closed 2026-10-27 — 15 phases
+(38-51, with 50.1 inserted and 48-51 added mid-milestone from a code survey and three web3sec
+handoffs), 174 plans, 281 tasks, 63/66 requirements (ADOPT-01…03 superseded at source by the
+owner's 2026-10-14 scope cut), 34 days (2026-09-24 → 2026-10-27; 1,126 commits on the release
+PR #59 per GitHub, `df24689c` → `70657919` → `a49200da`). Archived to `milestones/v0.11.0-ROADMAP.md`,
+`v0.11.0-REQUIREMENTS.md`, `v0.11.0-MILESTONE-AUDIT.md` (status `tech_debt`, 0 gaps, 8/8 seams,
+8/8 flows, 15/15 Nyquist-compliant) and `v0.11.0-phases/`. Released on one tag: `v0.11.0` on
+merge commit `70657919` (2026-10-26; run `40396108246`, all 12 publishable crates on crates.io at
+`0.11.0` through Trusted Publishing; `Coverage` 92.74 %). Closeout type `override_closeout` — see
+*Deferred Items*. Full record: MILESTONES.md.
 
-**Prior:** v0.9.0 "Security Tooling" shipped 2026-09-01 (4 phases, 25 plans, 20/20 requirements,
-240 commits; tag `v0.9.0` on `0b5d4106`, all eleven crates at `0.9.0`); v0.8.0 shipped 2026-08-24
-(14 phases, 149 plans, 65/65); v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived
-under `milestones/`.
+**Prior:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 (19 phases, 231 plans,
+88/89 requirements, 1,678 commits; released as `v0.10.1` on `f7dae267` after the `v0.10.0` tag
+published 3 of 12 crates); v0.9.0 "Security Tooling" shipped 2026-09-01 (4 phases, 25 plans,
+20/20; tag `v0.9.0` on `0b5d4106`); v0.8.0 shipped 2026-08-24 (14 phases, 149 plans, 65/65);
+v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `milestones/`.
 
 ## Current Position
 
-Phase: 47 (v0.11.0 Crate Release) — COMPLETE (verified 2026-10-26)
-Plan: 10 of 10
-Status: ALL PHASES COMPLETE — milestone v0.11.0 ready to close; PR #60 (`chore/47-close`, documentation-only) is open for the maintainer to merge, then `/gsd-audit-milestone v0.11.0` and `/gsd-complete-milestone v0.11.0` are the maintainer's next commands
-Last activity: 2026-10-26 — Phase 47 verified and marked complete: `47-UAT.md` 2/2 passed (the maintainer's B-1 condensation read, and the `Coverage` job's `Lines: 167104/180183 = 92.74%` on the merge commit, read at the verify step through the GitHub job-logs API and recorded in `47-CI-EVIDENCE.md`, the acceptance audit and the completed todo); `47-VERIFICATION.md` `passed`; the api-coverage gate passed on `COVERAGE.md`'s no-external-API declaration; ROADMAP Phase 47 checkbox ticked, progress row 10/10 Complete; `.continue-here.md` removed. Observed and left for the maintainer: the Codecov upload step reports `success` while its CLI fails for want of a token. Next: merge PR #60, then `/gsd-audit-milestone v0.11.0` and `/gsd-complete-milestone v0.11.0`.
-Previous: 2026-10-26 — Plan 47-10 complete: 47-READY-TO-CLOSE.md written, chore/47-close pushed, docs-only PR #60 open (maintainer merges); phase verification and phase.complete 47 next
+Phase: 52 (ci-release-pipeline-repair) — EXECUTING
+Plan: 8 of 8
+Status: Phase complete — ready for verification
+Last activity: 2026-10-28 — Phase 52 execution started
+
+Progress: [██████████] 100% (0 of 7 phases)
 
 ## Performance Metrics
 
@@ -365,6 +353,14 @@ Previous: 2026-10-26 — Plan 47-10 complete: 47-READY-TO-CLOSE.md written, chor
 | Phase 47 P08 | 12m | 3 tasks | 5 files |
 | Phase 47 P09 | 5m | 2 tasks | 7 files |
 | Phase 47 P10 | 30m | 2 tasks | 5 files |
+| Phase 52 P01 | 40min | 2 tasks | 5 files |
+| Phase 52 P02 | 30min | 3 tasks | 5 files |
+| Phase 52 P03 | 51min | 3 tasks | 5 files |
+| Phase 52 P04 | 25min | 2 tasks | 2 files |
+| Phase 52 P05 | 14min | 2 tasks | 12 files |
+| Phase 52 P06 | 35min | 3 tasks | 7 files |
+| Phase 52 P07 | 70min | 3 tasks | 1 files |
+| Phase 52 P08 | about 19h wall clock (3 sessions) | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -670,29 +666,68 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: [Phase 47] 47-08: tag v0.11.0 (77a37c18) peels to merge commit 70657919 = PR #59 merge_commit_sha = origin/main, parents df24689c and SHA-A4; release.yml run 40396108246 green, publish job success; 12 of 12 crates at 0.11.0 unyanked with trustpub_data naming DF3NDR/paladin-dev-env; chore/47-close cut from the merge commit and not pushed
 - [Phase 47]: v0.11.0 released: tag `v0.11.0` on merge commit `70657919beadbd341a72be2d0107080017a803f0`, release run `40396108246`, 12/12 crates registry-verified at `0.11.0` (unyanked, sparse-index re-read 2026-10-26T20:53Z), Trusted Publishing — D-16: SHIP-07 was ticked on the live sparse-index table (12 of 12 derived crates at 0.11.0, yanked false, trustpub_data naming run 40396108246), not on the merge, the tag or the workflow log.
 - [Phase 47]: Phase 47 ends at ready-to-close: 47-READY-TO-CLOSE.md written, chore/47-close pushed and docs-only PR #60 opened on the maintainer's push ok; audit, milestone close and merge stay the maintainer's — D-17 and D-00l: the last plan ends at a hand-off; SC1-SC3 observed TRUE from evidence (SC3 under B1=a), the Coverage Lines figure and the B-1 read stated as open
+- [Phase ?]: 52-01: semver loop lives in tested scripts/check-semver.sh (zero-check tripwire); allowlist gate runs from required cargo-deny job; --release-type patch fixed by flag
+- [Phase ?]: Phase 52-02: release body travels file -> jq --rawfile -> stdin; one shared scripts/release-body-fit.sh (limit 125000, reserve 5000, code points) truncates at a line boundary with sentinel footer; empty limit var means default
+- [Phase 52]: 52-03: the 20 OSV-Scanner advisory alerts are out of the CodeQL register's scope (17 governed by SECURITY-EXCEPTIONS.md, 3 ungoverned left open for the maintainer)
+- [Phase 52]: 52-03: 31 new CODEQL-DISMISSALS rows merged in ascending alert_number order between existing blocks; no alert fixed; platform dismissal commands handed over as H-04
+- [Phase ?]: 52-04: finalize size guard re-fits only the curated section to limit minus the artifact part via the shared release-body-fit.sh; artifact sections never altered
+- [Phase ?]: Phase 52-05: all six crate-wide semver allow tables (28 lines) removed after measuring 12/12 packages at 223 checks pass vs 0.11.0 (--release-type patch); MIGRATION.md section 11 opened with an empty X-10 register and the allowlist gate reads only 11.2 to 11.3
+- [Phase ?]: 52-06: Publish Dry Run runs on every PR; End-to-End Tests runs on main pushes and release-labelled PRs (labeled activity type); committed ruleset record is 46 contexts, live PUT is maintainer handover H-01 (PD-06-1 awaiting user confirmation)
+- [Phase 52]: 52-07: semver red proof via leaf-crate cron_field_count pub->pub(crate); local RED-PROVEN (222 pass/1 fail, function_missing); CI red job capture and remote scratch-branch delete handed over as H-03 (gh pr create refused, GraphQL 403)
+- [Phase ?]: 52-08: PD-06-1 confirmed by the maintainer; Semver Checks (vs v0.11.0) is a required check, live ruleset 20868126 carries 46 contexts equal to the committed record
+- [Phase ?]: 52-08: H-06 local make coverage deferred to the maintainer (Docker-capable machine); todo stays pending, resolves_phase 56, no coverage gate changed
 
 ### Pending Todos
 
-One of the two todos acknowledged as deferred at the v0.10.0 close (see *Deferred Items*) remains:
+Four pending todos were acknowledged as deferred at the v0.11.0 close (see *Deferred Items*):
 
 - `todos/pending/2026-08-13-verify-local-coverage-reproduction.md` — user-owned; walk the
   documented `make services-up` → `make coverage` procedure on a Docker-capable machine (now
-  against the RustFS dev stack) and confirm it reproduces the CI figure (now 90.44 %, not the
-  82.39 % the todo quotes). `recheck_by: 2026-10-16`. Re-acknowledged as a follow-up at Phase 45
-  UAT test 5.
+  against the RustFS dev stack) and confirm it reproduces the CI figure (now 92.74 % on the
+  v0.11.0 merge commit, not the 82.39 % the todo quotes). `recheck_by: 2026-10-16` has passed;
+  carried since the v0.8.0 close.
 
-- ~~`todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md`~~ — **closed by Phase 45**
-  (plan 45-06, ADR-0055): RustFS `1.0.0` is the dev/test and reference object store everywhere the
-  MinIO pin was; moved to `todos/completed/`.
+- `todos/pending/2026-10-13-review-content-data-orchestration-base-items.md` — review the
+  unfinished content / general data orchestration system before removing any of the five base
+  items Phase 48 retained (ENTITY-04, D-05, ADR-0060).
+
+- `todos/pending/2026-10-14-web3sec-single-bump-to-v0-11-0.md` — web3sec moves once, straight to
+  `v0.11.0`, with `MIGRATION.md` section 10 / §9.8 and `47-HANDOFF-web3sec.md` as the spec; stays
+  pending until the consumer reports back (Phase 49 D-15). Owner: repo maintainer (relay).
+
+- `todos/pending/2026-10-20-openai-responses-api-for-pro-tier.md` — add OpenAI Responses API
+  support so `gpt-5.5-pro` and siblings are usable (Phase 50.1 seed probe finding).
 
 ### Blockers/Concerns
 
-**No blockers at the v0.10.0 close (2026-09-23).** All 19 phases `passed`; `WINDOWS.md`
-`open_count: 0`; audit `tech_debt` with 0 gaps. The per-phase close notes this section carried for
-Phases 23-33 are resolved and archived with their phases (`milestones/v0.10.0-phases/`); the
-five-run ingest concern register (run 5's eight verified-open findings and the runs 1-4
-carry-forward) was disposed by Phases 5-16 and is preserved in this file's git history at commit
-`6a08c293`. Open concerns carried into the next milestone:
+**v0.11.1 roadmap-time findings (2026-10-27, measured against the tree while drafting the roadmap):**
+
+- **Phase 53, verify first:** Phase 40's `40-REVIEW-FIX.md` already records WR-01…WR-04 (TENANT-04, -05, -06) as fixed
+  (`ensure_thread_visible` in `submission.rs`, tenant check inside `RunSubmissionService::cancel`, a fixed run-store
+  error message in `run_controller.rs`); the carried-gaps inventory lists them open. Plans prove-then-lock those three.
+
+- **Phase 53, decision point:** if the thread-tenant fix (or any security change) forces a persisted or public-surface
+  break, the milestone becomes `v0.12.0`; record the decision before Phase 58 opens.
+
+- **Phase 55, FIXES-01 premise:** `content_filtering_service.rs` is commented out of `services/mod.rs` and is not valid
+  Rust, so its `todo!()` is unreachable; the reachable stubs are twenty `todo!()` bodies in the SQLite and MySQL
+  `ContentListRepository` impls in `paladin-storage`.
+
+- **Phase 55, FIXES-04:** `paladin-eval`'s `RunStatusValue` is not `#[non_exhaustive]`, so adding `Cancelled` trips the
+  patch-level semver gate Phase 52 arms; settle shape-or-break at discuss-phase.
+
+- **Phase 56 depends on external inputs** (the maintainer's runs, the web3sec return, a Docker-capable machine for
+  DOGF-05) that the roadmap cannot schedule; an unreturned DOGF-02 is held or re-homed with an owner and date.
+
+- **Phase 57:** `open_count: 0` also needs rows 64-66 (accepted ADR-0057 contracts) and 77 (Grok deferral) waived with a
+  reason or re-homed; no requirement names them beyond REG-02's closing clause.
+
+**No blockers at the v0.11.0 close (2026-10-27).** All 15 phases `passed`; audit `tech_debt`
+with 0 gaps, 8/8 seams, 8/8 flows; `WINDOWS.md` `open_count: 13` (the rows are dispositioned as
+accepted debt with owners in `milestones/v0.11.0-MILESTONE-AUDIT.md`, not closed). The per-phase
+close notes this section carried for Phases 38-51 are archived with their phases
+(`milestones/v0.11.0-phases/`); the v0.10.0 close note is preserved in this file's git history at
+`a49200da`. Open concerns carried into the next milestone:
 
 - **Coverage is CI-attributed, not locally measurable** — this devcontainer has no Docker; the
   82 % floor (ADR-0006) is read from the CI `coverage` job (90.44 % at PR #56; 92.74 % on the
@@ -740,11 +775,26 @@ carry-forward) was disposed by Phases 5-16 and is preserved in this file's git h
   gap is listed in each file's `## Gaps`. **Still open:** archived phases 05-21 likewise
   unreconciled. `/gsd-validate-phase <N>` each; coverage TODO, not a compliance failure.
 
-- **Open WINDOWS rows at Phase 46 close:** 13 (ids 56, 58, 62, 63, 64, 65, 66, 67, 68, 69, 73, 77,
-  79, per `windows status`) -- none are Phase 46's; `/gsd-ship` blocks while `open_count > 0`, so
-  Phase 47 dispositions them or records an override. **Phase 47 recorded them as not its own**
-  (`47-CI-EVIDENCE.md`, 2026-10-25) and released through PR #59 without `/gsd-ship`; they carry
-  into the v0.11.0 milestone audit undispositioned.
+- **Open WINDOWS rows at the v0.11.0 close:** 13 (ids 56, 58, 62-69, 73, 77, 79, per `windows
+  status`) — Phase 47 recorded them as not its own (`47-CI-EVIDENCE.md`, 2026-10-25) and released
+  through PR #59 without `/gsd-ship`; the milestone audit inventoried every one under `tech_debt`
+  with an owner. `/gsd-ship` blocks while `open_count > 0`, so the next milestone's first shipping
+  phase either dispositions them or records an override. The audit's two integration warnings ride
+  with them: G1 (no aggregate HTTP spend route; LEDGR-04 is per-run over HTTP) and G2 (nothing
+  asserts the engine-factory wiring that attaches settlement, spend guard and cancel probe).
+
+- **Phase 47 carried findings** (`47-CI-EVIDENCE.md` D-00d, `47-REVIEW.md`): the
+  `paladin-memory` / `paladin-content` crate changelogs say "No functional change" for 0.11.0
+  although the persisted-key change (`paladin.node` → `paladin.data`) is one-way — fix in the next
+  patch release's changelog, the published crates are immutable; the release-body builder still
+  fails above 131,072 bytes (B-1 root cause); re-pin the cargo-semver-checks baseline 0.9.0 →
+  0.11.0 and add `paladin-eval`; wire `check-migration-allowlist` into `ci.yml`; run Publish Dry
+  Run and End-to-End Tests on PRs; stale `v0.10.0` labels in `k8s/server/worker-deployment.yaml`;
+  stale "ten crates" comments; 24 advisory CodeQL alerts on the PR heads, untriaged.
+
+- **Three RustSec advisories carried as exceptions** (RUSTSEC-2026-0367/0368/0369, `zip 3.0.0`
+  via the `utoipa-swagger-ui 9.0.2` build-dependency) in `SECURITY-EXCEPTIONS.md`, review date
+  2026-12-31 — an exception, not a fix.
 
 - **Bookkeeping drift in the corpus acceptance audit** — the seven §11 judgment-tier sign-off boxes
   and the `v0.10.0` tag box in `.project/v0.10.0/09-program-acceptance-audit.md` are still `- [ ]`
@@ -796,8 +846,35 @@ carry-forward) was disposed by Phases 5-16 and is preserved in this file's git h
 - Phase 50 added: Provider Parity & Configuration-Driven Model Swap — any agent movable between the nine LLM providers by config only, or an early build error naming provider/model/parameter: OpenAI empty-user-message defect fixed first, parameter support per provider and per model (ADR amending 0004), config-driven provider construction as a library API with all nine adapter/config pairs on the facade, dated per-model profile registry feeding Commissary, response/error parity (empty output, typed refusal, usage cap, cache-write, reasoning text, stop sequences), per-step fallback models, nine-adapter conformance + live smoke + mdBook "Switching providers" page (PARITY-01..08 minted, from the second web3sec handoff filed as 50-HANDOFF-web3sec-parity.md; D-1..D-4 settled at discuss); **sequenced after Phase 49 and before Phases 46-47** (owner decision 2026-10-14)
 - Phase 51 added: Adjustable Reasoning Effort — a provider-neutral `ReasoningEffort` on `LlmRequest`, `PaladinData`, the YAML agent definition and `llm.<provider>` config (request → agent → provider → vendor default), translated exactly to each vendor's native wire form or refused before the HTTP call with `LlmError::UnsupportedParameter`; compile-enforced `ReasoningWire` per compat preset, model-aware mapping in the native adapters, levels from Phase 50's model-profile registry, Kimi silent-no-op regression test, requested/effective effort on the response and trace stream, `Budget(n)` bounds, live per-vendor invalid-effort probes, ADR amending 0004, mdBook "Reasoning effort" page (REASON-01..07 minted, fortieth prefix; source `51-HANDOFF-web3sec-reasoning-effort.md`; runs after 50, before 46-47; ships in v0.11.0)
 - Phase 50.1 inserted after Phase 50: Consumer-Surface Readiness for v0.11.0 — the Aegis family (`Aegis`, `ErrorHandlerSpec`, `TimeoutPolicy`, `StateDelta`, `NodeError`, `NodeErrorSource`, `TimeoutKind`, `NodeId`, `Transience`) on the facade so §9.8 DR-1/2/8/9 compile without `paladin-ai-core`; one `*Config::new(..)` shape plus `with_timeout_seconds` / `with_base_url` on the shared knob builders as a registered clean break (resolves the 2026-10-16 harmonisation todo by owner decision 2026-10-18); the consumer-surface muster extended to handoff Appendix B with a red proof; four MIGRATION §9.8 gaps (pre-`v0.10.0` P31/P32/P33 pointers, lost in-adapter 429 retry + Cadence recipe, decorator `model_profile` forwarding, adapter-wide context window following the seeded default); a facade pacing-only path; `claude-opus-4-8` / `deepseek-v4-pro` seeds under the seed rule (D-E: listing-only evidence conflicts with `seeded.rs`'s measured-end-to-end rule — probe re-run, listing tier, or decline). SURFACE-01..06 minted, forty-first prefix; source `50.1-HANDOFF-web3sec-consumer-surface.md`; runs after 50, before 51, because 51 extends the same nine `*Config` types (owner decision 2026-10-18, filed 2026-10-19)
+- Milestone v0.11.0 closed 2026-10-27: Phases 38-51 archived to `milestones/v0.11.0-*`; ROADMAP.md collapsed; next phases start at 52
+- Milestone v0.11.1 "Dogfood Cleanup" roadmap created 2026-10-27: Phases 52-58 — CI & Release Pipeline Repair (52), Tenant Isolation Closure (53), First-Run Usability (54), Correctness Fixes / Test Hygiene / Lint Bar (55), Dogfood Findings (56, scope filled from the findings log), Register Hygiene Close-Out (57), Crate Release (58); 53 requirements mapped (CIREL-08 placed in 55 beside TESTS-03/04); integer phases only, no insertions yet
 
 ## Deferred Items
+
+### Acknowledged at v0.11.0 milestone close (2026-10-27)
+
+**Verification overrides: 0** — all 15 phases (38-51) report `phase_complete: true` and
+`verification_status: passed` (`init.manager` `all_phases_verified: true`); 174/174 plans carry a
+SUMMARY. **Requirement gaps acknowledged: 3** — ADOPT-01…03 superseded by the owner's 2026-10-14
+scope cut, deliberately unticked (MILESTONES.md *Known Gaps*). **Open artifacts acknowledged: 9**
+at the pre-close `audit-open` run: three `debug/` sessions, two UAT rows and four pending todos.
+Closeout type `override_closeout`, on the strength of those artifacts rather than any unverified
+phase.
+
+| Category | Item | Status | Deferred At |
+|----------|------|--------|-------------|
+| debug | `kimi-fallback-profile-stale` | `diagnosed` (root cause found; session scoped `find_root_cause_only`). **Fixed by Phase 50 plan 50-20** — unseeded Kimi ids now send no temperature/top_p/penalties; WINDOWS row 76 `fixed`. The session file is left at `diagnosed` as the record of the investigation; move to `debug/resolved/` when convenient | Phase 50 UAT (2026-10-17); acknowledged v0.11.0 close |
+| debug | `openai-max-completion-tokens` | `diagnosed`. **Fixed by plan 50-19** — the OpenAI adapter sends `max_completion_tokens` on every chat and vision body; WINDOWS row 75 `fixed` | Phase 50 UAT (2026-10-17); acknowledged v0.11.0 close |
+| debug | `vendor-token-usage-fidelity` | `diagnosed`. **Fixed by plans 50-21..50-23** — every compat preset, OpenAI, DeepSeek and Gemini parse the vendor's own total on both paths and record a disagreement under `paladin.usage_unreconciled`; the Grok reasoning undercount is priced as xAI bills it; WINDOWS row 74 `fixed`. Remainder (c) — Grok's `cost_in_usd_ticks` / `num_sources_used` unparsed — is row 77, open | Phase 50 UAT (2026-10-17); acknowledged v0.11.0 close |
+| uat | Phase 41 `41-UAT-RUNBOOK.md` reads `[unknown]` to the audit tool | Not a gap: the runbook is the operator walkthrough script, not a UAT record; `41-UAT.md` is complete 4/4 (operator sign-off 2026-10-12) | Acknowledged v0.11.0 close |
+| uat | Phase 42 `42-UAT.md` `[passed]`, 0 pending | Not a gap: listed by the tool because its status token is `passed` rather than `complete`; 42-VERIFICATION `passed` under the operator's accepted ALLOW-03 override of 2026-10-07 | Acknowledged v0.11.0 close |
+| todo | `2026-08-13-verify-local-coverage-reproduction` | Open — owner: repo maintainer. Walk `make services-up` → `make coverage` on a Docker-capable machine (RustFS stack) and confirm the CI figure reproduces (92.74 % on `70657919`). `recheck_by: 2026-10-16` passed unactioned | v0.8.0 close; re-acknowledged v0.9.0, v0.10.0 and v0.11.0 |
+| todo | `2026-10-13-review-content-data-orchestration-base-items` | Open — owner: repo maintainer. Review the unfinished content / data orchestration system before removing any of the five base items Phase 48 retained (ENTITY-04, D-05, ADR-0060) | Phase 48 (2026-10-13); acknowledged v0.11.0 close |
+| todo | `2026-10-14-web3sec-single-bump-to-v0-11-0` | Open — owner: repo maintainer (relay to web3sec). The consumer's single move to `v0.11.0` against `MIGRATION.md` section 10 / §9.8 and `47-HANDOFF-web3sec.md`; supersedes ADOPT-01…03 (Phase 49 D-15). Stays pending until web3sec reports back | Phase 49 scope cut (2026-10-14); acknowledged v0.11.0 close |
+| todo | `2026-10-20-openai-responses-api-for-pro-tier` | Open — owner: repo maintainer. OpenAI Responses API support so the pro tier (`gpt-5.5-pro` and siblings) is usable; a candidate requirement for the next milestone | Phase 50.1 seed probe (2026-10-20); acknowledged v0.11.0 close |
+| requirement | ADOPT-01…03 | Superseded by the owner's 2026-10-14 scope cut; amend-at-source note in `milestones/v0.11.0-REQUIREMENTS.md`, traceability rows `Superseded (scope cut 2026-10-14)` | Phase 49 (2026-10-14) |
+| debt | Audit `tech_debt` register (13 open WINDOWS rows; G1/G2; the Phase 47 carried findings; the Codecov silent failure; REASON-06 override-only / `Unmeasured` policies; the three `zip` RustSec exceptions; five SUMMARY-frontmatter hygiene omissions; the SSRF resolve-then-connect limitation) | Inventoried with owners in `milestones/v0.11.0-MILESTONE-AUDIT.md`, not duplicated here | v0.11.0 close |
+| testing | Nyquist validation unreconciled for archived Phases 05-21 | Still open (coverage TODO, not a compliance failure); Phases 22-37.1 were reconciled by Phase 46 and Phases 38-51 by the 2026-10-27 `/gsd-validate-phase` sweep | v0.10.0 close; re-acknowledged v0.11.0 |
 
 ### Acknowledged at v0.10.0 milestone close (2026-09-23)
 
@@ -909,115 +986,36 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-10-26
-Stopped at: Phase 47 complete and verified; milestone v0.11.0 ready to close (PR #60 open)
+Last session: 2026-10-29T23:20:29.216Z
+Stopped at: Completed 52-08-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
 
-- **Phase 41 (Admission-Time Allowance Enforcement) is sealed 2026-10-12:** `41-VERIFICATION.md`
-  (2026-10-04, 3/3 success criteria, 54/57 truths, 0 failed) now reads `passed`; `41-UAT.md`
-  complete (4/4 — the operator walkthrough observed 2026-10-05, the CI-only coverage and Postgres
-  gates on run 37363204486 at `bc9cdf00`, the ADR-0056 over-admission race acceptance and the two
-  backstop truths were all signed off by the operator on 2026-10-12). ROADMAP row 41 reads 9/9
-  Complete; ALLOW-01/02/04 were already ticked. With this, every phase 38-45 is sealed.
+- **Milestone v0.11.1 roadmap is drafted (2026-10-27):** `.planning/ROADMAP.md` (Phases 52-58) and the
+  `REQUIREMENTS.md` traceability table are written and uncommitted. After approval, start with
+  `/gsd-discuss-phase 52` (or `/gsd-plan-phase 52`). Phase 56 stays a frame until the findings log has content;
+  append maintainer-run and web3sec findings to `.project/v0.11.1/02-dogfood-findings-log.md` as they arrive.
 
-- **Phase 44 (Legacy Clean-Break Removal) is sealed 2026-10-12:** `44-VERIFICATION.md` passed (2026-10-11),
-  `44-UAT.md` complete (15/15 — source-tree guard, per-attempt Aegis bounds on Campaign/Formation/Phalanx,
-  validate_aegis at entry, Phalanx review fixes, structured node_errors and herald lines, transience-only
-  breaker/Conclave, Commander defaults, CLI, examples, mdBook pages, v0.10 config loading, ADR/MIGRATION/
-  allowlist/CHANGELOG records, full gate), `44-SECURITY.md` verified (threats_open 0), `44-VALIDATION.md`
-  validated. UAT surfaced one issue outside the phase: the `pre-commit` workflow had been red on every
-  push since Phase 43 planning (end-of-file-fixer on three 43-*-PLAN.md files); fixed in `1e93e1ce`,
-  green on run 38193792540. Queued follow-ups stay in `.planning/todos/pending/2026-10-11-*`.
+- **Milestone v0.11.0 is closed (2026-10-27).** Archive: `milestones/v0.11.0-ROADMAP.md`,
+  `v0.11.0-REQUIREMENTS.md`, `v0.11.0-MILESTONE-AUDIT.md`, `v0.11.0-phases/`; record:
+  `MILESTONES.md`; retrospective: `RETROSPECTIVE.md`. `REQUIREMENTS.md` is removed — the next
+  milestone mints a fresh one. The close landed on `claude/laughing-dirac-e0h2ax`; merge it to
+  `main` through a documentation-only PR like `chore/47-close` (PR #60).
 
-- **Phase 48 (Base Entity Rename) added 2026-10-12 and sequenced before Phases 46-47:** the
-  base-layer wrapper `base::entity::node::Node<T>` becomes `Entity<T>` (payload `node` → `data`,
-  serde alias for persisted JSON), the dormant base items are dispositioned, and "node" is
-  reserved for the graph sense (`NodeId`, `NodeSpec`, `StateNode`, …, untouched). ENTITY-01..05
-  minted. `48-CONTEXT.md` is a **draft** from the code survey, re-verified on the post-Phase-44
-  tree, with recommended decisions D-01..D-07 and four open questions — the main one being
-  **clean break (the X-03 supersession pattern of Phases 31-33 and 44, ADR-0060) vs a
-  one-release `#[deprecated]` alias (X-03 as written, which would make MIGRATION §9.7 non-empty
-  for the first time)** — plus name, which base items to keep, and own PR or not.
+- **Start the next milestone:** `/clear` then `/gsd-new-milestone` (questioning → research →
+  requirements → roadmap). New phases start at **Phase 52**. Candidate inputs already on file: the
+  four pending todos above (the OpenAI Responses API for the pro tier; the base-item review behind
+  ENTITY-04); the audit's G1 (an aggregate HTTP spend route, LEDGR-04's HTTP half) and G2 (assert
+  the engine-factory Treasurer wiring); the untenanted `/v1/threads/*` routes (row 58); the
+  tracing-overhead bar (rows 35/61, still not met); the Phase 47 carried release-process findings
+  (semver baseline re-pin to 0.11.0 plus `paladin-eval`, `check-migration-allowlist` in `ci.yml`,
+  the release-body builder's 131,072-byte cap, stale `k8s/` labels); the Codecov token decision;
+  the `zip` RustSec exceptions due for review 2026-12-31; and the `v0.11.0-MILESTONE-AUDIT.md`
+  `tech_debt` register, which the audit itself recommends reviewing before the next roadmap.
 
-- **Phase 48 (Base Entity Rename) is sealed 2026-10-14:** `48-VERIFICATION.md` passed (5/5 success
-  criteria; its three human items — Docker Integration Tests / Coverage / pre-commit green after the
-  2ad9fa6 guard fix, `make security` and the Security Audit / License & Dependency Policy jobs, and the
-  82 % coverage floor — were closed by `48-UAT.md` 3/3 from GitHub Actions evidence on run
-  38585690891 at 2388fc13 plus a local `make security` pass on e3075023), `48-SECURITY.md` verified
-  (threats_open 0), `48-VALIDATION.md` validated, code review 10/10 findings fixed. Two dependency
-  advisories published mid-phase were cleared in Cargo.lock (quinn-proto 0.11.19 in 1ff46a35, rustls
-  0.23.46 in 9b5fa65d); unsafe-libyaml's unmaintained advisory is register row 12 (12c6a5fa).
-  ROADMAP row 48 reads 9/9 Complete; ENTITY-01..05 Complete.
-
-- **Phase 50.1 (Consumer-Surface Readiness for v0.11.0) inserted 2026-10-19 after Phase 50, before
-  Phase 51:** the fourth web3sec handoff (dated 2026-10-18, pre-measured bump against `21426037`:
-  112 errors / 3 crates, all on registered rows, suite back at 2,592 / 0 / 2; 147 at the sealed
-  `a1128fc1` with DR-17's 35; the author re-verified every claim there, zero drift) is filed verbatim as
-  `phases/50.1-consumer-surface-readiness/50.1-HANDOFF-web3sec-consumer-surface.md`; SURFACE-01..06
-  minted; ROADMAP carries the phase with a verified ground-truth block (five of the six asks hold
-  exactly as written on `a1128fc1`; SURFACE-06 as asked conflicts with the `registry/seeded.rs`
-  "measured end to end" rule, raised as **D-E**). Open decisions for discuss: **D-A** whole modules
-  or selected items on the facade; **D-B** `new(api_key, model)` + builders (web3sec's and the
-  todo's preference) or a shared builder; **D-C** a dedicated CI step for the muster (it is already
-  compiled by `make check`/`lint` and CI's all-targets steps); **D-D** SURFACE-05/06 in-phase or
-  deferred; **D-E** seed via probe re-run on the operator's keys, a listing-only tier, or decline
-  with a `model_overrides` recipe. Phase 51's "Depends on" now names 50.1.
-
-- **Phase 50.1 (Consumer-Surface Readiness for v0.11.0) is sealed 2026-10-20:**
-  `50.1-VERIFICATION.md` passed (6/6), `50.1-UAT.md` complete (1/1 — owner chose fix-before-tag for
-  review findings WR-01..03; the fixes had landed as `9d0eaa3d`, `ec3fdc92`, `5ebd315b`, with WR-04
-  in `c5bdea75`), `50.1-SECURITY.md` verified (30/30 closed, threats_open 0). WR-03 changed
-  behaviour (seven adapters now refuse a `base_url` that only begins with `http`), so at the
-  owner's request it is recorded in root and `paladin-llm` CHANGELOG *Changed* and a MIGRATION §9.8
-  bullet (`aa48314d`) before the seal. ROADMAP row 50.1 reads 9/9 Complete; SURFACE-01..06
-  Complete. web3sec can now adapt to the 50.1 surface and report back before Phase 46 freezes the
-  guide.
-
-- **Next:** `/clear` then `/gsd-discuss-phase 51` (no `51-CONTEXT.md` yet; the third web3sec
-  handoff is filed as `51-HANDOFF-web3sec-reasoning-effort.md`), or `/gsd-plan-phase 51`.
-
-- *(done 2026-10-20)* `/gsd-execute-phase 50.1` — 9 plans in 7 waves; three owner checkpoints
-  along the way (50.1-02 the one-way D-05 constructor door, 50.1-06 the D-07 `max_tokens` source,
-  50.1-07 the probe run on the operator's keys with the D-16 candidate table). Research corrected
-  two CONTEXT premises (C1: `config.model` is not read by the adapters' window chain, so OpenAI's
-  `declared_capabilities` is not rewired; C2: "P31/P32/P33" are Phase 31/32/33 §9.2 rows, cited
-  by type). Phase 51 follows and plans against the harmonised `*Config::new` shape.
-
-- *(done 2026-10-19)* `/gsd-discuss-phase 50.1` and `/gsd-plan-phase 50.1`.
-
-- *(superseded 2026-10-19 by the Phase 50.1 insertion)* **Next:** `/clear` then `/gsd-discuss-phase 46` (no `46-CONTEXT.md` yet) or `/gsd-plan-phase 46`.
-  Phase 46's migration guide (CURR-23) must carry Phase 48's `MIGRATION.md` §9.2 rows; Phase 47
-  follows.
-
-- **Phase 45 (RustFS Swap & Platform/Observability Deviations) is sealed 2026-09-30:**
-  `45-VERIFICATION.md` passed, `45-UAT.md` complete (5/5: CI run 36751442387 green with the 11-case
-  contract suite and the k8s RustFS pod Ready, actionlint green, docs page confirmed, OBS-05 figure
-  accepted with WINDOWS.md row 61 waived, follow-ups acknowledged), `45-SECURITY.md` verified (31
-  threats closed, 0 open), ROADMAP/REQUIREMENTS ticked (STORE-01..03, PLAT-08, OBS-05). All artifacts
-  pushed on `claude/laughing-dirac-e0h2ax`; open a PR to `main` when convenient — that PR is also
-  where `docs.yml` (Build MDBook) first runs for the retitled storage page.
-
-- **Phase 40 (Tenant Identity & Run-Read Scoping) is sealed 2026-09-30:** `40-VERIFICATION.md`
-  passed, `40-UAT.md` complete (5/5 — WR-01 scope decision, backstop truth, judgment-tier
-  prohibitions and the credential-handling review, CI-only evidence on ci.yml run 36770517439 with
-  the Postgres contract suites, coverage floor and `e2e_platform_api` green, WR-02..04 disposition),
-  `40-SECURITY.md` verified (26 threats closed: 22 mitigated, 3 accepted, T-40-23 transferred to
-  WINDOWS.md row 58). ROADMAP row 40 reads 6/6 Complete. `/v1/threads/*` scoping stays open as
-  row 58 (owner Phase 41 planning if allowance enforcement needs thread ownership, else a v0.11
-  hygiene phase).
-
-- *(superseded)* Phases 41-44 ran before 46 and 47 (Phase 45 D-01 resequencing); Phase 41 planning owned
-  WINDOWS.md row 58's disposition.
-
-- **Phase 39 (Spend Ledger) sealed 2026-09-28** (verification passed, UAT 49/49, VALIDATION and
-  SECURITY verified); **Phase 38 sealed 2026-09-26.**
-
-- **Still manual:** operator UAT of a real multi-model engine run (`paladin-cli treasury spend --group-by model`
-  against a priced `treasurer:` table) — optional, not required for compliance.
-
-- **Housekeeping, no milestone needed:** tick or annotate the seven §11 sign-off boxes and the `v0.10.0` tag box in
-  `.project/v0.10.0/09-program-acceptance-audit.md`; `/gsd-validate-phase` 22, 24, 28, 29, 30, 34, 36, 36.1 (advisory).
-
-- **Recheck by 2026-10-16:** the two pending todos (`todos/pending/`).
+- **Maintainer-only items observed at the close, unchanged:** the Codecov upload step reports
+  `success` while its CLI fails for want of a token (supply `CODECOV_TOKEN` and set
+  `fail_ci_if_error`, or drop the step); the seven §11 sign-off boxes in
+  `.project/v0.10.0/09-program-acceptance-audit.md` are still `- [ ]` on disk; web3sec's single
+  bump to `v0.11.0` is the consumer's own next step.

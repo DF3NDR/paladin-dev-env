@@ -150,7 +150,13 @@
             "context": "OSV Scanner"
           },
           {
+            "context": "Publish Dry Run"
+          },
+          {
             "context": "Security Audit"
+          },
+          {
+            "context": "Semver Checks (vs v0.11.0)"
           },
           {
             "context": "Unit Tests (beta)"

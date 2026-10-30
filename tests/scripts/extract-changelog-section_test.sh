@@ -229,15 +229,12 @@ else
 fi
 
 ASSERTIONS=$((ASSERTIONS + 1))
-# create-or-reuse-release.sh's own _cor_build_payload reads the body file via
-# `body_text="$(cat "${body_file}")"` -- ordinary bash command substitution,
-# which strips all trailing newlines before the value ever reaches jq. That
-# stripping is this script's pre-existing, unmodified contract (this plan
-# does not touch create-or-reuse-release.sh), so the byte-for-byte
-# comparison below reads the expected side the identical way rather than
-# from the raw file, so it reflects what actually reaches the payload.
-EXPECTED_BODY_TEXT="$(cat "${BODY_FILE}")"
-EXPECTED_BODY_JSON="$(printf '%s' "${EXPECTED_BODY_TEXT}" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')"
+# create-or-reuse-release.sh's _cor_build_payload hands the body file to jq
+# with `--rawfile` (plan 52-02, D-09), so the file's bytes reach the payload
+# unchanged, trailing newlines included. (It used to read the file through
+# `$(cat ...)`, which stripped trailing newlines; the byte-for-byte
+# comparison below therefore reads the expected side from the raw file.)
+EXPECTED_BODY_JSON="$(python3 -c 'import json,sys; print(json.dumps(open(sys.argv[1], encoding="utf-8", newline="").read()))' "${BODY_FILE}")"
 ACTUAL_BODY_JSON="$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1], encoding="utf-8"))["body"]))' "${E2E_DIR}/captured_payload" 2>/dev/null)"
 if [ -n "${ACTUAL_BODY_JSON}" ] && [ "${EXPECTED_BODY_JSON}" = "${ACTUAL_BODY_JSON}" ]; then
     echo "PASS: captured create payload's .body equals the extracted file byte-for-byte"

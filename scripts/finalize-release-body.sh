@@ -72,6 +72,26 @@
 # uses to stub the GitHub API, so this script's own harness never touches
 # the network either.
 #
+# Size guard (CIREL-05, D-11): GitHub rejects a release body longer than
+# 125,000 characters, and the curated section `create-or-reuse-release.sh`
+# publishes can already sit near that cap before the artifact sections below
+# are appended. After composing, `_frb_fit_composed_body` measures the body
+# against PALADIN_RELEASE_BODY_LIMIT (default 125000, positive integer; the
+# same variable and the same one implementation, scripts/release-body-fit.sh,
+# the create step uses) and, only when it is over, re-fits JUST the curated
+# section to limit minus the artifact part, then recomposes. The artifact
+# sections are never shortened, dropped or reordered, and a body within the
+# limit is left byte-for-byte as composed (nothing logged). The cut is logged
+# by size (`release-body-fit: original N chars, ...`) and leaves a sentinel
+# footer in the body; the helper strips an existing footer before re-fitting,
+# so any number of re-runs publishes the same bytes with the footer once. If
+# the artifact sections alone leave no room for the footer plus one curated
+# character, the script fails by name (`the release artifact sections alone
+# need N chars; limit L leaves no room for the curated notes`) rather than
+# publish an over-limit body; an invalid PALADIN_RELEASE_BODY_LIMIT and a
+# missing release-body-fit.sh are named failures too. `${GITHUB_REPOSITORY}`
+# supplies the footer's changelog link (release.yml passes no --repo).
+#
 # Sourcing seam: set FINALIZE_RELEASE_BODY_LIB_ONLY=1 before sourcing this
 # file to load finalize_release_body_main (and its helpers, including the
 # pure compose_release_body) without executing it -- this file's own
@@ -107,6 +127,10 @@
 #         exit (a non-2xx response from `gh release edit` is already a hard
 #         failure -- no status-code introspection is needed here, unlike
 #         create-or-reuse-release.sh's create/reuse decision table).
+#         A size-guard failure (invalid PALADIN_RELEASE_BODY_LIMIT, missing
+#         release-body-fit.sh, artifact sections that leave no room, a fitted
+#         body still over the limit) is also a non-zero exit, always before
+#         `gh release edit`.
 
 set -euo pipefail
 
@@ -354,6 +378,118 @@ compose_release_body() {
     } > "${output}"
 }
 
+# _frb_load_fit_lib -> loads the shared release-body size helper
+# (scripts/release-body-fit.sh, plan 52-02) from this script's own location.
+# Idempotent. A missing helper is a named failure, raised before any `gh`
+# call, never a silently unguarded publish.
+_frb_load_fit_lib() {
+    local root fit_lib
+    if declare -F release_body_fit >/dev/null 2>&1; then
+        return 0
+    fi
+    root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    fit_lib="${root}/scripts/release-body-fit.sh"
+    if [ ! -f "${fit_lib}" ]; then
+        echo "ERROR: scripts/release-body-fit.sh not found (looked at ${fit_lib})" >&2
+        return 1
+    fi
+    # shellcheck source=scripts/release-body-fit.sh
+    RELEASE_BODY_FIT_LIB_ONLY=1 source "${fit_lib}"
+}
+
+# _frb_fit_composed_body_in WORK OUTPUT CURATED TAG REPO DIGEST IMAGE_REF
+#     SIZE_MB ASSET_LIST SUMS_NAME SBOM_ASSET -> the body of
+# _frb_fit_composed_body, run with WORK as a scratch directory the caller
+# removes afterwards.
+_frb_fit_composed_body_in() {
+    local work="$1" output="$2" curated="$3" tag="$4" repo="$5"
+    local digest="$6" image_ref="$7" size_mb="$8" asset_list="$9"
+    local sums_name="${10}" sbom_asset="${11}"
+    local limit total curated_out curated_chars artifact_chars budget
+    local curated_file fitted_file err_file fitted
+
+    limit="$(release_body_limit)" || return 1
+    total="$(release_body_length "${output}")" || return 1
+    if [ "${total}" -le "${limit}" ]; then
+        return 0
+    fi
+
+    # The curated part exactly as compose_release_body wrote it: a single
+    # trailing newline is added when one is missing.
+    curated_out="${curated}"
+    if [ -n "${curated}" ]; then
+        case "${curated}" in
+            *$'\n') : ;;
+            *) curated_out="${curated}"$'\n' ;;
+        esac
+    fi
+    curated_file="${work}/curated.md"
+    fitted_file="${work}/curated-fitted.md"
+    err_file="${work}/fit.err"
+    printf '%s' "${curated_out}" > "${curated_file}"
+    curated_chars="$(release_body_length "${curated_file}")" || return 1
+
+    artifact_chars=$((total - curated_chars))
+    budget=$((limit - artifact_chars))
+    if [ "${budget}" -lt 1 ]; then
+        echo "ERROR: the release artifact sections alone need ${artifact_chars} chars; limit ${limit} leaves no room for the curated notes" >&2
+        return 1
+    fi
+
+    # Fit in this shell, not a command substitution, so the helper's size log
+    # reaches the runner. Its stderr is held back only to recognise the one
+    # failure that means "the budget cannot hold the footer"; it is always
+    # relayed.
+    if ! release_body_fit "${curated_file}" "${fitted_file}" "${budget}" "${tag}" "${repo}" 2> "${err_file}"; then
+        cat "${err_file}" >&2
+        if grep -q 'is too small to hold the truncation footer' "${err_file}"; then
+            echo "ERROR: the release artifact sections alone need ${artifact_chars} chars; limit ${limit} leaves no room for the curated notes" >&2
+        fi
+        return 1
+    fi
+    cat "${err_file}" >&2
+
+    # Read the fitted text without letting command substitution strip its
+    # trailing newline, then rebuild the whole body from the same artifact
+    # inputs so the artifact part is byte-identical to the unfitted one.
+    fitted="$(cat "${fitted_file}"; printf x)"
+    fitted="${fitted%x}"
+    compose_release_body "${fitted}" "${digest}" "${image_ref}" "${size_mb}" \
+        "${asset_list}" "${sums_name}" "${sbom_asset}" "${output}"
+
+    total="$(release_body_length "${output}")" || return 1
+    if [ "${total}" -gt "${limit}" ]; then
+        echo "ERROR: the fitted release body is ${total} chars, still over the limit ${limit}; refusing to publish it" >&2
+        return 1
+    fi
+}
+
+# _frb_fit_composed_body OUTPUT CURATED TAG REPO DIGEST IMAGE_REF SIZE_MB
+#     ASSET_LIST SUMS_NAME SBOM_ASSET
+#
+# The size guard (CIREL-05, D-11). OUTPUT is the body compose_release_body
+# just wrote from CURATED plus the artifact inputs (the last six arguments,
+# exactly what compose_release_body received). When OUTPUT is within
+# PALADIN_RELEASE_BODY_LIMIT it is left untouched -- no re-fit, no log line.
+# Otherwise only the curated part is cut, by the shared release_body_fit, to
+# limit minus the artifact part's length, and OUTPUT is recomposed; the
+# artifact sections are never shortened, dropped or reordered. A budget too
+# small for the footer plus one curated character is a named failure, as is
+# an OUTPUT that is still over the limit afterwards. The helper strips a
+# footer already present in CURATED before re-fitting, so a re-run over this
+# function's own published output never stacks footers.
+_frb_fit_composed_body() {
+    local work rc=0
+    _frb_load_fit_lib || return 1
+    if ! work="$(mktemp -d "${TMPDIR:-/tmp}/finalize-release-fit.XXXXXX")"; then
+        echo "ERROR: could not create a scratch directory for the release body fit" >&2
+        return 1
+    fi
+    _frb_fit_composed_body_in "${work}" "$@" || rc=$?
+    rm -rf -- "${work}"
+    return "${rc}"
+}
+
 finalize_release_body_main() {
     local TAG="" IMAGE_DIGEST="" IMAGE_REF="" IMAGE_SIZE_MB=""
     local AGGREGATE_CHECKSUMS=0
@@ -455,6 +591,8 @@ finalize_release_body_main() {
         return 1
     fi
 
+    _frb_load_fit_lib || return 1
+
     local current_body=""
     current_body="$("${GH}" release view "${TAG}" --json body -q .body)"
 
@@ -481,6 +619,11 @@ finalize_release_body_main() {
 
     compose_release_body "${curated_section}" "${IMAGE_DIGEST}" "${IMAGE_REF}" "${IMAGE_SIZE_MB}" \
         "${asset_list}" "${sums_attached_name}" "${SBOM_ASSET}" "${OUTPUT}"
+
+    # Size guard: never hand `gh release edit` a body over the limit (D-11).
+    _frb_fit_composed_body "${OUTPUT}" "${curated_section}" "${TAG}" "${GITHUB_REPOSITORY:-}" \
+        "${IMAGE_DIGEST}" "${IMAGE_REF}" "${IMAGE_SIZE_MB}" \
+        "${asset_list}" "${sums_attached_name}" "${SBOM_ASSET}"
 
     "${GH}" release edit "${TAG}" --notes-file "${OUTPUT}"
 }

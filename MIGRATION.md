@@ -1,6 +1,49 @@
 # Upgrading Paladin
 
-> **Scope note:** this file is the root migration guide and has two parts, newest first. **Section 10**, "Upgrading from v0.10.1 to v0.11.0", carries what a consumer or operator moving from the published `v0.10.1` to `v0.11.0` needs. **Section 9**, "Upgrading from v0.9.0 to v0.10.0", is the v0.10 record, kept as it shipped. Each part is substantive and carries no open marker. The part and section numbers, the row identifiers (`M-B-NN`, `DR-NN`) and the section 10.2 register keys are cited by the CHANGELOG, the ADRs and the consumer muster, so later work appends to section 10 rather than renumbering either part.
+> **Scope note:** this file is the root migration guide and has three parts, newest first. **Section 11**, "Upgrading from v0.11.0 to v0.11.1", is the open part: later v0.11.1 work appends its entries there. **Section 10**, "Upgrading from v0.10.1 to v0.11.0", carries what a consumer or operator moving from the published `v0.10.1` to `v0.11.0` needs, and **Section 9**, "Upgrading from v0.9.0 to v0.10.0", is the v0.10 record; both are frozen and kept as they shipped. The part and section numbers, the row identifiers (`M-B-NN`, `DR-NN`) and the section 10.2 register keys are cited by the CHANGELOG, the ADRs and the consumer muster, so later work appends to section 11 rather than renumbering any part.
+
+# 11. Upgrading from v0.11.0 to v0.11.1
+
+v0.11.1 is the Dogfood Cleanup release (milestone opened 2026-10-27, Phases 52 to 58): it closes the security, correctness, release-process and first-run gaps v0.11.0 left behind, with no new features. It is a patch release unless a security fix forces a minor bump, which is decided at Phase 53's decision point. This part starts empty and records only what a consumer or operator moving from the published `v0.11.0` to `v0.11.1` must act on; each later v0.11.1 change adds its entry to the matching section below in the same commit as the change.
+
+## 11.1 Behavioral changes (user-visible without code changes)
+
+No behavioral change is recorded since `v0.11.0`. A later v0.11.1 change of this kind adds its entry here in the same commit.
+
+## 11.2 Rust API changes (compile-affecting; the X-10 register)
+
+Columns: **Crate · Type/Trait · Change · Mitigation (`#[non_exhaustive]` / default method / new trait / `#[serde(default)]`) · Deliberate-breaking? (Y/N, justification) · Requirement ID**.
+
+The **Crate** cell of every row marked `Y` is the crate's **published crates.io package name** (`paladin-ai-core` for the `crates/paladin-core` directory, whose library is still imported as `paladin_core`), never the directory name: the allowlist gate compares that cell against `.cargo/semver-checks-allowlist.toml`'s `crate = "..."` keys by exact string, in both directions, and the allowlist's own schema requires the package name.
+
+This section is the v0.11.1 register. The `semver` CI gate (`scripts/check-migration-allowlist.sh`) reads only this table's `Y` rows against `.cargo/semver-checks-allowlist.toml`; the registers of sections 10.2 and 9.2 are frozen records of breaks already shipped against older baselines and are no longer read. No change is recorded since `v0.11.0`, so the table has no row. A later v0.11.1 change that breaks the public API on purpose adds a row here and an allowlist entry in the same commit.
+
+| Crate | Type / Trait | Change | Mitigation | Deliberate-breaking? | Req |
+|---|---|---|---|---|---|
+
+## 11.3 Toolchain & dependencies
+
+No toolchain or dependency change is recorded since `v0.11.0`. A later v0.11.1 change of this kind adds its entry here in the same commit.
+
+## 11.4 Persistence & schema migrations
+
+No persistence or schema change is recorded since `v0.11.0`. A later v0.11.1 change of this kind adds its entry here in the same commit.
+
+## 11.5 Configuration & environment
+
+No configuration or environment change is recorded since `v0.11.0`. A later v0.11.1 change of this kind adds its entry here in the same commit.
+
+## 11.6 HTTP API
+
+No HTTP API change is recorded since `v0.11.0`. A later v0.11.1 change of this kind adds its entry here in the same commit.
+
+## 11.7 Deprecations
+
+No item is marked `#[deprecated]` since `v0.11.0`. A later v0.11.1 deprecation adds its entry here in the same commit.
+
+## 11.8 Upgrade checklist
+
+No operator step is recorded since `v0.11.0`: a v0.11.0 deployment upgrades to v0.11.1 by replacing the binary. A later v0.11.1 change that needs an operator step adds it here in the same commit.
 
 # 10. Upgrading from v0.10.1 to v0.11.0
 

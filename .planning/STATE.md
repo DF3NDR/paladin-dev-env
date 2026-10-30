@@ -5,12 +5,12 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 53
 current_phase_name: Tenant Isolation Closure
 status: planning
-stopped_at: Completed 52-08-PLAN.md
-last_updated: "2026-10-30T11:11:30.675Z"
+stopped_at: Phase 53 context gathered
+last_updated: "2026-10-30T23:37:37.477Z"
 last_activity: 2026-10-30
 last_activity_desc: Phase 52 complete, transitioned to Phase 53
 progress:
-  total_phases: 1
+  total_phases: 2
   completed_phases: 1
   total_plans: 8
   completed_plans: 8
@@ -708,19 +708,25 @@ Four pending todos were acknowledged as deferred at the v0.11.0 close (see *Defe
   2026-10-30; head `dcaf6af26`, 46 required contexts incl. the new `Semver Checks (vs v0.11.0)`). `main`
   now carries the armed gates; later phases keep working on `claude/laughing-dirac-e0h2ax` and merge
   `main` back in before the next PR.
+
 - **Release-body size guard has never run live** (D-12) — `scripts/release-body-fit.sh` and the create/finalize
   guards are proven only by the stubbed harnesses and the >131,072-byte regression; the first live use is
   the `v0.11.1` tag in Phase 58. Read that release's body size and footer at the tag.
+
 - **Three OSV-Scanner advisory alerts are ungoverned** (alerts 23, 24, 25 — `D-52-03-02` in
   `52-ci-release-pipeline-repair/deferred-items.md`): no `SECURITY-EXCEPTIONS.md` row, `.cargo/audit.toml`
   or `deny.toml` entry; left open for the maintainer by design. The other 17 OSV alerts are governed by rows.
+
 - **News API key travels in the URL and `reqwest` error text can echo it** (`D-52-03-01`,
   `news_api_fetcher.rs`; CodeQL alert 54 itself is a false positive) — a Phase 55 correctness candidate:
   header-carried key, URL stripped from the mapped error, `Policy::none()`.
+
 - **Label events re-run the whole `ci.yml`** including the ~63-minute Docker build (PD-06-3) — documented,
   not engineered around; apply the `release` label once.
+
 - **`CODEQL-DISMISSALS.md` rows 40 and 49 carry stale line anchors** (left per D-14; logged in
   deferred-items) — fix when those files are next touched.
+
 - **H-06 (local `make coverage` reproduction) deferred again** to the maintainer on a Docker-capable
   machine; the pending todo stays with `resolves_phase: 56`.
 
@@ -1019,9 +1025,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-10-30T11:13:52Z
-Stopped at: Phase 52 complete, ready to plan Phase 53
-Resume file: None
+Last session: 2026-10-30T23:37:36.805Z
+Stopped at: Phase 53 context gathered
+Resume file: .planning/phases/53-tenant-isolation-closure/53-CONTEXT.md
 
 ## Operator Next Steps
 

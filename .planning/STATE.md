@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-10-30 after Phase 52)
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
 **Current focus:** Phase 53 — Tenant Isolation Closure (Phase 52 completed 2026-10-30, 8/8 plans,
-52-UAT 3/3 passed; PR #61 is open under the `release` label awaiting the maintainer's merge)
+52-UAT 3/3 passed; PR #61 merged to `main` as `84686acfb` on 2026-10-30)
 (carried-gaps inventory, dogfood findings log, scoping notes): 7 phases (52-58), 53/53 requirements
 mapped. Phase 52 (CI & Release Pipeline Repair) completed 2026-10-30; next: Phase 53. Decisions at open: OpenAI Responses API out,
 `${VAR}` auth keys refused at boot, research skipped.
@@ -704,9 +704,10 @@ Four pending todos were acknowledged as deferred at the v0.11.0 close (see *Defe
 
 **Phase 52 close (2026-10-30, 52-VERIFICATION `passed` 5/5, 52-UAT 3/3, 52-SECURITY 0 open):**
 
-- **PR #61 is open, not merged** — the release-labelled PR carrying all of Phase 52 (head `dcaf6af26`,
-  46 required contexts incl. the new `Semver Checks (vs v0.11.0)`); merge is the maintainer's act.
-  Until it lands on `main`, every later phase branches from the same `claude/laughing-dirac-e0h2ax` line.
+- ~~**PR #61 is open, not merged**~~ — **merged by the maintainer** (merge commit `84686acfb` on `main`,
+  2026-10-30; head `dcaf6af26`, 46 required contexts incl. the new `Semver Checks (vs v0.11.0)`). `main`
+  now carries the armed gates; later phases keep working on `claude/laughing-dirac-e0h2ax` and merge
+  `main` back in before the next PR.
 - **Release-body size guard has never run live** (D-12) — `scripts/release-body-fit.sh` and the create/finalize
   guards are proven only by the stubbed harnesses and the >131,072-byte regression; the first live use is
   the `v0.11.1` tag in Phase 58. Read that release's body size and footer at the tag.
@@ -1024,9 +1025,8 @@ Resume file: None
 
 ## Operator Next Steps
 
-- **Phase 52 is complete (2026-10-30):** verification `passed`, UAT 3/3, security 0 open. Two maintainer acts
-  remain outside the phase: merge PR #61 (`release` label, 46 required contexts) and, later, cut `v0.11.1` in
-  Phase 58. Next: `/clear` then `/gsd-discuss-phase 53` (Tenant Isolation Closure — verify Phase 40's
+- **Phase 52 is complete (2026-10-30):** verification `passed`, UAT 3/3, security 0 open. PR #61 is merged
+  (`84686acfb` on `main`, 2026-10-30); the one maintainer act still ahead is the `v0.11.1` tag in Phase 58. Next: `/clear` then `/gsd-discuss-phase 53` (Tenant Isolation Closure — verify Phase 40's
   `40-REVIEW-FIX.md` fixes first, and record the `v0.11.1`-vs-`v0.12.0` decision there).
 
 - **Milestone v0.11.1 roadmap (2026-10-27):** `.planning/ROADMAP.md` (Phases 52-58) and the

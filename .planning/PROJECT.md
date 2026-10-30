@@ -2339,8 +2339,8 @@ the first v0.11.1 phase (8 plans, CIREL-01…07 and 09; verification `passed` 5/
 open). The gates every later phase runs under are now armed: semver against `0.11.0` at patch with a
 zero-check tripwire and a required context, the allows gone, allowlist/dry-run/E2E before merge, the
 release-body cap fixed, CodeQL triaged, issue #41 closed. "Release-process and CI repair" moved from
-Active to Validated; five owner decisions logged (no ADR). Still outside the phase: the maintainer's
-merge of PR #61 and the guard's first live run at the `v0.11.1` tag. Next: Phase 53.*
+Active to Validated; five owner decisions logged (no ADR). PR #61 merged to `main` on 2026-10-30
+(`84686acfb`); still ahead: the guard's first live run at the `v0.11.1` tag. Next: Phase 53.*
 
 ---
 *Last updated: 2026-10-27 after the **v0.11.0 "Treasurer Spend Governance" milestone close**

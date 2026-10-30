@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v0.11.1
 milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
-current_phase: 52
-current_phase_name: ci-release-pipeline-repair
-status: verifying
+current_phase: 53
+current_phase_name: Tenant Isolation Closure
+status: planning
 stopped_at: Completed 52-08-PLAN.md
-last_updated: "2026-10-29T23:20:29.247Z"
-last_activity: 2026-10-28
-last_activity_desc: Phase 52 execution started
+last_updated: "2026-10-30T11:11:30.675Z"
+last_activity: 2026-10-30
+last_activity_desc: Phase 52 complete, transitioned to Phase 53
 progress:
   total_phases: 1
   completed_phases: 1
@@ -20,14 +20,15 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-10-27 at the v0.11.1 milestone open)
+See: .planning/PROJECT.md (updated 2026-10-30 after Phase 52)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 52 — ci-release-pipeline-repair
+**Current focus:** Phase 53 — Tenant Isolation Closure (Phase 52 completed 2026-10-30, 8/8 plans,
+52-UAT 3/3 passed; PR #61 is open under the `release` label awaiting the maintainer's merge)
 (carried-gaps inventory, dogfood findings log, scoping notes): 7 phases (52-58), 53/53 requirements
-mapped. Next: Phase 52 (CI & Release Pipeline Repair). Decisions at open: OpenAI Responses API out,
+mapped. Phase 52 (CI & Release Pipeline Repair) completed 2026-10-30; next: Phase 53. Decisions at open: OpenAI Responses API out,
 `${VAR}` auth keys refused at boot, research skipped.
 
 **Previous milestone:** v0.11.0 "Treasurer Spend Governance" closed 2026-10-27 — 15 phases
@@ -49,18 +50,18 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 
 ## Current Position
 
-Phase: 52 (ci-release-pipeline-repair) — EXECUTING
-Plan: 8 of 8
-Status: Phase complete — ready for verification
-Last activity: 2026-10-28 — Phase 52 execution started
+Phase: 53 — Tenant Isolation Closure
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-10-30 — Phase 52 complete, transitioned to Phase 53
 
-Progress: [██████████] 100% (0 of 7 phases)
+Progress: [███░░░░░░░░░░░░░░░░░] 1/7 phases (14%) — Phase 52 plans [████████████████████] 8/8 (100%)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 589
+- Total plans completed: 597
 - Average duration: —
 - Total execution time: —
 
@@ -121,6 +122,7 @@ Progress: [██████████] 100% (0 of 7 phases)
 | 51 | 20 | - | - |
 | 46 | 14 | - | - |
 | 47 | 10 | - | - |
+| 52 | 8 | - | - |
 
 *Updated after each plan completion*
 
@@ -700,6 +702,27 @@ Four pending todos were acknowledged as deferred at the v0.11.0 close (see *Defe
 
 ### Blockers/Concerns
 
+**Phase 52 close (2026-10-30, 52-VERIFICATION `passed` 5/5, 52-UAT 3/3, 52-SECURITY 0 open):**
+
+- **PR #61 is open, not merged** — the release-labelled PR carrying all of Phase 52 (head `dcaf6af26`,
+  46 required contexts incl. the new `Semver Checks (vs v0.11.0)`); merge is the maintainer's act.
+  Until it lands on `main`, every later phase branches from the same `claude/laughing-dirac-e0h2ax` line.
+- **Release-body size guard has never run live** (D-12) — `scripts/release-body-fit.sh` and the create/finalize
+  guards are proven only by the stubbed harnesses and the >131,072-byte regression; the first live use is
+  the `v0.11.1` tag in Phase 58. Read that release's body size and footer at the tag.
+- **Three OSV-Scanner advisory alerts are ungoverned** (alerts 23, 24, 25 — `D-52-03-02` in
+  `52-ci-release-pipeline-repair/deferred-items.md`): no `SECURITY-EXCEPTIONS.md` row, `.cargo/audit.toml`
+  or `deny.toml` entry; left open for the maintainer by design. The other 17 OSV alerts are governed by rows.
+- **News API key travels in the URL and `reqwest` error text can echo it** (`D-52-03-01`,
+  `news_api_fetcher.rs`; CodeQL alert 54 itself is a false positive) — a Phase 55 correctness candidate:
+  header-carried key, URL stripped from the mapped error, `Policy::none()`.
+- **Label events re-run the whole `ci.yml`** including the ~63-minute Docker build (PD-06-3) — documented,
+  not engineered around; apply the `release` label once.
+- **`CODEQL-DISMISSALS.md` rows 40 and 49 carry stale line anchors** (left per D-14; logged in
+  deferred-items) — fix when those files are next touched.
+- **H-06 (local `make coverage` reproduction) deferred again** to the maintainer on a Docker-capable
+  machine; the pending todo stays with `resolves_phase: 56`.
+
 **v0.11.1 roadmap-time findings (2026-10-27, measured against the tree while drafting the roadmap):**
 
 - **Phase 53, verify first:** Phase 40's `40-REVIEW-FIX.md` already records WR-01…WR-04 (TENANT-04, -05, -06) as fixed
@@ -783,7 +806,13 @@ close notes this section carried for Phases 38-51 are archived with their phases
   with them: G1 (no aggregate HTTP spend route; LEDGR-04 is per-run over HTTP) and G2 (nothing
   asserts the engine-factory wiring that attaches settlement, spend guard and cancel probe).
 
-- **Phase 47 carried findings** (`47-CI-EVIDENCE.md` D-00d, `47-REVIEW.md`): the
+- **Phase 47 carried findings** (`47-CI-EVIDENCE.md` D-00d, `47-REVIEW.md`) — **the release-process
+  half is resolved by Phase 52 (2026-10-30):** semver re-pinned to `0.11.0` with `paladin-eval` (12/12 crates,
+  223 checks pass, zero-check tripwire), `check-migration-allowlist` in the required cargo-deny job, Publish
+  Dry Run on every PR and End-to-End Tests under the `release` label, release body via `jq --rawfile` with
+  the size guard, 37 CodeQL alerts registered and dismissed, issue #41 closed. **Still open:** the
+  `paladin-memory` / `paladin-content` changelog wording (Phase 54/55), stale `k8s/` labels and "ten crates"
+  comments (Phase 54's `check-version-strings`). Original text: the
   `paladin-memory` / `paladin-content` crate changelogs say "No functional change" for 0.11.0
   although the persisted-key change (`paladin.node` → `paladin.data`) is one-way — fix in the next
   patch release's changelog, the published crates are immutable; the release-body builder still
@@ -810,7 +839,10 @@ close notes this section carried for Phases 38-51 are archived with their phases
   superseded) — expected, documented in MILESTONES.md *Known Gaps*; do not "fix" by fabricating
   SUMMARYs.
 
-- cargo-semver-checks 0.50.0's CI-pinned --baseline-version 0.9.0 job is currently a no-op for every one of the 11 checked packages -- confirmed 2026-09-26 during Phase 38 plan 38-09's closeout measurement. The in-tree workspace version (0.10.1, the last real release) already differs from that two-milestones-old baseline by a pre-1.0 "major-equivalent" bump, so the tool skips all lint evaluation (0 checks, 254 skip) unconditionally. This will remain true for every plan in every phase of the v0.11.0 milestone until the version is bumped at the eventual release commit. Not fixed in 38-09 (ci.yml is not in that plan's files_modified) -- flag for whichever phase next touches ci.yml's semver job or performs the v0.11.0 version bump. **Still a no-op at v0.11.0** (Phase 47 re-seal row 57, 2026-10-25: `0 checks, 254 skip` for 10 of 11 packages against 0.9.0; `paladin-web` attributed to its CI twin); now that `0.11.0` is published the baseline can move to it -- a v0.12 hygiene item.
+- ~~cargo-semver-checks 0.50.0's CI-pinned --baseline-version 0.9.0 job is currently a no-op~~ — **resolved by
+  Phase 52 (2026-10-30, plans 52-01/52-05/52-07):** baseline `0.11.0` at `--release-type patch` by flag, 12/12
+  packages at 223 checks pass, a scratch-branch leaf break turned the job red, and `Semver Checks (vs v0.11.0)`
+  is a required context in ruleset 20868126. Original text: cargo-semver-checks 0.50.0's CI-pinned --baseline-version 0.9.0 job is currently a no-op for every one of the 11 checked packages -- confirmed 2026-09-26 during Phase 38 plan 38-09's closeout measurement. The in-tree workspace version (0.10.1, the last real release) already differs from that two-milestones-old baseline by a pre-1.0 "major-equivalent" bump, so the tool skips all lint evaluation (0 checks, 254 skip) unconditionally. This will remain true for every plan in every phase of the v0.11.0 milestone until the version is bumped at the eventual release commit. Not fixed in 38-09 (ci.yml is not in that plan's files_modified) -- flag for whichever phase next touches ci.yml's semver job or performs the v0.11.0 version bump. **Still a no-op at v0.11.0** (Phase 47 re-seal row 57, 2026-10-25: `0 checks, 254 skip` for 10 of 11 packages against 0.9.0; `paladin-web` attributed to its CI twin); now that `0.11.0` is published the baseline can move to it -- a v0.12 hygiene item.
 
 ### Quick Tasks Completed
 
@@ -986,15 +1018,19 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-10-29T23:20:29.216Z
-Stopped at: Completed 52-08-PLAN.md
+Last session: 2026-10-30T11:13:52Z
+Stopped at: Phase 52 complete, ready to plan Phase 53
 Resume file: None
 
 ## Operator Next Steps
 
-- **Milestone v0.11.1 roadmap is drafted (2026-10-27):** `.planning/ROADMAP.md` (Phases 52-58) and the
-  `REQUIREMENTS.md` traceability table are written and uncommitted. After approval, start with
-  `/gsd-discuss-phase 52` (or `/gsd-plan-phase 52`). Phase 56 stays a frame until the findings log has content;
+- **Phase 52 is complete (2026-10-30):** verification `passed`, UAT 3/3, security 0 open. Two maintainer acts
+  remain outside the phase: merge PR #61 (`release` label, 46 required contexts) and, later, cut `v0.11.1` in
+  Phase 58. Next: `/clear` then `/gsd-discuss-phase 53` (Tenant Isolation Closure — verify Phase 40's
+  `40-REVIEW-FIX.md` fixes first, and record the `v0.11.1`-vs-`v0.12.0` decision there).
+
+- **Milestone v0.11.1 roadmap (2026-10-27):** `.planning/ROADMAP.md` (Phases 52-58) and the
+  `REQUIREMENTS.md` traceability table. Phase 56 stays a frame until the findings log has content;
   append maintainer-run and web3sec findings to `.project/v0.11.1/02-dogfood-findings-log.md` as they arrive.
 
 - **Milestone v0.11.0 is closed (2026-10-27).** Archive: `milestones/v0.11.0-ROADMAP.md`,

@@ -899,6 +899,20 @@ unless a phase adopts them):
 
 ### Validated
 
+**Dogfood Cleanup — v0.11.1, in progress (opened 2026-10-27).** Phase records in
+`.planning/phases/`; requirements in `.planning/REQUIREMENTS.md`.
+
+- ✓ Release-process and CI repair — semver gate re-pinned to the published `0.11.0` baseline at
+  `--release-type patch` through a tested `scripts/check-semver.sh` (12/12 crates incl. `paladin-eval`,
+  223 checks pass, zero-check tripwire, red proven on a scratch-branch leaf break, `Semver Checks
+  (vs v0.11.0)` required in the live ruleset); all six crate-wide semver allow tables removed and
+  `MIGRATION.md` §11 opened; `check-migration-allowlist` in the required cargo-deny job; Publish Dry
+  Run on every PR and End-to-End Tests under the `release` label; release body via `jq --rawfile`
+  with a shared size-fit helper (limit 125,000, reserve 5,000) proven on a 243,044-byte body; 37
+  CodeQL alerts registered in `CODEQL-DISMISSALS.md` and dismissed on the platform; issue #41 closed
+  (CIREL-01 … CIREL-07, CIREL-09; D1–D7) — Phase 52, verified 2026-10-30. CIREL-08 (the eight
+  `#![allow(rustdoc::…)]`) stays with Phase 55.
+
 **Treasurer Spend Governance — shipped v0.11.0, closed 2026-10-27; crates at `0.11.0`**
 (Phases 38-51, 174 plans, 63/66 requirements verified, ADOPT-01…03 superseded). Archive:
 `.planning/milestones/v0.11.0-ROADMAP.md`. Requirements:
@@ -1358,9 +1372,6 @@ while the code ships):
 **Milestone v0.11.1 "Dogfood Cleanup" (opened 2026-10-27).** Requirement IDs are minted in
 `.planning/REQUIREMENTS.md`; the themes below are the scope (inventory rows in parentheses):
 
-- [ ] Release-process and CI repair — semver gate re-pinned to the 0.11.0 baseline and actually
-      checking, allows dropped, allowlist check and `main`-only jobs on PRs, release-body cap fixed,
-      CodeQL triaged, issue #41 closed (D1–D7)
 - [ ] Tenant isolation closure — `/v1/threads/*`, run submission, fork, cancel, agent jobs all
       tenant-gated; error bodies redacted; Treasurer attachment asserted at boot (A1–A5, A8)
 - [ ] First-run usability — unexpanded `${VAR}` auth keys refused at boot, version strings fixed and
@@ -2293,7 +2304,15 @@ ADOPT-01…03 superseded by one web3sec move straight to `v0.11.0` (2026-10-14 �
 consumer bumps once); the `*Config::new` harmonisation as a registered clean break rather than a
 todo (2026-10-18 — ✓ Good); OBS-05's overhead figure accepted rather than met (2026-09-30 — ⚠️
 Revisit, the bar stands); Phase 47's one-PR, frozen-`main`, merge-commit tag cut with the
-maintainer alone performing the irreversible acts (D-00a..D-14 — ✓ Good, one tag sufficed).
+maintainer alone performing the irreversible acts (D-00a..D-14 — ✓ Good, one tag sufficed);
+Phase 52's owner decisions, no ADR minted (PD-05-4): the semver gate evaluates at `--release-type
+patch` fixed by flag, never inferred from the version delta (the `0.9.0` baseline went blind that way
+— ✓ Good, 223 checks); the allowlist gate runs inside the already-required cargo-deny job rather than
+the semver job (PD-01-3 — ✓ Good); the ruleset stays at 46 contexts with `Semver Checks (vs v0.11.0)`
+required (PD-06-1, confirmed 2026-10-29 — ✓ Good); no CodeQL alert was code-fixed because none of the
+31 newly triaged was a genuine leak (✓ Good; alert 54's News API key-in-URL is a Phase 55 candidate);
+the release-body guard triggers at the limit but fits to limit-minus-reserve (PD-02-1 — ⚠️ Revisit
+after its first live use at the `v0.11.1` tag, D-12).
 
 ## Evolution
 
@@ -2313,6 +2332,15 @@ This document evolves at phase transitions and milestone boundaries.
 2. Core Value check — still the right priority?
 3. Audit Out of Scope — reasons still valid?
 4. Update Context with current state
+
+---
+*Last updated: 2026-10-30 after **Phase 52: CI & Release Pipeline Repair** completed and verified —
+the first v0.11.1 phase (8 plans, CIREL-01…07 and 09; verification `passed` 5/5, UAT 3/3, security 0
+open). The gates every later phase runs under are now armed: semver against `0.11.0` at patch with a
+zero-check tripwire and a required context, the allows gone, allowlist/dry-run/E2E before merge, the
+release-body cap fixed, CodeQL triaged, issue #41 closed. "Release-process and CI repair" moved from
+Active to Validated; five owner decisions logged (no ADR). Still outside the phase: the maintainer's
+merge of PR #61 and the guard's first live run at the `v0.11.1` tag. Next: Phase 53.*
 
 ---
 *Last updated: 2026-10-27 after the **v0.11.0 "Treasurer Spend Governance" milestone close**

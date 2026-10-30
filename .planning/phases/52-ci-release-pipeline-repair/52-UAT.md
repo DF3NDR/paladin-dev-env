@@ -1,20 +1,14 @@
 ---
-status: testing
+status: complete
 phase: 52-ci-release-pipeline-repair
 source: [52-VERIFICATION.md]
 started: 2026-10-30T00:08:40Z
-updated: 2026-10-30T00:28:16Z
+updated: 2026-10-30T11:10:01Z
 ---
 
 ## Current Test
 
-number: 3
-name: Merge of PR #61 and the later v0.11.1 tag
-expected: |
-  PR #61 (open, label 'release', head on claude/laughing-dirac-e0h2ax) merges with all 46 required contexts green;
-  the first live use of the release-body size guard is the v0.11.1 tag in Phase 58 (the guard has only been
-  exercised by stubbed harnesses, never a live release call, D-12).
-awaiting: user response
+[testing complete]
 
 ## Tests
 
@@ -28,15 +22,17 @@ result: pass
 
 ### 3. Merge of PR #61 and the later v0.11.1 tag
 expected: PR #61 (open, label 'release', head on claude/laughing-dirac-e0h2ax) merges with all 46 required contexts green; the first live use of the release-body size guard is the v0.11.1 tag in Phase 58 (the guard has only been exercised by stubbed harnesses, never a live release call, D-12).
-result: [pending]
+result: pass
 
 ## Summary
 
 total: 3
-passed: 2
+passed: 3
 issues: 0
-pending: 1
+pending: 0
 skipped: 0
 blocked: 0
 
 ## Gaps
+
+[none]

@@ -1,0 +1,78 @@
+{
+  "phase": "53",
+  "phase_name": "Tenant Isolation Closure",
+  "timestamp": "2026-10-30T12:00:00Z",
+  "paused_by_user": true,
+  "areas_completed": [],
+  "areas_remaining": [
+    "Thread ownership source + version call",
+    "Gate shape + run-less threads",
+    "Corrupt row / Serialization policy",
+    "Jobs, boot assertion, small guards"
+  ],
+  "decisions": {},
+  "pending_question": {
+    "area": "Thread ownership source + version call",
+    "question": "Where does a thread's tenant come from for the visibility gate?",
+    "options_presented": [
+      "Derive from the thread's runs (Recommended): tenant = submitted_by of the thread's latest run, the rule ensure_thread_visible already applies on submit and fork; no schema change, no pub field on Waypoint/ThreadSummary, no WaypointPort change; semver green at patch level, milestone stays v0.11.1; cost: GET /v1/threads needs a per-thread run lookup, run-less threads have no tenant",
+      "Record a tenant on the thread: tenant_id column on waypoints (no threads table exists) or a new threads table, plus a pub field on Waypoint and ThreadSummary and a WaypointPort change; exact and query-friendly but a public break on paladin-ai-core and paladin-ports: MIGRATION.md section 11.2 row, allowlist entry, milestone becomes v0.12.0",
+      "Derive now, record later: ship derive-from-runs in v0.11.1 and open a deferred idea to record the tenant in the next feature milestone"
+    ],
+    "answer": null
+  },
+  "deferred_ideas": [],
+  "reviewed_todos_not_folded": [
+    ".planning/todos/pending/2026-08-13-verify-local-coverage-reproduction.md (assigned to Phase 56)",
+    ".planning/todos/pending/2026-10-13-review-content-data-orchestration-base-items.md (keyword match only)",
+    ".planning/todos/pending/2026-10-14-web3sec-single-bump-to-v0-11-0.md (consumer's own act)",
+    ".planning/todos/pending/2026-10-20-openai-responses-api-for-pro-tier.md (ruled out at milestone open)"
+  ],
+  "prior_decisions_carried": [
+    "ADR-0054: tenant server-derived; RunReadScope {All, Tenant}; hidden equals missing (404 never 403); Admin bypass; one shared gate plus an OpenAPI-derived route matrix",
+    "Phase 52 D-01/D-03: semver gate at --release-type patch vs 0.11.0; a deliberate break needs a MIGRATION.md section 11.2 row plus allowlist entry and flips the milestone to v0.12.0",
+    "Milestone open: A6 reserved literals rejected at config load; A7 boot warn! only, no backfill; a tenant column is a migration, not a feature; no new routes",
+    "Verified in tree: 40-REVIEW-FIX WR-01..04 present (ensure_thread_visible in submission.rs; service-layer tenant check in cancel; fixed 'run store error' 500 via internal_repo_error) so TENANT-04/05/06 are prove-then-lock"
+  ],
+  "codebase_facts": [
+    "No threads table: a thread exists only as waypoints.thread_id and runs.thread_id",
+    "Waypoint (paladin-ai-core), ThreadSummary and WaypointPort (paladin-ports), JobRecord (paladin-web) are all-pub-field types without #[non_exhaustive]: adding a field or trait method is a public break",
+    "WaypointPort has 10+ implementors (sqlite, postgres, in_memory, retention, erased wrapper, parley adapter, chronicle, test doubles)",
+    "run_controller.rs has published_run_id_operations: the OpenAPI-derived route-matrix precedent to mirror for /v1/threads/{id}*",
+    "get_job ignores principal and agent id; JobStore keeps JobRecord {status, result, error} in an in-memory bounded map",
+    "build_run_api always calls with_engine_factory and attaches the Treasurer via with_treasurer; nothing asserts the pairing",
+    "AuthConfig::validate (src/config/agents.rs) is the config-load validation site; reserved literals per 40-REVIEW IN-01: open-access, unattributed as tenant/key names, anonymous as key name",
+    "RunScheduleRepositoryPort::list(limit, cursor) pages all schedules; RunSchedule.created_by: Option<RunAttribution>"
+  ],
+  "canonical_refs": [
+    ".planning/ROADMAP.md (Phase 53)",
+    ".planning/REQUIREMENTS.md (TENANT-03..10)",
+    ".project/v0.11.1/01-carried-gaps-inventory.md (section A rows A1-A8)",
+    ".project/v0.11.1/03-suggestions-and-scoping.md (section 7)",
+    ".planning/milestones/v0.11.0-phases/40-tenant-identity-run-read-scoping/40-REVIEW.md (IN-01, IN-04)",
+    ".planning/milestones/v0.11.0-phases/40-tenant-identity-run-read-scoping/40-REVIEW-FIX.md (WR-01..WR-04)",
+    ".planning/milestones/v0.11.0-phases/40-tenant-identity-run-read-scoping/40-CONTEXT.md (D-14)",
+    ".planning/decisions/0054-tenant-scoped-run-reads.md",
+    ".planning/decisions/PROMOTION.md (next free ADR 0063)",
+    ".planning/WINDOWS.md (rows 58, 63)",
+    ".planning/phases/52-ci-release-pipeline-repair/52-CONTEXT.md (D-01, D-03)",
+    ".planning/milestones/v0.11.0-MILESTONE-AUDIT.md (G2)",
+    "MIGRATION.md (section 11)",
+    ".cargo/semver-checks-allowlist.toml",
+    ".github/instructions/security.instructions.md",
+    "crates/paladin-web/src/thread_controller.rs",
+    "crates/paladin-web/src/run_controller.rs (load_visible_run, internal_repo_error, published_run_id_operations)",
+    "crates/paladin-web/src/agent_controller.rs (get_job, enqueue_job)",
+    "crates/paladin-web/src/job_store.rs",
+    "src/application/services/run/submission.rs (ensure_thread_visible, cancel)",
+    "src/application/services/run/worker.rs (with_engine_factory, with_treasurer)",
+    "src/infrastructure/web/run_api_wiring.rs (build_run_api)",
+    "src/config/agents.rs (AuthConfig::validate)",
+    "crates/paladin-core/src/platform/container/principal.rs",
+    "crates/paladin-core/src/platform/container/waypoint.rs",
+    "crates/paladin-ports/src/output/waypoint_port.rs",
+    "crates/paladin-ports/src/output/run_schedule_repository_port.rs",
+    "crates/paladin-storage/migrations/sqlite/001_create_waypoints_table.sql",
+    "crates/paladin-storage/migrations/sqlite/010_add_run_schedule_created_by.sql"
+  ]
+}

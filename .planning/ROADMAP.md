@@ -378,7 +378,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 53-07-PLAN.md — ADR-0063 amending ADR-0054, user docs, WINDOWS rows 58/63 closed, Phase 40 dispositions, manual credential review (TENANT-03..10)
+- [x] 53-07-PLAN.md — ADR-0063 amending ADR-0054, user docs, WINDOWS rows 58/63 closed, Phase 40 dispositions, manual credential review (TENANT-03..10)
 
 **Wave 7** *(blocked on Wave 6 completion)*
 

@@ -40,6 +40,7 @@ use paladin_battalion::engine::shutdown::ShutdownCoordinator;
 use paladin_core::platform::container::assistant::AssistantSource;
 use paladin_core::platform::container::principal::TenantId;
 use paladin_core::platform::container::run::AssistantRef;
+use paladin_core::platform::container::run_schedule::RunScheduleId;
 use paladin_core::platform::container::waypoint::{ThreadId, Waypoint, WaypointId};
 use paladin_llm::cadence::CadenceWiring;
 use paladin_ports::input::allowance_admission_port::AllowanceAdmissionPort;
@@ -651,6 +652,120 @@ fn assert_treasurer_enforced(
     }
 }
 
+/// How many schedules each page of the boot-time creator scan asks for (D-14).
+const SCHEDULE_SCAN_PAGE: u32 = 100;
+
+/// What the boot-time creator scan found: the ids of schedules with no recorded creator, and
+/// where the walk stopped if a page could not be read.
+#[derive(Debug, Default)]
+struct ScanOutcome {
+    /// Ids whose `created_by` is `None`, in the order the pages handed them over.
+    unattributed: Vec<RunScheduleId>,
+    /// `Some` when a page failed to load: the cursor that page was requested with (`None` inside
+    /// means the very first page). Carries no error text and no row content (P2).
+    page_failure: Option<ScanStop>,
+}
+
+/// Where an unreadable page stopped the scan.
+#[derive(Debug)]
+struct ScanStop {
+    /// The last schedule id of the previous page, or `None` for the first page.
+    after: Option<RunScheduleId>,
+}
+
+/// TENANT-10, D-14: walk every schedule once, read-only, and collect the ids that have no
+/// recorded creator (`created_by` is `None`, a pre-Phase-41 row). Such a schedule fires
+/// unattributed and is never gated by an allowance.
+///
+/// Pages with `list(SCHEDULE_SCAN_PAGE, cursor)` to exhaustion. Only `list` is ever called: no
+/// backfill, re-assignment, disable or delete. An unreadable page (the SQLite adapter fails a
+/// whole page on a half-attributed row) ends the walk and is recorded without its error text;
+/// the function never returns an error, so the boot that called it is never blocked.
+async fn scan_unattributed_schedules(repo: &dyn RunScheduleRepositoryPort) -> ScanOutcome {
+    scan_unattributed_schedules_paged(repo, SCHEDULE_SCAN_PAGE).await
+}
+
+/// [`scan_unattributed_schedules`] with the page size supplied, so a test can force several
+/// pages over a handful of rows.
+async fn scan_unattributed_schedules_paged(
+    repo: &dyn RunScheduleRepositoryPort,
+    page_size: u32,
+) -> ScanOutcome {
+    let mut outcome = ScanOutcome::default();
+    let mut cursor: Option<RunScheduleId> = None;
+    loop {
+        let page = match repo.list(page_size, cursor.clone()).await {
+            Ok(page) => page,
+            Err(_) => {
+                // The error text can carry row detail; the position is all the operator gets.
+                outcome.page_failure = Some(ScanStop { after: cursor });
+                return outcome;
+            }
+        };
+        outcome.unattributed.extend(
+            page.items
+                .iter()
+                .filter(|schedule| schedule.created_by.is_none())
+                .map(|schedule| schedule.schedule_id.clone()),
+        );
+        match page.next_cursor {
+            Some(next) => cursor = Some(next),
+            None => return outcome,
+        }
+    }
+}
+
+/// The log lines a scan outcome produces: at most one `Warn` (count, every id ascending, the
+/// re-create action) and at most one `Error` (a fixed sentence and the cursor position, never an
+/// error text or row content). Pure, so the content is tested without a process-wide logger.
+fn scan_report(outcome: &ScanOutcome) -> Vec<(log::Level, String)> {
+    let mut lines = Vec::new();
+    if !outcome.unattributed.is_empty() {
+        let mut ids: Vec<&RunScheduleId> = outcome.unattributed.iter().collect();
+        ids.sort();
+        let listed = ids
+            .iter()
+            .map(|id| id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push((
+            log::Level::Warn,
+            format!(
+                "{} run schedule(s) have no recorded creator (NULL created_by) and fire \
+                 unattributed and ungated by any allowance: {listed} -- re-create each via \
+                 POST /v1/schedules so its creator is stamped",
+                ids.len()
+            ),
+        ));
+    }
+    if let Some(stop) = &outcome.page_failure {
+        let position = match &stop.after {
+            Some(id) => format!("after schedule id {id}"),
+            None => "at start".to_string(),
+        };
+        lines.push((
+            log::Level::Error,
+            format!(
+                "run schedule scan for missing creators stopped at an unreadable page \
+                 ({position}); schedules from there on were not scanned -- inspect the \
+                 run_schedules table directly"
+            ),
+        ));
+    }
+    lines
+}
+
+/// Log each [`scan_report`] line once at its own level. Infallible: boot continues whatever the
+/// outcome was.
+fn report_unattributed_schedules(outcome: &ScanOutcome) {
+    for (level, line) in scan_report(outcome) {
+        match level {
+            log::Level::Error => log::error!("{line}"),
+            _ => log::warn!("{line}"),
+        }
+    }
+}
+
 /// [`build_run_api`] with the run engine's `PaladinPort` paced through the supplied `cadence`
 /// wiring (PACE-02, D-08).
 ///
@@ -733,6 +848,11 @@ pub async fn build_run_api_with_cadence(
             RunStoreBackend::Sqlite { path } => build_sqlite_quartet(path).await?,
             RunStoreBackend::Postgres { url_env } => build_postgres_quartet(url_env).await?,
         };
+
+    // TENANT-10, D-14: surface schedules with no recorded creator once, read-only and advisory.
+    // Runs whenever the schedule repository exists (run store enabled), whatever
+    // `schedules.enabled` says; the disabled-store arm returned above, so it logs nothing.
+    report_unattributed_schedules(&scan_unattributed_schedules(schedule_repository.as_ref()).await);
 
     // D-08, D-10, 39-07: the Treasurer's spend ledger, sharing this exact run store's
     // backend selection -- `None` only when `build_treasury_ledger` itself hits the
@@ -1690,6 +1810,396 @@ mod tests {
         .expect("the shipped wiring with a Treasurer boots");
         assert!(handles.treasurer.is_some(), "the Treasurer is present");
         coordinator.cancel_and_wait(Duration::from_secs(1)).await;
+        cleanup(&run_path);
+        cleanup(&wp_path);
+        unsafe {
+            std::env::remove_var("OPENAI_API_KEY");
+        }
+    }
+
+    // ---- Phase 53 (53-06, D-14): the advisory NULL created_by schedule scan ----
+
+    use paladin_core::platform::container::principal::RunAttribution;
+    use paladin_core::platform::container::run_schedule::{RunSchedule, RunScheduleId};
+    use paladin_ports::output::run_schedule_repository_port::{
+        RunSchedulePage, RunScheduleRepositoryError,
+    };
+    use paladin_storage::run_schedule::in_memory::InMemoryRunScheduleRepository;
+
+    /// A time-ordered, valid schedule id whose last digit orders it (`1` < `2` < ...).
+    fn schedule_id(n: u8) -> RunScheduleId {
+        RunScheduleId::parse(format!("00000000-0000-7000-8000-00000000000{n}")).expect("valid id")
+    }
+
+    fn attributed_schedule(n: u8) -> RunSchedule {
+        RunSchedule::new(schedule_id(n), "assistant", "* * * * *").with_created_by(
+            RunAttribution::new(TenantId::new("acme").expect("tenant"), "svc-a"),
+        )
+    }
+
+    fn unattributed_schedule(n: u8) -> RunSchedule {
+        RunSchedule::new(schedule_id(n), "assistant", "* * * * *")
+    }
+
+    /// An in-memory schedule store that records every method called on it, delegates `list` to
+    /// the inner store, can fail its `list` call number `fail_list_call` (0-based) with the
+    /// adapter's half-attribution `Serialization` error, and answers every other method with an
+    /// error (so a scan that tried to write would be visible both as a record and as a failure).
+    struct RecordingSchedules {
+        inner: InMemoryRunScheduleRepository,
+        calls: std::sync::Mutex<Vec<&'static str>>,
+        fail_list_call: Option<usize>,
+    }
+
+    impl RecordingSchedules {
+        fn new(fail_list_call: Option<usize>) -> Self {
+            Self {
+                inner: InMemoryRunScheduleRepository::new(),
+                calls: std::sync::Mutex::new(Vec::new()),
+                fail_list_call,
+            }
+        }
+
+        async fn seed(&self, schedules: Vec<RunSchedule>) {
+            for schedule in schedules {
+                self.inner.insert(schedule).await.expect("seed");
+            }
+        }
+
+        fn record(&self, name: &'static str) {
+            self.calls.lock().expect("calls").push(name);
+        }
+
+        fn calls(&self) -> Vec<&'static str> {
+            self.calls.lock().expect("calls").clone()
+        }
+
+        fn refused() -> RunScheduleRepositoryError {
+            RunScheduleRepositoryError::Serialization {
+                message: "the scan must never call this method".to_string(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl RunScheduleRepositoryPort for RecordingSchedules {
+        async fn insert(&self, _schedule: RunSchedule) -> Result<(), RunScheduleRepositoryError> {
+            self.record("insert");
+            Err(Self::refused())
+        }
+        async fn get(
+            &self,
+            _schedule_id: &RunScheduleId,
+        ) -> Result<Option<RunSchedule>, RunScheduleRepositoryError> {
+            self.record("get");
+            Err(Self::refused())
+        }
+        async fn list(
+            &self,
+            limit: u32,
+            cursor: Option<RunScheduleId>,
+        ) -> Result<RunSchedulePage, RunScheduleRepositoryError> {
+            let call = {
+                let mut calls = self.calls.lock().expect("calls");
+                calls.push("list");
+                calls.iter().filter(|name| **name == "list").count() - 1
+            };
+            if self.fail_list_call == Some(call) {
+                return Err(RunScheduleRepositoryError::Serialization {
+                    message: "run schedule row attribution is incomplete: tenant_id and \
+                              api_key_id must both be set or both be NULL"
+                        .to_string(),
+                });
+            }
+            self.inner.list(limit, cursor).await
+        }
+        async fn update(
+            &self,
+            _schedule_id: &RunScheduleId,
+            _update: paladin_core::platform::container::run_schedule::RunScheduleUpdate,
+        ) -> Result<(), RunScheduleRepositoryError> {
+            self.record("update");
+            Err(Self::refused())
+        }
+        async fn delete(
+            &self,
+            _schedule_id: &RunScheduleId,
+        ) -> Result<(), RunScheduleRepositoryError> {
+            self.record("delete");
+            Err(Self::refused())
+        }
+        async fn due(
+            &self,
+            _now: DateTime<Utc>,
+            _limit: u32,
+        ) -> Result<Vec<RunSchedule>, RunScheduleRepositoryError> {
+            self.record("due");
+            Err(Self::refused())
+        }
+        async fn claim_tick(
+            &self,
+            _schedule_id: &RunScheduleId,
+            _expected_next: DateTime<Utc>,
+            _new_last: DateTime<Utc>,
+            _new_next: DateTime<Utc>,
+        ) -> Result<bool, RunScheduleRepositoryError> {
+            self.record("claim_tick");
+            Err(Self::refused())
+        }
+        async fn increment_skipped(
+            &self,
+            _schedule_id: &RunScheduleId,
+        ) -> Result<u64, RunScheduleRepositoryError> {
+            self.record("increment_skipped");
+            Err(Self::refused())
+        }
+    }
+
+    fn lines_at(lines: &[(log::Level, String)], level: log::Level) -> Vec<&str> {
+        lines
+            .iter()
+            .filter(|(l, _)| *l == level)
+            .map(|(_, text)| text.as_str())
+            .collect()
+    }
+
+    /// AC-17 (empty and boundary): no schedules, or only attributed ones, report nothing.
+    #[tokio::test]
+    async fn schedule_scan_reports_nothing_when_every_schedule_is_attributed() {
+        let empty = RecordingSchedules::new(None);
+        let outcome = scan_unattributed_schedules(&empty).await;
+        assert!(scan_report(&outcome).is_empty(), "an empty store is silent");
+
+        let attributed = RecordingSchedules::new(None);
+        attributed
+            .seed(vec![attributed_schedule(1), attributed_schedule(2)])
+            .await;
+        let outcome = scan_unattributed_schedules(&attributed).await;
+        assert!(
+            scan_report(&outcome).is_empty(),
+            "only attributed schedules: no line"
+        );
+    }
+
+    /// AC-17: one unattributed schedule is exactly one `warn!` with count 1, its id and the
+    /// operator action.
+    #[tokio::test]
+    async fn schedule_scan_reports_one_unattributed_schedule() {
+        let store = RecordingSchedules::new(None);
+        store
+            .seed(vec![attributed_schedule(1), unattributed_schedule(2)])
+            .await;
+        let report = scan_report(&scan_unattributed_schedules(&store).await);
+        assert_eq!(report.len(), 1, "exactly one line: {report:?}");
+        let warns = lines_at(&report, log::Level::Warn);
+        assert_eq!(warns.len(), 1);
+        assert!(warns[0].starts_with("1 run schedule(s)"), "{}", warns[0]);
+        assert!(warns[0].contains(schedule_id(2).as_str()));
+        assert!(!warns[0].contains(schedule_id(1).as_str()));
+        assert!(warns[0].contains("POST /v1/schedules"));
+    }
+
+    /// AC-17 (ordering): several unattributed schedules found across pages (page size 2) are one
+    /// `warn!` carrying the exact count and every id in ascending order, whatever order the
+    /// store handed them over in.
+    #[tokio::test]
+    async fn schedule_scan_reports_every_unattributed_schedule_ascending_in_one_line() {
+        let store = RecordingSchedules::new(None);
+        store
+            .seed(vec![
+                unattributed_schedule(3),
+                attributed_schedule(4),
+                unattributed_schedule(1),
+                unattributed_schedule(2),
+            ])
+            .await;
+        let outcome = scan_unattributed_schedules_paged(&store, 2).await;
+        assert!(
+            store.calls().len() >= 2,
+            "page size 2 over 4 rows takes several list calls: {:?}",
+            store.calls()
+        );
+        let report = scan_report(&outcome);
+        let warns = lines_at(&report, log::Level::Warn);
+        assert_eq!(report.len(), 1, "one line only: {report:?}");
+        let line = warns[0];
+        assert!(line.starts_with("3 run schedule(s)"), "{line}");
+        let (a, b, c) = (
+            line.find(schedule_id(1).as_str()).expect("id 1"),
+            line.find(schedule_id(2).as_str()).expect("id 2"),
+            line.find(schedule_id(3).as_str()).expect("id 3"),
+        );
+        assert!(a < b && b < c, "ids ascending in {line}");
+        assert!(!line.contains(schedule_id(4).as_str()));
+        assert!(line.contains("POST /v1/schedules"));
+
+        // The formatter sorts for itself: ids handed over out of order still list ascending.
+        let shuffled = ScanOutcome {
+            unattributed: vec![schedule_id(3), schedule_id(1), schedule_id(2)],
+            page_failure: None,
+        };
+        let report = scan_report(&shuffled);
+        let line = &report[0].1;
+        let (a, b, c) = (
+            line.find(schedule_id(1).as_str()).expect("id 1"),
+            line.find(schedule_id(2).as_str()).expect("id 2"),
+            line.find(schedule_id(3).as_str()).expect("id 3"),
+        );
+        assert!(a < b && b < c, "ids ascending in {line}");
+    }
+
+    /// AC-18, P2: a page that fails (a half-attributed row) ends the scan with one fixed error
+    /// line naming the cursor position and no error text; ids from earlier pages are still
+    /// reported in the single warn. Boot is not affected -- the scan returns no error at all.
+    #[tokio::test]
+    async fn schedule_scan_page_error_is_one_error_line_and_boot_continues() {
+        // Page 1 (2 rows) succeeds, page 2 (list call index 1) fails.
+        let store = RecordingSchedules::new(Some(1));
+        store
+            .seed(vec![
+                unattributed_schedule(1),
+                attributed_schedule(2),
+                unattributed_schedule(3),
+            ])
+            .await;
+        let outcome = scan_unattributed_schedules_paged(&store, 2).await;
+        let report = scan_report(&outcome);
+        let warns = lines_at(&report, log::Level::Warn);
+        let errors = lines_at(&report, log::Level::Error);
+        assert_eq!(warns.len(), 1, "{report:?}");
+        assert_eq!(errors.len(), 1, "{report:?}");
+        assert_eq!(
+            report.len(),
+            2,
+            "at most one warn and one error: {report:?}"
+        );
+        assert!(warns[0].starts_with("1 run schedule(s)"), "{}", warns[0]);
+        assert!(warns[0].contains(schedule_id(1).as_str()));
+        // The cursor position is the last id of the previous page.
+        assert!(errors[0].contains(schedule_id(2).as_str()), "{}", errors[0]);
+        assert!(!errors[0].contains("attribution is incomplete"));
+        assert!(!errors[0].contains("tenant_id"));
+        assert!(!errors[0].contains("api_key_id"));
+        assert!(
+            !errors[0].contains(schedule_id(1).as_str()) && !errors[0].contains("assistant"),
+            "no row content: {}",
+            errors[0]
+        );
+
+        // A failure on the very first page names `start` and reports no warn.
+        let first = RecordingSchedules::new(Some(0));
+        let report = scan_report(&scan_unattributed_schedules(&first).await);
+        assert_eq!(report.len(), 1, "{report:?}");
+        assert_eq!(report[0].0, log::Level::Error);
+        assert!(report[0].1.contains("start"), "{}", report[0].1);
+
+        // The emitter logs each line once and returns nothing the boot path could propagate.
+        report_unattributed_schedules(&outcome);
+    }
+
+    /// AC-N2, P2: the scan only ever calls `list` -- no backfill, re-assignment, disable or
+    /// delete -- so every recorded method name is `list`.
+    #[tokio::test]
+    async fn schedule_scan_never_writes() {
+        let store = RecordingSchedules::new(None);
+        store
+            .seed(vec![unattributed_schedule(1), attributed_schedule(2)])
+            .await;
+        let _ = scan_unattributed_schedules_paged(&store, 1).await;
+        let calls = store.calls();
+        assert!(!calls.is_empty());
+        assert!(
+            calls.iter().all(|name| *name == "list"),
+            "the scan called something other than list: {calls:?}"
+        );
+    }
+
+    /// AC-17/AC-18 end to end over a real SQLite run store holding an attributed, an
+    /// unattributed and a half-attributed schedule: boot is `Ok` and the table is byte-identical
+    /// before and after (the scan never writes).
+    #[tokio::test]
+    #[serial_test::serial(paladin_run_api_wiring_openai_api_key)]
+    async fn schedule_scan_boot_over_sqlite_is_ok_and_leaves_the_table_untouched() {
+        use sqlx::Row;
+        unsafe {
+            std::env::set_var("OPENAI_API_KEY", "sk-test-run-api-wiring-hermetic");
+        }
+        let (run_path, run_url) = temp_sqlite_url("schedule_scan");
+        let (wp_path, wp_url) = temp_sqlite_url("schedule_scan_wp");
+
+        // Seed through the real adapter, then half-attribute one row with raw SQL.
+        {
+            let repo =
+                paladin_storage::run_schedule::sqlite::SqliteRunScheduleRepository::new(&run_url)
+                    .await
+                    .expect("schedule store opens");
+            repo.insert(attributed_schedule(1)).await.expect("insert 1");
+            repo.insert(unattributed_schedule(2))
+                .await
+                .expect("insert 2");
+            repo.insert(attributed_schedule(3)).await.expect("insert 3");
+        }
+        let dump = |url: String| async move {
+            let pool = sqlx::SqlitePool::connect(&url).await.expect("connect");
+            let rows = sqlx::query("SELECT * FROM run_schedules ORDER BY schedule_id")
+                .fetch_all(&pool)
+                .await
+                .expect("select");
+            let mut out = Vec::new();
+            for row in &rows {
+                let mut cells = Vec::new();
+                for column in sqlx::Row::columns(row) {
+                    let name = sqlx::Column::name(column).to_string();
+                    let text: Option<String> = row
+                        .try_get::<Option<String>, _>(name.as_str())
+                        .or_else(|_| {
+                            row.try_get::<Option<i64>, _>(name.as_str())
+                                .map(|v| v.map(|n| n.to_string()))
+                        })
+                        .or_else(|_| {
+                            row.try_get::<Option<bool>, _>(name.as_str())
+                                .map(|v| v.map(|b| b.to_string()))
+                        })
+                        .or_else(|_| {
+                            row.try_get::<Option<DateTime<Utc>>, _>(name.as_str())
+                                .map(|v| v.map(|t| t.to_rfc3339()))
+                        })
+                        .unwrap_or_else(|_| Some("<undecodable>".to_string()));
+                    cells.push(format!("{name}={text:?}"));
+                }
+                out.push(cells.join("|"));
+            }
+            pool.close().await;
+            out
+        };
+        {
+            let pool = sqlx::SqlitePool::connect(&run_url).await.expect("connect");
+            sqlx::query("UPDATE run_schedules SET api_key_id = NULL WHERE schedule_id = ?")
+                .bind(schedule_id(3).as_str().to_string())
+                .execute(&pool)
+                .await
+                .expect("half-attribute row 3");
+            pool.close().await;
+        }
+        let before = dump(run_url.clone()).await;
+        assert_eq!(before.len(), 3);
+
+        let coordinator = ShutdownCoordinator::new();
+        let handles = build_run_api(
+            sqlite_configs(&run_url),
+            &Settings::default(),
+            coordinator.clone(),
+            Some(sqlite_waypoints(&wp_url).await),
+            principal_auth(&[("secret-a", "svc-a", "acme")]),
+            Arc::new(AgentRegistry::new()),
+        )
+        .await
+        .expect("an unreadable schedule row never blocks boot");
+        assert!(handles.run_repository.is_some());
+        coordinator.cancel_and_wait(Duration::from_secs(1)).await;
+
+        let after = dump(run_url.clone()).await;
+        assert_eq!(before, after, "the scan left run_schedules untouched");
         cleanup(&run_path);
         cleanup(&wp_path);
         unsafe {

@@ -362,7 +362,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 53-03-PLAN.md — `load_visible_thread` gate on every `/v1/threads/{id}*` route (gate before admin check), seven backend-text sites redacted, OpenAPI-derived route matrix (TENANT-03, TENANT-06)
+- [x] 53-03-PLAN.md — `load_visible_thread` gate on every `/v1/threads/{id}*` route (gate before admin check), seven backend-text sites redacted, OpenAPI-derived route matrix (TENANT-03, TENANT-06)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

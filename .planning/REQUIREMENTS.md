@@ -67,7 +67,7 @@ error text), which the inventory built from `40-REVIEW.md` alone did not see. TE
 are therefore prove-against-the-tree-and-add-the-missing-regression-test requirements; only what
 fails is rebuilt.*
 
-- [ ] **TENANT-03**: Every `/v1/threads/*` handler (list, get, state, history, resume, fork, delete)
+- [x] **TENANT-03**: Every `/v1/threads/*` handler (list, get, state, history, resume, fork, delete)
       resolves the thread through one visibility gate (as `run_controller::load_visible_run` does), so
       a principal of another tenant gets 404 and cannot enumerate or read another tenant's threads or
       Waypoint state — A1, WINDOWS row 58
@@ -79,7 +79,7 @@ fails is rebuilt.*
 - [x] **TENANT-05**: `RunSubmissionService::cancel` enforces the tenant at the service layer (not
       only in the HTTP controller), so library and future-route callers cannot bypass it — A3, WR-02
 
-- [ ] **TENANT-06**: A corrupt or half-attributed run row, and any `Serialization` error, surfaces
+- [x] **TENANT-06**: A corrupt or half-attributed run row, and any `Serialization` error, surfaces
       to an API client as a redacted error that preserves the hidden-equals-missing guarantee; no
       backend text reaches the response body — A4, WR-03/WR-04
 
@@ -314,10 +314,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CIREL-07 | Phase 52 | Complete |
 | CIREL-08 | Phase 55 | Pending |
 | CIREL-09 | Phase 52 | Complete |
-| TENANT-03 | Phase 53 | Pending |
+| TENANT-03 | Phase 53 | Complete |
 | TENANT-04 | Phase 53 | Complete |
 | TENANT-05 | Phase 53 | Complete |
-| TENANT-06 | Phase 53 | Pending |
+| TENANT-06 | Phase 53 | Complete |
 | TENANT-07 | Phase 53 | Pending |
 | TENANT-08 | Phase 53 | Pending |
 | TENANT-09 | Phase 53 | Pending |

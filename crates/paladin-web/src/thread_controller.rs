@@ -91,7 +91,9 @@ use paladin_core::platform::container::waypoint::{ThreadId, Waypoint, WaypointId
 use paladin_ports::input::parley_port::{ParleyError, ParleyPort};
 use paladin_ports::input::run_submission_port::{ForkRun, RunSubmissionPort};
 use paladin_ports::output::run_repository_port::{RunQuery, RunRepositoryError, RunRepositoryPort};
-use paladin_ports::output::waypoint_port::{WaypointError, WaypointPort, WaypointSummary};
+use paladin_ports::output::waypoint_port::{
+    ThreadSummary, WaypointError, WaypointPort, WaypointSummary,
+};
 
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
@@ -233,6 +235,19 @@ const MAX_HISTORY_LIMIT: u32 = 100;
 /// renders (TENANT-06). The detail -- which can carry connection strings, schema names or
 /// the shape of a corrupt Waypoint -- goes to the server log only.
 const THREAD_STORE_ERROR_MESSAGE: &str = "thread store error";
+
+/// The most threads one tenant-scoped `GET /threads` request examines (D-04, T-53-21).
+///
+/// Each examined thread costs one latest-run lookup, so this bounds a request to
+/// `MAX_EXAMINED_THREADS` run-repository reads and
+/// `MAX_EXAMINED_THREADS / THREAD_SCAN_BATCH` waypoint-store list calls however large the
+/// store is or however few of its threads the caller may see. A walk that reaches the cap
+/// returns what it has (possibly nothing) with a non-null `next_cursor`.
+const MAX_EXAMINED_THREADS: usize = 500;
+
+/// How many thread summaries one tenant-scoped list walk asks the waypoint store for per
+/// call (the port's `limit`).
+const THREAD_SCAN_BATCH: u32 = 100;
 
 // --- Label helpers (stable, lowercase wire labels) -------------------------
 
@@ -728,6 +743,89 @@ async fn latest_run_for_thread(
     Ok(page.items.into_iter().next())
 }
 
+/// Collect up to `limit` threads `scope` may see, walking the waypoint store newest
+/// activity first (TENANT-03, D-04) -- the `GET /threads` counterpart of
+/// [`load_visible_thread`].
+///
+/// A thread's owner is its latest run, so each examined thread costs one
+/// [`latest_run_for_thread`] lookup (the same read the single-thread gate performs, with
+/// the `All` scope) and is kept when [`RunReadScope::permits_thread`] admits it. The walk
+/// pages the store in [`THREAD_SCAN_BATCH`]-sized `list_threads` calls and stops as soon
+/// as `limit` threads are kept, the store is exhausted, or [`MAX_EXAMINED_THREADS`]
+/// threads have been examined.
+///
+/// Returns the kept threads (newest first) and the cursor to continue from: the
+/// `last_updated_at` of the **last examined** thread, or `None` when the store is
+/// exhausted. A page may therefore hold fewer than `limit` items while the cursor still
+/// advances (a client follows `next_cursor` until it is `null`), and no thread repeats
+/// across pages. The cursor is an exclusive timestamp, so, as `WaypointPort::list_threads`
+/// itself documents, two threads with an identical `last_updated_at` straddling a page
+/// boundary can be skipped; this is a keyset walk, not a snapshot.
+///
+/// A lookup that fails with [`RunRepositoryError::Serialization`] means that one thread's
+/// run row is unreadable. For a `Tenant` scope the thread is skipped (it is hidden, never
+/// shown) and the error logged, so one tenant's corrupt row cannot fail another tenant's
+/// list. Any other run-repository error, and every waypoint-store error, answers the fixed
+/// `500` for every role -- a list has no single object to hide (D-09).
+async fn visible_thread_page(
+    waypoints: &Arc<dyn WaypointPort>,
+    runs: &Arc<dyn RunRepositoryPort>,
+    scope: &RunReadScope,
+    limit: u32,
+    before: Option<DateTime<Utc>>,
+) -> Result<(Vec<ThreadSummary>, Option<DateTime<Utc>>), ApiError> {
+    let limit = limit as usize;
+    let mut visible: Vec<ThreadSummary> = Vec::new();
+    let mut examined = 0_usize;
+    let mut cursor = before;
+    loop {
+        let batch = waypoints
+            .list_threads(Some(THREAD_SCAN_BATCH), cursor)
+            .await
+            .map_err(|e| thread_store_error("thread API list", e))?;
+        let batch_len = batch.len();
+        if batch_len == 0 {
+            return Ok((visible, None));
+        }
+        for summary in batch {
+            examined += 1;
+            cursor = Some(summary.last_updated_at);
+            match latest_run_for_thread(runs, &summary.thread_id).await {
+                Ok(latest) => {
+                    if scope.permits_thread(latest.as_ref()) {
+                        visible.push(summary);
+                    }
+                }
+                Err(RunRepositoryError::Serialization { message })
+                    if !matches!(scope, RunReadScope::All) =>
+                {
+                    // Hidden, not shown: an unreadable row has no attributable owner.
+                    log::error!(
+                        "thread API list owner lookup failed: run serialization error: \
+                         {message} (thread skipped as not visible)"
+                    );
+                }
+                Err(other) => {
+                    // The `All` scope never takes the hidden branch, so this is the fixed
+                    // `500`; the fallback closure is unreachable by construction.
+                    return Err(run_repo_error_for_scope(
+                        &RunReadScope::All,
+                        "thread API list owner lookup",
+                        other,
+                        || ApiError::internal(THREAD_STORE_ERROR_MESSAGE),
+                    ));
+                }
+            }
+            if visible.len() >= limit || examined >= MAX_EXAMINED_THREADS {
+                return Ok((visible, cursor));
+            }
+        }
+        if batch_len < THREAD_SCAN_BATCH as usize {
+            return Ok((visible, None));
+        }
+    }
+}
+
 /// Load a thread's latest Waypoint and check the caller may see the thread -- the single
 /// entry every `/v1/threads/{id}*` route passes through (TENANT-03, D-05).
 ///
@@ -1019,6 +1117,17 @@ async fn active_run_id_for(state: &ThreadApiState, thread: &ThreadId) -> Option<
         .map(|run| run.run_id.to_string())
 }
 
+/// Build the list DTO for one thread summary, with its active run id when a run store
+/// is wired.
+async fn thread_summary_dto(state: &ThreadApiState, summary: &ThreadSummary) -> ThreadSummaryDto {
+    ThreadSummaryDto {
+        thread_id: summary.thread_id.as_str().to_string(),
+        latest_status: waypoint_status_label(&summary.latest_status).to_string(),
+        updated_at: summary.last_updated_at,
+        active_run_id: active_run_id_for(state, &summary.thread_id).await,
+    }
+}
+
 /// `GET /threads` -- paginated thread list, newest-activity-first (D-45,
 /// D-47). Authenticated, any role.
 ///
@@ -1051,7 +1160,7 @@ async fn active_run_id_for(state: &ThreadApiState, thread: &ThreadId) -> Option<
 )]
 pub async fn list_threads(
     State(state): State<ThreadApiState>,
-    Extension(_principal): Extension<Principal>,
+    Extension(principal): Extension<Principal>,
     Query(params): Query<ThreadListQuery>,
 ) -> Result<(StatusCode, JsonValue), ApiError> {
     let waypoints = state
@@ -1065,8 +1174,33 @@ pub async fn list_threads(
         .map(decode_cursor::<DateTime<Utc>>)
         .transpose()?;
 
-    // limit+1 trick: fetch one extra to know whether a next page exists
-    // without a second round trip.
+    // A non-admin sees only threads whose latest run is its tenant's (TENANT-03, D-04).
+    let scope = principal.read_scope();
+    if !matches!(scope, RunReadScope::All) {
+        // No run store: ownership cannot be established, so nothing is visible (D-07).
+        let Some(runs) = state.runs.as_ref() else {
+            return Ok((
+                StatusCode::OK,
+                ok_body(&ThreadListResponse {
+                    items: Vec::new(),
+                    next_cursor: None,
+                }),
+            ));
+        };
+        let (visible, cursor) = visible_thread_page(waypoints, runs, &scope, limit, before).await?;
+        let mut items = Vec::with_capacity(visible.len());
+        for summary in &visible {
+            items.push(thread_summary_dto(&state, summary).await);
+        }
+        let next_cursor = cursor.as_ref().map(encode_cursor);
+        return Ok((
+            StatusCode::OK,
+            ok_body(&ThreadListResponse { items, next_cursor }),
+        ));
+    }
+
+    // Admin: limit+1 trick -- fetch one extra to know whether a next page exists
+    // without a second round trip, and perform no owner lookup.
     let page = waypoints
         .list_threads(Some(limit + 1), before)
         .await
@@ -1080,13 +1214,7 @@ pub async fn list_threads(
 
     let mut items = Vec::with_capacity(page_items.len());
     for summary in page_items {
-        let active_run_id = active_run_id_for(&state, &summary.thread_id).await;
-        items.push(ThreadSummaryDto {
-            thread_id: summary.thread_id.as_str().to_string(),
-            latest_status: waypoint_status_label(&summary.latest_status).to_string(),
-            updated_at: summary.last_updated_at,
-            active_run_id,
-        });
+        items.push(thread_summary_dto(&state, summary).await);
     }
     let next_cursor = if has_more {
         page_items.last().map(|s| encode_cursor(&s.last_updated_at))
@@ -1371,7 +1499,6 @@ mod tests {
     use paladin_ports::input::parley_port::ResumeAccepted;
     use paladin_ports::input::run_submission_port::{RunSubmissionError, SubmitRun};
     use paladin_ports::output::run_repository_port::RunRepositoryPort;
-    use paladin_ports::output::waypoint_port::{ThreadSummary, WaypointError};
     use std::collections::BTreeMap;
     use std::collections::HashMap;
     use std::sync::Mutex;
@@ -1440,12 +1567,19 @@ mod tests {
     /// The text every injected failure carries; no response body may contain it.
     const INJECTED_TEXT: &str = "db.internal.example corrupt-row-detail";
 
+    /// One recorded `list_threads(limit, before)` call.
+    type ListCall = (Option<u32>, Option<DateTime<Utc>>);
+
     #[derive(Default)]
     struct MockWaypointStore {
         latest: Mutex<HashMap<String, Waypoint>>,
         history: Mutex<HashMap<String, Vec<WaypointSummary>>>,
         /// When set, `latest()` fails with this variant (Phase 53 thread gate tests).
         fail_latest_with: Mutex<Option<WaypointFailure>>,
+        /// Seeded `list_threads` rows (Phase 53 list walk tests); empty by default.
+        threads: Mutex<Vec<ThreadSummary>>,
+        /// Every `list_threads(limit, before)` call, in order.
+        list_calls: Mutex<Vec<ListCall>>,
     }
 
     impl MockWaypointStore {
@@ -1458,6 +1592,11 @@ mod tests {
                 .lock()
                 .unwrap()
                 .insert(wp.thread_id.as_str().to_string(), wp);
+        }
+
+        /// Seed one `list_threads` row.
+        fn seed_listed(&self, summary: ThreadSummary) {
+            self.threads.lock().unwrap().push(summary);
         }
 
         fn seed_history(&self, thread: &ThreadId, items: Vec<WaypointSummary>) {
@@ -1530,12 +1669,27 @@ mod tests {
             Ok(page)
         }
 
+        /// Honors the port contract over the seeded rows: newest `last_updated_at` first,
+        /// `before` exclusive, `limit` applied last. Empty when nothing is seeded.
         async fn list_threads(
             &self,
-            _limit: Option<u32>,
-            _before: Option<DateTime<Utc>>,
+            limit: Option<u32>,
+            before: Option<DateTime<Utc>>,
         ) -> Result<Vec<ThreadSummary>, WaypointError> {
-            Ok(vec![])
+            self.list_calls.lock().unwrap().push((limit, before));
+            let mut rows: Vec<ThreadSummary> = self
+                .threads
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|row| before.is_none_or(|b| row.last_updated_at < b))
+                .cloned()
+                .collect();
+            rows.sort_by_key(|row| std::cmp::Reverse(row.last_updated_at));
+            if let Some(limit) = limit {
+                rows.truncate(limit as usize);
+            }
+            Ok(rows)
         }
 
         async fn delete_thread(&self, thread: &ThreadId) -> Result<u64, WaypointError> {
@@ -2219,6 +2373,8 @@ mod tests {
         /// When set, `get`, `list` and `active_run_for_thread` fail with a
         /// `Serialization` error carrying this text (Phase 53 thread gate tests).
         fail_reads_with: Mutex<Option<String>>,
+        /// Number of `list` calls made (the thread list walk's owner lookups).
+        list_calls: std::sync::atomic::AtomicUsize,
     }
 
     impl MockRunRepository {
@@ -2293,6 +2449,8 @@ mod tests {
             paladin_ports::output::run_repository_port::RunPage,
             paladin_ports::output::run_repository_port::RunRepositoryError,
         > {
+            self.list_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             self.read_failure()?;
             let mut items: Vec<Run> = self
                 .runs
@@ -2457,6 +2615,24 @@ mod tests {
             t
         }
 
+        /// Seed one thread for the list walk tests: a latest Waypoint, a `list_threads`
+        /// row whose `last_updated_at` is `list_epoch() + rank` seconds (a higher `rank`
+        /// is newer), and, for `Some(tenant)`, one run on it attributed to that tenant
+        /// submitted at the same instant. `None` leaves the thread with no run.
+        fn listed_thread(&self, name: &str, rank: i64, owner: Option<&str>) -> ThreadId {
+            let t = self.waypoint(name);
+            let at = list_epoch() + chrono::Duration::seconds(rank);
+            self.waypoints.seed_listed(ThreadSummary {
+                thread_id: t.clone(),
+                latest_status: WaypointStatus::Completed,
+                last_updated_at: at,
+            });
+            if let Some(tenant) = owner {
+                self.runs.seed_run(run_on(&t, tenant, "svc", at));
+            }
+            t
+        }
+
         /// A state with the four-key auth, both stores and (when `with_runs`) the run store.
         fn state(&self, with_runs: bool) -> ThreadApiState {
             let state = ThreadApiState::new()
@@ -2468,6 +2644,11 @@ mod tests {
                 state
             }
         }
+    }
+
+    /// The fixed instant list walk tests count seconds from.
+    fn list_epoch() -> DateTime<Utc> {
+        DateTime::<Utc>::from_timestamp(1_800_000_000, 0).expect("valid timestamp")
     }
 
     async fn send_thread_request(
@@ -3230,6 +3411,78 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // --- Tenant-filtered thread list (Phase 53, plan 53-04, TENANT-03, D-04) ---
+
+    /// `GET /v1/threads{query}` as `key`, returning `(status, parsed JSON body)`.
+    async fn list_as(
+        app: &axum::Router,
+        key: &str,
+        query: &str,
+    ) -> (StatusCode, serde_json::Value) {
+        let response =
+            send_thread_request(app, "GET", format!("/v1/threads{query}"), key, None, &[]).await;
+        let (status, _headers, body) = response_parts(response).await;
+        let json = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+        (status, json)
+    }
+
+    /// The `thread_id`s of a list body's `items`, in order.
+    fn listed_ids(body: &serde_json::Value) -> Vec<String> {
+        body["items"]
+            .as_array()
+            .expect("items is an array")
+            .iter()
+            .map(|item| item["thread_id"].as_str().expect("thread_id").to_string())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn list_threads_omits_foreign_and_zero_run_threads() {
+        let fixture = ThreadFixture::new();
+        fixture.listed_thread("globex-2", 4, Some("globex"));
+        fixture.listed_thread("acme-2", 3, Some("acme"));
+        fixture.listed_thread("zero-1", 2, None);
+        fixture.listed_thread("acme-1", 1, Some("acme"));
+        let app = thread_router(fixture.state(true));
+
+        let (status, owner) = list_as(&app, "owner-key", "?limit=10").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            listed_ids(&owner),
+            ["acme-2", "acme-1"],
+            "acme sees only its own threads, newest activity first"
+        );
+        assert!(owner["next_cursor"].is_null(), "the store was exhausted");
+
+        let (_, foreign) = list_as(&app, "foreign-key", "?limit=10").await;
+        assert_eq!(listed_ids(&foreign), ["globex-2"]);
+        assert!(foreign["next_cursor"].is_null());
+
+        let (_, admin) = list_as(&app, "admin-key", "?limit=10").await;
+        assert_eq!(
+            listed_ids(&admin),
+            ["globex-2", "acme-2", "zero-1", "acme-1"],
+            "an Admin sees every thread, including the run-less one"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_threads_returns_the_empty_page_shape_when_nothing_is_visible() {
+        let fixture = ThreadFixture::new();
+        fixture.listed_thread("acme-2", 2, Some("acme"));
+        fixture.listed_thread("acme-1", 1, Some("acme"));
+        fixture.listed_thread("zero-1", 0, None);
+        let app = thread_router(fixture.state(true));
+
+        let (status, body) = list_as(&app, "foreign-key", "").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body,
+            serde_json::json!({ "items": [], "next_cursor": null }),
+            "nothing visible is the documented empty page"
+        );
     }
 
     #[tokio::test]

@@ -688,7 +688,7 @@ fn map_parley_error(err: ParleyError) -> ApiError {
 /// `"thread store error"` for every role.
 ///
 /// For a failure that is *not* an existence question: the caller has already been
-/// admitted by [`load_visible_thread`], so there is nothing left to hide, and the detail
+/// admitted by `load_visible_thread`, so there is nothing left to hide, and the detail
 /// is for the operator's log only. Routed through the shared run-route redaction rule
 /// with an `All` scope and `hideable = false`, so one rule renders every store error.
 fn thread_store_error(context: &str, err: impl std::fmt::Display) -> ApiError {
@@ -752,7 +752,7 @@ async fn latest_run_for_thread(
 
 /// Collect up to `limit` threads `scope` may see, walking the waypoint store newest
 /// activity first (TENANT-03, D-04) -- the `GET /threads` counterpart of
-/// [`load_visible_thread`].
+/// `load_visible_thread`.
 ///
 /// A thread's owner is its latest run, so each examined thread costs one
 /// [`latest_run_for_thread`] lookup (the same read the single-thread gate performs, with
@@ -910,7 +910,7 @@ async fn load_visible_thread(
 /// `GET /threads/{id}/state` -- the thread's latest status, plus outstanding
 /// parleys/responses when suspended.
 ///
-/// Authenticated, any role, tenant-scoped through [`load_visible_thread`]: a user-role
+/// Authenticated, any role, tenant-scoped through `load_visible_thread`: a user-role
 /// principal sees only a thread whose latest run belongs to its tenant, an Admin sees
 /// every thread, and a thread the caller may not see answers the same `404` as a missing
 /// one (ADR-0063).
@@ -954,7 +954,7 @@ pub async fn get_thread_state(
 /// `POST /threads/{id}/resume` -- deliver parley responses.
 ///
 /// Requires an admin principal ([`require_admin`], CR-01) **after** the thread
-/// visibility gate ([`load_visible_thread`], D-06): a non-admin of another tenant gets
+/// visibility gate (`load_visible_thread`, D-06): a non-admin of another tenant gets
 /// the missing-thread `404`, never the `403` that would reveal the thread exists; a
 /// same-tenant non-admin gets the `403`; an Admin passes both. See the module-level
 /// "Authorization (tenant visibility, ADR-0063)" docs.
@@ -1033,7 +1033,7 @@ pub async fn resume_thread(
 
 /// `GET /threads/{id}/history` -- paginated Chronicle history.
 ///
-/// Authenticated, any role, tenant-scoped through [`load_visible_thread`] exactly like
+/// Authenticated, any role, tenant-scoped through `load_visible_thread` exactly like
 /// [`get_thread_state`]. An unknown thread is `404` for every role (it used to answer
 /// `200` with an empty page, which let a caller probe for a thread's existence).
 ///
@@ -1247,7 +1247,7 @@ pub async fn list_threads(
 }
 
 /// `GET /threads/{id}` -- one thread's summary (D-45). Authenticated, any
-/// role, tenant-scoped through [`load_visible_thread`] (ADR-0063).
+/// role, tenant-scoped through `load_visible_thread` (ADR-0063).
 ///
 /// Returns:
 /// - `200 OK` with [`ThreadResponse`] on success;
@@ -1302,7 +1302,7 @@ pub async fn get_thread(
 /// [`RunSubmissionPort::fork`] -- `paladin-web` has no visibility into
 /// `allowed_roles` itself, ADR-0031).
 ///
-/// The caller must be able to see the thread ([`load_visible_thread`]): a thread another
+/// The caller must be able to see the thread (`load_visible_thread`): a thread another
 /// tenant owns answers the missing-thread `404` before the fork is submitted.
 /// `RunSubmissionService::ensure_thread_visible` re-checks the same rule for library
 /// callers that bypass this controller.
@@ -1378,7 +1378,7 @@ pub async fn fork_thread(
 /// `DELETE /threads/{id}` -- delete a thread's whole Waypoint history
 /// (admin, D-45).
 ///
-/// The visibility gate ([`load_visible_thread`]) runs **before** the admin check
+/// The visibility gate (`load_visible_thread`) runs **before** the admin check
 /// (D-06): a non-admin of another tenant gets the missing-thread `404`, a same-tenant
 /// non-admin the `403`. A second `DELETE` of a deleted thread is `404` for every role.
 ///

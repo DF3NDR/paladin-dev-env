@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 13
+open_count: 16
 waived_count: 39
 fixed_count: 32
-total_count: 84
-last_updated: 2026-10-31T14:18:13.284Z
+total_count: 87
+last_updated: 2026-10-31T17:57:36.724Z
 ---
 
 # Broken Windows Ledger
@@ -99,6 +99,9 @@ last_updated: 2026-10-31T14:18:13.284Z
 | 82 | 46 | deviation | .planning/decisions/0015-core-ports-dependency-allowlist.md |  | Deferred debt line: paladin-core / paladin-ports dependency allowlists (declared 6 / 7, shipping 14 / 10 at ingest). Fixed: ADR-0015 rebaselined to the measured sets with the purity invariant; Phase 46 (D-20/D-21) re-measured 14 / 12 (log added to paladin-ports, ADR-0015 amendment 2026-10-24) and pinned them with scripts/check-dependency-allowlist.sh in make check-gates and CI's cargo-deny job. | fixed |  | 2026-10-24T13:47:17.331Z | 2026-10-24T13:47:20.422Z |
 | 83 | 52 | unrun-verify | .github/workflows/ci.yml |  | actionlint not runnable in sandbox; CI Workflow Lint job gates the 52-01 ci.yml edits (A-52-03) | open |  | 2026-10-28T19:29:42.085Z |  |
 | 84 | 52 | unrun-verify | .github/workflows/ci.yml |  | actionlint not installed in sandbox; 52-06 ci.yml edits (labeled type, e2e/publish-dry-run conditions) await CI Workflow Lint job | open |  | 2026-10-29T01:38:56.452Z |  |
+| 85 | 53 | deviation | crates/paladin-web/src/thread_controller.rs | 815 | 53-REVIEW WR-01, owner-accepted follow-up (53-UAT test 2): a run row with UnknownSchemaVersion on any tenant's thread falls into the Err(other) arm of visible_thread_page and aborts the walk, so every non-admin GET /v1/threads returns 500 until the row is repaired (likely after a downgrade). Fix: skip-and-log UnknownSchemaVersion in the list walk like Serialization; consider making it hideable in run_repo_error_for_scope. Proposed owner: Phase 55 (correctness fixes). | open |  | 2026-10-31T17:57:36.525Z |  |
+| 86 | 53 | deviation | crates/paladin-web/src/thread_controller.rs | 739 | 53-REVIEW WR-02, owner-accepted follow-up (53-UAT test 2): the latest-run lookup uses list(limit: 1), and the SQLite/Postgres list decodes limit+1 rows, so one corrupt OLDER run row returns Serialization and locks tenant A out of its own thread (404 on every gated route, 500 for Admin and on submit/fork via ensure_thread_visible in submission.rs:289). Fix: a port method that reads exactly the newest run (LIMIT 1), used in both places. Proposed owner: Phase 55 (correctness fixes). | open |  | 2026-10-31T17:57:36.623Z |  |
+| 87 | 53 | deviation | crates/paladin-core/src/platform/container/principal.rs | 325 | 53-REVIEW WR-03, owner-accepted follow-up (53-UAT test 2): thread ownership is the latest run's submitted_by, so an Admin fork/submit onto tenant A's thread, or an unattributed (schedule-fired, submitted_by None) run, transfers or hides the thread and tenant A gets 404 on a thread it created. Matches SPEC AC-04 as written. Fix: derive ownership from the first or earliest attributed run, or keep the original tenant's attribution on admin forks; at minimum document the transfer in ADR-0063 and parley-and-chronicle.md. Proposed owner: Phase 55 (correctness fixes). | open |  | 2026-10-31T17:57:36.724Z |  |
 
 ````json
 [
@@ -1108,6 +1111,42 @@ last_updated: 2026-10-31T14:18:13.284Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-10-29T01:38:56.452Z",
+    "resolved_at": null
+  },
+  {
+    "id": 85,
+    "kind": "deviation",
+    "phase": "53",
+    "file": "crates/paladin-web/src/thread_controller.rs",
+    "line": 815,
+    "description": "53-REVIEW WR-01, owner-accepted follow-up (53-UAT test 2): a run row with UnknownSchemaVersion on any tenant's thread falls into the Err(other) arm of visible_thread_page and aborts the walk, so every non-admin GET /v1/threads returns 500 until the row is repaired (likely after a downgrade). Fix: skip-and-log UnknownSchemaVersion in the list walk like Serialization; consider making it hideable in run_repo_error_for_scope. Proposed owner: Phase 55 (correctness fixes).",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-10-31T17:57:36.525Z",
+    "resolved_at": null
+  },
+  {
+    "id": 86,
+    "kind": "deviation",
+    "phase": "53",
+    "file": "crates/paladin-web/src/thread_controller.rs",
+    "line": 739,
+    "description": "53-REVIEW WR-02, owner-accepted follow-up (53-UAT test 2): the latest-run lookup uses list(limit: 1), and the SQLite/Postgres list decodes limit+1 rows, so one corrupt OLDER run row returns Serialization and locks tenant A out of its own thread (404 on every gated route, 500 for Admin and on submit/fork via ensure_thread_visible in submission.rs:289). Fix: a port method that reads exactly the newest run (LIMIT 1), used in both places. Proposed owner: Phase 55 (correctness fixes).",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-10-31T17:57:36.623Z",
+    "resolved_at": null
+  },
+  {
+    "id": 87,
+    "kind": "deviation",
+    "phase": "53",
+    "file": "crates/paladin-core/src/platform/container/principal.rs",
+    "line": 325,
+    "description": "53-REVIEW WR-03, owner-accepted follow-up (53-UAT test 2): thread ownership is the latest run's submitted_by, so an Admin fork/submit onto tenant A's thread, or an unattributed (schedule-fired, submitted_by None) run, transfers or hides the thread and tenant A gets 404 on a thread it created. Matches SPEC AC-04 as written. Fix: derive ownership from the first or earliest attributed run, or keep the original tenant's attribution on admin forks; at minimum document the transfer in ADR-0063 and parley-and-chronicle.md. Proposed owner: Phase 55 (correctness fixes).",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-10-31T17:57:36.724Z",
     "resolved_at": null
   }
 ]

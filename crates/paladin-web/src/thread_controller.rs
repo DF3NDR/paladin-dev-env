@@ -1,5 +1,5 @@
-//! Axum HTTP controller for inspecting, resuming, and paging through threads
-//! (HITL-05, HITL-FR-16, D-24/D-25/D-27).
+//! Axum HTTP controller for inspecting, resuming, forking and deleting threads
+//! (HITL-05, HITL-FR-16, D-24/D-25/D-27/D-45).
 //!
 //! This module mirrors [`crate::agent_controller`]'s conventions on a router
 //! and state struct of its own, so [`crate::agent_controller::AgentApiState`]
@@ -7,9 +7,13 @@
 //!
 //! | Method & path | Description |
 //! |---------------|-------------|
+//! | `GET /threads` | Paginated thread list, newest activity first |
+//! | `GET /threads/{id}` | One thread's summary |
 //! | `GET /threads/{id}/state` | The thread's latest status, plus outstanding parleys/responses when suspended |
-//! | `POST /threads/{id}/resume` | Deliver parley responses; `202 Accepted`, poll `state` for the outcome |
+//! | `POST /threads/{id}/resume` | Deliver parley responses; `202 Accepted`, poll `state` for the outcome (Admin) |
+//! | `POST /threads/{id}/fork` | Submit a new run continuing the thread from a Waypoint |
 //! | `GET /threads/{id}/history` | Paginated Chronicle history (`limit` + opaque `cursor`) |
+//! | `DELETE /threads/{id}` | Delete a thread's whole Waypoint history (Admin) |
 //!
 //! [`ThreadApiState`] holds `Option<Arc<dyn WaypointPort>>` and
 //! `Option<Arc<dyn ParleyPort>>` -- both `paladin-ports` trait objects, never
@@ -28,22 +32,47 @@
 //! `parley_already_answered` / `response_shape_invalid` / `parley_expired`
 //! (the offending `parley_id` in `details`); `501` when unwired.
 //!
-//! ## Authorization (narrows D-24 pending PLAT-06)
+//! ## Authorization (tenant visibility, ADR-0063)
 //!
-//! D-24 scoped these routes to "the same auth middleware as `/v1/agents/*`,
-//! authenticated callers, any role; scopes are PLAT-06 (Phase 27)". Per
-//! CR-01 (24-REVIEW.md), that was too permissive for the one *mutating*
-//! route: any authenticated credential -- including the lowest-privileged
-//! configured role -- could drive `POST .../resume` for a thread it had no
-//! relationship to, since neither `ThreadId` nor `Waypoint` carry an
-//! owner/principal to scope against yet. Until PLAT-06 lands real per-thread
-//! ownership, `resume_thread` additionally requires [`crate::agent_auth::require_admin`]
-//! (matching `agent_controller.rs`'s own admin-gated routes); `get_thread_state`
-//! and `get_thread_history` remain authenticated-any-role, as D-24 specified --
-//! reads carry lower blast radius than driving execution forward, and a
-//! coarser per-thread read scope is exactly what PLAT-06 is expected to add.
-//! Every credential configured for `/v1/threads/*/resume` must be treated as
-//! admin-equivalent until then.
+//! A thread carries no tenant of its own; it belongs to the tenant of its **latest run**
+//! -- the newest by `submitted_at`, with `run_id` as the tiebreak. Every
+//! `/v1/threads/{id}*` route (`get_thread`, `get_thread_state`, `get_thread_history`,
+//! `resume_thread`, `fork_thread`, `delete_thread`) enters through one private gate,
+//! `load_visible_thread`, which applies
+//! [`RunReadScope::permits_thread`](paladin_core::platform::container::principal::RunReadScope::permits_thread)
+//! to the principal's own scope (server-derived, never from a header, query parameter or
+//! body):
+//!
+//! - an **Admin** sees every thread and the gate performs no run lookup;
+//! - a **user-role principal** sees a thread only when its latest run is attributed to
+//!   the principal's tenant;
+//! - a thread with **no run** has no owner and is visible to an Admin only;
+//! - with **no run store wired** ([`ThreadApiState::runs`] is `None`) ownership cannot be
+//!   established, so the gate fails closed: a non-admin sees no thread, an Admin is
+//!   unaffected (D-07);
+//! - a thread the caller may not see answers the **byte-identical `404 unknown thread
+//!   '<id>'`** a missing thread gets -- no `403`, no distinct code, message or header --
+//!   so a foreign tenant cannot learn that a thread exists (ADR-0054 rule 5);
+//! - on `resume` and `delete` the gate runs **before** `require_admin` (D-06): a foreign
+//!   non-admin gets the `404`, a same-tenant non-admin the `403`, an Admin passes both;
+//!   `fork` runs the gate before the fork is submitted, and
+//!   `RunSubmissionService::ensure_thread_visible` re-checks the same rule for library
+//!   callers.
+//!
+//! Store failures never echo backend text: a waypoint-store failure renders the fixed
+//! `500 "thread store error"` and a run-store failure the fixed `500 "run store error"`
+//! (detail to the server log only). A Waypoint or run row the store cannot read
+//! (`Serialization`, or an unsupported Waypoint schema version) is an existence signal, so
+//! for a non-admin it is the same missing-thread `404`; an Admin gets the fixed `500`.
+//!
+//! The route-enumerating test `every_thread_id_route_hides_foreign_threads_behind_the_missing_thread_404`
+//! reads the `/v1/threads/{id}*` operations from this router's own OpenAPI document and
+//! fails if any is missing from its table, so a future route cannot skip the gate unnoticed.
+//!
+//! Known limitation (D-14): thread ids are not tenant-namespaced, so two tenants that pick
+//! the same id share one thread, and its latest run decides who sees it. `GET /threads`
+//! (the list route) is outside this gate: it addresses no single thread, and its
+//! tenant-filtered walk is plan 53-04's.
 
 use std::sync::Arc;
 
@@ -627,7 +656,7 @@ fn map_parley_error(err: ParleyError) -> ApiError {
             expires_at,
         } => ApiError::bad_request(format!("parley {parley_id} expired at {expires_at}"))
             .with_details(serde_json::json!({ "parley_id": parley_id.to_string() })),
-        other => ApiError::internal(other.to_string()),
+        other => thread_store_error("thread API resume", other),
     }
 }
 
@@ -776,15 +805,15 @@ async fn load_visible_thread(
 /// `GET /threads/{id}/state` -- the thread's latest status, plus outstanding
 /// parleys/responses when suspended.
 ///
-/// Authenticated, any role (D-24) -- reads carry lower blast radius than
-/// `resume_thread`; per-thread ownership scoping is PLAT-06 (Phase 27). The
-/// `Principal` is extracted (unused today) so this handler's signature is
-/// already shaped for that scoping to land as a body-only change.
+/// Authenticated, any role, tenant-scoped through [`load_visible_thread`]: a user-role
+/// principal sees only a thread whose latest run belongs to its tenant, an Admin sees
+/// every thread, and a thread the caller may not see answers the same `404` as a missing
+/// one (ADR-0063).
 ///
 /// Returns:
 /// - `200 OK` with [`ThreadStateResponse`] on success;
 /// - `400 Bad Request` for an invalid thread id;
-/// - `404 Not Found` if no Waypoint exists for `id`;
+/// - `404 Not Found` for an unknown thread, or one the caller may not see;
 /// - `501 Not Implemented` if no waypoint backend is configured.
 #[utoipa::path(
     get,
@@ -792,30 +821,24 @@ async fn load_visible_thread(
     tag = "threads",
     params(("id" = String, Path, description = "Thread id")),
     responses(
-        (status = 200, description = "Thread state", body = ThreadStateResponse),
+        (status = 200, description = "Thread state. Tenant-scoped: a user-role principal can read only a thread whose latest run belongs to its tenant; an admin-role principal can read every thread.", body = ThreadStateResponse),
         (status = 400, description = "Invalid thread id", body = ApiErrorBody),
         (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
-        (status = 404, description = "Unknown thread", body = ApiErrorBody),
+        (status = 404, description = "Unknown thread (also returned for a thread the caller may not see)", body = ApiErrorBody),
         (status = 501, description = "No waypoint backend configured", body = ApiErrorBody),
     ),
     security(("api_key" = []), ("bearer_token" = [])),
 )]
 pub async fn get_thread_state(
     State(state): State<ThreadApiState>,
-    Extension(_principal): Extension<Principal>,
+    Extension(principal): Extension<Principal>,
     Path(id): Path<String>,
 ) -> Result<(StatusCode, JsonValue), ApiError> {
-    let waypoints = state
-        .waypoints
-        .as_ref()
-        .ok_or_else(|| ApiError::not_implemented(WAYPOINT_BACKEND_HINT))?;
+    if state.waypoints.is_none() {
+        return Err(ApiError::not_implemented(WAYPOINT_BACKEND_HINT));
+    }
     let thread = parse_thread_id(&id)?;
-
-    let waypoint = waypoints
-        .latest(&thread)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .ok_or_else(|| ApiError::not_found(format!("unknown thread '{id}'")))?;
+    let waypoint = load_visible_thread(&state, &principal, &thread).await?;
 
     Ok((
         StatusCode::OK,
@@ -825,10 +848,11 @@ pub async fn get_thread_state(
 
 /// `POST /threads/{id}/resume` -- deliver parley responses.
 ///
-/// Requires an admin principal ([`require_admin`]) -- see the module-level
-/// "Authorization" docs: this narrows D-24's "any role" default for the one
-/// *mutating* thread route (CR-01, 24-REVIEW.md), pending PLAT-06's real
-/// per-thread ownership scoping.
+/// Requires an admin principal ([`require_admin`], CR-01) **after** the thread
+/// visibility gate ([`load_visible_thread`], D-06): a non-admin of another tenant gets
+/// the missing-thread `404`, never the `403` that would reveal the thread exists; a
+/// same-tenant non-admin gets the `403`; an Admin passes both. See the module-level
+/// "Authorization (tenant visibility, ADR-0063)" docs.
 ///
 /// Validates synchronously through [`ParleyPort::resume_with`] and returns
 /// `202 Accepted` immediately; the run itself continues on a background task
@@ -845,7 +869,7 @@ pub async fn get_thread_state(
         (status = 400, description = "One of unknown_parley_id / parley_already_answered / response_shape_invalid / parley_expired; the offending parley_id is in `details`", body = ApiErrorBody),
         (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
         (status = 403, description = "Admin role required", body = ApiErrorBody),
-        (status = 404, description = "Unknown thread", body = ApiErrorBody),
+        (status = 404, description = "Unknown thread (also returned for a thread the caller may not see)", body = ApiErrorBody),
         (status = 409, description = "Same HTTP status, two distinct envelope codes: `thread_not_awaiting_input` (the thread is not suspended) or `graph_not_registered` (the thread's graph fingerprint has no registered WarGraph in this process)", body = ApiErrorBody),
         (status = 501, description = "No waypoint backend configured", body = ApiErrorBody),
     ),
@@ -857,12 +881,15 @@ pub async fn resume_thread(
     Path(id): Path<String>,
     Json(body): Json<ResumeRequest>,
 ) -> Result<(StatusCode, JsonValue), ApiError> {
-    require_admin(&principal)?;
     let parley = state
         .parley
         .as_ref()
         .ok_or_else(|| ApiError::not_implemented(PARLEY_PORT_HINT))?;
     let thread = parse_thread_id(&id)?;
+    // The gate runs BEFORE `require_admin` (D-06): a foreign non-admin must see the
+    // missing-thread 404, not a 403 that confirms the thread exists.
+    load_visible_thread(&state, &principal, &thread).await?;
+    require_admin(&principal)?;
 
     let responses = body
         .responses
@@ -901,8 +928,9 @@ pub async fn resume_thread(
 
 /// `GET /threads/{id}/history` -- paginated Chronicle history.
 ///
-/// Authenticated, any role (D-24) -- see [`get_thread_state`]'s docs on why
-/// reads are not admin-gated the way [`resume_thread`] is.
+/// Authenticated, any role, tenant-scoped through [`load_visible_thread`] exactly like
+/// [`get_thread_state`]. An unknown thread is `404` for every role (it used to answer
+/// `200` with an empty page, which let a caller probe for a thread's existence).
 ///
 /// `limit` (capped by the crate-private history limit) and an opaque `cursor` whose
 /// content is the last returned item's `waypoint_id` (D-27). Returns
@@ -917,16 +945,17 @@ pub async fn resume_thread(
         ("cursor" = Option<String>, Query, description = "Opaque pagination cursor from a previous page's next_cursor"),
     ),
     responses(
-        (status = 200, description = "A page of waypoint summaries", body = HistoryResponse),
+        (status = 200, description = "A page of waypoint summaries. Tenant-scoped: a user-role principal can read only a thread whose latest run belongs to its tenant; an admin-role principal can read every thread.", body = HistoryResponse),
         (status = 400, description = "limit exceeds 100, or cursor is not a valid waypoint id", body = ApiErrorBody),
         (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
+        (status = 404, description = "Unknown thread (also returned for a thread the caller may not see)", body = ApiErrorBody),
         (status = 501, description = "No waypoint backend configured", body = ApiErrorBody),
     ),
     security(("api_key" = []), ("bearer_token" = [])),
 )]
 pub async fn get_thread_history(
     State(state): State<ThreadApiState>,
-    Extension(_principal): Extension<Principal>,
+    Extension(principal): Extension<Principal>,
     Path(id): Path<String>,
     Query(params): Query<HistoryQuery>,
 ) -> Result<(StatusCode, JsonValue), ApiError> {
@@ -949,10 +978,14 @@ pub async fn get_thread_history(
         .map(parse_waypoint_id)
         .transpose()?;
 
+    // `limit`/`cursor` validation above says nothing about the thread, so it may precede
+    // the gate; everything that touches the thread's data follows it.
+    load_visible_thread(&state, &principal, &thread).await?;
+
     let page = waypoints
         .history(&thread, params.limit, before)
         .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        .map_err(|e| thread_store_error("thread API history", e))?;
 
     // A full page (== the requested limit) may have more behind it; a
     // shorter page (or no limit at all, i.e. "everything") is the last one.
@@ -1068,12 +1101,12 @@ pub async fn list_threads(
 }
 
 /// `GET /threads/{id}` -- one thread's summary (D-45). Authenticated, any
-/// role.
+/// role, tenant-scoped through [`load_visible_thread`] (ADR-0063).
 ///
 /// Returns:
 /// - `200 OK` with [`ThreadResponse`] on success;
 /// - `400 Bad Request` for an invalid thread id;
-/// - `404 Not Found` if no Waypoint exists for `id`;
+/// - `404 Not Found` if no Waypoint exists for `id`, or the caller may not see the thread;
 /// - `501 Not Implemented` if no waypoint backend is configured.
 #[utoipa::path(
     get,
@@ -1081,10 +1114,10 @@ pub async fn list_threads(
     tag = "threads",
     params(("id" = String, Path, description = "Thread id")),
     responses(
-        (status = 200, description = "Thread summary", body = ThreadResponse),
+        (status = 200, description = "Thread summary. Tenant-scoped: a user-role principal can read only a thread whose latest run belongs to its tenant; an admin-role principal can read every thread.", body = ThreadResponse),
         (status = 400, description = "Invalid thread id", body = ApiErrorBody),
         (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
-        (status = 404, description = "Unknown thread", body = ApiErrorBody),
+        (status = 404, description = "Unknown thread (also returned for a thread the caller may not see)", body = ApiErrorBody),
         (status = 501, description = "No waypoint backend configured", body = ApiErrorBody),
     ),
     security(("api_key" = []), ("bearer_token" = [])),
@@ -1123,12 +1156,18 @@ pub async fn get_thread(
 /// [`RunSubmissionPort::fork`] -- `paladin-web` has no visibility into
 /// `allowed_roles` itself, ADR-0031).
 ///
+/// The caller must be able to see the thread ([`load_visible_thread`]): a thread another
+/// tenant owns answers the missing-thread `404` before the fork is submitted.
+/// `RunSubmissionService::ensure_thread_visible` re-checks the same rule for library
+/// callers that bypass this controller.
+///
 /// Returns:
 /// - `202 Accepted` with [`ForkThreadResponse`] on success;
 /// - `400 Bad Request` for an invalid thread id or `webhook_url_rejected`
 ///   (write-time SSRF guard, D-42);
 /// - `403 Forbidden` if the principal's role is not permitted;
-/// - `404 Not Found` for an unknown thread or an unknown `from_waypoint_id`;
+/// - `404 Not Found` for an unknown thread (or one the caller may not see) or an unknown
+///   `from_waypoint_id`;
 /// - `409 Conflict` (`thread_busy`) while a run is already active on the
 ///   thread;
 /// - `501 Not Implemented` if no run submission backend is configured.
@@ -1143,7 +1182,7 @@ pub async fn get_thread(
         (status = 400, description = "Invalid thread id, or webhook_url_rejected", body = ApiErrorBody),
         (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
         (status = 403, description = "Role not permitted for this assistant", body = ApiErrorBody),
-        (status = 404, description = "Unknown thread or waypoint", body = ApiErrorBody),
+        (status = 404, description = "Unknown thread or waypoint (a thread the caller may not see is also reported as unknown)", body = ApiErrorBody),
         (status = 409, description = "Thread busy -- a run is already active on this thread", body = ApiErrorBody),
         (status = 429, description = "Allowance exhausted (code allowance_exhausted): the caller's tenant or API-key allowance is spent; Retry-After carries the seconds until the window resets and is omitted for a lifetime cap", body = ApiErrorBody),
         (status = 500, description = "The allowance check itself failed; the request is refused and nothing runs (fail closed)", body = ApiErrorBody),
@@ -1162,6 +1201,9 @@ pub async fn fork_thread(
         .as_ref()
         .ok_or_else(|| ApiError::not_implemented(RUN_SUBMISSION_PORT_HINT))?;
     let thread = parse_thread_id(&id)?;
+    // The gate precedes every body-dependent check, so a foreign caller learns nothing
+    // from a 400 about a thread it cannot see.
+    load_visible_thread(&state, &principal, &thread).await?;
     let from_waypoint_id = parse_waypoint_id(&body.from_waypoint_id)?;
     let webhook = body.webhook.map(to_run_webhook_spec).transpose()?;
 
@@ -1190,11 +1232,15 @@ pub async fn fork_thread(
 /// `DELETE /threads/{id}` -- delete a thread's whole Waypoint history
 /// (admin, D-45).
 ///
+/// The visibility gate ([`load_visible_thread`]) runs **before** the admin check
+/// (D-06): a non-admin of another tenant gets the missing-thread `404`, a same-tenant
+/// non-admin the `403`. A second `DELETE` of a deleted thread is `404` for every role.
+///
 /// Returns:
 /// - `204 No Content` on success;
 /// - `400 Bad Request` for an invalid thread id;
-/// - `403 Forbidden` for a non-admin principal;
-/// - `404 Not Found` if nothing was deleted;
+/// - `403 Forbidden` for a non-admin principal who can see the thread;
+/// - `404 Not Found` if nothing was deleted, or the thread is not visible to the caller;
 /// - `409 Conflict` (`thread_busy`) while a run is active on the thread;
 /// - `501 Not Implemented` if no waypoint backend is configured.
 #[utoipa::path(
@@ -1207,7 +1253,7 @@ pub async fn fork_thread(
         (status = 400, description = "Invalid thread id", body = ApiErrorBody),
         (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
         (status = 403, description = "Admin role required", body = ApiErrorBody),
-        (status = 404, description = "Nothing was deleted", body = ApiErrorBody),
+        (status = 404, description = "Unknown thread (also returned for a thread the caller may not see)", body = ApiErrorBody),
         (status = 409, description = "Thread busy -- a run is active on this thread", body = ApiErrorBody),
         (status = 501, description = "No waypoint backend configured", body = ApiErrorBody),
     ),
@@ -1218,18 +1264,28 @@ pub async fn delete_thread(
     Extension(principal): Extension<Principal>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    require_admin(&principal)?;
     let waypoints = state
         .waypoints
         .as_ref()
         .ok_or_else(|| ApiError::not_implemented(WAYPOINT_BACKEND_HINT))?;
     let thread = parse_thread_id(&id)?;
+    // Gate first, admin check second (D-06): 404 for a hidden thread, 403 only for a
+    // caller who may see it.
+    load_visible_thread(&state, &principal, &thread).await?;
+    require_admin(&principal)?;
 
     if let Some(runs) = &state.runs
         && runs
             .active_run_for_thread(&thread)
             .await
-            .map_err(|e| ApiError::internal(e.to_string()))?
+            .map_err(|e| {
+                run_repo_error_for_scope(
+                    &principal.read_scope(),
+                    "thread API busy check",
+                    e,
+                    || ApiError::not_found(format!("unknown thread '{id}'")),
+                )
+            })?
             .is_some()
     {
         return Err(ApiError::new(
@@ -1242,7 +1298,7 @@ pub async fn delete_thread(
     let deleted = waypoints
         .delete_thread(&thread)
         .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        .map_err(|e| thread_store_error("thread API delete", e))?;
     if deleted == 0 {
         return Err(ApiError::not_found(format!("unknown thread '{id}'")));
     }
@@ -1564,12 +1620,20 @@ mod tests {
         ThreadApiState::new().with_waypoints(store)
     }
 
-    fn state_with_parley(outcome: MockOutcome, parley_id: ParleyId) -> ThreadApiState {
+    fn state_with_parley(
+        outcome: MockOutcome,
+        parley_id: ParleyId,
+        t: &ThreadId,
+    ) -> ThreadApiState {
         // A resume call also needs a waypoint backend wired (D-24: `parley`
         // and `waypoints` come from the SAME store in production; the mocks
-        // are independent here since only `parley` is exercised).
+        // are independent here since only `parley` is exercised). The thread under
+        // test has a seeded latest Waypoint so the visibility gate (TENANT-03) admits
+        // the Admin principals these tests call with.
+        let store = Arc::new(MockWaypointStore::default());
+        store.seed_latest(sample_waypoint(t, 1, WaypointStatus::Completed));
         ThreadApiState::new()
-            .with_waypoints(Arc::new(MockWaypointStore::default()))
+            .with_waypoints(store)
             .with_parley(Arc::new(MockParleyPort { outcome, parley_id }))
     }
 
@@ -1652,7 +1716,7 @@ mod tests {
     async fn post_resume_returns_202_with_thread_and_state_url() {
         let t = thread("resumable");
         let parley_id = ParleyId::new();
-        let state = state_with_parley(MockOutcome::Accepted, parley_id);
+        let state = state_with_parley(MockOutcome::Accepted, parley_id, &t);
 
         let (status, Json(body)) = resume_thread(
             State(state),
@@ -1677,7 +1741,7 @@ mod tests {
     async fn post_resume_unknown_thread_is_404() {
         let t = thread("unknown-thread");
         let parley_id = ParleyId::new();
-        let state = state_with_parley(MockOutcome::ThreadNotFound, parley_id);
+        let state = state_with_parley(MockOutcome::ThreadNotFound, parley_id, &t);
 
         let err = resume_thread(
             State(state),
@@ -1694,7 +1758,7 @@ mod tests {
     async fn post_resume_on_running_thread_is_409_thread_not_awaiting_input() {
         let t = thread("running-thread");
         let parley_id = ParleyId::new();
-        let state = state_with_parley(MockOutcome::ThreadNotAwaitingInput, parley_id);
+        let state = state_with_parley(MockOutcome::ThreadNotAwaitingInput, parley_id, &t);
 
         let err = resume_thread(
             State(state),
@@ -1712,7 +1776,7 @@ mod tests {
     async fn post_resume_with_unregistered_graph_is_409_graph_not_registered() {
         let t = thread("unregistered-graph");
         let parley_id = ParleyId::new();
-        let state = state_with_parley(MockOutcome::GraphNotRegistered, parley_id);
+        let state = state_with_parley(MockOutcome::GraphNotRegistered, parley_id, &t);
 
         let err = resume_thread(
             State(state),
@@ -1741,7 +1805,7 @@ mod tests {
             MockOutcome::ResponseShapeInvalid,
             MockOutcome::ParleyExpired,
         ] {
-            let state = state_with_parley(outcome, parley_id);
+            let state = state_with_parley(outcome, parley_id, &t);
             let err = resume_thread(
                 State(state),
                 admin(),
@@ -1783,6 +1847,7 @@ mod tests {
             .map(|(i, id)| summary_at(*id, i as u64, now))
             .collect();
         store.seed_history(&t, items);
+        store.seed_latest(sample_waypoint(&t, 5, WaypointStatus::Completed));
         let state = state_with_waypoints(store);
 
         // First page.
@@ -1928,21 +1993,24 @@ mod tests {
     /// a `parley` port that always accepts, plus two API keys -- one
     /// `UserRole::User`, one `UserRole::Admin` -- for role-scoped HTTP tests.
     fn authed_thread_app(parley_id: ParleyId) -> axum::Router {
+        let tenant =
+            || paladin_core::platform::container::principal::TenantId::new("test-tenant").unwrap();
         let mut api_keys = HashMap::new();
         api_keys.insert(
             "user-key".to_string(),
-            Principal::new(
-                "u",
-                UserRole::User,
-                paladin_core::platform::container::principal::TenantId::new("test-tenant").unwrap(),
-            ),
+            Principal::new("u", UserRole::User, tenant()),
         );
         api_keys.insert(
             "admin-key".to_string(),
+            Principal::new("a", UserRole::Admin, tenant()),
+        );
+        api_keys.insert(
+            "foreign-key".to_string(),
             Principal::new(
-                "a",
-                UserRole::Admin,
-                paladin_core::platform::container::principal::TenantId::new("test-tenant").unwrap(),
+                "f",
+                UserRole::User,
+                paladin_core::platform::container::principal::TenantId::new("other-tenant")
+                    .unwrap(),
             ),
         );
         let auth = crate::agent_auth::AgentAuthConfig {
@@ -1951,8 +2019,17 @@ mod tests {
             token_verifier: None,
             bearer_tenant: None,
         };
+        // `scoped-thread` has a latest Waypoint and one run attributed to `user-key`'s
+        // tenant, so the visibility gate admits `user-key` and `admin-key` and hides the
+        // thread from `foreign-key` (TENANT-03).
+        let store = Arc::new(MockWaypointStore::default());
+        let t = thread("scoped-thread");
+        store.seed_latest(sample_waypoint(&t, 1, WaypointStatus::Completed));
+        let runs = Arc::new(MockRunRepository::default());
+        runs.seed_run(run_on_for_tenant(&t, "test-tenant", "u"));
         let state = ThreadApiState::new()
-            .with_waypoints(Arc::new(MockWaypointStore::default()))
+            .with_waypoints(store)
+            .with_runs(runs)
             .with_parley(Arc::new(MockParleyPort {
                 outcome: MockOutcome::Accepted,
                 parley_id,
@@ -2016,23 +2093,76 @@ mod tests {
     #[tokio::test]
     async fn get_thread_state_with_non_admin_role_is_200_not_403() {
         // Reads stay authenticated-any-role (D-24); only `resume` is
-        // narrowed to admin by CR-01.
+        // narrowed to admin by CR-01. The user-role key owns `scoped-thread`
+        // (its tenant has the latest run), so the read is 200, not 403.
         let parley_id = ParleyId::new();
         let app = authed_thread_app(parley_id);
 
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/v1/threads/no-such-thread/state")
+                    .uri("/v1/threads/scoped-thread/state")
                     .header("x-api-key", "user-key")
                     .body(Body::empty())
                     .expect("request builds"),
             )
             .await
             .expect("router responds");
-        // `404` (unknown thread), not `403` -- proves the User-role
-        // credential cleared authorization and reached the handler.
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    /// D-06 / T-53-14: the visibility gate runs BEFORE `require_admin` on resume, so a
+    /// non-admin of another tenant gets the missing-thread 404 -- never the 403 that
+    /// would confirm the thread exists -- and the 404 equals the response for a thread
+    /// that does not exist. The owning tenant's user still gets the 403.
+    #[tokio::test]
+    async fn post_resume_by_a_foreign_user_is_404_not_403() {
+        let parley_id = ParleyId::new();
+        let app = authed_thread_app(parley_id);
+        let body = serde_json::json!({
+            "responses": [
+                { "parley_id": parley_id.to_string(), "value": true, "responded_by": "alice" }
+            ]
+        });
+
+        let hidden = send_thread_request(
+            &app,
+            "POST",
+            "/v1/threads/scoped-thread/resume".to_string(),
+            "foreign-key",
+            Some(body.clone()),
+            &[],
+        )
+        .await;
+        assert_eq!(hidden.status(), StatusCode::NOT_FOUND, "never 403");
+        let missing = send_thread_request(
+            &app,
+            "POST",
+            "/v1/threads/no-such-9f3a/resume".to_string(),
+            "foreign-key",
+            Some(body.clone()),
+            &[],
+        )
+        .await;
+        assert_hidden_equals_missing(
+            hidden,
+            missing,
+            "scoped-thread",
+            "no-such-9f3a",
+            "foreign resume",
+        )
+        .await;
+
+        let same_tenant = send_thread_request(
+            &app,
+            "POST",
+            "/v1/threads/scoped-thread/resume".to_string(),
+            "user-key",
+            Some(body),
+            &[],
+        )
+        .await;
+        assert_eq!(same_tenant.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
@@ -2254,6 +2384,11 @@ mod tests {
             },
             serde_json::json!({}),
         )
+    }
+
+    /// A run on `thread` attributed to `tenant`/`key`, submitted now.
+    fn run_on_for_tenant(thread: &ThreadId, tenant: &str, key: &str) -> Run {
+        run_on(thread, tenant, key, Utc::now())
     }
 
     // --- Tenant visibility of single-thread routes (Phase 53, plan 53-03, TENANT-03) ---
@@ -2854,6 +2989,16 @@ mod tests {
         }
     }
 
+    /// A state with a fork submission double and a seeded latest Waypoint for `name`, so
+    /// the visibility gate (TENANT-03) admits the Admin principal these tests call with.
+    fn fork_state(outcome: ForkOutcome, name: &str) -> ThreadApiState {
+        let store = Arc::new(MockWaypointStore::default());
+        store.seed_latest(sample_waypoint(&thread(name), 1, WaypointStatus::Completed));
+        ThreadApiState::new()
+            .with_waypoints(store)
+            .with_run_submission(Arc::new(MockForkSubmissionPort { outcome }))
+    }
+
     fn fork_body() -> ForkThreadRequest {
         ForkThreadRequest {
             from_waypoint_id: WaypointId::generate().to_string(),
@@ -2878,9 +3023,7 @@ mod tests {
 
     #[tokio::test]
     async fn fork_thread_accepted_returns_202() {
-        let state = ThreadApiState::new().with_run_submission(Arc::new(MockForkSubmissionPort {
-            outcome: ForkOutcome::Accepted,
-        }));
+        let state = fork_state(ForkOutcome::Accepted, "fork-thread");
         let (status, Json(body)) = fork_thread(
             State(state),
             admin(),
@@ -2896,9 +3039,7 @@ mod tests {
 
     #[tokio::test]
     async fn fork_thread_busy_returns_409() {
-        let state = ThreadApiState::new().with_run_submission(Arc::new(MockForkSubmissionPort {
-            outcome: ForkOutcome::ThreadBusy,
-        }));
+        let state = fork_state(ForkOutcome::ThreadBusy, "t");
         let err = fork_thread(
             State(state),
             admin(),
@@ -2912,9 +3053,7 @@ mod tests {
 
     #[tokio::test]
     async fn fork_thread_unknown_waypoint_returns_404() {
-        let state = ThreadApiState::new().with_run_submission(Arc::new(MockForkSubmissionPort {
-            outcome: ForkOutcome::UnknownWaypoint,
-        }));
+        let state = fork_state(ForkOutcome::UnknownWaypoint, "t");
         let err = fork_thread(
             State(state),
             admin(),
@@ -2928,9 +3067,7 @@ mod tests {
 
     #[tokio::test]
     async fn fork_thread_forbidden_returns_403() {
-        let state = ThreadApiState::new().with_run_submission(Arc::new(MockForkSubmissionPort {
-            outcome: ForkOutcome::Forbidden,
-        }));
+        let state = fork_state(ForkOutcome::Forbidden, "t");
         let err = fork_thread(
             State(state),
             admin(),
@@ -2947,9 +3084,7 @@ mod tests {
     /// the shared `map_submission_error`.
     #[tokio::test]
     async fn fork_route_maps_allowance_exhausted_to_429() {
-        let state = ThreadApiState::new().with_run_submission(Arc::new(MockForkSubmissionPort {
-            outcome: ForkOutcome::AllowanceExhausted,
-        }));
+        let state = fork_state(ForkOutcome::AllowanceExhausted, "t");
         let err = fork_thread(
             State(state),
             admin(),
@@ -3027,10 +3162,14 @@ mod tests {
 
     #[tokio::test]
     async fn delete_thread_non_admin_is_403() {
+        // A same-tenant user on a thread its tenant owns passes the visibility gate and
+        // is refused by `require_admin` (D-06: 403 only for a caller who can see it).
         let store = Arc::new(MockWaypointStore::default());
         let t = thread("admin-gated");
         store.seed_latest(sample_waypoint(&t, 1, WaypointStatus::Completed));
-        let state = state_with_waypoints(store);
+        let runs = Arc::new(MockRunRepository::default());
+        runs.seed_run(run_on_for_tenant(&t, "test-tenant", "u"));
+        let state = state_with_waypoints(store).with_runs(runs);
         let user_principal = Extension(Principal::new(
             "u",
             UserRole::User,

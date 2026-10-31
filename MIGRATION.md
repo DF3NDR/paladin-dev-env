@@ -11,6 +11,7 @@ v0.11.1 is the Dogfood Cleanup release (milestone opened 2026-10-27, Phases 52 t
 | ID | Change | Who is affected | Required user action |
 |---|---|---|---|
 | M-B-23 | **Unreadable run rows are hidden from non-admin principals (TENANT-06, Phase 53 plan 53-02, D-09).** When the run store cannot read a run row as a `Run` (a corrupt or half-attributed row, reported by the repository as a `Serialization` error), `GET /v1/runs/{run_id}`, `GET /v1/runs/{run_id}/stream`, `GET /v1/runs/{run_id}/webhook-deliveries` and `POST /v1/runs/{run_id}/cancel` now answer a non-admin principal the same `404 not_found` as a missing run (byte-identical status, headers and body) instead of `500`, so a tenant can no longer learn that an unreadable row exists under an id. An Admin still receives `500` with the fixed message `run store error`. Every other repository error (an outage, a state error) stays the fixed `500 run store error` for every role, and `GET /v1/runs` (a list, with no single object to hide) keeps the fixed `500` for every role. The repository detail is written to the server log at `error` level and never to a response body. | HTTP clients that authenticate with user-role API keys and treated a `500` on these routes as a signal to retry or alert; operators who watched for that `500` (the detail now appears in the server log, still at `error`). | None required. A client that handled `500` from these routes for a non-admin key now sees `404`; operators find the unreadable row in the server log. |
+| M-B-24 | **Thread routes are tenant-scoped (TENANT-03, Phase 53 plan 53-03, D-05 to D-07).** A thread belongs to the tenant of its latest run (newest by `submitted_at`, `run_id` as the tiebreak). A user-role principal of another tenant now gets `404 not_found` (was `200`) on `GET /v1/threads/{id}`, `GET /v1/threads/{id}/state`, `GET /v1/threads/{id}/history` and `POST /v1/threads/{id}/fork`, and `404 not_found` (was `403`) on `POST /v1/threads/{id}/resume` and `DELETE /v1/threads/{id}`; the `404` is byte-identical to the response for a thread that does not exist, because the visibility check now runs before the admin check. A thread with no run is visible to an Admin only. A deployment that has a waypoint store but has the run store disabled shows non-admin principals no thread at all, because ownership cannot be established. An Admin is unaffected on every route. | HTTP clients that authenticate with user-role API keys and read, fork, resume or delete threads their tenant did not start; operators running a waypoint store without `run_store.backend`; clients that relied on a `403` from `resume` or `delete` to detect an existing thread. | Use an Admin key for threads that have no run, and enable `run_store.backend` so non-admin keys can see their own threads. A client that handled `403` from `resume` or `delete` for a foreign thread now sees `404`. |
 
 ## 11.2 Rust API changes (compile-affecting; the X-10 register)
 
@@ -45,6 +46,23 @@ identical status, headers and body, where v0.11.0 returned `500`. An admin-role 
 `500` with the message `run store error`. No other status, code or response shape changes, and
 `GET /v1/runs` keeps its fixed `500` for every role. The OpenAPI document is unchanged: the `404`
 and `500` responses were already published on these operations.
+
+**Thread routes are tenant-scoped and hide a foreign thread behind the missing-thread `404` -- landed Phase 53 (plan 53-03), TENANT-03, TENANT-06 (`M-B-24`, section 11.1).**
+Every `/v1/threads/{id}*` route (`GET /v1/threads/{id}`, `.../state`, `.../history`, `POST .../resume`,
+`POST .../fork`, `DELETE /v1/threads/{id}`) now checks that the caller may see the thread before doing
+anything else. A user-role principal sees a thread only when its latest run belongs to the principal's
+tenant; an admin-role principal sees every thread; a thread with no run is Admin-only; and with no run
+store wired a non-admin sees no thread. A thread the caller may not see answers
+`404 {"error":{"code":"not_found","message":"unknown thread '<id>'"}}`, byte-identical to a thread that
+does not exist, where v0.11.0 returned `200` on the three `GET` routes and `fork`, and `403` on `resume`
+and `delete` for a non-admin. `resume` and `delete` run this check before the admin check, so a same-tenant
+non-admin still gets `403` and a foreign non-admin gets `404`. `GET /v1/threads/{id}/history` of an unknown
+thread now answers `404` for every role (it answered `200` with `{"items":[],"next_cursor":null}`), and
+its OpenAPI operation now lists the `404` response. A second `DELETE` of an already deleted thread is `404`
+for every role. Waypoint-store failures on these routes now render the fixed message `thread store error`
+and run-store failures `run store error`, never the backend's own text; a Waypoint or run row the store
+cannot read is the same missing-thread `404` for a non-admin and the fixed `500` for an Admin. The
+OpenAPI document changes only on `/v1/threads/...` operations (descriptions, and the history `404`).
 
 ## 11.7 Deprecations
 

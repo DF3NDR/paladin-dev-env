@@ -89,11 +89,9 @@
 //! (never the key value, never the role; `null` when no principal was
 //! recorded, D-19).
 //!
-//! The thread routes (`/threads/{id}/state|history|resume|fork`, `DELETE
-//! /threads/{id}`) are **not** tenant-scoped -- threads carry no tenant --
-//! and remain deployment-wide; that gap is tracked separately in the
-//! project's broken-windows ledger (`.planning/WINDOWS.md`), not implied
-//! closed by the run scope described here.
+//! The single-thread routes (`/threads/{id}`, `.../state`, `.../history`, `.../resume`,
+//! `.../fork`, `DELETE /threads/{id}`) apply the same `RunReadScope` rule to a thread's
+//! latest run through `thread_controller`'s `load_visible_thread` gate (ADR-0063).
 
 use std::collections::HashMap;
 use std::convert::Infallible;

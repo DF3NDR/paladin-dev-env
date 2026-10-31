@@ -13,6 +13,18 @@ and this project follows lockstep workspace versioning.
   section 11.1 `M-B-23`): `GET /v1/runs/{run_id}`, `.../stream`, `.../webhook-deliveries` and
   `POST .../cancel` answer a non-admin principal the same `404` as a missing run when the run row
   cannot be read, and an Admin the fixed `500` `run store error`. The detail is logged server-side only.
+- Thread visibility gate (TENANT-03, TENANT-06 thread half, Phase 53 plan 53-03; see `MIGRATION.md`
+  section 11.1 `M-B-24`): every `/v1/threads/{id}*` route (`GET`, `.../state`, `.../history`,
+  `POST .../resume`, `POST .../fork`, `DELETE`) enters one `load_visible_thread` gate. A thread belongs to
+  the tenant of its latest run; a thread another tenant owns answers the same `404` as a missing thread
+  (on `resume` and `delete` before the admin check), a run-less thread is Admin-only, and a deployment
+  without a run store shows non-admin principals no thread. Thread-route store failures render the
+  fixed `thread store error` / `run store error` messages instead of backend text.
+
+### Changed
+
+- `GET /v1/threads/{id}/history` of an unknown thread answers `404` for every role (was `200` with an
+  empty page); the operation lists the `404` response in `openapi.json`.
 
 ## [0.11.0] - 2026-10-26
 

@@ -2367,8 +2367,8 @@
         "tags": [
           "threads"
         ],
-        "summary": "`GET /threads` -- paginated thread list, newest-activity-first (D-45,\nD-47). Authenticated, any role.",
-        "description": "A cursor walk gives a stable ordering for threads that already existed\nwhen the first page was fetched, but is NOT a point-in-time snapshot: a\nthread whose latest waypoint was written after the first page was read\nmay be omitted from the walk (D-47 backstop).\n\nReturns:\n- `200 OK` with [`ThreadListResponse`] on success; `{ items: [],\n  next_cursor: null }` when empty;\n- `400 Bad Request` for `limit == 0`/`limit > 100`, or an unparseable\n  `cursor`;\n- `501 Not Implemented` if no waypoint backend is configured.",
+        "summary": "`GET /threads` -- paginated thread list, newest-activity-first (D-45,\nD-47). Authenticated, any role, tenant-scoped (TENANT-03, ADR-0063).",
+        "description": "An Admin lists every thread. A user-role principal lists only the threads\nwhose latest run is attributed to its own tenant; a thread with no run is\nAdmin-only, and with no run store wired a non-admin lists nothing. Because\nthe other tenants' threads are filtered out of a page after it is read, a\npage may hold fewer than `limit` items (even none) while `next_cursor` is\nstill non-null: keep following `next_cursor` until it is `null`. A request\nexamines a bounded number of threads, so the walk always makes progress\nwithout one request scanning the whole store.\n\nA cursor walk gives a stable ordering for threads that already existed\nwhen the first page was fetched, but is NOT a point-in-time snapshot: a\nthread whose latest waypoint was written after the first page was read\nmay be omitted from the walk (D-47 backstop), and two threads with an\nidentical `last_updated_at` straddling a page boundary can be skipped (the\ncursor is an exclusive timestamp).\n\nReturns:\n- `200 OK` with [`ThreadListResponse`] on success; `{ items: [],\n  next_cursor: null }` when the walk ends with nothing visible;\n- `400 Bad Request` for `limit == 0`/`limit > 100`, or an unparseable\n  `cursor`;\n- `501 Not Implemented` if no waypoint backend is configured.",
         "operationId": "list_threads",
         "parameters": [
           {
@@ -2394,7 +2394,7 @@
         ],
         "responses": {
           "200": {
-            "description": "A page of threads; { items: [], next_cursor: null } when empty",
+            "description": "A page of the threads the caller may see; a page may be shorter than limit while next_cursor is non-null, so follow next_cursor until it is null; { items: [], next_cursor: null } when nothing is visible",
             "content": {
               "application/json": {
                 "schema": {

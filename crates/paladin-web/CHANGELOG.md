@@ -20,6 +20,12 @@ and this project follows lockstep workspace versioning.
   (on `resume` and `delete` before the admin check), a run-less thread is Admin-only, and a deployment
   without a run store shows non-admin principals no thread. Thread-route store failures render the
   fixed `thread store error` / `run store error` messages instead of backend text.
+- Tenant-filtered thread list (TENANT-03, Phase 53 plan 53-04; see `MIGRATION.md` section 11.1
+  `M-B-25`): `GET /v1/threads` lists a user-role principal only the threads whose latest run belongs to
+  its tenant (an Admin still lists all; a non-admin without a run store lists none). A page may hold fewer
+  than `limit` items with a non-null `next_cursor` because a request examines at most 500 threads; clients
+  follow `next_cursor` until `null`. A thread whose owner lookup hits an unreadable run row is skipped and
+  logged for a tenant rather than failing the list.
 
 ### Changed
 

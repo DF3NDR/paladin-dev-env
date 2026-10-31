@@ -70,9 +70,16 @@
 //! fails if any is missing from its table, so a future route cannot skip the gate unnoticed.
 //!
 //! Known limitation (D-14): thread ids are not tenant-namespaced, so two tenants that pick
-//! the same id share one thread, and its latest run decides who sees it. `GET /threads`
-//! (the list route) is outside this gate: it addresses no single thread, and its
-//! tenant-filtered walk is plan 53-04's.
+//! the same id share one thread, and its latest run decides who sees it.
+//!
+//! `GET /threads` (the list route) addresses no single thread, so it does not enter
+//! `load_visible_thread`; it applies the same rule per thread instead. An Admin keeps the
+//! single newest-first fetch and performs no owner lookup. For a user-role principal,
+//! `visible_thread_page` walks the store in batches, resolves each examined thread's latest
+//! run exactly as the gate does, keeps the threads `permits_thread` admits, and examines at
+//! most `MAX_EXAMINED_THREADS` per request -- so a page may hold fewer than `limit` items
+//! while `next_cursor` still advances, and a client follows `next_cursor` until it is
+//! `null`. With no run store wired a non-admin lists no thread (D-07).
 
 use std::sync::Arc;
 
@@ -1129,16 +1136,27 @@ async fn thread_summary_dto(state: &ThreadApiState, summary: &ThreadSummary) -> 
 }
 
 /// `GET /threads` -- paginated thread list, newest-activity-first (D-45,
-/// D-47). Authenticated, any role.
+/// D-47). Authenticated, any role, tenant-scoped (TENANT-03, ADR-0063).
+///
+/// An Admin lists every thread. A user-role principal lists only the threads
+/// whose latest run is attributed to its own tenant; a thread with no run is
+/// Admin-only, and with no run store wired a non-admin lists nothing. Because
+/// the other tenants' threads are filtered out of a page after it is read, a
+/// page may hold fewer than `limit` items (even none) while `next_cursor` is
+/// still non-null: keep following `next_cursor` until it is `null`. A request
+/// examines a bounded number of threads, so the walk always makes progress
+/// without one request scanning the whole store.
 ///
 /// A cursor walk gives a stable ordering for threads that already existed
 /// when the first page was fetched, but is NOT a point-in-time snapshot: a
 /// thread whose latest waypoint was written after the first page was read
-/// may be omitted from the walk (D-47 backstop).
+/// may be omitted from the walk (D-47 backstop), and two threads with an
+/// identical `last_updated_at` straddling a page boundary can be skipped (the
+/// cursor is an exclusive timestamp).
 ///
 /// Returns:
 /// - `200 OK` with [`ThreadListResponse`] on success; `{ items: [],
-///   next_cursor: null }` when empty;
+///   next_cursor: null }` when the walk ends with nothing visible;
 /// - `400 Bad Request` for `limit == 0`/`limit > 100`, or an unparseable
 ///   `cursor`;
 /// - `501 Not Implemented` if no waypoint backend is configured.
@@ -1151,7 +1169,7 @@ async fn thread_summary_dto(state: &ThreadApiState, summary: &ThreadSummary) -> 
         ("cursor" = Option<String>, Query, description = "Opaque pagination cursor from a previous page's next_cursor -- a keyset walk, not a snapshot: threads updated after the first page was fetched may be omitted"),
     ),
     responses(
-        (status = 200, description = "A page of threads; { items: [], next_cursor: null } when empty", body = ThreadListResponse),
+        (status = 200, description = "A page of the threads the caller may see; a page may be shorter than limit while next_cursor is non-null, so follow next_cursor until it is null; { items: [], next_cursor: null } when nothing is visible", body = ThreadListResponse),
         (status = 400, description = "Invalid limit or cursor", body = ApiErrorBody),
         (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
         (status = 501, description = "No waypoint backend configured", body = ApiErrorBody),
@@ -2375,9 +2393,31 @@ mod tests {
         fail_reads_with: Mutex<Option<String>>,
         /// Number of `list` calls made (the thread list walk's owner lookups).
         list_calls: std::sync::atomic::AtomicUsize,
+        /// When set, `list` fails for queries on this one thread id (Phase 53 list walk).
+        fail_thread: Mutex<Option<(String, ThreadRunFailure)>>,
+    }
+
+    /// The run-repository error a thread-scoped `list` failure builds (a
+    /// `RunRepositoryError` is not `Clone`, so the seam stores which variant to build).
+    #[derive(Clone, Copy)]
+    enum ThreadRunFailure {
+        /// `RunRepositoryError::Serialization` (an unreadable row).
+        Serialization,
+        /// `RunRepositoryError::Backend` (an outage).
+        Backend,
     }
 
     impl MockRunRepository {
+        /// Make `list` fail for queries scoped to `thread` only.
+        fn fail_on_thread(&self, thread: &str, failure: ThreadRunFailure) {
+            *self.fail_thread.lock().unwrap() = Some((thread.to_string(), failure));
+        }
+
+        /// How many `list` calls have been made.
+        fn list_call_count(&self) -> usize {
+            self.list_calls.load(std::sync::atomic::Ordering::SeqCst)
+        }
+
         fn seed_run(&self, run: Run) {
             self.runs.lock().unwrap().push(run);
         }
@@ -2451,6 +2491,24 @@ mod tests {
         > {
             self.list_calls
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if let (Some(wanted), Some((failing, failure))) = (
+                query.thread_id.as_ref(),
+                self.fail_thread.lock().unwrap().as_ref(),
+            ) && wanted.as_str() == failing
+            {
+                return Err(match failure {
+                    ThreadRunFailure::Serialization => {
+                        paladin_ports::output::run_repository_port::RunRepositoryError::Serialization {
+                            message: INJECTED_TEXT.to_string(),
+                        }
+                    }
+                    ThreadRunFailure::Backend => {
+                        paladin_ports::output::run_repository_port::RunRepositoryError::Backend {
+                            source: INJECTED_TEXT.into(),
+                        }
+                    }
+                });
+            }
             self.read_failure()?;
             let mut items: Vec<Run> = self
                 .runs
@@ -3482,6 +3540,301 @@ mod tests {
             body,
             serde_json::json!({ "items": [], "next_cursor": null }),
             "nothing visible is the documented empty page"
+        );
+    }
+
+    /// Follow `next_cursor` from the first page until it is `null`, returning every page
+    /// body in order. Panics if the walk does not end within `max_pages`.
+    async fn walk_list(
+        app: &axum::Router,
+        key: &str,
+        limit: u32,
+        max_pages: usize,
+    ) -> Vec<serde_json::Value> {
+        let mut pages = Vec::new();
+        let mut query = format!("?limit={limit}");
+        for _ in 0..max_pages {
+            let (status, body) = list_as(app, key, &query).await;
+            assert_eq!(status, StatusCode::OK, "page {} of the walk", pages.len());
+            let next = body["next_cursor"].as_str().map(str::to_string);
+            pages.push(body);
+            match next {
+                Some(cursor) => query = format!("?limit={limit}&cursor={cursor}"),
+                None => return pages,
+            }
+        }
+        panic!("the list walk did not end within {max_pages} pages");
+    }
+
+    #[tokio::test]
+    async fn list_threads_short_pages_advance_the_cursor_without_repeats() {
+        // 520 globex threads, newer than a 25-thread tail alternating acme (odd ranks) and
+        // globex (even ranks): the first request examines 500 foreign threads and returns
+        // an EMPTY page with a cursor; later pages are full until the visible set runs out.
+        let fixture = ThreadFixture::new();
+        for rank in 26..=545 {
+            fixture.listed_thread(&format!("globex-top-{rank}"), rank, Some("globex"));
+        }
+        for rank in 1..=25 {
+            if rank % 2 == 1 {
+                fixture.listed_thread(&format!("acme-{rank}"), rank, Some("acme"));
+            } else {
+                fixture.listed_thread(&format!("globex-{rank}"), rank, Some("globex"));
+            }
+        }
+        let app = thread_router(fixture.state(true));
+
+        let pages = walk_list(&app, "owner-key", 5, 20).await;
+
+        assert!(
+            pages
+                .iter()
+                .any(|p| listed_ids(p).len() < 5 && !p["next_cursor"].is_null()),
+            "a filtered page may be shorter than `limit` while the cursor still advances"
+        );
+        assert!(
+            listed_ids(&pages[0]).is_empty() && !pages[0]["next_cursor"].is_null(),
+            "the first request hits the examination cap on foreign threads"
+        );
+        assert!(
+            pages.last().unwrap()["next_cursor"].is_null(),
+            "the final page of a walk carries a null cursor"
+        );
+        let collected: Vec<String> = pages.iter().flat_map(listed_ids).collect();
+        let expected: Vec<String> = (1..=25)
+            .rev()
+            .filter(|rank| rank % 2 == 1)
+            .map(|rank| format!("acme-{rank}"))
+            .collect();
+        assert_eq!(
+            collected, expected,
+            "every visible thread exactly once, newest first, never repeated across pages"
+        );
+        assert!(
+            pages.iter().all(|p| listed_ids(p).len() <= 5),
+            "no page exceeds `limit`"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_threads_examination_cap_returns_a_short_page_with_a_cursor() {
+        // acme ranks 1..=3 sit under 600 newer globex threads.
+        let fixture = ThreadFixture::new();
+        for rank in 4..=603 {
+            fixture.listed_thread(&format!("globex-{rank}"), rank, Some("globex"));
+        }
+        for rank in 1..=3 {
+            fixture.listed_thread(&format!("acme-{rank}"), rank, Some("acme"));
+        }
+        let app = thread_router(fixture.state(true));
+
+        let (status, first) = list_as(&app, "owner-key", "?limit=20").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            fixture.runs.list_call_count(),
+            MAX_EXAMINED_THREADS,
+            "exactly the cap's worth of owner lookups on the first request"
+        );
+        assert!(
+            listed_ids(&first).is_empty(),
+            "no visible thread within the cap"
+        );
+        // The cursor is the 500th examined thread (ranks 603 down to 104).
+        assert_eq!(
+            first["next_cursor"],
+            serde_json::json!(encode_cursor(
+                &(list_epoch() + chrono::Duration::seconds(104))
+            )),
+            "the cursor is the last examined thread's last_updated_at"
+        );
+        let calls = fixture.waypoints.list_calls.lock().unwrap().clone();
+        assert_eq!(
+            calls.len(),
+            MAX_EXAMINED_THREADS / THREAD_SCAN_BATCH as usize,
+            "five batched list calls, never one unbounded call"
+        );
+        assert!(
+            calls
+                .iter()
+                .all(|(limit, _)| *limit == Some(THREAD_SCAN_BATCH)),
+            "every list call asks for one scan batch"
+        );
+
+        // The walk continues from the cursor and ends with a null cursor.
+        let cursor = first["next_cursor"].as_str().unwrap().to_string();
+        let (_, second) = list_as(&app, "owner-key", &format!("?limit=20&cursor={cursor}")).await;
+        assert_eq!(listed_ids(&second), ["acme-3", "acme-2", "acme-1"]);
+        assert!(second["next_cursor"].is_null());
+    }
+
+    /// Captures `log` records so a test can assert the server-side line a skipped thread
+    /// leaves (the repo has no log-capture dev-dependency). Installed once per test
+    /// binary; no other test in this crate installs a logger.
+    struct CaptureLogger;
+    static CAPTURED_LOGS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    impl log::Log for CaptureLogger {
+        fn enabled(&self, _metadata: &log::Metadata) -> bool {
+            true
+        }
+        fn log(&self, record: &log::Record) {
+            CAPTURED_LOGS
+                .lock()
+                .unwrap()
+                .push(format!("{}: {}", record.level(), record.args()));
+        }
+        fn flush(&self) {}
+    }
+
+    fn install_capture_logger() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            // Ignore a failure: another logger already installed means no capture, and the
+            // test then falls back to the HTTP-visible assertions alone.
+            let _ = log::set_logger(&CaptureLogger);
+            log::set_max_level(log::LevelFilter::Error);
+        });
+    }
+
+    #[tokio::test]
+    async fn list_threads_skips_a_corrupt_thread_for_a_tenant() {
+        install_capture_logger();
+        let fixture = ThreadFixture::new();
+        fixture.listed_thread("acme-2", 3, Some("acme"));
+        fixture.listed_thread("globex-bad", 2, Some("globex"));
+        fixture.listed_thread("acme-1", 1, Some("acme"));
+        fixture
+            .runs
+            .fail_on_thread("globex-bad", ThreadRunFailure::Serialization);
+        let app = thread_router(fixture.state(true));
+
+        // Another tenant's unreadable row does not fail this tenant's list.
+        let response = send_thread_request(
+            &app,
+            "GET",
+            "/v1/threads?limit=10".to_string(),
+            "owner-key",
+            None,
+            &[],
+        )
+        .await;
+        let (status, _headers, body) = response_parts(response).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            !body.contains(INJECTED_TEXT) && !body.contains("globex-bad"),
+            "the corrupt thread is hidden and its error text never reaches a body: {body}"
+        );
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(listed_ids(&json), ["acme-2", "acme-1"]);
+        assert!(json["next_cursor"].is_null());
+        let logged = CAPTURED_LOGS.lock().unwrap().clone();
+        assert!(
+            logged.iter().any(|line| line.starts_with("ERROR")
+                && line.contains("thread API list owner lookup failed")
+                && line.contains("thread skipped as not visible")),
+            "the skip is logged at error level server-side: {logged:?}"
+        );
+
+        // A run-store outage on the same lookup is the fixed 500 for a tenant, never a skip.
+        fixture
+            .runs
+            .fail_on_thread("globex-bad", ThreadRunFailure::Backend);
+        let response = send_thread_request(
+            &app,
+            "GET",
+            "/v1/threads?limit=10".to_string(),
+            "owner-key",
+            None,
+            &[],
+        )
+        .await;
+        let (status, _headers, body) = response_parts(response).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(body.contains("run store error"), "fixed message: {body}");
+        assert!(!body.contains(INJECTED_TEXT), "no backend text: {body}");
+
+        // An Admin performs no owner lookup, so neither failure touches the Admin list.
+        let (status, admin) = list_as(&app, "admin-key", "?limit=10").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(listed_ids(&admin), ["acme-2", "globex-bad", "acme-1"]);
+    }
+
+    #[tokio::test]
+    async fn list_threads_fails_closed_for_non_admin_without_a_run_store() {
+        let fixture = ThreadFixture::new();
+        fixture.listed_thread("acme-1", 2, Some("acme"));
+        fixture.listed_thread("zero-1", 1, None);
+        let app = thread_router(fixture.state(false));
+
+        for key in ["owner-key", "foreign-key"] {
+            let (status, body) = list_as(&app, key, "").await;
+            assert_eq!(status, StatusCode::OK, "{key}");
+            assert_eq!(
+                body,
+                serde_json::json!({ "items": [], "next_cursor": null }),
+                "{key}: ownership cannot be established, so nothing is listed"
+            );
+        }
+        let (status, admin) = list_as(&app, "admin-key", "").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            listed_ids(&admin),
+            ["acme-1", "zero-1"],
+            "Admin is unaffected"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_threads_admin_path_performs_no_owner_lookup() {
+        let fixture = ThreadFixture::new();
+        fixture.listed_thread("globex-1", 3, Some("globex"));
+        fixture.listed_thread("zero-1", 2, None);
+        fixture.listed_thread("acme-1", 1, Some("acme"));
+        let app = thread_router(fixture.state(true));
+
+        let (status, body) = list_as(&app, "admin-key", "?limit=2").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(listed_ids(&body), ["globex-1", "zero-1"]);
+        assert!(!body["next_cursor"].is_null(), "a third thread exists");
+        assert_eq!(
+            fixture.runs.list_call_count(),
+            0,
+            "the Admin path never reads the run store for ownership"
+        );
+        let calls = fixture.waypoints.list_calls.lock().unwrap().clone();
+        assert_eq!(
+            calls,
+            [(Some(3), None)],
+            "the Admin path keeps the single limit+1 fetch"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_threads_ignores_tenant_hints() {
+        let fixture = ThreadFixture::new();
+        fixture.listed_thread("globex-1", 3, Some("globex"));
+        fixture.listed_thread("acme-1", 2, Some("acme"));
+        fixture.listed_thread("zero-1", 1, None);
+        let app = thread_router(fixture.state(true));
+
+        let (_, plain) = list_as(&app, "foreign-key", "?limit=10").await;
+        assert_eq!(listed_ids(&plain), ["globex-1"]);
+
+        let response = send_thread_request(
+            &app,
+            "GET",
+            "/v1/threads?limit=10&tenant_id=acme&tenant=acme".to_string(),
+            "foreign-key",
+            None,
+            &[("x-tenant-id", "acme"), ("x-paladin-tenant", "acme")],
+        )
+        .await;
+        let (status, _headers, body) = response_parts(response).await;
+        assert_eq!(status, StatusCode::OK);
+        let hinted: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            hinted, plain,
+            "tenant hints in headers or query change nothing: the scope is the key's own"
         );
     }
 

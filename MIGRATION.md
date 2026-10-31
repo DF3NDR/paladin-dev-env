@@ -12,6 +12,7 @@ v0.11.1 is the Dogfood Cleanup release (milestone opened 2026-10-27, Phases 52 t
 |---|---|---|---|
 | M-B-23 | **Unreadable run rows are hidden from non-admin principals (TENANT-06, Phase 53 plan 53-02, D-09).** When the run store cannot read a run row as a `Run` (a corrupt or half-attributed row, reported by the repository as a `Serialization` error), `GET /v1/runs/{run_id}`, `GET /v1/runs/{run_id}/stream`, `GET /v1/runs/{run_id}/webhook-deliveries` and `POST /v1/runs/{run_id}/cancel` now answer a non-admin principal the same `404 not_found` as a missing run (byte-identical status, headers and body) instead of `500`, so a tenant can no longer learn that an unreadable row exists under an id. An Admin still receives `500` with the fixed message `run store error`. Every other repository error (an outage, a state error) stays the fixed `500 run store error` for every role, and `GET /v1/runs` (a list, with no single object to hide) keeps the fixed `500` for every role. The repository detail is written to the server log at `error` level and never to a response body. | HTTP clients that authenticate with user-role API keys and treated a `500` on these routes as a signal to retry or alert; operators who watched for that `500` (the detail now appears in the server log, still at `error`). | None required. A client that handled `500` from these routes for a non-admin key now sees `404`; operators find the unreadable row in the server log. |
 | M-B-24 | **Thread routes are tenant-scoped (TENANT-03, Phase 53 plan 53-03, D-05 to D-07).** A thread belongs to the tenant of its latest run (newest by `submitted_at`, `run_id` as the tiebreak). A user-role principal of another tenant now gets `404 not_found` (was `200`) on `GET /v1/threads/{id}`, `GET /v1/threads/{id}/state`, `GET /v1/threads/{id}/history` and `POST /v1/threads/{id}/fork`, and `404 not_found` (was `403`) on `POST /v1/threads/{id}/resume` and `DELETE /v1/threads/{id}`; the `404` is byte-identical to the response for a thread that does not exist, because the visibility check now runs before the admin check. A thread with no run is visible to an Admin only. A deployment that has a waypoint store but has the run store disabled shows non-admin principals no thread at all, because ownership cannot be established. An Admin is unaffected on every route. | HTTP clients that authenticate with user-role API keys and read, fork, resume or delete threads their tenant did not start; operators running a waypoint store without `run_store.backend`; clients that relied on a `403` from `resume` or `delete` to detect an existing thread. | Use an Admin key for threads that have no run, and enable `run_store.backend` so non-admin keys can see their own threads. A client that handled `403` from `resume` or `delete` for a foreign thread now sees `404`. |
+| M-B-25 | **`GET /v1/threads` is tenant-filtered (TENANT-03, Phase 53 plan 53-04, D-04).** A user-role principal now lists only the threads whose latest run belongs to its tenant; other tenants' threads and threads with no run are omitted (an Admin still lists every thread, and a deployment with a waypoint store but no run store shows a non-admin an empty list). Because the filter is applied after a page is read, a page may now hold fewer than `limit` items, even none, while `next_cursor` is non-null: a request examines at most 500 threads, and the response is `{"items":[],"next_cursor":null}` only when the walk has ended with nothing visible. | HTTP clients that page `GET /v1/threads` with user-role API keys and relied on seeing every thread in the deployment, or that stop paging at the first short or empty page. | Page by cursor: keep requesting with `next_cursor` until it is `null` rather than stopping at a short page. Use an Admin key to list threads that have no run. |
 
 ## 11.2 Rust API changes (compile-affecting; the X-10 register)
 
@@ -63,6 +64,20 @@ for every role. Waypoint-store failures on these routes now render the fixed mes
 and run-store failures `run store error`, never the backend's own text; a Waypoint or run row the store
 cannot read is the same missing-thread `404` for a non-admin and the fixed `500` for an Admin. The
 OpenAPI document changes only on `/v1/threads/...` operations (descriptions, and the history `404`).
+
+**`GET /v1/threads` is tenant-filtered and may return short pages -- landed Phase 53 (plan 53-04), TENANT-03 (`M-B-25`, section 11.1).**
+The thread list no longer enumerates other tenants' threads. A user-role principal receives only the
+threads whose latest run is attributed to its own tenant, newest activity first; threads of other tenants
+and threads with no run are omitted, an admin-role principal lists every thread exactly as before, and a
+non-admin on a deployment without a run store receives `{"items":[],"next_cursor":null}`. Because the
+filter runs after the store is read, a page may hold fewer than `limit` items (even none) while
+`next_cursor` is non-null; a client must follow `next_cursor` until it is `null` and must not treat a short
+page as the end of the list. A request examines at most 500 threads (in batches of 100), so one request
+cannot scan the whole store; the cursor is the `last_updated_at` of the last examined thread and no thread
+repeats across pages. The cursor is an exclusive timestamp, so, as before, two threads with an identical
+`last_updated_at` straddling a page boundary can be skipped (a keyset walk, not a snapshot). The response
+shape and the cursor encoding are unchanged; the OpenAPI document changes only the description of the list
+operation.
 
 ## 11.7 Deprecations
 

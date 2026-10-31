@@ -1,7 +1,7 @@
 ---
 phase: 52-ci-release-pipeline-repair
 verified: 2026-10-29T23:59:00Z
-status: human_needed
+status: passed
 score: 5/5 roadmap success criteria verified (plus 8/8 requirement IDs accounted for)
 behavior_unverified: 0
 overrides_applied: 0
@@ -10,12 +10,15 @@ gaps: []
 deferred: []
 behavior_unverified_items: []
 human_verification:
+
   - test: "Judgment-tier prohibitions (unverified-prohibition, human review recommended): confirm the 10 judgment-tier must-NOT items listed under 'Prohibitions' below"
     expected: "Maintainer agrees each did not happen. This verifier's verdicts on them are NON-AUTHORITATIVE LLM-judge verdicts."
     why_human: "ADR-550 D3/D4: judgment-tier prohibitions never pass silently; they need human resolution at the end-of-phase checkpoint."
+
   - test: "Platform CodeQL dismissals: with a token that can read code-scanning alerts, run GET /repos/DF3NDR/paladin-dev-env/code-scanning/alerts?state=open and ?state=dismissed"
     expected: "0 open CodeQL rule alerts; the 37 register alert numbers all dismissed with the register's reasons (24 false positive, 12 used in tests, 1 won't fix); 20 OSV advisory alerts still open by design"
     why_human: "The unauthenticated API returns 403 for code-scanning alerts, so the platform side of H-04 rests on the maintainer's pasted read-back (52-HANDOVER.md). Roadmap SC5 itself is worded on the register and is verified."
+
   - test: "Merge of PR #61 and the later v0.11.1 tag"
     expected: "PR #61 (open, label 'release', head dcaf6af26) merges with all 46 required contexts green; the first live use of the release-body size guard is the v0.11.1 tag (Phase 58)"
     why_human: "Merge and tag are maintainer-gated and outside this phase; the guard has only been exercised by stubbed harnesses, never a live release call (D-12)."

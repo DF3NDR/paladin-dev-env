@@ -2,32 +2,33 @@
 gsd_state_version: 1.0
 milestone: v0.11.1
 milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
-current_phase: 52
-current_phase_name: ci-release-pipeline-repair
-status: verifying
-stopped_at: Completed 52-08-PLAN.md
-last_updated: "2026-10-29T23:20:29.247Z"
-last_activity: 2026-10-28
-last_activity_desc: Phase 52 execution started
+current_phase: 54
+current_phase_name: First-Run Usability
+status: planning
+stopped_at: Completed 53-08-PLAN.md
+last_updated: "2026-10-31T18:04:48.427Z"
+last_activity: 2026-10-31
+last_activity_desc: Phase 53 complete, transitioned to Phase 54
 progress:
-  total_phases: 1
-  completed_phases: 1
-  total_plans: 8
-  completed_plans: 8
+  total_phases: 2
+  completed_phases: 2
+  total_plans: 16
+  completed_plans: 16
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-10-27 at the v0.11.1 milestone open)
+See: .planning/PROJECT.md (updated 2026-10-31 after Phase 53)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 52 — ci-release-pipeline-repair
+**Current focus:** Phase 54 — First-Run Usability
+52-UAT 3/3 passed; PR #61 merged to `main` as `84686acfb` on 2026-10-30)
 (carried-gaps inventory, dogfood findings log, scoping notes): 7 phases (52-58), 53/53 requirements
-mapped. Next: Phase 52 (CI & Release Pipeline Repair). Decisions at open: OpenAI Responses API out,
+mapped. Phase 52 (CI & Release Pipeline Repair) completed 2026-10-30; Phase 53 (Tenant Isolation Closure) completed 2026-10-31; next: Phase 54. Decisions at open: OpenAI Responses API out,
 `${VAR}` auth keys refused at boot, research skipped.
 
 **Previous milestone:** v0.11.0 "Treasurer Spend Governance" closed 2026-10-27 — 15 phases
@@ -49,18 +50,18 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 
 ## Current Position
 
-Phase: 52 (ci-release-pipeline-repair) — EXECUTING
-Plan: 8 of 8
-Status: Phase complete — ready for verification
-Last activity: 2026-10-28 — Phase 52 execution started
+Phase: 54 — First-Run Usability
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-10-31 — Phase 53 complete, transitioned to Phase 54
 
-Progress: [██████████] 100% (0 of 7 phases)
+Progress: [██████░░░░░░░░░░░░░░] 2/7 phases ([██████████] 100%) — Phase 53 plans [████████████████████] 8/8 (100%)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 589
+- Total plans completed: 605
 - Average duration: —
 - Total execution time: —
 
@@ -121,6 +122,8 @@ Progress: [██████████] 100% (0 of 7 phases)
 | 51 | 20 | - | - |
 | 46 | 14 | - | - |
 | 47 | 10 | - | - |
+| 52 | 8 | - | - |
+| 53 | 8 | - | - |
 
 *Updated after each plan completion*
 
@@ -361,6 +364,14 @@ Progress: [██████████] 100% (0 of 7 phases)
 | Phase 52 P06 | 35min | 3 tasks | 7 files |
 | Phase 52 P07 | 70min | 3 tasks | 1 files |
 | Phase 52 P08 | about 19h wall clock (3 sessions) | 3 tasks | 3 files |
+| Phase 53 P01 | 10min | 2 tasks | 5 files |
+| Phase 53 P02 | 25min | 2 tasks | 3 files |
+| Phase 53 P03 | 70min | 3 tasks | 5 files |
+| Phase 53 P04 | 45min | 2 tasks | 4 files |
+| Phase 53 P05 | 40min | 2 tasks | 4 files |
+| Phase 53 P06 | 14min | 3 tasks | 8 files |
+| Phase 53 P07 | 30min | 3 tasks | 9 files |
+| Phase 53 P08 | 12min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -676,6 +687,18 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 52]: 52-07: semver red proof via leaf-crate cron_field_count pub->pub(crate); local RED-PROVEN (222 pass/1 fail, function_missing); CI red job capture and remote scratch-branch delete handed over as H-03 (gh pr create refused, GraphQL 403)
 - [Phase ?]: 52-08: PD-06-1 confirmed by the maintainer; Semver Checks (vs v0.11.0) is a required check, live ruleset 20868126 carries 46 contexts equal to the committed record
 - [Phase ?]: 52-08: H-06 local make coverage deferred to the maintainer (Docker-capable machine); todo stays pending, resolves_phase 56, no coverage gate changed
+- [Phase ?]: 53-01: RunReadScope::permits_thread is the one thread-owner rule (latest run by submitted_at, run_id tiebreak); ensure_thread_visible calls it only with Some(&latest) so thread birth stays open
+- [Phase ?]: Phase 53-02: only RunRepositoryError::Serialization is hideable via redact_store_error_for_scope; UnknownSchemaVersion and all other errors stay the fixed 'run store error' 500 for every role (D-09)
+- [Phase ?]: 53-03: Admin scope skips the owner lookup in load_visible_thread; only DELETE (busy check) loads runs for an Admin and answers the fixed 'run store error' 500 (PD-03-5)
+- [Phase ?]: 53-03: waypoint Serialization/SchemaVersionUnsupported are hideable (tenant gets the missing-thread 404); Backend/NotFound stay the fixed 'thread store error' 500 (PD-03-3)
+- [Phase ?]: [Phase 53-04] GET /v1/threads for a Tenant scope walks list_threads in batches of 100 with a 500-thread examination cap, per-thread latest-run lookup (scope All) plus permits_thread; cursor is the last examined thread's last_updated_at; a Serialization owner lookup is skipped and logged, other run errors are the fixed 500; Admin keeps the single limit+1 fetch
+- [Phase ?]: 53-05: get_job keeps its #[utoipa::path] annotation (generated public __path_get_job item) and gets no #[deprecated]; get_job_scoped is routed with operation_id get_job so openapi.json stays byte-identical; JobStore owner (agent id, tenant) lives in private Inner.owners
+- [Phase ?]: Phase 53-06: Treasurer refusal fires exactly on Treasurer configured AND no engine factory (D-00f); no config escape hatch; factory-present-but-with_treasurer-dropped is an accepted residual
+- [Phase ?]: Phase 53-06: schedule creator scan runs whenever the schedule repository exists, is read-only and advisory, emits at most one warn and one error
+- [Phase ?]: Phase 53-06: reserved literals open-access/unattributed (key name, key tenant, bearer tenant) and anonymous (key name) are refused at config load, exact and case-sensitive
+- [Phase ?]: ADR-0063 (Phase 53-07): threads belong to the tenant of their latest run, jobs to their enqueuing agent id and tenant; amends ADR-0054; get_job #[deprecated] deferred to next minor
+- [Phase ?]: Phase 53-08 (2026-10-31): v0.11.1 patch decided, every change additive. Evidence: local reproduction of Semver Checks (vs v0.11.0) with scripts/check-semver.sh at --release-type patch on head 4ef9ddd2a, 223 checks: 223 pass, 31 skip for all twelve packages, 0 failure(s); MIGRATION.md 11.2 has no row, allowlist has no entry. Recorded in .planning/phases/53-tenant-isolation-closure/53-VERSION-DECISION.md
+- [Phase 53]: UAT (2026-10-31): AC-N5 passed on an owner read of the shipped wiring (the no-op-factory blind spot stays a code-review control); review warnings WR-01, WR-02, WR-03 carried as open WINDOWS rows 85-87 (proposed owner Phase 55), WR-04 and WR-05 recorded as ADR-0063 residuals
 
 ### Pending Todos
 
@@ -700,13 +723,52 @@ Four pending todos were acknowledged as deferred at the v0.11.0 close (see *Defe
 
 ### Blockers/Concerns
 
+**Phase 53 close (2026-10-31, 53-VERIFICATION `passed` 5/5, 53-UAT 2/2, 53-SECURITY 0 open):**
+
+- **WINDOWS rows 85-87 are open** (53-REVIEW WR-01…03, owner-accepted follow-ups): a newer-schema run row
+  fails every non-admin `GET /v1/threads` with a 500 (row 85); a corrupt older run row locks the owner out
+  of their thread because the latest-run lookup decodes `limit + 1` rows (row 86); thread ownership
+  transfers to whoever submitted the latest run, including an Admin fork or an unattributed schedule run
+  (row 87). Proposed owner Phase 55 (correctness fixes); `open_count` is now 16, and the `v0.11.1` exit
+  criterion needs 0, so Phase 55 or Phase 57 must fix or waive them.
+- **Phase 53 work is on `claude/laughing-dirac-e0h2ax`, not yet merged to `main`.**
+
+**Phase 52 close (2026-10-30, 52-VERIFICATION `passed` 5/5, 52-UAT 3/3, 52-SECURITY 0 open):**
+
+- ~~**PR #61 is open, not merged**~~ — **merged by the maintainer** (merge commit `84686acfb` on `main`,
+  2026-10-30; head `dcaf6af26`, 46 required contexts incl. the new `Semver Checks (vs v0.11.0)`). `main`
+  now carries the armed gates; later phases keep working on `claude/laughing-dirac-e0h2ax` and merge
+  `main` back in before the next PR.
+
+- **Release-body size guard has never run live** (D-12) — `scripts/release-body-fit.sh` and the create/finalize
+  guards are proven only by the stubbed harnesses and the >131,072-byte regression; the first live use is
+  the `v0.11.1` tag in Phase 58. Read that release's body size and footer at the tag.
+
+- **Three OSV-Scanner advisory alerts are ungoverned** (alerts 23, 24, 25 — `D-52-03-02` in
+  `52-ci-release-pipeline-repair/deferred-items.md`): no `SECURITY-EXCEPTIONS.md` row, `.cargo/audit.toml`
+  or `deny.toml` entry; left open for the maintainer by design. The other 17 OSV alerts are governed by rows.
+
+- **News API key travels in the URL and `reqwest` error text can echo it** (`D-52-03-01`,
+  `news_api_fetcher.rs`; CodeQL alert 54 itself is a false positive) — a Phase 55 correctness candidate:
+  header-carried key, URL stripped from the mapped error, `Policy::none()`.
+
+- **Label events re-run the whole `ci.yml`** including the ~63-minute Docker build (PD-06-3) — documented,
+  not engineered around; apply the `release` label once.
+
+- **`CODEQL-DISMISSALS.md` rows 40 and 49 carry stale line anchors** (left per D-14; logged in
+  deferred-items) — fix when those files are next touched.
+
+- **H-06 (local `make coverage` reproduction) deferred again** to the maintainer on a Docker-capable
+  machine; the pending todo stays with `resolves_phase: 56`.
+
 **v0.11.1 roadmap-time findings (2026-10-27, measured against the tree while drafting the roadmap):**
 
-- **Phase 53, verify first:** Phase 40's `40-REVIEW-FIX.md` already records WR-01…WR-04 (TENANT-04, -05, -06) as fixed
+- ~~**Phase 53, verify first:**~~ — **done in Phase 53** (plans prove-then-lock, `53-TENANT-EVIDENCE.md`). Phase 40's `40-REVIEW-FIX.md` already records WR-01…WR-04 (TENANT-04, -05, -06) as fixed
   (`ensure_thread_visible` in `submission.rs`, tenant check inside `RunSubmissionService::cancel`, a fixed run-store
   error message in `run_controller.rs`); the carried-gaps inventory lists them open. Plans prove-then-lock those three.
 
-- **Phase 53, decision point:** if the thread-tenant fix (or any security change) forces a persisted or public-surface
+- ~~**Phase 53, decision point:**~~ — **decided in Phase 53: `v0.11.1` patch, every change additive**
+  (`53-VERSION-DECISION.md`). If the thread-tenant fix (or any security change) forces a persisted or public-surface
   break, the milestone becomes `v0.12.0`; record the decision before Phase 58 opens.
 
 - **Phase 55, FIXES-01 premise:** `content_filtering_service.rs` is commented out of `services/mod.rs` and is not valid
@@ -783,7 +845,13 @@ close notes this section carried for Phases 38-51 are archived with their phases
   with them: G1 (no aggregate HTTP spend route; LEDGR-04 is per-run over HTTP) and G2 (nothing
   asserts the engine-factory wiring that attaches settlement, spend guard and cancel probe).
 
-- **Phase 47 carried findings** (`47-CI-EVIDENCE.md` D-00d, `47-REVIEW.md`): the
+- **Phase 47 carried findings** (`47-CI-EVIDENCE.md` D-00d, `47-REVIEW.md`) — **the release-process
+  half is resolved by Phase 52 (2026-10-30):** semver re-pinned to `0.11.0` with `paladin-eval` (12/12 crates,
+  223 checks pass, zero-check tripwire), `check-migration-allowlist` in the required cargo-deny job, Publish
+  Dry Run on every PR and End-to-End Tests under the `release` label, release body via `jq --rawfile` with
+  the size guard, 37 CodeQL alerts registered and dismissed, issue #41 closed. **Still open:** the
+  `paladin-memory` / `paladin-content` changelog wording (Phase 54/55), stale `k8s/` labels and "ten crates"
+  comments (Phase 54's `check-version-strings`). Original text: the
   `paladin-memory` / `paladin-content` crate changelogs say "No functional change" for 0.11.0
   although the persisted-key change (`paladin.node` → `paladin.data`) is one-way — fix in the next
   patch release's changelog, the published crates are immutable; the release-body builder still
@@ -810,7 +878,10 @@ close notes this section carried for Phases 38-51 are archived with their phases
   superseded) — expected, documented in MILESTONES.md *Known Gaps*; do not "fix" by fabricating
   SUMMARYs.
 
-- cargo-semver-checks 0.50.0's CI-pinned --baseline-version 0.9.0 job is currently a no-op for every one of the 11 checked packages -- confirmed 2026-09-26 during Phase 38 plan 38-09's closeout measurement. The in-tree workspace version (0.10.1, the last real release) already differs from that two-milestones-old baseline by a pre-1.0 "major-equivalent" bump, so the tool skips all lint evaluation (0 checks, 254 skip) unconditionally. This will remain true for every plan in every phase of the v0.11.0 milestone until the version is bumped at the eventual release commit. Not fixed in 38-09 (ci.yml is not in that plan's files_modified) -- flag for whichever phase next touches ci.yml's semver job or performs the v0.11.0 version bump. **Still a no-op at v0.11.0** (Phase 47 re-seal row 57, 2026-10-25: `0 checks, 254 skip` for 10 of 11 packages against 0.9.0; `paladin-web` attributed to its CI twin); now that `0.11.0` is published the baseline can move to it -- a v0.12 hygiene item.
+- ~~cargo-semver-checks 0.50.0's CI-pinned --baseline-version 0.9.0 job is currently a no-op~~ — **resolved by
+  Phase 52 (2026-10-30, plans 52-01/52-05/52-07):** baseline `0.11.0` at `--release-type patch` by flag, 12/12
+  packages at 223 checks pass, a scratch-branch leaf break turned the job red, and `Semver Checks (vs v0.11.0)`
+  is a required context in ruleset 20868126. Original text: cargo-semver-checks 0.50.0's CI-pinned --baseline-version 0.9.0 job is currently a no-op for every one of the 11 checked packages -- confirmed 2026-09-26 during Phase 38 plan 38-09's closeout measurement. The in-tree workspace version (0.10.1, the last real release) already differs from that two-milestones-old baseline by a pre-1.0 "major-equivalent" bump, so the tool skips all lint evaluation (0 checks, 254 skip) unconditionally. This will remain true for every plan in every phase of the v0.11.0 milestone until the version is bumped at the eventual release commit. Not fixed in 38-09 (ci.yml is not in that plan's files_modified) -- flag for whichever phase next touches ci.yml's semver job or performs the v0.11.0 version bump. **Still a no-op at v0.11.0** (Phase 47 re-seal row 57, 2026-10-25: `0 checks, 254 skip` for 10 of 11 packages against 0.9.0; `paladin-web` attributed to its CI twin); now that `0.11.0` is published the baseline can move to it -- a v0.12 hygiene item.
 
 ### Quick Tasks Completed
 
@@ -986,15 +1057,23 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-10-29T23:20:29.216Z
-Stopped at: Completed 52-08-PLAN.md
+Last session: 2026-10-31T18:10:00.000Z
+Stopped at: Phase 53 complete, ready to plan Phase 54
 Resume file: None
 
 ## Operator Next Steps
 
-- **Milestone v0.11.1 roadmap is drafted (2026-10-27):** `.planning/ROADMAP.md` (Phases 52-58) and the
-  `REQUIREMENTS.md` traceability table are written and uncommitted. After approval, start with
-  `/gsd-discuss-phase 52` (or `/gsd-plan-phase 52`). Phase 56 stays a frame until the findings log has content;
+- **Phase 53 is complete (2026-10-31):** verification `passed`, UAT 2/2, security 0 open, ADR-0063 minted,
+  `v0.11.1` stays a patch. Review warnings WR-01…03 are open WINDOWS rows 85-87 for a later phase. The work
+  is on `claude/laughing-dirac-e0h2ax` (not yet on `main`). Next: `/clear` then `/gsd-discuss-phase 54`
+  (First-Run Usability).
+
+- **Phase 52 is complete (2026-10-30):** verification `passed`, UAT 3/3, security 0 open. PR #61 is merged
+  (`84686acfb` on `main`, 2026-10-30); the one maintainer act still ahead is the `v0.11.1` tag in Phase 58. Next: `/clear` then `/gsd-discuss-phase 53` (Tenant Isolation Closure — verify Phase 40's
+  `40-REVIEW-FIX.md` fixes first, and record the `v0.11.1`-vs-`v0.12.0` decision there).
+
+- **Milestone v0.11.1 roadmap (2026-10-27):** `.planning/ROADMAP.md` (Phases 52-58) and the
+  `REQUIREMENTS.md` traceability table. Phase 56 stays a frame until the findings log has content;
   append maintainer-run and web3sec findings to `.project/v0.11.1/02-dogfood-findings-log.md` as they arrive.
 
 - **Milestone v0.11.0 is closed (2026-10-27).** Archive: `milestones/v0.11.0-ROADMAP.md`,

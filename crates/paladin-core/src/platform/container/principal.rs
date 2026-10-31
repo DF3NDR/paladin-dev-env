@@ -6,21 +6,27 @@
 //! else (D-02) -- no request header, query parameter or body field may name, influence or
 //! override it.
 //!
-//! [`RunReadScope`] is the **one shared read-scope rule** (D-12), applied by exactly two
+//! [`RunReadScope`] is the **one shared read-scope rule** (D-12), applied by exactly three
 //! mechanisms and nowhere else: the list path (`RunQuery.scope`, applied as a SQL
-//! `WHERE tenant_id = ?` by every `RunRepositoryPort::list` adapter) and the single-run
-//! path (`paladin-web`'s `load_visible_run` helper, which calls [`RunReadScope::permits`]).
+//! `WHERE tenant_id = ?` by every `RunRepositoryPort::list` adapter), the single-run
+//! path (`paladin-web`'s `load_visible_run` helper, which calls [`RunReadScope::permits`]),
+//! and the thread-visibility rule [`RunReadScope::permits_thread`] (a thread belongs to the
+//! tenant of its latest run), used by `paladin-web`'s thread gate and by
+//! `RunSubmissionService::ensure_thread_visible`.
 //!
 //! [`TenantId::OPEN_ACCESS`] and `LedgerScope::UNATTRIBUTED`
 //! (`crate::platform::container::treasury_ledger::LedgerScope`) are deliberately different
 //! literals: `"open-access"` names a principal that exists when auth is disabled (an Admin,
 //! by the D-11 rule, sees every run); `"unattributed"` names the absence of any principal on
-//! a ledger row. Never conflate the two.
+//! a ledger row. Never conflate the two. [`RESERVED_PRINCIPAL_LITERALS`] and
+//! [`RESERVED_KEY_NAME_LITERALS`] collect the literals a configuration may not take for a key
+//! name or tenant (TENANT-09).
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::platform::container::run::Run;
+use crate::platform::container::treasury_ledger::LedgerScope;
 use crate::platform::container::user::UserRole;
 
 /// Maximum length, in bytes, of a [`TenantId`].
@@ -28,6 +34,45 @@ use crate::platform::container::user::UserRole;
 /// This is a **byte** limit (`str::len()`, the UTF-8 encoded length). `ThreadId` allows 256;
 /// `TenantId` is bounded to 128 to keep the new `idx_runs_tenant_submitted` index key short.
 pub const TENANT_ID_MAX_LEN: usize = 128;
+
+/// Literals no configured API key name or tenant may take: the two sentinels
+/// [`TenantId::OPEN_ACCESS`] and `LedgerScope::UNATTRIBUTED`.
+///
+/// A configured tenant or key named like a sentinel would be indistinguishable from the open-access
+/// principal or from an unattributed ledger row. Matching is exact and case-sensitive (`Open-Access`
+/// is not reserved). `AuthConfig::validate` in the root crate rejects them at config load, naming
+/// the entry (TENANT-09, Phase 40 IN-01); [`TenantId::new`] itself does not reject them, because
+/// the open-access principal legitimately carries one.
+///
+/// # Examples
+///
+/// ```
+/// use paladin_core::platform::container::principal::{RESERVED_PRINCIPAL_LITERALS, TenantId};
+///
+/// assert!(RESERVED_PRINCIPAL_LITERALS.contains(&"open-access"));
+/// assert!(RESERVED_PRINCIPAL_LITERALS.contains(&"unattributed"));
+/// assert!(!RESERVED_PRINCIPAL_LITERALS.contains(&"Open-Access"));
+/// // The constructor still accepts them: the check lives at config load.
+/// assert!(TenantId::new("open-access").is_ok());
+/// ```
+pub const RESERVED_PRINCIPAL_LITERALS: &[&str] =
+    &[TenantId::OPEN_ACCESS, LedgerScope::UNATTRIBUTED];
+
+/// Literals that may not be an API key *name* in addition to [`RESERVED_PRINCIPAL_LITERALS`]:
+/// `"anonymous"`, the principal id the open-access (auth disabled) principal carries.
+///
+/// Exact and case-sensitive, rejected at config load by `AuthConfig::validate` (TENANT-09).
+/// `paladin-web` owns the matching `OPEN_ACCESS_PRINCIPAL_ID` constant and core cannot import it,
+/// so a root-crate test asserts the two stay equal.
+///
+/// # Examples
+///
+/// ```
+/// use paladin_core::platform::container::principal::RESERVED_KEY_NAME_LITERALS;
+///
+/// assert_eq!(RESERVED_KEY_NAME_LITERALS, &["anonymous"]);
+/// ```
+pub const RESERVED_KEY_NAME_LITERALS: &[&str] = &["anonymous"];
 
 /// Identity of a tenant: a plain identifier (D-00e -- not a Medieval-military officer word)
 /// naming the organization or deployment scope an authenticated principal belongs to.
@@ -233,6 +278,57 @@ impl RunReadScope {
             Self::Tenant(t) => run.submitted_by.as_ref().is_some_and(|a| &a.tenant_id == t),
         }
     }
+
+    /// Whether this scope permits seeing a thread whose latest run is `latest` -- the
+    /// thread-visibility rule of ADR-0054 as amended by ADR-0063.
+    ///
+    /// A thread carries no tenant of its own; it belongs to the tenant of its **latest
+    /// run**, the newest by `submitted_at` with `run_id` as the tiebreak (the order every
+    /// run repository's `list` returns). `All` permits every thread. A `Tenant` scope
+    /// permits a thread only when `latest` is `Some` and [`RunReadScope::permits`] holds
+    /// for it; a thread with no run has no owner, so `(Tenant, None)` is `false` and only
+    /// `All` sees it.
+    ///
+    /// Callers that must admit a brand-new thread id (submit and fork, where the first run
+    /// creates the thread) decide that before asking -- they call this only with
+    /// `Some(latest)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_core::platform::container::principal::{RunAttribution, RunReadScope, TenantId};
+    /// use paladin_core::platform::container::run::{AssistantRef, Run, RunId};
+    /// use paladin_core::platform::container::waypoint::ThreadId;
+    ///
+    /// fn run_of(tenant: &str) -> Result<Run, Box<dyn std::error::Error>> {
+    ///     Ok(Run::new(
+    ///         RunId::new_v7(),
+    ///         ThreadId::new("thread-1")?,
+    ///         AssistantRef { assistant_id: "wf".to_string(), version: 1 },
+    ///         serde_json::json!({}),
+    ///     )
+    ///     .with_submitted_by(RunAttribution::new(TenantId::new(tenant)?, "svc")))
+    /// }
+    ///
+    /// fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let acme_run = run_of("acme")?;
+    ///     let acme = RunReadScope::Tenant(TenantId::new("acme")?);
+    ///     let globex = RunReadScope::Tenant(TenantId::new("globex")?);
+    ///
+    ///     assert!(RunReadScope::All.permits_thread(None));
+    ///     assert!(acme.permits_thread(Some(&acme_run)));
+    ///     assert!(!globex.permits_thread(Some(&acme_run)));
+    ///     assert!(!acme.permits_thread(None));
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn permits_thread(&self, latest: Option<&Run>) -> bool {
+        match (self, latest) {
+            (Self::All, _) => true,
+            (Self::Tenant(_), None) => false,
+            (Self::Tenant(_), Some(run)) => self.permits(run),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -329,6 +425,23 @@ mod tests {
         let other_scope = RunReadScope::Tenant(tenant("globex"));
         assert!(!other_scope.permits(&run));
         assert!(RunReadScope::All.permits(&run));
+    }
+
+    #[test]
+    fn permits_thread_admits_all_and_only_the_latest_runs_tenant() {
+        let mut acme_run = bare_run();
+        acme_run.submitted_by = Some(RunAttribution::new(tenant("acme"), "svc-a"));
+        let mut globex_run = bare_run();
+        globex_run.submitted_by = Some(RunAttribution::new(tenant("globex"), "svc-b"));
+        let unattributed_run = bare_run();
+        let acme = RunReadScope::Tenant(tenant("acme"));
+
+        assert!(RunReadScope::All.permits_thread(None));
+        assert!(RunReadScope::All.permits_thread(Some(&globex_run)));
+        assert!(!acme.permits_thread(None));
+        assert!(acme.permits_thread(Some(&acme_run)));
+        assert!(!acme.permits_thread(Some(&globex_run)));
+        assert!(!acme.permits_thread(Some(&unattributed_run)));
     }
 
     #[test]

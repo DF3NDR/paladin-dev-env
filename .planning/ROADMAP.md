@@ -104,7 +104,7 @@ frozen at 311 lines that two milestones made invisible.
 | **Security Tooling** | 18-21 | ✅ **Shipped v0.9.0 (2026-09-01)** — [archive](milestones/v0.9.0-ROADMAP.md) | Forward work — not ingest-derived. Added 2026-08-24 per *Roadmap Extension Protocol* item 1, closing the Rust-SAST gap the v0.8.0 milestone audit left as its one genuinely open item; extended 2026-08-25 with Phases 19-21 (publish credential, publish operations, release artifacts). |
 | **Durable Agent Execution Runtime** | 22-37.1 | ✅ **Shipped v0.10.0 (2026-09-23)** — [archive](milestones/v0.10.0-ROADMAP.md). Released to crates.io as `0.10.1` (tag `v0.10.1` on merge commit `f7dae267`, 2026-09-21) after the `v0.10.0` tag published 3 of 12 crates — see MILESTONES.md. Phases 22-29 complete 2026-09-10; Phases 30-33 added 2026-09-14, complete 2026-09-16; Phases 34-37 added 2026-09-17, Phase 36.1 and 37.1 inserted; all 19 phases complete 2026-09-23 | Forward work — not ingest-derived. Added 2026-09-01, sourced from the user-authored design corpus in `.project/v0.10.0/` (program overview `00`, epic PRDs `01`-`07`, traceability matrix `08`) rather than the historical `.project/Milestone_*` ingest. **Extended 2026-09-14** with Phases 30-33 (Token Economy — Commissary anchoring, lossless accounting, primitive unification, Commissary adoption), sourced from `.project/Milestone_13-Token-Economy/` (overview + Epics 1-4). Milestone 14 (Treasurer, `.project/Milestone_14-Treasurer/`) is reserved, not roadmapped. **Extended 2026-09-17** with Phases 34-37 (Release Readiness — documentation currency audit, mdBook currency, rustdoc zero-warning bar & examples currency, the crate release) — operator-instructed pre-tag work, not corpus-sourced. |
 | **Treasurer Spend Governance** | 38-51 | ✅ **Shipped v0.11.0 (2026-10-27)** — [archive](milestones/v0.11.0-ROADMAP.md). Tag `v0.11.0` on merge commit `70657919` (2026-10-26, release run `40396108246`), all 12 publishable crates on crates.io at `0.11.0` — one tag, no patch needed; see MILESTONES.md. Phases 38-45 complete by 2026-10-12; Phases 48-51 (and the inserted 50.1) added 2026-10-12..19 and complete by 2026-10-23; Phases 46-47 complete 2026-10-24/26; all 15 phases closed 2026-10-27 | Forward work — not ingest-derived. Sourced from `.project/Milestone_14-Treasurer/` (overview + Epic 1 PRD `prd-treasurer-spend-governance.md`, R1-R6), the supporting scope in PROJECT.md *Current Milestone*, and `.planning/research/SUMMARY.md` (2026-09-24). Operator-confirmed full governance (per-tenant + per-API-key), 2026-09-24. Extended 2026-10-12 with Phase 48 (Base Entity Rename) and 2026-10-14 with Phase 49 (Downstream Adoption of v0.10.1, from the web3sec handoff), both sequenced before Phases 46-47; extended again 2026-10-14 with Phase 50 (Provider Parity & Configuration-Driven Model Swap, from the second web3sec handoff), also sequenced before Phases 46-47; extended again 2026-10-19 with Phase 50.1 (Consumer-Surface Readiness for v0.11.0, inserted from the fourth web3sec handoff), sequenced after Phase 50 and before Phase 51. |
-| **Dogfood Cleanup** | 52-58 | 🚧 **In progress (v0.11.1, opened 2026-10-27)** — 7 phases, 53 requirements; a patch release unless a security fix forces `v0.12.0` (decision point in Phase 53) | Forward work — not ingest-derived. Sourced from `.project/v0.11.1/` (`01-carried-gaps-inventory.md` rows A1…G4, `02-dogfood-findings-log.md` entries DF-nn, `03-suggestions-and-scoping.md`) and PROJECT.md *Current Milestone*. Cleanup and bug-fix only: no new ports, adapters or HTTP routes except where a security fix needs one; stubs are fenced, not finished. Phase 56's detailed scope is filled from the findings log once the maintainer's runs and the web3sec return arrive. |
+| **Dogfood Cleanup** | 52-58 | 🚧 **In progress (v0.11.1, opened 2026-10-27)** — 7 phases, 53 requirements; a patch release (v0.11.1, decided in Phase 53, 53-VERSION-DECISION.md: every change additive, semver green at patch for all twelve packages) | Forward work — not ingest-derived. Sourced from `.project/v0.11.1/` (`01-carried-gaps-inventory.md` rows A1…G4, `02-dogfood-findings-log.md` entries DF-nn, `03-suggestions-and-scoping.md`) and PROJECT.md *Current Milestone*. Cleanup and bug-fix only: no new ports, adapters or HTTP routes except where a security fix needs one; stubs are fenced, not finished. Phase 56's detailed scope is filled from the findings log once the maintainer's runs and the web3sec return arrive. |
 
 **The ingest is complete.** All 263 documents in `.project/` are covered — 199 classified across
 five runs and 64 `tasks-*.md` measured deterministically by `intel/task-completion-state.md`. There
@@ -254,8 +254,8 @@ Phase artifacts: `milestones/v0.11.0-phases/`
 
 *Goal: close the security, correctness, release-process and first-run gaps v0.11.0 left behind, plus whatever dogfooding v0.11.0 surfaces, so the `v0.11.1` tag ships with `WINDOWS.md` `open_count: 0` and a milestone audit that reads `passed` rather than `tech_debt`. Cleanup only: no new features, and no new ports, adapters or HTTP routes except where a security fix needs one. If Phase 53's decision point forces a persisted or public-surface break, the milestone version becomes `v0.12.0` and every `0.11.1` below reads `0.12.0`.*
 
-- [ ] **Phase 52: CI & Release Pipeline Repair** - Re-pin the semver gate to the published `0.11.0` baseline so it checks something, drop the crate-wide allows, run the migration-allowlist, end-to-end and publish-dry-run gates before merge, fix the release-body argv cap, and clear the CodeQL, issue #41 and publish-order carry-overs
-- [ ] **Phase 53: Tenant Isolation Closure** - One visibility gate for every `/v1/threads/*` route, run submission and fork refusing a foreign tenant's thread, tenant-checked job reads and cancel, redacted run-row errors, and a boot-time refusal when a configured Treasurer is not attached to the worker pool (the only S1 cluster; records the patch-versus-`v0.12.0` decision)
+- [x] **Phase 52: CI & Release Pipeline Repair** - Re-pin the semver gate to the published `0.11.0` baseline so it checks something, drop the crate-wide allows, run the migration-allowlist, end-to-end and publish-dry-run gates before merge, fix the release-body argv cap, and clear the CodeQL, issue #41 and publish-order carry-overs (completed 2026-10-30)
+- [x] **Phase 53: Tenant Isolation Closure** - One visibility gate for every `/v1/threads/*` route, run submission and fork refusing a foreign tenant's thread, tenant-checked job reads and cancel, redacted run-row errors, and a boot-time refusal when a configured Treasurer is not attached to the worker pool (the only S1 cluster; records the patch-versus-`v0.12.0` decision) (completed 2026-10-31)
 - [ ] **Phase 54: First-Run Usability** - Refuse unexpanded `${VAR}` HTTP auth keys at boot and make the examples honest, bring every install snippet, version line and `k8s/` label to the current release behind a `check-version-strings` gate, and fix the changelog, ADR, count and API-surface-snapshot nits a new user trips on
 - [ ] **Phase 55: Correctness Fixes, Test Hygiene & Lint Bar** - No `todo!()` reachable in a published crate (held by a grep guard), the unfinished content/base-layer items each given a keep/fence/remove decision, the Failed-vs-Halted, `Cancelled`, `claude-opus-4-8` seed and unpriced-model-warning fixes, hermetic and non-flaky tests, and a warning-free lint and rustdoc bar with the eight crate-level rustdoc allows removed
 - [ ] **Phase 56: Dogfood Findings** - Triage the maintainer's runs, the web3sec return and two deliberate walk-throughs into the findings log, disposition every `DF-nn`, and fix every promoted S1/S2 finding before the tag (detailed scope is unknown today and is filled from `.project/v0.11.1/02-dogfood-findings-log.md`)
@@ -352,12 +352,44 @@ Plans:
   4. With a Treasurer configured, `paladin-server` refuses to boot unless the worker pool was built through `with_engine_factory` (a test proves the refusal); reserved literals are rejected as tenant and API-key names at config load; and boot logs exactly one `warn!` listing schedules with `NULL created_by`, with no backfill route.
   5. The patch-versus-minor decision is recorded in this phase before Phase 58 opens: either the fixes stay additive (semver job green at patch level, no `MIGRATION.md` break; a tenant column on threads is a migration, not a break) or the one deliberate break is named, registered in `MIGRATION.md` and the allowlist, and the milestone version becomes `v0.12.0`.
 
-**Plans**: TBD
+**Plans**: 8 plans
+
+Plans:
+**Wave 1**
+
+- [x] 53-01-PLAN.md — One thread-owner rule `RunReadScope::permits_thread` in core; submit/fork/cancel isolation locked at HTTP and service level; prove-then-lock evidence (TENANT-03 rule, TENANT-04, TENANT-05)
+- [x] 53-02-PLAN.md — One role-aware redaction rule; an unreadable run row is the missing-run 404 for a tenant and the fixed `run store error` 500 for Admin on every run route (TENANT-06)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 53-03-PLAN.md — `load_visible_thread` gate on every `/v1/threads/{id}*` route (gate before admin check), seven backend-text sites redacted, OpenAPI-derived route matrix (TENANT-03, TENANT-06)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 53-04-PLAN.md — `GET /v1/threads` bounded tenant-filtered walk (500-thread cap, short pages with a cursor, corrupt foreign rows skipped) (TENANT-03)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 53-05-PLAN.md — Job polls scoped to (agent, tenant) through `JobStore::get_visible` and additive `get_job_scoped`; OpenAPI unchanged (TENANT-07)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [x] 53-06-PLAN.md — Boot guards: Treasurer-without-engine-factory refusal, one advisory `warn!` for `NULL created_by` schedules, reserved principal literals refused at config load (TENANT-08, TENANT-10, TENANT-09)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [x] 53-07-PLAN.md — ADR-0063 amending ADR-0054, user docs, WINDOWS rows 58/63 closed, Phase 40 dispositions, manual credential review (TENANT-03..10)
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [x] 53-08-PLAN.md — Phase-head gate sweep and twelve-package patch-level semver evidence; `53-VERSION-DECISION.md` recorded last (SC5)
+
 **Scope notes**:
 
 - **Re-verify against the tree first.** Phase 40's `40-REVIEW-FIX.md` records WR-01…WR-04 (TENANT-04, -05, -06) as fixed: `ensure_thread_visible` is in `src/application/services/run/submission.rs`, `RunSubmissionService::cancel` enforces the tenant in the service, and `run_controller.rs` returns a fixed run-store error message. The carried-gaps inventory (built from `40-REVIEW.md` alone) lists them open. For those three requirements the plan starts by proving the criterion against the tree and adds the regression test where one is missing; only what fails is rebuilt. TENANT-03, -07, -08, -09 and -10 are expected to be real work.
 - **Decision point (v0.11.1 or v0.12.0).** A tenant column on threads, or a signature change on a published type, may force a persisted or public-surface break. Decide when the break is known, not at the tag: if it is forced by this security fix it is the one deliberate break (`MIGRATION.md` §11, mirrored allowlist entry) and the version is `v0.12.0`; a break not forced by security is reshaped or dropped instead. Shared-gate design (derive the tenant from a thread's runs versus record it on the thread) is a discuss-phase question.
 - No new HTTP routes: the fixes route existing handlers through the gate.
+- **Version decision (recorded 2026-10-31, `.planning/phases/53-tenant-isolation-closure/53-VERSION-DECISION.md`):** v0.11.1 (patch) -- decided in Phase 53, 53-VERSION-DECISION.md. Every change is additive: `Semver Checks (vs v0.11.0)` reproduced locally at `--release-type patch` reads `223 checks: 223 pass, 31 skip` for all twelve packages with 0 failures, `MIGRATION.md` section 11.2 has no row and `.cargo/semver-checks-allowlist.toml` has no entry.
 
 ### Phase 54: First-Run Usability
 
@@ -481,8 +513,8 @@ Plans:
 | 18-21 | v0.9.0 | 25/25 | ✅ Shipped | 2026-09-01 |
 | 22-37.1 | v0.10.0 | 231/231 (228 executed, 3 superseded) | ✅ Shipped | 2026-09-23 |
 | 38-51 | v0.11.0 | 174/174 | ✅ Shipped | 2026-10-27 |
-| 52. CI & Release Pipeline Repair | v0.11.1 | 0/TBD | Not started | - |
-| 53. Tenant Isolation Closure | v0.11.1 | 0/TBD | Not started | - |
+| 52. CI & Release Pipeline Repair | v0.11.1 | 8/8 | Complete    | 2026-10-30 |
+| 53. Tenant Isolation Closure | v0.11.1 | 8/8 | Complete    | 2026-10-31 |
 | 54. First-Run Usability | v0.11.1 | 0/TBD | Not started | - |
 | 55. Correctness Fixes, Test Hygiene & Lint Bar | v0.11.1 | 0/TBD | Not started | - |
 | 56. Dogfood Findings | v0.11.1 | 0/TBD | Not started | - |

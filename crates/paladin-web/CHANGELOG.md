@@ -5,6 +5,46 @@ All notable changes to `paladin-web` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows lockstep workspace versioning.
 
+## [Unreleased]
+
+### Added
+
+- `JobStore::create_owned` and `JobStore::get_visible` (TENANT-07, Phase 53 plan 53-05): a job's owner
+  `(agent id, tenant)` is recorded in the store's private state at enqueue and checked on read.
+- `agent_controller::get_job_scoped`: the scoped job-poll handler now routed for
+  `GET /v1/agents/{id}/jobs/{job_id}` (same `operation_id`, so `openapi.json` is unchanged). `get_job`
+  keeps its signature and is no longer routed; see `MIGRATION.md` section 11.7.
+
+### Security
+
+- Scoped job polls (TENANT-07, Phase 53 plan 53-05; see `MIGRATION.md` section 11.1 `M-B-26`):
+  `GET /v1/agents/{id}/jobs/{job_id}` returns a job only to the tenant that enqueued it, under the agent id
+  it was enqueued under, or to an Admin; every other poll is the same `404 unknown job '<id>'` as a missing
+  or evicted job.
+
+- Corrupt-row redaction by role on the run routes (TENANT-06, Phase 53 plan 53-02; see `MIGRATION.md`
+  section 11.1 `M-B-23`): `GET /v1/runs/{run_id}`, `.../stream`, `.../webhook-deliveries` and
+  `POST .../cancel` answer a non-admin principal the same `404` as a missing run when the run row
+  cannot be read, and an Admin the fixed `500` `run store error`. The detail is logged server-side only.
+- Thread visibility gate (TENANT-03, TENANT-06 thread half, Phase 53 plan 53-03; see `MIGRATION.md`
+  section 11.1 `M-B-24`): every `/v1/threads/{id}*` route (`GET`, `.../state`, `.../history`,
+  `POST .../resume`, `POST .../fork`, `DELETE`) enters one `load_visible_thread` gate. A thread belongs to
+  the tenant of its latest run; a thread another tenant owns answers the same `404` as a missing thread
+  (on `resume` and `delete` before the admin check), a run-less thread is Admin-only, and a deployment
+  without a run store shows non-admin principals no thread. Thread-route store failures render the
+  fixed `thread store error` / `run store error` messages instead of backend text.
+- Tenant-filtered thread list (TENANT-03, Phase 53 plan 53-04; see `MIGRATION.md` section 11.1
+  `M-B-25`): `GET /v1/threads` lists a user-role principal only the threads whose latest run belongs to
+  its tenant (an Admin still lists all; a non-admin without a run store lists none). A page may hold fewer
+  than `limit` items with a non-null `next_cursor` because a request examines at most 500 threads; clients
+  follow `next_cursor` until `null`. A thread whose owner lookup hits an unreadable run row is skipped and
+  logged for a tenant rather than failing the list.
+
+### Changed
+
+- `GET /v1/threads/{id}/history` of an unknown thread answers `404` for every role (was `200` with an
+  empty page); the operation lists the `404` response in `openapi.json`.
+
 ## [0.11.0] - 2026-10-26
 
 ### Added

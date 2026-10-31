@@ -554,6 +554,12 @@ does, and `20.25` (81 %) does. A notice is claimed once per window and never gat
 With `http.auth.enabled: false` the open-access principal is the key `anonymous` in the tenant
 `open-access`, so `api_keys.anonymous` and `tenants.open-access` are accepted.
 
+Because those names stand for the open-access and unattributed principals, they are reserved:
+`paladin-server` also refuses to load a configuration that uses `open-access`, `unattributed` or `anonymous` as an
+`http.auth.api_keys` entry `name`, or `open-access` or `unattributed` as an `http.auth.api_keys`
+entry `tenant`, or as `http.auth.bearer_token.tenant` while the bearer token is enabled. The match
+is exact and case-sensitive.
+
 #### The derived token budget on agent routes
 
 On `POST /v1/agents/{id}/execute`, `execute/stream` and `jobs`, a principal with an `allowance`

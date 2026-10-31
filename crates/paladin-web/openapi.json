@@ -2367,8 +2367,8 @@
         "tags": [
           "threads"
         ],
-        "summary": "`GET /threads` -- paginated thread list, newest-activity-first (D-45,\nD-47). Authenticated, any role.",
-        "description": "A cursor walk gives a stable ordering for threads that already existed\nwhen the first page was fetched, but is NOT a point-in-time snapshot: a\nthread whose latest waypoint was written after the first page was read\nmay be omitted from the walk (D-47 backstop).\n\nReturns:\n- `200 OK` with [`ThreadListResponse`] on success; `{ items: [],\n  next_cursor: null }` when empty;\n- `400 Bad Request` for `limit == 0`/`limit > 100`, or an unparseable\n  `cursor`;\n- `501 Not Implemented` if no waypoint backend is configured.",
+        "summary": "`GET /threads` -- paginated thread list, newest-activity-first (D-45,\nD-47). Authenticated, any role, tenant-scoped (TENANT-03, ADR-0063).",
+        "description": "An Admin lists every thread. A user-role principal lists only the threads\nwhose latest run is attributed to its own tenant; a thread with no run is\nAdmin-only, and with no run store wired a non-admin lists nothing. Because\nthe other tenants' threads are filtered out of a page after it is read, a\npage may hold fewer than `limit` items (even none) while `next_cursor` is\nstill non-null: keep following `next_cursor` until it is `null`. A request\nexamines a bounded number of threads, so the walk always makes progress\nwithout one request scanning the whole store.\n\nA cursor walk gives a stable ordering for threads that already existed\nwhen the first page was fetched, but is NOT a point-in-time snapshot: a\nthread whose latest waypoint was written after the first page was read\nmay be omitted from the walk (D-47 backstop), and two threads with an\nidentical `last_updated_at` straddling a page boundary can be skipped (the\ncursor is an exclusive timestamp).\n\nReturns:\n- `200 OK` with [`ThreadListResponse`] on success; `{ items: [],\n  next_cursor: null }` when the walk ends with nothing visible;\n- `400 Bad Request` for `limit == 0`/`limit > 100`, or an unparseable\n  `cursor`;\n- `501 Not Implemented` if no waypoint backend is configured.",
         "operationId": "list_threads",
         "parameters": [
           {
@@ -2394,7 +2394,7 @@
         ],
         "responses": {
           "200": {
-            "description": "A page of threads; { items: [], next_cursor: null } when empty",
+            "description": "A page of the threads the caller may see; a page may be shorter than limit while next_cursor is non-null, so follow next_cursor until it is null; { items: [], next_cursor: null } when nothing is visible",
             "content": {
               "application/json": {
                 "schema": {
@@ -2449,8 +2449,8 @@
         "tags": [
           "threads"
         ],
-        "summary": "`GET /threads/{id}` -- one thread's summary (D-45). Authenticated, any\nrole.",
-        "description": "Returns:\n- `200 OK` with [`ThreadResponse`] on success;\n- `400 Bad Request` for an invalid thread id;\n- `404 Not Found` if no Waypoint exists for `id`;\n- `501 Not Implemented` if no waypoint backend is configured.",
+        "summary": "`GET /threads/{id}` -- one thread's summary (D-45). Authenticated, any\nrole, tenant-scoped through `load_visible_thread` (ADR-0063).",
+        "description": "Returns:\n- `200 OK` with [`ThreadResponse`] on success;\n- `400 Bad Request` for an invalid thread id;\n- `404 Not Found` if no Waypoint exists for `id`, or the caller may not see the thread;\n- `501 Not Implemented` if no waypoint backend is configured.",
         "operationId": "get_thread",
         "parameters": [
           {
@@ -2465,7 +2465,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Thread summary",
+            "description": "Thread summary. Tenant-scoped: a user-role principal can read only a thread whose latest run belongs to its tenant; an admin-role principal can read every thread.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2495,7 +2495,7 @@
             }
           },
           "404": {
-            "description": "Unknown thread",
+            "description": "Unknown thread (also returned for a thread the caller may not see)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2529,7 +2529,7 @@
           "threads"
         ],
         "summary": "`DELETE /threads/{id}` -- delete a thread's whole Waypoint history\n(admin, D-45).",
-        "description": "Returns:\n- `204 No Content` on success;\n- `400 Bad Request` for an invalid thread id;\n- `403 Forbidden` for a non-admin principal;\n- `404 Not Found` if nothing was deleted;\n- `409 Conflict` (`thread_busy`) while a run is active on the thread;\n- `501 Not Implemented` if no waypoint backend is configured.",
+        "description": "The visibility gate (`load_visible_thread`) runs **before** the admin check\n(D-06): a non-admin of another tenant gets the missing-thread `404`, a same-tenant\nnon-admin the `403`. A second `DELETE` of a deleted thread is `404` for every role.\n\nReturns:\n- `204 No Content` on success;\n- `400 Bad Request` for an invalid thread id;\n- `403 Forbidden` for a non-admin principal who can see the thread;\n- `404 Not Found` if nothing was deleted, or the thread is not visible to the caller;\n- `409 Conflict` (`thread_busy`) while a run is active on the thread;\n- `501 Not Implemented` if no waypoint backend is configured.",
         "operationId": "delete_thread",
         "parameters": [
           {
@@ -2577,7 +2577,7 @@
             }
           },
           "404": {
-            "description": "Nothing was deleted",
+            "description": "Unknown thread (also returned for a thread the caller may not see)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2623,7 +2623,7 @@
           "threads"
         ],
         "summary": "`POST /threads/{id}/fork` -- submit a NEW run that continues the thread\nfrom a specific Waypoint, optionally editing state at the fork point\n(D-45, D-46).",
-        "description": "Invocation-shaped: any authenticated principal, subject to the target\nassistant's own `allowed_roles` (checked inside\n[`RunSubmissionPort::fork`] -- `paladin-web` has no visibility into\n`allowed_roles` itself, ADR-0031).\n\nReturns:\n- `202 Accepted` with [`ForkThreadResponse`] on success;\n- `400 Bad Request` for an invalid thread id or `webhook_url_rejected`\n  (write-time SSRF guard, D-42);\n- `403 Forbidden` if the principal's role is not permitted;\n- `404 Not Found` for an unknown thread or an unknown `from_waypoint_id`;\n- `409 Conflict` (`thread_busy`) while a run is already active on the\n  thread;\n- `501 Not Implemented` if no run submission backend is configured.",
+        "description": "Invocation-shaped: any authenticated principal, subject to the target\nassistant's own `allowed_roles` (checked inside\n[`RunSubmissionPort::fork`] -- `paladin-web` has no visibility into\n`allowed_roles` itself, ADR-0031).\n\nThe caller must be able to see the thread (`load_visible_thread`): a thread another\ntenant owns answers the missing-thread `404` before the fork is submitted.\n`RunSubmissionService::ensure_thread_visible` re-checks the same rule for library\ncallers that bypass this controller.\n\nReturns:\n- `202 Accepted` with [`ForkThreadResponse`] on success;\n- `400 Bad Request` for an invalid thread id or `webhook_url_rejected`\n  (write-time SSRF guard, D-42);\n- `403 Forbidden` if the principal's role is not permitted;\n- `404 Not Found` for an unknown thread (or one the caller may not see) or an unknown\n  `from_waypoint_id`;\n- `409 Conflict` (`thread_busy`) while a run is already active on the\n  thread;\n- `501 Not Implemented` if no run submission backend is configured.",
         "operationId": "fork_thread",
         "parameters": [
           {
@@ -2688,7 +2688,7 @@
             }
           },
           "404": {
-            "description": "Unknown thread or waypoint",
+            "description": "Unknown thread or waypoint (a thread the caller may not see is also reported as unknown)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2754,7 +2754,7 @@
           "threads"
         ],
         "summary": "`GET /threads/{id}/history` -- paginated Chronicle history.",
-        "description": "Authenticated, any role (D-24) -- see [`get_thread_state`]'s docs on why\nreads are not admin-gated the way [`resume_thread`] is.\n\n`limit` (capped by the crate-private history limit) and an opaque `cursor` whose\ncontent is the last returned item's `waypoint_id` (D-27). Returns\n`400 Bad Request` for `limit > 100` or an unparseable `cursor`.",
+        "description": "Authenticated, any role, tenant-scoped through `load_visible_thread` exactly like\n[`get_thread_state`]. An unknown thread is `404` for every role (it used to answer\n`200` with an empty page, which let a caller probe for a thread's existence).\n\n`limit` (capped by the crate-private history limit) and an opaque `cursor` whose\ncontent is the last returned item's `waypoint_id` (D-27). Returns\n`400 Bad Request` for `limit > 100` or an unparseable `cursor`.",
         "operationId": "get_thread_history",
         "parameters": [
           {
@@ -2789,7 +2789,7 @@
         ],
         "responses": {
           "200": {
-            "description": "A page of waypoint summaries",
+            "description": "A page of waypoint summaries. Tenant-scoped: a user-role principal can read only a thread whose latest run belongs to its tenant; an admin-role principal can read every thread.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2810,6 +2810,16 @@
           },
           "401": {
             "description": "Missing/invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown thread (also returned for a thread the caller may not see)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2845,7 +2855,7 @@
           "threads"
         ],
         "summary": "`POST /threads/{id}/resume` -- deliver parley responses.",
-        "description": "Requires an admin principal ([`require_admin`]) -- see the module-level\n\"Authorization\" docs: this narrows D-24's \"any role\" default for the one\n*mutating* thread route (CR-01, 24-REVIEW.md), pending PLAT-06's real\nper-thread ownership scoping.\n\nValidates synchronously through [`ParleyPort::resume_with`] and returns\n`202 Accepted` immediately; the run itself continues on a background task\n(D-25) -- a client polls `GET .../state` to observe the outcome. Maps\n[`ParleyError`] per the crate-private `map_parley_error` mapping.",
+        "description": "Requires an admin principal ([`require_admin`], CR-01) **after** the thread\nvisibility gate (`load_visible_thread`, D-06): a non-admin of another tenant gets\nthe missing-thread `404`, never the `403` that would reveal the thread exists; a\nsame-tenant non-admin gets the `403`; an Admin passes both. See the module-level\n\"Authorization (tenant visibility, ADR-0063)\" docs.\n\nValidates synchronously through [`ParleyPort::resume_with`] and returns\n`202 Accepted` immediately; the run itself continues on a background task\n(D-25) -- a client polls `GET .../state` to observe the outcome. Maps\n[`ParleyError`] per the crate-private `map_parley_error` mapping.",
         "operationId": "resume_thread",
         "parameters": [
           {
@@ -2910,7 +2920,7 @@
             }
           },
           "404": {
-            "description": "Unknown thread",
+            "description": "Unknown thread (also returned for a thread the caller may not see)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2956,7 +2966,7 @@
           "threads"
         ],
         "summary": "`GET /threads/{id}/state` -- the thread's latest status, plus outstanding\nparleys/responses when suspended.",
-        "description": "Authenticated, any role (D-24) -- reads carry lower blast radius than\n`resume_thread`; per-thread ownership scoping is PLAT-06 (Phase 27). The\n`Principal` is extracted (unused today) so this handler's signature is\nalready shaped for that scoping to land as a body-only change.\n\nReturns:\n- `200 OK` with [`ThreadStateResponse`] on success;\n- `400 Bad Request` for an invalid thread id;\n- `404 Not Found` if no Waypoint exists for `id`;\n- `501 Not Implemented` if no waypoint backend is configured.",
+        "description": "Authenticated, any role, tenant-scoped through `load_visible_thread`: a user-role\nprincipal sees only a thread whose latest run belongs to its tenant, an Admin sees\nevery thread, and a thread the caller may not see answers the same `404` as a missing\none (ADR-0063).\n\nReturns:\n- `200 OK` with [`ThreadStateResponse`] on success;\n- `400 Bad Request` for an invalid thread id;\n- `404 Not Found` for an unknown thread, or one the caller may not see;\n- `501 Not Implemented` if no waypoint backend is configured.",
         "operationId": "get_thread_state",
         "parameters": [
           {
@@ -2971,7 +2981,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Thread state",
+            "description": "Thread state. Tenant-scoped: a user-role principal can read only a thread whose latest run belongs to its tenant; an admin-role principal can read every thread.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3001,7 +3011,7 @@
             }
           },
           "404": {
-            "description": "Unknown thread",
+            "description": "Unknown thread (also returned for a thread the caller may not see)",
             "content": {
               "application/json": {
                 "schema": {

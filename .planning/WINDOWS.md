@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 15
+open_count: 16
 waived_count: 39
-fixed_count: 30
-total_count: 84
-last_updated: 2026-10-29T01:38:56.452Z
+fixed_count: 32
+total_count: 87
+last_updated: 2026-10-31T17:57:36.724Z
 ---
 
 # Broken Windows Ledger
@@ -72,12 +72,12 @@ last_updated: 2026-10-29T01:38:56.452Z
 | 55 | 35 | unmet-truth | docs/src/appendix/battalion-patterns-guide.md | 354 | One of four battalion-patterns-guide.md example bodies Phase 35 plan 35-09 flagged as carrying pre-existing API-shape drift (D-07 fallback): the body at line 354 fails the D-00e throwaway scratch-compile probe (examples/_scratch.rs + cargo check --example _scratch --features llm-openai) even after the OpenAIAdapter casing fix -- missing Arc/OpenAIAdapter imports, an un-awaited async .build(), and further per-body Campaign/Phalanx/ChainOfCommand builder API drift. Probed, not rewritten, per D-07 scope. Recorded in .planning/phases/36.1-deferred-items-closure/36.1-evidence/36.1-04-scratch-probe.txt. | waived | appendix sample fenced `rust,ignore`, does not compile against the shipped API (see 36.1-04 probe); Owner: v0.11.0 docs-currency pass. Re-check: that milestone's discuss step. | 2026-09-18T05:30:55.190Z | 2026-09-18T05:30:55.444Z |
 | 56 | 38 | lint-warning | crates/paladin-core/src/platform/container/cost.rs |  | Pre-existing rustdoc broken_intra_doc_links (Cost/CurrencyCode/PriceRow unresolved in module doc comment); introduced by plan 38-02, out of scope for 38-04, logged to phase deferred-items.md | open |  | 2026-09-26T02:43:14.297Z |  |
 | 57 | 40 | deviation | docs/src/deployment-topologies/http-service-host.md |  | 40-03: plan Task 2 negated grep '^\\s*api_keys\\s*:' over src/application/cli is a false positive on a Rust parameter (env.rs:22); intent verified by refined grep, not fixed | waived | Plan-text issue, not a code defect: 40-03's negated acceptance grep '^\\s*api_keys\\s*:' over src/application/cli matched a Rust parameter 'api_keys: &HashMap<K, String>' in src/application/cli/templates/env.rs; the intent (the onboarding template emits no tenantless api_keys YAML key) was verified by a refined grep in 40-03 and the template needed no change. Waived in 40-06 as directed by the phase orchestrator. | 2026-09-29T00:00:16.256Z | 2026-09-29T11:49:59.820Z |
-| 58 | 40 | deviation | crates/paladin-web/src/thread_controller.rs |  | (Phase 40 D-14 deferral, T-40-23) The /v1/threads routes -- GET /threads (lists every thread), GET /threads/{id}, GET /threads/{id}/state, GET /threads/{id}/history, POST /threads/{id}/resume, POST /threads/{id}/fork, DELETE /threads/{id} -- are not tenant-scoped because threads carry no tenant, so an authenticated principal can enumerate another tenant's threads and read their Waypoint state and history although that tenant's /runs routes answer 404. Closing condition: record a tenant on the thread (or derive it from the thread's runs) and route every /threads/{id}* handler through one shared visibility gate like run_controller::load_visible_run. Owner: Phase 41 planning if allowance enforcement needs thread ownership, else a v0.11 hygiene phase. | open |  | 2026-09-29T11:49:59.678Z |  |
+| 58 | 40 | deviation | crates/paladin-web/src/thread_controller.rs |  | (Phase 40 D-14 deferral, T-40-23) The /v1/threads routes -- GET /threads (lists every thread), GET /threads/{id}, GET /threads/{id}/state, GET /threads/{id}/history, POST /threads/{id}/resume, POST /threads/{id}/fork, DELETE /threads/{id} -- are not tenant-scoped because threads carry no tenant, so an authenticated principal can enumerate another tenant's threads and read their Waypoint state and history although that tenant's /runs routes answer 404. Closing condition: record a tenant on the thread (or derive it from the thread's runs) and route every /threads/{id}* handler through one shared visibility gate like run_controller::load_visible_run. Owner: Phase 41 planning if allowance enforcement needs thread ownership, else a v0.11 hygiene phase. | fixed | Closed by Phase 53 (plans 53-03 and 53-04, ADR-0063): every /v1/threads/{id} route enters load_visible_thread and a thread belongs to the tenant of its latest run; evidence thread_controller::tests::every_thread_id_route_hides_foreign_threads_behind_the_missing_thread_404 and the list_threads_ tests (53-TENANT-EVIDENCE.md). | 2026-09-29T11:49:59.678Z | 2026-10-31T14:18:13.197Z |
 | 59 | 40 | deviation | .project/current-exports.txt |  | (40-06 Task 2) The plan's acceptance grep for RunReadScope/TenantId in .project/current-exports.txt cannot pass by the tool's design: cargo-public-api lists a re-exported foreign-crate module as one 'pub use paladin::core::platform::container::principal' line (exactly as the existing cost and treasury_ledger lines), never its items. The refreshed baseline does carry every facade-visible Phase 40 item (execute_scoped, execute_stream_scoped, ApiKeyConfig.tenant, BearerTokenAuthConfig.tenant, AuthConfig::validate, the principal re-export, cancel's Option<principal::PrincipalRef>) and make api-surface exits 0. Plan-text issue, not a code defect; left open for the operator to waive. | waived | Tool-design limitation, not a defect: cargo-public-api lists the re-exported principal module as a single pub-use line, so item-level names cannot appear in current-exports.txt. Every facade-visible Phase 40 item is present in the baseline (execute_scoped, execute_stream_scoped, ApiKeyConfig.tenant, AuthConfig::validate, principal re-export); the 40-06 SUMMARY records the measured evidence. | 2026-09-29T11:49:59.952Z | 2026-09-29T12:16:51.627Z |
 | 60 | 45 | deviation | src/application/services/run/worker.rs |  | Closing condition of row 31 (WR-02) is met: run_agent's success and failure return paths now bind the live event bus, emit through map_trace_event (RunStarted/NodeStarted/NodeFinished/RunFinished via a per-run TraceDispatcher) and enqueue webhook deliveries via webhook_delivery_for_outcome; the pinning test is inverted to agent_kind_run_with_a_webhook_enqueues_a_delivery, with agent_kind_run_streams_done_live and agent_kind_run_emits_exactly_one_terminal_event as sibling evidence. Row 31 itself stays waived (only open->fixed\|waived transitions exist). Phase 45 plan 45-02 (PLAT-08). | fixed |  | 2026-09-29T22:37:02.721Z | 2026-09-29T22:37:06.572Z |
 | 61 | 45 | deviation | .planning/phases/45-rustfs-swap-platform-observability-deviations/45-BENCH-EVIDENCE.md |  | Amends row 35 (Phase 28 tracing-overhead deviation): OBS-05 re-measure at Phase 45 point C, paladin::trace target enabled, after the D-17 fixes (enablement guard, per-thread buffer reuse, CompositeSink last-child move) did NOT meet the <=3% bar: log_sink +19.36%, composite +16.19% against a 120.00us untraced baseline (maintainer's machine, 2026-09-30, 45-BENCH-EVIDENCE.md; Verdict: AMEND). Serialisation-skipped _target_off rows still cost +16.24%/+18.57%, so the remaining cost is not serialisation. Amended closing condition: accepted-pending at +19.36%/+16.19% after the D-17 fixes, 2026-09-30, 45-BENCH-EVIDENCE.md; the maintainer accepts this figure at Phase 45 UAT, then gsd-tools windows waive <id> with the acceptance text. The I/O-bound re-scope stays deferred (no I/O-bound bench added in Phase 45, D-19). Row 35 itself stays waived. | waived | Maintainer accepted at Phase 45 UAT (test 4, 2026-09-30): +19.36% (log_sink) / +16.19% (composite) tracing overhead at point C recorded as the new figure in place of the <=3% PRD 07 bar; remaining cost sits in the dispatcher/sink path, not serialisation; I/O-bound re-scope stays deferred per D-19. | 2026-09-30T16:44:57.003Z | 2026-09-30T19:52:30.554Z |
 | 62 | 41 | deviation | config.example.yml |  | The config loader performs no ${VAR} expansion (pinned by src/config/treasurer.rs::yaml_env_placeholder_is_not_expanded; no expansion code exists under src/ or crates/), so the http.auth.api_keys[].key: "${PALADIN_API_KEY_CI}" examples in config.example.yml (lines 161, 165) and k8s/server/configmap.yaml (lines 36, 40; its header also claims the server expands them at load time) would load the literal placeholder as the key value unless the deployment substitutes it before the file is read. Closing condition: document the substitution step or replace the examples with env-override guidance. Owner: Phase 46 docs currency. | open |  | 2026-10-03T22:52:46.178Z |  |
-| 63 | 41 | deviation | crates/paladin-storage/migrations/sqlite/010_add_run_schedule_created_by.sql |  | Schedules created before Phase 41 have a NULL created_by (run_schedules.tenant_id and api_key_id both NULL) and keep firing unattributed and ungated by any allowance (D-08). Closing condition: an operator re-creates them through POST /v1/schedules so the creator is stamped; a backfill and PATCH re-assignment of created_by are deferred ideas in 41-CONTEXT. | open |  | 2026-10-03T23:46:40.147Z |  |
+| 63 | 41 | deviation | crates/paladin-storage/migrations/sqlite/010_add_run_schedule_created_by.sql |  | Schedules created before Phase 41 have a NULL created_by (run_schedules.tenant_id and api_key_id both NULL) and keep firing unattributed and ungated by any allowance (D-08). Closing condition: an operator re-creates them through POST /v1/schedules so the creator is stamped; a backfill and PATCH re-assignment of created_by are deferred ideas in 41-CONTEXT. | fixed | Closed by Phase 53 (plan 53-06, TENANT-10, MIGRATION 11.8): boot now logs one warn naming every schedule with no recorded creator, proven by run_api_wiring::tests::schedule_scan_reports_every_unattributed_schedule_ascending_in_one_line; operators re-create them via POST /v1/schedules, no backfill is claimed. | 2026-10-03T23:46:40.147Z | 2026-10-31T14:18:13.284Z |
 | 64 | 42 | deviation | src/application/services/run/worker.rs |  | D-08: worker-dispatched Runnable::Agent runs write no Waypoint, so a Treasurer-halted agent-kind run cannot be forked from a checkpoint; it is resumed by a fresh POST /v1/runs that re-executes from the start, and the HTTP agent routes have no run row at all. ALLOW-03 continue-from-checkpoint is met on the engine path and not applicable by construction on the agent loop. | open |  | 2026-10-07T00:52:04.918Z |  |
 | 65 | 42 | deviation | src/application/services/treasurer/guard.rs |  | D-01 (ADR-0057): the mid-run boundary check is a check-only balance read with no reservation, so runs admitted in the same instant can all start and each one halts at its first boundary after the allowance is exhausted; overshoot is bounded to one superstep's spend per run (not per principal). Owner: the Treasurer maintainers; rationale: a reservation hold per superstep would need an estimate rule ADR-0057 records as missing, so the race is accepted and bounded rather than prevented. Closing condition: the deferred per-superstep reservation hold ships, or an operator sizes each ceiling with headroom for concurrent runs times one superstep. | open |  | 2026-10-07T02:02:07.590Z |  |
 | 66 | 42 | deviation | src/application/services/paladin/paladin_execution_service.rs |  | G2 (ADR-0057 group e, D-12, 42-01 option-b gate): a true streamed execute/stream call is one provider call with no after_model, so the derived budget cannot cut it mid-flight; admission (including the model_unpriced and zero-budget refusals) is its only gate and its overshoot is that one streamed call. Under the recorded option-b its terminal done carries an informational halt_reason when the terminal usage crossed the derived figure (a crossing report, not a halt: the call had already finished; implemented in 42-08), and is otherwise unchanged, so the done is NOT byte-identical in all cases; D-12's 'the agent stream's terminal done carries the same object' holds for the buffered fallback always and for a true stream when its terminal usage crossed the figure. Owner: the Treasurer maintainers; closing condition: mid-stream usage accounting that can cut a single streamed call. | open |  | 2026-10-07T02:02:07.736Z |  |
@@ -99,6 +99,9 @@ last_updated: 2026-10-29T01:38:56.452Z
 | 82 | 46 | deviation | .planning/decisions/0015-core-ports-dependency-allowlist.md |  | Deferred debt line: paladin-core / paladin-ports dependency allowlists (declared 6 / 7, shipping 14 / 10 at ingest). Fixed: ADR-0015 rebaselined to the measured sets with the purity invariant; Phase 46 (D-20/D-21) re-measured 14 / 12 (log added to paladin-ports, ADR-0015 amendment 2026-10-24) and pinned them with scripts/check-dependency-allowlist.sh in make check-gates and CI's cargo-deny job. | fixed |  | 2026-10-24T13:47:17.331Z | 2026-10-24T13:47:20.422Z |
 | 83 | 52 | unrun-verify | .github/workflows/ci.yml |  | actionlint not runnable in sandbox; CI Workflow Lint job gates the 52-01 ci.yml edits (A-52-03) | open |  | 2026-10-28T19:29:42.085Z |  |
 | 84 | 52 | unrun-verify | .github/workflows/ci.yml |  | actionlint not installed in sandbox; 52-06 ci.yml edits (labeled type, e2e/publish-dry-run conditions) await CI Workflow Lint job | open |  | 2026-10-29T01:38:56.452Z |  |
+| 85 | 53 | deviation | crates/paladin-web/src/thread_controller.rs | 815 | 53-REVIEW WR-01, owner-accepted follow-up (53-UAT test 2): a run row with UnknownSchemaVersion on any tenant's thread falls into the Err(other) arm of visible_thread_page and aborts the walk, so every non-admin GET /v1/threads returns 500 until the row is repaired (likely after a downgrade). Fix: skip-and-log UnknownSchemaVersion in the list walk like Serialization; consider making it hideable in run_repo_error_for_scope. Proposed owner: Phase 55 (correctness fixes). | open |  | 2026-10-31T17:57:36.525Z |  |
+| 86 | 53 | deviation | crates/paladin-web/src/thread_controller.rs | 739 | 53-REVIEW WR-02, owner-accepted follow-up (53-UAT test 2): the latest-run lookup uses list(limit: 1), and the SQLite/Postgres list decodes limit+1 rows, so one corrupt OLDER run row returns Serialization and locks tenant A out of its own thread (404 on every gated route, 500 for Admin and on submit/fork via ensure_thread_visible in submission.rs:289). Fix: a port method that reads exactly the newest run (LIMIT 1), used in both places. Proposed owner: Phase 55 (correctness fixes). | open |  | 2026-10-31T17:57:36.623Z |  |
+| 87 | 53 | deviation | crates/paladin-core/src/platform/container/principal.rs | 325 | 53-REVIEW WR-03, owner-accepted follow-up (53-UAT test 2): thread ownership is the latest run's submitted_by, so an Admin fork/submit onto tenant A's thread, or an unattributed (schedule-fired, submitted_by None) run, transfers or hides the thread and tenant A gets 404 on a thread it created. Matches SPEC AC-04 as written. Fix: derive ownership from the first or earliest attributed run, or keep the original tenant's attribution on admin forks; at minimum document the transfer in ADR-0063 and parley-and-chronicle.md. Proposed owner: Phase 55 (correctness fixes). | open |  | 2026-10-31T17:57:36.724Z |  |
 
 ````json
 [
@@ -793,10 +796,10 @@ last_updated: 2026-10-29T01:38:56.452Z
     "file": "crates/paladin-web/src/thread_controller.rs",
     "line": null,
     "description": "(Phase 40 D-14 deferral, T-40-23) The /v1/threads routes -- GET /threads (lists every thread), GET /threads/{id}, GET /threads/{id}/state, GET /threads/{id}/history, POST /threads/{id}/resume, POST /threads/{id}/fork, DELETE /threads/{id} -- are not tenant-scoped because threads carry no tenant, so an authenticated principal can enumerate another tenant's threads and read their Waypoint state and history although that tenant's /runs routes answer 404. Closing condition: record a tenant on the thread (or derive it from the thread's runs) and route every /threads/{id}* handler through one shared visibility gate like run_controller::load_visible_run. Owner: Phase 41 planning if allowance enforcement needs thread ownership, else a v0.11 hygiene phase.",
-    "status": "open",
-    "reason": "",
+    "status": "fixed",
+    "reason": "Closed by Phase 53 (plans 53-03 and 53-04, ADR-0063): every /v1/threads/{id} route enters load_visible_thread and a thread belongs to the tenant of its latest run; evidence thread_controller::tests::every_thread_id_route_hides_foreign_threads_behind_the_missing_thread_404 and the list_threads_ tests (53-TENANT-EVIDENCE.md).",
     "recorded_at": "2026-09-29T11:49:59.678Z",
-    "resolved_at": null
+    "resolved_at": "2026-10-31T14:18:13.197Z"
   },
   {
     "id": 59,
@@ -853,10 +856,10 @@ last_updated: 2026-10-29T01:38:56.452Z
     "file": "crates/paladin-storage/migrations/sqlite/010_add_run_schedule_created_by.sql",
     "line": null,
     "description": "Schedules created before Phase 41 have a NULL created_by (run_schedules.tenant_id and api_key_id both NULL) and keep firing unattributed and ungated by any allowance (D-08). Closing condition: an operator re-creates them through POST /v1/schedules so the creator is stamped; a backfill and PATCH re-assignment of created_by are deferred ideas in 41-CONTEXT.",
-    "status": "open",
-    "reason": "",
+    "status": "fixed",
+    "reason": "Closed by Phase 53 (plan 53-06, TENANT-10, MIGRATION 11.8): boot now logs one warn naming every schedule with no recorded creator, proven by run_api_wiring::tests::schedule_scan_reports_every_unattributed_schedule_ascending_in_one_line; operators re-create them via POST /v1/schedules, no backfill is claimed.",
     "recorded_at": "2026-10-03T23:46:40.147Z",
-    "resolved_at": null
+    "resolved_at": "2026-10-31T14:18:13.284Z"
   },
   {
     "id": 64,
@@ -1108,6 +1111,42 @@ last_updated: 2026-10-29T01:38:56.452Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-10-29T01:38:56.452Z",
+    "resolved_at": null
+  },
+  {
+    "id": 85,
+    "kind": "deviation",
+    "phase": "53",
+    "file": "crates/paladin-web/src/thread_controller.rs",
+    "line": 815,
+    "description": "53-REVIEW WR-01, owner-accepted follow-up (53-UAT test 2): a run row with UnknownSchemaVersion on any tenant's thread falls into the Err(other) arm of visible_thread_page and aborts the walk, so every non-admin GET /v1/threads returns 500 until the row is repaired (likely after a downgrade). Fix: skip-and-log UnknownSchemaVersion in the list walk like Serialization; consider making it hideable in run_repo_error_for_scope. Proposed owner: Phase 55 (correctness fixes).",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-10-31T17:57:36.525Z",
+    "resolved_at": null
+  },
+  {
+    "id": 86,
+    "kind": "deviation",
+    "phase": "53",
+    "file": "crates/paladin-web/src/thread_controller.rs",
+    "line": 739,
+    "description": "53-REVIEW WR-02, owner-accepted follow-up (53-UAT test 2): the latest-run lookup uses list(limit: 1), and the SQLite/Postgres list decodes limit+1 rows, so one corrupt OLDER run row returns Serialization and locks tenant A out of its own thread (404 on every gated route, 500 for Admin and on submit/fork via ensure_thread_visible in submission.rs:289). Fix: a port method that reads exactly the newest run (LIMIT 1), used in both places. Proposed owner: Phase 55 (correctness fixes).",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-10-31T17:57:36.623Z",
+    "resolved_at": null
+  },
+  {
+    "id": 87,
+    "kind": "deviation",
+    "phase": "53",
+    "file": "crates/paladin-core/src/platform/container/principal.rs",
+    "line": 325,
+    "description": "53-REVIEW WR-03, owner-accepted follow-up (53-UAT test 2): thread ownership is the latest run's submitted_by, so an Admin fork/submit onto tenant A's thread, or an unattributed (schedule-fired, submitted_by None) run, transfers or hides the thread and tenant A gets 404 on a thread it created. Matches SPEC AC-04 as written. Fix: derive ownership from the first or earliest attributed run, or keep the original tenant's attribution on admin forks; at minimum document the transfer in ADR-0063 and parley-and-chronicle.md. Proposed owner: Phase 55 (correctness fixes).",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-10-31T17:57:36.724Z",
     "resolved_at": null
   }
 ]

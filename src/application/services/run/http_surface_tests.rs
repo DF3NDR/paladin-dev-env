@@ -1512,6 +1512,151 @@ async fn tenant_scoped_run_list_e2e() {
     .expect("tenant_scoped_run_list_e2e did not hang");
 }
 
+/// Phase 53's TENANT-04 HTTP-level lock (D-00d prove-then-lock, T-53-01, T-53-02, T-53-06):
+/// `POST /v1/runs {thread_id}` against another tenant's thread is the `unknown thread` 404
+/// through the real `run_router` and `RunSubmissionService` -- `not_found`, never
+/// `thread_busy` or `403`, so the guard does not confirm the thread exists -- and it inserts
+/// no run and enqueues nothing. The owning tenant's second key and an Admin of another tenant
+/// pass the guard (`409 thread_busy` while the first run is queued), and a fresh thread id is
+/// accepted for any principal (thread birth). No request names a tenant in any header, query
+/// parameter or body: the scope derives only from the authenticated principal.
+#[tokio::test(flavor = "multi_thread")]
+async fn cross_tenant_submit_on_a_thread_is_the_unknown_thread_404() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let (repo_path, repo_url) = temp_sqlite_url("cross-tenant-submit");
+        let repository: Arc<dyn RunRepositoryPort> =
+            Arc::new(SqliteRunRepository::new(&repo_url).await.unwrap());
+        let queue = Arc::new(InMemoryRunQueue::new());
+        let queue_port: Arc<dyn RunQueuePort> = queue.clone();
+        let resolver: Arc<dyn AssistantResolver> =
+            Arc::new(CodeWorkflowResolver::new().register("thread-wf", build_chain_graph(1)));
+        let submission: Arc<dyn RunSubmissionPort> = Arc::new(RunSubmissionService::new(
+            repository.clone(),
+            queue_port,
+            resolver.clone(),
+        ));
+
+        let mut api_keys = HashMap::new();
+        api_keys.insert(
+            "thread-key-a".to_string(),
+            Principal::new("svc-a", UserRole::User, TenantId::new("acme").unwrap()),
+        );
+        api_keys.insert(
+            "thread-key-a2".to_string(),
+            Principal::new("svc-a2", UserRole::User, TenantId::new("acme").unwrap()),
+        );
+        api_keys.insert(
+            "thread-key-b".to_string(),
+            Principal::new("svc-b", UserRole::User, TenantId::new("globex").unwrap()),
+        );
+        api_keys.insert(
+            "thread-key-ops".to_string(),
+            Principal::new("ops", UserRole::Admin, TenantId::new("ops-tenant").unwrap()),
+        );
+        let auth = AgentAuthConfig {
+            enabled: true,
+            api_keys,
+            token_verifier: None,
+            bearer_tenant: None,
+        };
+        let app = run_router(
+            RunApiState::new()
+                .with_submission(submission)
+                .with_repository(repository.clone())
+                .with_auth(auth),
+        );
+
+        async fn submit_on(
+            app: &axum::Router,
+            key: &str,
+            thread: &str,
+        ) -> (StatusCode, serde_json::Value) {
+            let body = serde_json::to_vec(&serde_json::json!({
+                "assistant_id": "thread-wf",
+                "thread_id": thread,
+                "input": {}
+            }))
+            .unwrap();
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/runs")
+                        .header("content-type", "application/json")
+                        .header("x-api-key", key)
+                        .body(Body::from(body))
+                        .expect("request builds"),
+                )
+                .await
+                .expect("router responds");
+            let status = response.status();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("read submit body");
+            (
+                status,
+                serde_json::from_slice(&bytes).expect("submit body is JSON"),
+            )
+        }
+
+        async fn run_count(repository: &Arc<dyn RunRepositoryPort>) -> usize {
+            repository
+                .list(RunQuery {
+                    limit: 10,
+                    ..Default::default()
+                })
+                .await
+                .expect("repository list succeeds")
+                .items
+                .len()
+        }
+
+        // The owner tenant starts a thread. No worker runs, so the run stays Queued.
+        let (status, _) = submit_on(&app, "thread-key-a", "acme-thread-1").await;
+        assert_eq!(status, StatusCode::ACCEPTED, "owner submit on a new thread");
+        assert_eq!(run_count(&repository).await, 1);
+        let depth_before = queue.depth().await.unwrap();
+
+        // A foreign tenant's user key: the unknown-thread 404, nothing inserted or enqueued.
+        let (status, body) = submit_on(&app, "thread-key-b", "acme-thread-1").await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "foreign submit: {body}");
+        assert_eq!(body["error"]["code"], "not_found");
+        assert_eq!(body["error"]["message"], "unknown thread 'acme-thread-1'");
+        assert_eq!(
+            run_count(&repository).await,
+            1,
+            "a refused foreign submit must insert no run"
+        );
+        assert_eq!(
+            queue.depth().await.unwrap(),
+            depth_before,
+            "a refused foreign submit must enqueue nothing"
+        );
+
+        // The owner's peer key and an Admin of another tenant pass the guard: the first run
+        // is still queued, so the answer is `thread_busy`, not the 404.
+        for key in ["thread-key-a2", "thread-key-ops"] {
+            let (status, body) = submit_on(&app, key, "acme-thread-1").await;
+            assert_eq!(
+                status,
+                StatusCode::CONFLICT,
+                "{key} passes the guard: {body}"
+            );
+            assert_eq!(body["error"]["code"], "thread_busy");
+        }
+
+        // Thread birth: a fresh thread id with no runs is accepted for any principal.
+        let (status, body) = submit_on(&app, "thread-key-b", "globex-fresh-7").await;
+        assert_eq!(status, StatusCode::ACCEPTED, "fresh thread: {body}");
+        assert_eq!(run_count(&repository).await, 2);
+
+        cleanup(&repo_path);
+    })
+    .await
+    .expect("cross_tenant_submit_on_a_thread_is_the_unknown_thread_404 did not hang");
+}
+
 /// Phase 40's cross-tenant cancel proof (D-13, T-40-19, PLAT-07) over a real on-disk
 /// `SqliteRunRepository` through the real `run_router` and `RunSubmissionService`: key b's
 /// `POST /v1/runs/{id}/cancel` on key a's run is the missing-run 404 and writes NOTHING --

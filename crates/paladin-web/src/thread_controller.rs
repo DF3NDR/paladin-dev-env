@@ -2690,53 +2690,6 @@ mod tests {
         assert_eq!(status_for("foreign-key").await, StatusCode::NOT_FOUND);
     }
 
-    #[tokio::test]
-    async fn thread_routes_fail_closed_for_non_admin_without_a_run_store() {
-        let fixture = ThreadFixture::new();
-        fixture.waypoint("acme-thread-1");
-        // D-07: a waypoint store but no run store -- ownership cannot be established.
-        let app = thread_router(fixture.state(false));
-
-        let admin_response = send_thread_request(
-            &app,
-            "GET",
-            "/v1/threads/acme-thread-1".to_string(),
-            "admin-key",
-            None,
-            &[],
-        )
-        .await;
-        assert_eq!(admin_response.status(), StatusCode::OK);
-
-        let hidden = send_thread_request(
-            &app,
-            "GET",
-            "/v1/threads/acme-thread-1".to_string(),
-            "owner-key",
-            None,
-            &[],
-        )
-        .await;
-        let missing = send_thread_request(
-            &app,
-            "GET",
-            "/v1/threads/no-such-9f3a".to_string(),
-            "owner-key",
-            None,
-            &[],
-        )
-        .await;
-        assert_eq!(hidden.status(), StatusCode::NOT_FOUND);
-        assert_hidden_equals_missing(
-            hidden,
-            missing,
-            "acme-thread-1",
-            "no-such-9f3a",
-            "no run store, non-admin",
-        )
-        .await;
-    }
-
     /// An unreadable Waypoint or run row under a thread id is an existence signal, so for
     /// a `Tenant` scope it is the missing-thread `404` and for an Admin the fixed `500`;
     /// an Admin performs no owner lookup, so a run-store failure does not touch its `GET`
@@ -2815,6 +2768,418 @@ mod tests {
         }
         let admin_response = get(app, "acme-thread-1", "admin-key").await;
         assert_eq!(admin_response.status(), StatusCode::OK);
+    }
+
+    // --- The `/v1/threads/{id}*` route matrix (Phase 53, plan 53-03, D-08, AC-01, AC-06) ---
+
+    /// Every `(METHOD, path)` operation under `/v1/threads/{id}` the router publishes, read
+    /// from its OWN OpenAPI document (`versioned_thread_parts(..).1`) rather than a hand
+    /// list -- so a route added to `thread_openapi_router` without joining the table (and
+    /// the gate) fails the matrix (research Pitfall 10, AC-06).
+    fn published_thread_id_operations(api: &utoipa::openapi::OpenApi) -> Vec<(String, String)> {
+        let mut operations = Vec::new();
+        for (path, item) in &api.paths.paths {
+            if !path.starts_with("/v1/threads/{id}") {
+                continue;
+            }
+            let by_method = [
+                ("GET", item.get.is_some()),
+                ("PUT", item.put.is_some()),
+                ("POST", item.post.is_some()),
+                ("DELETE", item.delete.is_some()),
+                ("OPTIONS", item.options.is_some()),
+                ("HEAD", item.head.is_some()),
+                ("PATCH", item.patch.is_some()),
+                ("TRACE", item.trace.is_some()),
+            ];
+            for (method, present) in by_method {
+                if present {
+                    operations.push((method.to_string(), path.clone()));
+                }
+            }
+        }
+        operations.sort();
+        operations
+    }
+
+    /// `(method, path template, status for the owner as a user, status for an Admin)` of
+    /// every `/v1/threads/{id}*` operation. `resume` and `delete` are Admin-only (CR-01), so
+    /// a same-tenant user gets `403` (D-06) after passing the visibility gate.
+    const THREAD_ROUTE_TABLE: [(&str, &str, u16, u16); 6] = [
+        ("GET", "/v1/threads/{id}", 200, 200),
+        ("GET", "/v1/threads/{id}/state", 200, 200),
+        ("GET", "/v1/threads/{id}/history", 200, 200),
+        ("POST", "/v1/threads/{id}/fork", 202, 202),
+        ("POST", "/v1/threads/{id}/resume", 403, 202),
+        ("DELETE", "/v1/threads/{id}", 403, 204),
+    ];
+
+    impl ThreadFixture {
+        /// `acme-thread-1` with a latest Waypoint, one history item and one terminal run
+        /// attributed to `acme`.
+        fn seeded() -> Self {
+            let fixture = Self::new();
+            let t = fixture.waypoint("acme-thread-1");
+            let mut run = run_on(&t, "acme", "svc-a", Utc::now());
+            run.status = RunStatus::Completed;
+            fixture.runs.seed_run(run);
+            fixture
+                .waypoints
+                .seed_history(&t, vec![summary_at(WaypointId::generate(), 1, Utc::now())]);
+            fixture
+        }
+
+        /// The full router state: both stores (and, when `with_runs`, the run store), a
+        /// parley port and a fork submission port that accept, and the four-key auth.
+        fn full_state(&self, with_runs: bool) -> ThreadApiState {
+            self.state(with_runs)
+                .with_parley(Arc::new(MockParleyPort {
+                    outcome: MockOutcome::Accepted,
+                    parley_id: ParleyId::new(),
+                }))
+                .with_run_submission(Arc::new(MockForkSubmissionPort {
+                    outcome: ForkOutcome::Accepted,
+                }))
+        }
+    }
+
+    /// Send one table row's operation for thread `id`, with a valid body where the route
+    /// takes one.
+    async fn send_row(
+        app: &axum::Router,
+        method: &str,
+        template: &str,
+        id: &str,
+        key: &str,
+        extra_headers: &[(&str, &str)],
+    ) -> Response {
+        let body = if template.ends_with("/fork") {
+            Some(serde_json::json!({ "from_waypoint_id": WaypointId::generate().to_string() }))
+        } else if template.ends_with("/resume") {
+            Some(serde_json::json!({
+                "responses": [
+                    { "parley_id": ParleyId::new().to_string(), "value": true, "responded_by": "alice" }
+                ]
+            }))
+        } else {
+            None
+        };
+        send_thread_request(
+            app,
+            method,
+            template.replace("{id}", id),
+            key,
+            body,
+            extra_headers,
+        )
+        .await
+    }
+
+    /// D-08 / AC-01 / AC-06 on the WHOLE `/v1/threads/{id}*` route set: the operations are
+    /// enumerated from the router's own OpenAPI document and compared against the table;
+    /// for every row the owner (and a same-tenant peer) and an Admin of another tenant get
+    /// the documented status, and a key of a different tenant gets a `404` whose status,
+    /// headers and body bytes (after swapping the two ids) equal the response for a thread
+    /// that never existed -- never a `403`, on `resume` and `delete` too.
+    #[tokio::test]
+    async fn every_thread_id_route_hides_foreign_threads_behind_the_missing_thread_404() {
+        let mut tabled: Vec<(String, String)> = THREAD_ROUTE_TABLE
+            .iter()
+            .map(|(method, path, _, _)| (method.to_string(), path.to_string()))
+            .collect();
+        tabled.sort();
+
+        for (method, template, owner_status, admin_status) in THREAD_ROUTE_TABLE {
+            // A fresh state per row keeps the DELETE row from disturbing the others.
+            let fixture = ThreadFixture::seeded();
+            let (app, api) = versioned_thread_parts(fixture.full_state(true));
+            let published = published_thread_id_operations(&api);
+            assert_eq!(
+                published, tabled,
+                "the /v1/threads/{{id}}* operations the router publishes do not match the \
+                 matrix table: published={published:?} table={tabled:?}. Every route under \
+                 /v1/threads/{{id}} must enter through `load_visible_thread` (D-05, TENANT-03) \
+                 and be added to THREAD_ROUTE_TABLE with its owner and Admin statuses; a route \
+                 that no longer exists must be removed from the table."
+            );
+
+            for key in ["owner-key", "peer-key"] {
+                let response = send_row(&app, method, template, "acme-thread-1", key, &[]).await;
+                assert_eq!(
+                    response.status().as_u16(),
+                    owner_status,
+                    "{method} {template} as {key} (a user of the owning tenant)"
+                );
+            }
+
+            let hidden =
+                send_row(&app, method, template, "acme-thread-1", "foreign-key", &[]).await;
+            assert_eq!(
+                hidden.status(),
+                StatusCode::NOT_FOUND,
+                "{method} {template} as a foreign tenant must be the missing-thread 404, never 403"
+            );
+            let missing =
+                send_row(&app, method, template, "no-such-9f3a", "foreign-key", &[]).await;
+            assert_hidden_equals_missing(
+                hidden,
+                missing,
+                "acme-thread-1",
+                "no-such-9f3a",
+                &format!("{method} {template} as a foreign tenant"),
+            )
+            .await;
+
+            // Admin last: on the DELETE row it removes the thread.
+            let response =
+                send_row(&app, method, template, "acme-thread-1", "admin-key", &[]).await;
+            assert_eq!(
+                response.status().as_u16(),
+                admin_status,
+                "{method} {template} as an Admin of another tenant"
+            );
+        }
+    }
+
+    /// AC-05: once an Admin `DELETE` returns 204 the thread is gone, so a second `DELETE`
+    /// is the same missing-thread 404 for the Admin and for every other role.
+    #[tokio::test]
+    async fn second_delete_of_a_thread_is_404_for_every_role() {
+        let fixture = ThreadFixture::seeded();
+        let app = thread_router(fixture.full_state(true));
+        let delete = |key: &'static str| {
+            let app = app.clone();
+            async move {
+                send_thread_request(
+                    &app,
+                    "DELETE",
+                    "/v1/threads/acme-thread-1".to_string(),
+                    key,
+                    None,
+                    &[],
+                )
+                .await
+            }
+        };
+
+        assert_eq!(delete("admin-key").await.status(), StatusCode::NO_CONTENT);
+        for key in ["admin-key", "owner-key", "foreign-key"] {
+            let (status, _, body) = response_parts(delete(key).await).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "second DELETE as {key}");
+            let json: serde_json::Value = serde_json::from_str(&body).expect("json body");
+            assert_eq!(json["error"]["code"], "not_found", "{key}");
+            assert_eq!(
+                json["error"]["message"], "unknown thread 'acme-thread-1'",
+                "{key}"
+            );
+        }
+    }
+
+    /// D-07: with a waypoint store but no run store, ownership cannot be established, so a
+    /// non-admin gets the missing-thread 404 on EVERY `{id}` route (equal to a thread that
+    /// never existed) while an Admin is unaffected.
+    #[tokio::test]
+    async fn thread_routes_fail_closed_for_non_admin_without_a_run_store() {
+        for (method, template, _, admin_status) in THREAD_ROUTE_TABLE {
+            let fixture = ThreadFixture::seeded();
+            let app = thread_router(fixture.full_state(false));
+            for key in ["owner-key", "foreign-key"] {
+                let hidden = send_row(&app, method, template, "acme-thread-1", key, &[]).await;
+                let missing = send_row(&app, method, template, "no-such-9f3a", key, &[]).await;
+                assert_eq!(
+                    hidden.status(),
+                    StatusCode::NOT_FOUND,
+                    "{method} {template} as {key} without a run store"
+                );
+                assert_hidden_equals_missing(
+                    hidden,
+                    missing,
+                    "acme-thread-1",
+                    "no-such-9f3a",
+                    &format!("{method} {template} as {key}, no run store"),
+                )
+                .await;
+            }
+            let response =
+                send_row(&app, method, template, "acme-thread-1", "admin-key", &[]).await;
+            assert_eq!(
+                response.status().as_u16(),
+                admin_status,
+                "{method} {template} as an Admin without a run store"
+            );
+        }
+    }
+
+    /// The `error.message` of a response body, parsed.
+    fn error_message(body: &str) -> String {
+        serde_json::from_str::<serde_json::Value>(body)
+            .expect("json error body")["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    /// T-53-15 / T-53-16, AC-09 / AC-10 (thread half), on every published operation.
+    ///
+    /// With the run store failing (`Serialization`): the owner lookup cannot establish
+    /// ownership, so BOTH user keys (the owner included) get the missing-thread 404, equal
+    /// to a thread that never existed. An Admin performs no owner lookup (PD-03-5), so the
+    /// `GET`, fork and resume routes keep their success status, and only `DELETE` -- whose
+    /// busy check loads the active run -- answers `500` with exactly `run store error`.
+    ///
+    /// With the waypoint store failing on `latest()` (`Serialization`, then
+    /// `SchemaVersionUnsupported`): the user keys get the same 404 and an Admin gets `500`
+    /// `thread store error`. No body contains the injected text.
+    #[tokio::test]
+    async fn serialization_on_thread_routes_is_hidden_for_tenant_and_redacted_for_admin() {
+        // --- run store failing ---
+        for (method, template, _, admin_status) in THREAD_ROUTE_TABLE {
+            let fixture = ThreadFixture::seeded();
+            fixture.runs.fail_reads_with(INJECTED_TEXT);
+            let app = thread_router(fixture.full_state(true));
+            for key in ["owner-key", "foreign-key"] {
+                let hidden = send_row(&app, method, template, "acme-thread-1", key, &[]).await;
+                let missing = send_row(&app, method, template, "no-such-9f3a", key, &[]).await;
+                assert_eq!(
+                    hidden.status(),
+                    StatusCode::NOT_FOUND,
+                    "{method} {template} as {key}, run store failing"
+                );
+                let (_, _, body) = response_parts(
+                    send_row(&app, method, template, "acme-thread-1", key, &[]).await,
+                )
+                .await;
+                assert!(
+                    !body.contains(INJECTED_TEXT),
+                    "{method} {template} {key}: {body}"
+                );
+                assert_hidden_equals_missing(
+                    hidden,
+                    missing,
+                    "acme-thread-1",
+                    "no-such-9f3a",
+                    &format!("{method} {template} as {key}, run store failing"),
+                )
+                .await;
+            }
+            let response =
+                send_row(&app, method, template, "acme-thread-1", "admin-key", &[]).await;
+            if method == "DELETE" {
+                let (status, _, body) = response_parts(response).await;
+                assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+                assert_eq!(error_message(&body), "run store error");
+                assert!(!body.contains(INJECTED_TEXT), "{body}");
+            } else {
+                assert_eq!(
+                    response.status().as_u16(),
+                    admin_status,
+                    "{method} {template} as an Admin keeps its success status: the gate does no owner lookup"
+                );
+            }
+        }
+
+        // --- waypoint store failing ---
+        for failure in [
+            WaypointFailure::Serialization,
+            WaypointFailure::SchemaVersion,
+        ] {
+            for (method, template, _, _) in THREAD_ROUTE_TABLE {
+                let fixture = ThreadFixture::seeded();
+                fixture.waypoints.fail_latest(failure);
+                let app = thread_router(fixture.full_state(true));
+                for key in ["owner-key", "foreign-key"] {
+                    let hidden = send_row(&app, method, template, "acme-thread-1", key, &[]).await;
+                    let missing = send_row(&app, method, template, "no-such-9f3a", key, &[]).await;
+                    assert_eq!(
+                        hidden.status(),
+                        StatusCode::NOT_FOUND,
+                        "{method} {template} as {key}, waypoint store failing"
+                    );
+                    assert_hidden_equals_missing(
+                        hidden,
+                        missing,
+                        "acme-thread-1",
+                        "no-such-9f3a",
+                        &format!("{method} {template} as {key}, waypoint store failing"),
+                    )
+                    .await;
+                }
+                let (status, _, body) = response_parts(
+                    send_row(&app, method, template, "acme-thread-1", "admin-key", &[]).await,
+                )
+                .await;
+                assert_eq!(
+                    status,
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "{method} {template} as an Admin, waypoint store failing"
+                );
+                assert_eq!(error_message(&body), THREAD_STORE_ERROR_MESSAGE);
+                assert!(!body.contains(INJECTED_TEXT), "{body}");
+            }
+        }
+    }
+
+    /// T-53-17 (ADR-0054 rule 1): the tenant is server-derived. A foreign key that names
+    /// the owning tenant in headers or the query still gets the missing-thread 404 on the
+    /// three `GET` routes, and the owner naming another tenant still gets `200`.
+    #[tokio::test]
+    async fn tenant_hints_in_headers_or_query_change_nothing_on_thread_routes() {
+        let fixture = ThreadFixture::seeded();
+        let app = thread_router(fixture.full_state(true));
+        let hints = [("x-tenant-id", "acme"), ("x-paladin-tenant", "acme")];
+
+        for (suffix, query) in [
+            ("", "?tenant_id=acme"),
+            ("/state", "?tenant_id=acme"),
+            ("/history", "?tenant_id=acme&limit=5"),
+        ] {
+            let hidden = send_thread_request(
+                &app,
+                "GET",
+                format!("/v1/threads/acme-thread-1{suffix}{query}"),
+                "foreign-key",
+                None,
+                &hints,
+            )
+            .await;
+            let missing = send_thread_request(
+                &app,
+                "GET",
+                format!("/v1/threads/no-such-9f3a{suffix}{query}"),
+                "foreign-key",
+                None,
+                &hints,
+            )
+            .await;
+            assert_eq!(
+                hidden.status(),
+                StatusCode::NOT_FOUND,
+                "GET {suffix} with hints"
+            );
+            assert_hidden_equals_missing(
+                hidden,
+                missing,
+                "acme-thread-1",
+                "no-such-9f3a",
+                &format!("GET /v1/threads/{{id}}{suffix} with tenant hints"),
+            )
+            .await;
+
+            let owner = send_thread_request(
+                &app,
+                "GET",
+                format!("/v1/threads/acme-thread-1{suffix}?tenant_id=globex"),
+                "owner-key",
+                None,
+                &[("x-tenant-id", "globex"), ("x-paladin-tenant", "globex")],
+            )
+            .await;
+            assert_eq!(
+                owner.status(),
+                StatusCode::OK,
+                "owner GET {suffix} naming globex"
+            );
+        }
     }
 
     #[tokio::test]

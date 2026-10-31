@@ -366,7 +366,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 53-04-PLAN.md — `GET /v1/threads` bounded tenant-filtered walk (500-thread cap, short pages with a cursor, corrupt foreign rows skipped) (TENANT-03)
+- [x] 53-04-PLAN.md — `GET /v1/threads` bounded tenant-filtered walk (500-thread cap, short pages with a cursor, corrupt foreign rows skipped) (TENANT-03)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

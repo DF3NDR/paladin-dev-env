@@ -55,6 +55,7 @@ use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
 use paladin_storage::webhook::sqlite::SqliteWebhookDeliveryRepository;
 use paladin_web::agent_auth::{AgentAuthConfig, Principal};
 use paladin_web::run_controller::{RunApiState, run_router};
+use paladin_web::thread_controller::{ThreadApiState, thread_router};
 
 use super::resolver::{AssistantResolver, CodeWorkflowResolver};
 use super::submission::RunSubmissionService;
@@ -1655,6 +1656,182 @@ async fn cross_tenant_submit_on_a_thread_is_the_unknown_thread_404() {
     })
     .await
     .expect("cross_tenant_submit_on_a_thread_is_the_unknown_thread_404 did not hang");
+}
+
+/// Phase 53's TENANT-04 HTTP-level lock for the fork route (D-00d prove-then-lock, T-53-01,
+/// T-53-02, T-53-06): `POST /v1/threads/{id}/fork` through `thread_router` over the real
+/// `RunSubmissionService` answers another tenant's user key with the `unknown thread` 404 and
+/// dispatches no run. The owning tenant's key is admitted (`202`), and an Admin of another
+/// tenant then passes the guard too (`409 thread_busy`, because the owner's fork is still
+/// active -- either answer proves the guard admitted the caller). The router is wired like the
+/// shipped server (`with_waypoints`, `with_runs`, `with_run_submission`, `with_auth`), and no
+/// request names a tenant anywhere. Fork bodies for a foreign versus a missing thread are not
+/// byte-equal on this tree (the missing-thread case reaches the waypoint check); that equality
+/// is proven at the controller by plan 53-03's route matrix.
+#[tokio::test(flavor = "multi_thread")]
+async fn cross_tenant_fork_is_the_unknown_thread_404() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let waypoint_store = Arc::new(InMemoryWaypointStore::new());
+        let resolver: Arc<dyn AssistantResolver> =
+            Arc::new(CodeWorkflowResolver::new().register("fork-wf", build_chain_graph(3)));
+
+        let engine = Arc::new(WarEngine::new(
+            Arc::new(UnusedPaladinPort),
+            waypoint_store.clone(),
+        ));
+        let worker = RunWorkerPool::new(
+            engine,
+            waypoint_store.clone(),
+            repository.clone(),
+            queue.clone(),
+            resolver.clone(),
+            Duration::from_secs(30),
+        );
+
+        let waypoints_port: Arc<dyn WaypointPort> = waypoint_store.clone();
+        let service = Arc::new(
+            RunSubmissionService::new(repository.clone(), queue.clone(), resolver.clone())
+                .with_waypoints(waypoints_port.clone()),
+        );
+
+        // The owner tenant (acme) runs a thread to completion so Waypoints exist.
+        let owner = PrincipalRef::new("svc-a", TenantId::new("acme").unwrap(), UserRole::User);
+        let accepted = service
+            .submit(SubmitRun {
+                assistant_id: "fork-wf".to_string(),
+                version: None,
+                thread_id: Some(
+                    paladin_core::platform::container::waypoint::ThreadId::new("acme-fork-1")
+                        .unwrap(),
+                ),
+                input: serde_json::json!({}),
+                webhook: None,
+                requested_by: Some(owner),
+                attributed_to: None,
+            })
+            .await
+            .unwrap();
+        assert!(worker.run_once().await.unwrap());
+        let original = repository.get(&accepted.run_id).await.unwrap().unwrap();
+        assert_eq!(original.status, RunStatus::Completed);
+        let final_waypoint = waypoint_store
+            .history(&accepted.thread_id, None, None)
+            .await
+            .unwrap()
+            .into_iter()
+            .max_by_key(|snapshot| snapshot.superstep)
+            .expect("the completed run left Waypoints")
+            .waypoint_id;
+
+        let mut api_keys = HashMap::new();
+        api_keys.insert(
+            "fork-key-a".to_string(),
+            Principal::new("svc-a", UserRole::User, TenantId::new("acme").unwrap()),
+        );
+        api_keys.insert(
+            "fork-key-b".to_string(),
+            Principal::new("svc-b", UserRole::User, TenantId::new("globex").unwrap()),
+        );
+        api_keys.insert(
+            "fork-key-ops".to_string(),
+            Principal::new("ops", UserRole::Admin, TenantId::new("ops-tenant").unwrap()),
+        );
+        let auth = AgentAuthConfig {
+            enabled: true,
+            api_keys,
+            token_verifier: None,
+            bearer_tenant: None,
+        };
+        let run_submission: Arc<dyn RunSubmissionPort> = service.clone();
+        let app = thread_router(
+            ThreadApiState::new()
+                .with_waypoints(waypoints_port)
+                .with_runs(repository.clone())
+                .with_run_submission(run_submission)
+                .with_auth(auth),
+        );
+
+        async fn fork_as(
+            app: &axum::Router,
+            key: &str,
+            waypoint_id: &str,
+        ) -> (StatusCode, serde_json::Value) {
+            let body = serde_json::to_vec(&serde_json::json!({
+                "from_waypoint_id": waypoint_id
+            }))
+            .unwrap();
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/threads/acme-fork-1/fork")
+                        .header("content-type", "application/json")
+                        .header("x-api-key", key)
+                        .body(Body::from(body))
+                        .expect("request builds"),
+                )
+                .await
+                .expect("router responds");
+            let status = response.status();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("read fork body");
+            (
+                status,
+                serde_json::from_slice(&bytes).expect("fork body is JSON"),
+            )
+        }
+
+        async fn run_count(repository: &Arc<dyn RunRepositoryPort>) -> usize {
+            repository
+                .list(RunQuery {
+                    limit: 10,
+                    ..Default::default()
+                })
+                .await
+                .expect("repository list succeeds")
+                .items
+                .len()
+        }
+
+        let waypoint = final_waypoint.to_string();
+        assert_eq!(run_count(&repository).await, 1);
+        let depth_before = queue.depth().await.unwrap();
+
+        // A foreign tenant's user key: the unknown-thread 404, nothing dispatched.
+        let (status, body) = fork_as(&app, "fork-key-b", &waypoint).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "foreign fork: {body}");
+        assert_eq!(body["error"]["code"], "not_found");
+        assert_eq!(body["error"]["message"], "unknown thread 'acme-fork-1'");
+        assert_eq!(
+            run_count(&repository).await,
+            1,
+            "a refused foreign fork must insert no run"
+        );
+        assert_eq!(
+            queue.depth().await.unwrap(),
+            depth_before,
+            "a refused foreign fork must enqueue nothing"
+        );
+
+        // The owning tenant's key forks its own thread.
+        let (status, body) = fork_as(&app, "fork-key-a", &waypoint).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "owner fork: {body}");
+        assert_eq!(body["thread_id"], "acme-fork-1");
+        assert_eq!(run_count(&repository).await, 2);
+
+        // An Admin of another tenant passes the guard: the owner's fork is still active, so
+        // the answer is `thread_busy`, not the 404.
+        let (status, body) = fork_as(&app, "fork-key-ops", &waypoint).await;
+        assert_eq!(status, StatusCode::CONFLICT, "admin fork: {body}");
+        assert_eq!(body["error"]["code"], "thread_busy");
+        assert_eq!(run_count(&repository).await, 2);
+    })
+    .await
+    .expect("cross_tenant_fork_is_the_unknown_thread_404 did not hang");
 }
 
 /// Phase 40's cross-tenant cancel proof (D-13, T-40-19, PLAT-07) over a real on-disk

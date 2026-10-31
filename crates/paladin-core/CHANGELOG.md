@@ -5,6 +5,15 @@ All notable changes to `paladin-core` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows lockstep workspace versioning.
 
+## [Unreleased]
+
+### Added
+
+- `RunReadScope::permits_thread` -- the thread-visibility rule: a thread belongs to the tenant of
+  its latest run (the newest by `submitted_at`, `run_id` as the tiebreak); `All` sees every
+  thread, a `Tenant` scope sees a thread only when its latest run is attributed to that tenant,
+  and a thread with no run is visible to `All` only (TENANT-03, Phase 53).
+
 ## [0.11.0] - 2026-10-26
 
 ### Fixed

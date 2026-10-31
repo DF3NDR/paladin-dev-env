@@ -47,3 +47,69 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1459 filtered ou
 
 That failure also shows what the guard protects: without it a foreign tenant is told the thread
 exists and is busy. Restored run: `test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1459 filtered out; finished in 0.21s`.
+
+### TENANT-04 watched-red (PD-01-3), fork route
+
+`cross_tenant_fork_is_the_unknown_thread_404` (`src/application/services/run/http_surface_tests.rs`)
+mounts `thread_router(ThreadApiState::new().with_waypoints(..).with_runs(..).with_run_submission(..).with_auth(..))`,
+the same wiring `src/bin/paladin-server.rs` uses, over the real `RunSubmissionService`, an in-memory
+repository, queue and Waypoint store, and a worker that ran the owner's run to completion.
+It passed on arrival (`test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1460 filtered out; finished in 0.01s`).
+With the same local, uncommitted mutation (guard arm `if false && ..`, restored byte-for-byte from a
+backup afterwards, `git diff` empty for `submission.rs`) it failed:
+
+```
+thread 'application::services::run::http_surface_tests::cross_tenant_fork_is_the_unknown_thread_404' panicked at src/application/services/run/http_surface_tests.rs:1806:9:
+assertion `left == right` failed: foreign fork: {"run_id":"01a18fb6-356f-7773-92b2-adbdfaef6ed5","thread_id":"acme-fork-1"}
+  left: 202
+ right: 404
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1460 filtered out; finished in 0.10s
+```
+
+Without the guard a foreign tenant's fork is accepted and dispatches a new run onto the owner's thread.
+The test asserts, for the foreign user key: `404`, `error.code == "not_found"`,
+`error.message == "unknown thread 'acme-fork-1'"`, run count unchanged (1) and queue depth unchanged.
+The owner key then gets `202`; an Admin of `ops-tenant` then gets `409 thread_busy` (the owner's fork is active), which proves the guard admitted it.
+
+### TENANT-05 lock re-run on this plan's head (AC-08)
+
+AC-08 is **met by an existing test, with no router in the service test**: no new cancel test was added (D-00d).
+Re-run on this plan's head (after commit `2b16763d0` and the Task 2 test added):
+
+| Test | Command | `test result:` line |
+|------|---------|---------------------|
+| `cancel_of_another_tenants_run_is_not_found_and_writes_nothing` (service-level, foreign `PrincipalRef` -> `RunSubmissionError::NotFound`, `cancel_requested == false`) | `cargo test --lib --features web-server application::services::run::submission::tests::cancel_of_another_tenants_run_is_not_found_and_writes_nothing -- --exact` | `test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1460 filtered out; finished in 0.00s` |
+| `cancel_admits_the_owning_tenant_and_admin` (owner and Admin still cancel) | `cargo test --lib --features web-server application::services::run::submission::tests::cancel_admits_the_owning_tenant_and_admin -- --exact` | `test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1460 filtered out; finished in 0.00s` |
+| `cross_tenant_cancel_is_a_404_and_writes_no_cancel_flag` (HTTP, through `run_router`) | `cargo test --lib --features web-server application::services::run::http_surface_tests::cross_tenant_cancel_is_a_404_and_writes_no_cancel_flag -- --exact` | `test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1460 filtered out; finished in 0.18s` |
+
+## Semver probe
+
+Command: `SEMVER_PRUNE_LOCAL_CACHE=1 ./scripts/check-semver.sh --package paladin-ai-core`
+(`cargo semver-checks check-release --package paladin-ai-core --default-features --baseline-version 0.11.0 --release-type patch`),
+run with `RunReadScope::permits_thread` added:
+
+```
+semver: paladin-ai-core: 223 checks: 223 pass, 31 skip
+semver: 1 package(s) checked against 0.11.0 at --release-type patch; 0 failure(s)
+```
+
+The added inherent method passes at patch level. Plan 53-08 is the binding run.
+
+## Residuals
+
+- **Corrupt latest-run row on submit (PD-01-4, T-53-05, accepted).** A corrupt latest-run row read by
+  `ensure_thread_visible` keeps today's redacted `500 "run store error"` (it reaches
+  `map_submission_error`'s `Backend` arm and carries no backend text). D-09 limits the role-dependent
+  `404` mapping to `load_visible_run` and `load_visible_thread`; fork gets it through the controller
+  gate in plan 53-03.
+- **Fork body equality (PD-01-5).** On today's tree a foreign fork answers `unknown thread '<id>'`, while a
+  never-existing thread answers `unknown waypoint '<wp>' on thread '<id>'` (the service checks the waypoint
+  after the guard). Byte equality of foreign-versus-missing fork bodies is proven at the controller by plan
+  53-03's route matrix, not by this plan's test.
+- **Thread birth (T-53-04, accepted; 40-CONTEXT D-14).** `submit` accepts a caller-chosen id for a thread
+  with no runs, so an unused thread id stays distinguishable from a hidden one on submit. Thread ids are
+  UUIDv7 by default; tenant-namespaced thread ids are deferred. `ensure_thread_visible` therefore calls
+  `permits_thread` only with `Some(&latest)`.
+- **`make api-surface` (not run).** `.project/current-exports.txt` covers the root crate only and holds
+  no `RunReadScope` entry; this plan changes no root-crate public item (the `ensure_thread_visible` edit
+  is a private fn body), so the baseline is unaffected.

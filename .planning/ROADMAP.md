@@ -352,7 +352,38 @@ Plans:
   4. With a Treasurer configured, `paladin-server` refuses to boot unless the worker pool was built through `with_engine_factory` (a test proves the refusal); reserved literals are rejected as tenant and API-key names at config load; and boot logs exactly one `warn!` listing schedules with `NULL created_by`, with no backfill route.
   5. The patch-versus-minor decision is recorded in this phase before Phase 58 opens: either the fixes stay additive (semver job green at patch level, no `MIGRATION.md` break; a tenant column on threads is a migration, not a break) or the one deliberate break is named, registered in `MIGRATION.md` and the allowlist, and the milestone version becomes `v0.12.0`.
 
-**Plans**: TBD
+**Plans**: 8 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 53-01-PLAN.md — One thread-owner rule `RunReadScope::permits_thread` in core; submit/fork/cancel isolation locked at HTTP and service level; prove-then-lock evidence (TENANT-03 rule, TENANT-04, TENANT-05)
+- [ ] 53-02-PLAN.md — One role-aware redaction rule; an unreadable run row is the missing-run 404 for a tenant and the fixed `run store error` 500 for Admin on every run route (TENANT-06)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 53-03-PLAN.md — `load_visible_thread` gate on every `/v1/threads/{id}*` route (gate before admin check), seven backend-text sites redacted, OpenAPI-derived route matrix (TENANT-03, TENANT-06)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 53-04-PLAN.md — `GET /v1/threads` bounded tenant-filtered walk (500-thread cap, short pages with a cursor, corrupt foreign rows skipped) (TENANT-03)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 53-05-PLAN.md — Job polls scoped to (agent, tenant) through `JobStore::get_visible` and additive `get_job_scoped`; OpenAPI unchanged (TENANT-07)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 53-06-PLAN.md — Boot guards: Treasurer-without-engine-factory refusal, one advisory `warn!` for `NULL created_by` schedules, reserved principal literals refused at config load (TENANT-08, TENANT-10, TENANT-09)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] 53-07-PLAN.md — ADR-0063 amending ADR-0054, user docs, WINDOWS rows 58/63 closed, Phase 40 dispositions, manual credential review (TENANT-03..10)
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [ ] 53-08-PLAN.md — Phase-head gate sweep and twelve-package patch-level semver evidence; `53-VERSION-DECISION.md` recorded last (SC5)
+
 **Scope notes**:
 
 - **Re-verify against the tree first.** Phase 40's `40-REVIEW-FIX.md` records WR-01…WR-04 (TENANT-04, -05, -06) as fixed: `ensure_thread_visible` is in `src/application/services/run/submission.rs`, `RunSubmissionService::cancel` enforces the tenant in the service, and `run_controller.rs` returns a fixed run-store error message. The carried-gaps inventory (built from `40-REVIEW.md` alone) lists them open. For those three requirements the plan starts by proving the criterion against the tree and adds the regression test where one is missing; only what fails is rebuilt. TENANT-03, -07, -08, -09 and -10 are expected to be real work.

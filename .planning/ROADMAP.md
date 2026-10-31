@@ -255,7 +255,7 @@ Phase artifacts: `milestones/v0.11.0-phases/`
 *Goal: close the security, correctness, release-process and first-run gaps v0.11.0 left behind, plus whatever dogfooding v0.11.0 surfaces, so the `v0.11.1` tag ships with `WINDOWS.md` `open_count: 0` and a milestone audit that reads `passed` rather than `tech_debt`. Cleanup only: no new features, and no new ports, adapters or HTTP routes except where a security fix needs one. If Phase 53's decision point forces a persisted or public-surface break, the milestone version becomes `v0.12.0` and every `0.11.1` below reads `0.12.0`.*
 
 - [x] **Phase 52: CI & Release Pipeline Repair** - Re-pin the semver gate to the published `0.11.0` baseline so it checks something, drop the crate-wide allows, run the migration-allowlist, end-to-end and publish-dry-run gates before merge, fix the release-body argv cap, and clear the CodeQL, issue #41 and publish-order carry-overs (completed 2026-10-30)
-- [ ] **Phase 53: Tenant Isolation Closure** - One visibility gate for every `/v1/threads/*` route, run submission and fork refusing a foreign tenant's thread, tenant-checked job reads and cancel, redacted run-row errors, and a boot-time refusal when a configured Treasurer is not attached to the worker pool (the only S1 cluster; records the patch-versus-`v0.12.0` decision)
+- [x] **Phase 53: Tenant Isolation Closure** - One visibility gate for every `/v1/threads/*` route, run submission and fork refusing a foreign tenant's thread, tenant-checked job reads and cancel, redacted run-row errors, and a boot-time refusal when a configured Treasurer is not attached to the worker pool (the only S1 cluster; records the patch-versus-`v0.12.0` decision) (completed 2026-10-31)
 - [ ] **Phase 54: First-Run Usability** - Refuse unexpanded `${VAR}` HTTP auth keys at boot and make the examples honest, bring every install snippet, version line and `k8s/` label to the current release behind a `check-version-strings` gate, and fix the changelog, ADR, count and API-surface-snapshot nits a new user trips on
 - [ ] **Phase 55: Correctness Fixes, Test Hygiene & Lint Bar** - No `todo!()` reachable in a published crate (held by a grep guard), the unfinished content/base-layer items each given a keep/fence/remove decision, the Failed-vs-Halted, `Cancelled`, `claude-opus-4-8` seed and unpriced-model-warning fixes, hermetic and non-flaky tests, and a warning-free lint and rustdoc bar with the eight crate-level rustdoc allows removed
 - [ ] **Phase 56: Dogfood Findings** - Triage the maintainer's runs, the web3sec return and two deliberate walk-throughs into the findings log, disposition every `DF-nn`, and fix every promoted S1/S2 finding before the tag (detailed scope is unknown today and is filled from `.project/v0.11.1/02-dogfood-findings-log.md`)
@@ -514,7 +514,7 @@ Plans:
 | 22-37.1 | v0.10.0 | 231/231 (228 executed, 3 superseded) | ✅ Shipped | 2026-09-23 |
 | 38-51 | v0.11.0 | 174/174 | ✅ Shipped | 2026-10-27 |
 | 52. CI & Release Pipeline Repair | v0.11.1 | 8/8 | Complete    | 2026-10-30 |
-| 53. Tenant Isolation Closure | v0.11.1 | 8/8 | Plans complete (verification pending) | - |
+| 53. Tenant Isolation Closure | v0.11.1 | 8/8 | Complete    | 2026-10-31 |
 | 54. First-Run Usability | v0.11.1 | 0/TBD | Not started | - |
 | 55. Correctness Fixes, Test Hygiene & Lint Bar | v0.11.1 | 0/TBD | Not started | - |
 | 56. Dogfood Findings | v0.11.1 | 0/TBD | Not started | - |

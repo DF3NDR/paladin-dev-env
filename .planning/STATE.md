@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v0.11.1
 milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
-current_phase: 53
-current_phase_name: Tenant Isolation Closure
-status: verifying
+current_phase: 54
+current_phase_name: First-Run Usability
+status: planning
 stopped_at: Completed 53-08-PLAN.md
-last_updated: "2026-10-31T15:18:27.126Z"
+last_updated: "2026-10-31T18:04:48.427Z"
 last_activity: 2026-10-31
-last_activity_desc: Phase 53 execution started
+last_activity_desc: Phase 53 complete, transitioned to Phase 54
 progress:
   total_phases: 2
   completed_phases: 2
@@ -20,15 +20,15 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-10-30 after Phase 52)
+See: .planning/PROJECT.md (updated 2026-10-31 after Phase 53)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 53 — Tenant Isolation Closure
+**Current focus:** Phase 54 — First-Run Usability
 52-UAT 3/3 passed; PR #61 merged to `main` as `84686acfb` on 2026-10-30)
 (carried-gaps inventory, dogfood findings log, scoping notes): 7 phases (52-58), 53/53 requirements
-mapped. Phase 52 (CI & Release Pipeline Repair) completed 2026-10-30; next: Phase 53. Decisions at open: OpenAI Responses API out,
+mapped. Phase 52 (CI & Release Pipeline Repair) completed 2026-10-30; Phase 53 (Tenant Isolation Closure) completed 2026-10-31; next: Phase 54. Decisions at open: OpenAI Responses API out,
 `${VAR}` auth keys refused at boot, research skipped.
 
 **Previous milestone:** v0.11.0 "Treasurer Spend Governance" closed 2026-10-27 — 15 phases
@@ -50,18 +50,18 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 
 ## Current Position
 
-Phase: 53 (Tenant Isolation Closure) — EXECUTING
-Plan: 8 of 8
-Status: Phase complete — ready for verification
-Last activity: 2026-10-31 — Phase 53 execution started
+Phase: 54 — First-Run Usability
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-10-31 — Phase 53 complete, transitioned to Phase 54
 
-Progress: [███░░░░░░░░░░░░░░░░░] 1/7 phases ([██████████] 100%) — Phase 52 plans [████████████████████] 8/8 (100%)
+Progress: [██████░░░░░░░░░░░░░░] 2/7 phases ([██████████] 100%) — Phase 53 plans [████████████████████] 8/8 (100%)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 597
+- Total plans completed: 605
 - Average duration: —
 - Total execution time: —
 
@@ -123,6 +123,7 @@ Progress: [███░░░░░░░░░░░░░░░░░] 1/7 pha
 | 46 | 14 | - | - |
 | 47 | 10 | - | - |
 | 52 | 8 | - | - |
+| 53 | 8 | - | - |
 
 *Updated after each plan completion*
 
@@ -697,6 +698,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: Phase 53-06: reserved literals open-access/unattributed (key name, key tenant, bearer tenant) and anonymous (key name) are refused at config load, exact and case-sensitive
 - [Phase ?]: ADR-0063 (Phase 53-07): threads belong to the tenant of their latest run, jobs to their enqueuing agent id and tenant; amends ADR-0054; get_job #[deprecated] deferred to next minor
 - [Phase ?]: Phase 53-08 (2026-10-31): v0.11.1 patch decided, every change additive. Evidence: local reproduction of Semver Checks (vs v0.11.0) with scripts/check-semver.sh at --release-type patch on head 4ef9ddd2a, 223 checks: 223 pass, 31 skip for all twelve packages, 0 failure(s); MIGRATION.md 11.2 has no row, allowlist has no entry. Recorded in .planning/phases/53-tenant-isolation-closure/53-VERSION-DECISION.md
+- [Phase 53]: UAT (2026-10-31): AC-N5 passed on an owner read of the shipped wiring (the no-op-factory blind spot stays a code-review control); review warnings WR-01, WR-02, WR-03 carried as open WINDOWS rows 85-87 (proposed owner Phase 55), WR-04 and WR-05 recorded as ADR-0063 residuals
 
 ### Pending Todos
 
@@ -720,6 +722,16 @@ Four pending todos were acknowledged as deferred at the v0.11.0 close (see *Defe
   support so `gpt-5.5-pro` and siblings are usable (Phase 50.1 seed probe finding).
 
 ### Blockers/Concerns
+
+**Phase 53 close (2026-10-31, 53-VERIFICATION `passed` 5/5, 53-UAT 2/2, 53-SECURITY 0 open):**
+
+- **WINDOWS rows 85-87 are open** (53-REVIEW WR-01…03, owner-accepted follow-ups): a newer-schema run row
+  fails every non-admin `GET /v1/threads` with a 500 (row 85); a corrupt older run row locks the owner out
+  of their thread because the latest-run lookup decodes `limit + 1` rows (row 86); thread ownership
+  transfers to whoever submitted the latest run, including an Admin fork or an unattributed schedule run
+  (row 87). Proposed owner Phase 55 (correctness fixes); `open_count` is now 16, and the `v0.11.1` exit
+  criterion needs 0, so Phase 55 or Phase 57 must fix or waive them.
+- **Phase 53 work is on `claude/laughing-dirac-e0h2ax`, not yet merged to `main`.**
 
 **Phase 52 close (2026-10-30, 52-VERIFICATION `passed` 5/5, 52-UAT 3/3, 52-SECURITY 0 open):**
 
@@ -751,11 +763,12 @@ Four pending todos were acknowledged as deferred at the v0.11.0 close (see *Defe
 
 **v0.11.1 roadmap-time findings (2026-10-27, measured against the tree while drafting the roadmap):**
 
-- **Phase 53, verify first:** Phase 40's `40-REVIEW-FIX.md` already records WR-01…WR-04 (TENANT-04, -05, -06) as fixed
+- ~~**Phase 53, verify first:**~~ — **done in Phase 53** (plans prove-then-lock, `53-TENANT-EVIDENCE.md`). Phase 40's `40-REVIEW-FIX.md` already records WR-01…WR-04 (TENANT-04, -05, -06) as fixed
   (`ensure_thread_visible` in `submission.rs`, tenant check inside `RunSubmissionService::cancel`, a fixed run-store
   error message in `run_controller.rs`); the carried-gaps inventory lists them open. Plans prove-then-lock those three.
 
-- **Phase 53, decision point:** if the thread-tenant fix (or any security change) forces a persisted or public-surface
+- ~~**Phase 53, decision point:**~~ — **decided in Phase 53: `v0.11.1` patch, every change additive**
+  (`53-VERSION-DECISION.md`). If the thread-tenant fix (or any security change) forces a persisted or public-surface
   break, the milestone becomes `v0.12.0`; record the decision before Phase 58 opens.
 
 - **Phase 55, FIXES-01 premise:** `content_filtering_service.rs` is commented out of `services/mod.rs` and is not valid
@@ -1044,11 +1057,16 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-10-31T15:18:27.109Z
-Stopped at: Completed 53-08-PLAN.md
+Last session: 2026-10-31T18:10:00.000Z
+Stopped at: Phase 53 complete, ready to plan Phase 54
 Resume file: None
 
 ## Operator Next Steps
+
+- **Phase 53 is complete (2026-10-31):** verification `passed`, UAT 2/2, security 0 open, ADR-0063 minted,
+  `v0.11.1` stays a patch. Review warnings WR-01…03 are open WINDOWS rows 85-87 for a later phase. The work
+  is on `claude/laughing-dirac-e0h2ax` (not yet on `main`). Next: `/clear` then `/gsd-discuss-phase 54`
+  (First-Run Usability).
 
 - **Phase 52 is complete (2026-10-30):** verification `passed`, UAT 3/3, security 0 open. PR #61 is merged
   (`84686acfb` on `main`, 2026-10-30); the one maintainer act still ahead is the `v0.11.1` tag in Phase 58. Next: `/clear` then `/gsd-discuss-phase 53` (Tenant Isolation Closure — verify Phase 40's

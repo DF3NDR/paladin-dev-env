@@ -358,7 +358,7 @@ Plans:
 **Wave 1**
 
 - [x] 53-01-PLAN.md — One thread-owner rule `RunReadScope::permits_thread` in core; submit/fork/cancel isolation locked at HTTP and service level; prove-then-lock evidence (TENANT-03 rule, TENANT-04, TENANT-05)
-- [ ] 53-02-PLAN.md — One role-aware redaction rule; an unreadable run row is the missing-run 404 for a tenant and the fixed `run store error` 500 for Admin on every run route (TENANT-06)
+- [x] 53-02-PLAN.md — One role-aware redaction rule; an unreadable run row is the missing-run 404 for a tenant and the fixed `run store error` 500 for Admin on every run route (TENANT-06)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

@@ -5,15 +5,15 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 53
 current_phase_name: Tenant Isolation Closure
 status: executing
-stopped_at: Completed 53-01-PLAN.md
-last_updated: "2026-10-31T02:09:27.821Z"
+stopped_at: Completed 53-02-PLAN.md
+last_updated: "2026-10-31T02:27:20.250Z"
 last_activity: 2026-10-31
 last_activity_desc: Phase 53 execution started
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 16
-  completed_plans: 9
+  completed_plans: 10
 ---
 
 # Project State
@@ -51,11 +51,11 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 ## Current Position
 
 Phase: 53 (Tenant Isolation Closure) — EXECUTING
-Plan: 2 of 8
+Plan: 3 of 8
 Status: Ready to execute
 Last activity: 2026-10-31 — Phase 53 execution started
 
-Progress: [███░░░░░░░░░░░░░░░░░] 1/7 phases ([██████░░░░] 56%) — Phase 52 plans [████████████████████] 8/8 (100%)
+Progress: [███░░░░░░░░░░░░░░░░░] 1/7 phases ([██████░░░░] 63%) — Phase 52 plans [████████████████████] 8/8 (100%)
 
 ## Performance Metrics
 
@@ -364,6 +364,7 @@ Progress: [███░░░░░░░░░░░░░░░░░] 1/7 pha
 | Phase 52 P07 | 70min | 3 tasks | 1 files |
 | Phase 52 P08 | about 19h wall clock (3 sessions) | 3 tasks | 3 files |
 | Phase 53 P01 | 10min | 2 tasks | 5 files |
+| Phase 53 P02 | 25min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -680,6 +681,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 52-08: PD-06-1 confirmed by the maintainer; Semver Checks (vs v0.11.0) is a required check, live ruleset 20868126 carries 46 contexts equal to the committed record
 - [Phase ?]: 52-08: H-06 local make coverage deferred to the maintainer (Docker-capable machine); todo stays pending, resolves_phase 56, no coverage gate changed
 - [Phase ?]: 53-01: RunReadScope::permits_thread is the one thread-owner rule (latest run by submitted_at, run_id tiebreak); ensure_thread_visible calls it only with Some(&latest) so thread birth stays open
+- [Phase ?]: Phase 53-02: only RunRepositoryError::Serialization is hideable via redact_store_error_for_scope; UnknownSchemaVersion and all other errors stay the fixed 'run store error' 500 for every role (D-09)
 
 ### Pending Todos
 
@@ -1027,8 +1029,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-10-31T02:09:27.804Z
-Stopped at: Completed 53-01-PLAN.md
+Last session: 2026-10-31T02:27:20.232Z
+Stopped at: Completed 53-02-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

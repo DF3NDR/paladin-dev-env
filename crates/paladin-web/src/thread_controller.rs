@@ -56,11 +56,13 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use paladin_core::platform::container::parley::{ParleyKind, ParleyRequest, ParleyResponse};
+use paladin_core::platform::container::principal::RunReadScope;
+use paladin_core::platform::container::run::Run;
 use paladin_core::platform::container::waypoint::{ThreadId, Waypoint, WaypointId, WaypointStatus};
 use paladin_ports::input::parley_port::{ParleyError, ParleyPort};
 use paladin_ports::input::run_submission_port::{ForkRun, RunSubmissionPort};
-use paladin_ports::output::run_repository_port::RunRepositoryPort;
-use paladin_ports::output::waypoint_port::{WaypointPort, WaypointSummary};
+use paladin_ports::output::run_repository_port::{RunQuery, RunRepositoryError, RunRepositoryPort};
+use paladin_ports::output::waypoint_port::{WaypointError, WaypointPort, WaypointSummary};
 
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
@@ -69,7 +71,10 @@ use crate::agent_auth::{HasAgentAuth, Principal, require_admin};
 use crate::agent_controller::{JsonValue, ok_body};
 use crate::error::{ApiError, ApiErrorBody};
 use crate::pagination::{decode_cursor, encode_cursor, resolve_limit};
-use crate::run_controller::{RunWebhookRequestDto, map_submission_error, to_run_webhook_spec};
+use crate::run_controller::{
+    RunWebhookRequestDto, map_submission_error, redact_store_error_for_scope,
+    run_repo_error_for_scope, to_run_webhook_spec,
+};
 
 /// Shared state for the thread routes.
 ///
@@ -194,6 +199,11 @@ const RUN_SUBMISSION_PORT_HINT: &str =
 /// Maximum `limit` accepted by `GET .../history` (D-27, PLAT-FR-16
 /// pre-conformance); a larger value is a `400`.
 const MAX_HISTORY_LIMIT: u32 = 100;
+
+/// The one fixed client-facing message every waypoint-store failure on the thread routes
+/// renders (TENANT-06). The detail -- which can carry connection strings, schema names or
+/// the shape of a corrupt Waypoint -- goes to the server log only.
+const THREAD_STORE_ERROR_MESSAGE: &str = "thread store error";
 
 // --- Label helpers (stable, lowercase wire labels) -------------------------
 
@@ -621,6 +631,146 @@ fn map_parley_error(err: ParleyError) -> ApiError {
     }
 }
 
+// --- Visibility gate (TENANT-03, ADR-0054 as amended by ADR-0063) ------------
+
+/// Log a waypoint-store failure server-side and return the fixed `500`
+/// `"thread store error"` for every role.
+///
+/// For a failure that is *not* an existence question: the caller has already been
+/// admitted by [`load_visible_thread`], so there is nothing left to hide, and the detail
+/// is for the operator's log only. Routed through the shared run-route redaction rule
+/// with an `All` scope and `hideable = false`, so one rule renders every store error.
+fn thread_store_error(context: &str, err: impl std::fmt::Display) -> ApiError {
+    redact_store_error_for_scope(
+        &RunReadScope::All,
+        context,
+        &err,
+        false,
+        THREAD_STORE_ERROR_MESSAGE,
+        || ApiError::internal(THREAD_STORE_ERROR_MESSAGE),
+    )
+}
+
+/// Classify a [`WaypointError`] raised before the caller's ownership is known.
+///
+/// A corrupt or newer-schema Waypoint stored under an id is itself an existence signal,
+/// so `Serialization` and `SchemaVersionUnsupported` are hideable: a `Tenant` scope gets
+/// `hidden()` (the missing-thread `404`), exactly as for an unreadable run row (D-09).
+/// `Backend` is an outage and `NotFound` a state error; neither is hideable, so both
+/// render the fixed `thread store error` `500`. An `All` (Admin) scope always gets the
+/// fixed `500` so an operator learns the row is unreadable.
+fn waypoint_error_for_scope(
+    scope: &RunReadScope,
+    context: &str,
+    err: WaypointError,
+    hidden: impl FnOnce() -> ApiError,
+) -> ApiError {
+    let hideable = matches!(
+        err,
+        WaypointError::Serialization(_) | WaypointError::SchemaVersionUnsupported { .. }
+    );
+    redact_store_error_for_scope(
+        scope,
+        context,
+        &err,
+        hideable,
+        THREAD_STORE_ERROR_MESSAGE,
+        hidden,
+    )
+}
+
+/// The newest run on `thread` by `submitted_at` (`run_id` as the tiebreak), or `None`
+/// when the thread has no run row.
+///
+/// An internal authorization read: the query keeps the default `All` scope so the owner
+/// is found regardless of who is asking -- the caller's scope is applied afterwards by
+/// [`RunReadScope::permits_thread`], never pushed into this query.
+async fn latest_run_for_thread(
+    runs: &Arc<dyn RunRepositoryPort>,
+    thread: &ThreadId,
+) -> Result<Option<Run>, RunRepositoryError> {
+    let page = runs
+        .list(RunQuery {
+            thread_id: Some(thread.clone()),
+            limit: 1,
+            ..Default::default()
+        })
+        .await?;
+    Ok(page.items.into_iter().next())
+}
+
+/// Load a thread's latest Waypoint and check the caller may see the thread -- the single
+/// entry every `/v1/threads/{id}*` route passes through (TENANT-03, D-05).
+///
+/// A thread carries no tenant of its own: it belongs to the tenant of its **latest run**
+/// (newest by `submitted_at`, `run_id` as the tiebreak), applied through
+/// [`RunReadScope::permits_thread`]. In order:
+///
+/// 1. no waypoint backend -> `501` (same as every thread route);
+/// 2. the latest Waypoint is loaded; a missing thread is `hidden()`;
+/// 3. an `All` (Admin) scope returns here, performing **no** run lookup, so a run-store
+///    outage cannot turn an Admin read into a failure;
+/// 4. no run store wired -> `hidden()` for every non-admin (D-07, fail closed: ownership
+///    cannot be established, so nothing is shown);
+/// 5. the latest run is read and `permits_thread` applied; a thread with no run is
+///    `hidden()` (Admin-only), as is a thread whose latest run is another tenant's.
+///
+/// `hidden()` builds the exact `404 unknown thread '<id>'` a genuinely missing thread
+/// gets, so a hidden thread is indistinguishable from a missing one by status, code,
+/// headers and body (ADR-0054 rule 5, ADR-0063). Store failures go through the shared
+/// role-aware redaction: an unreadable Waypoint or run row is the same `404` for a
+/// `Tenant` scope and a fixed `500` for an Admin.
+///
+/// Known limitation (D-14): thread ids are not tenant-namespaced, so two tenants that
+/// choose the same id share one thread; the latest run decides who sees it.
+async fn load_visible_thread(
+    state: &ThreadApiState,
+    principal: &Principal,
+    thread: &ThreadId,
+) -> Result<Waypoint, ApiError> {
+    let waypoints = state
+        .waypoints
+        .as_ref()
+        .ok_or_else(|| ApiError::not_implemented(WAYPOINT_BACKEND_HINT))?;
+    let scope = principal.read_scope();
+    let hidden = || ApiError::not_found(format!("unknown thread '{thread}'"));
+
+    let waypoint = match waypoints.latest(thread).await {
+        Ok(Some(waypoint)) => waypoint,
+        Ok(None) => return Err(hidden()),
+        Err(e) => {
+            return Err(waypoint_error_for_scope(
+                &scope,
+                "thread API thread lookup",
+                e,
+                hidden,
+            ));
+        }
+    };
+
+    if matches!(scope, RunReadScope::All) {
+        return Ok(waypoint);
+    }
+    let Some(runs) = state.runs.as_ref() else {
+        return Err(hidden());
+    };
+    let latest = match latest_run_for_thread(runs, thread).await {
+        Ok(latest) => latest,
+        Err(e) => {
+            return Err(run_repo_error_for_scope(
+                &scope,
+                "thread API thread owner lookup",
+                e,
+                hidden,
+            ));
+        }
+    };
+    if !scope.permits_thread(latest.as_ref()) {
+        return Err(hidden());
+    }
+    Ok(waypoint)
+}
+
 // --- Handlers ---------------------------------------------------------------
 
 /// `GET /threads/{id}/state` -- the thread's latest status, plus outstanding
@@ -887,7 +1037,7 @@ pub async fn list_threads(
     let page = waypoints
         .list_threads(Some(limit + 1), before)
         .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        .map_err(|e| thread_store_error("thread API list", e))?;
     let has_more = page.len() as u32 > limit;
     let page_items = if has_more {
         &page[..limit as usize]
@@ -941,20 +1091,14 @@ pub async fn list_threads(
 )]
 pub async fn get_thread(
     State(state): State<ThreadApiState>,
-    Extension(_principal): Extension<Principal>,
+    Extension(principal): Extension<Principal>,
     Path(id): Path<String>,
 ) -> Result<(StatusCode, JsonValue), ApiError> {
-    let waypoints = state
-        .waypoints
-        .as_ref()
-        .ok_or_else(|| ApiError::not_implemented(WAYPOINT_BACKEND_HINT))?;
+    if state.waypoints.is_none() {
+        return Err(ApiError::not_implemented(WAYPOINT_BACKEND_HINT));
+    }
     let thread = parse_thread_id(&id)?;
-
-    let wp = waypoints
-        .latest(&thread)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .ok_or_else(|| ApiError::not_found(format!("unknown thread '{id}'")))?;
+    let wp = load_visible_thread(&state, &principal, &thread).await?;
 
     let active_run_id = active_run_id_for(&state, &thread).await;
 
@@ -1225,13 +1369,34 @@ mod tests {
 
     // --- Mock `WaypointPort` -------------------------------------------
 
+    /// The `latest()` failure a [`MockWaypointStore`] can be told to return (a
+    /// `WaypointError` is not `Clone`, so the seam stores which variant to build).
+    #[derive(Clone, Copy)]
+    enum WaypointFailure {
+        /// `WaypointError::Serialization` carrying text that must never reach a body.
+        Serialization,
+        /// `WaypointError::SchemaVersionUnsupported`.
+        SchemaVersion,
+        /// `WaypointError::Backend`.
+        Backend,
+    }
+
+    /// The text every injected failure carries; no response body may contain it.
+    const INJECTED_TEXT: &str = "db.internal.example corrupt-row-detail";
+
     #[derive(Default)]
     struct MockWaypointStore {
         latest: Mutex<HashMap<String, Waypoint>>,
         history: Mutex<HashMap<String, Vec<WaypointSummary>>>,
+        /// When set, `latest()` fails with this variant (Phase 53 thread gate tests).
+        fail_latest_with: Mutex<Option<WaypointFailure>>,
     }
 
     impl MockWaypointStore {
+        fn fail_latest(&self, failure: WaypointFailure) {
+            *self.fail_latest_with.lock().unwrap() = Some(failure);
+        }
+
         fn seed_latest(&self, wp: Waypoint) {
             self.latest
                 .lock()
@@ -1255,6 +1420,20 @@ mod tests {
         }
 
         async fn latest(&self, thread: &ThreadId) -> Result<Option<Waypoint>, WaypointError> {
+            if let Some(failure) = *self.fail_latest_with.lock().unwrap() {
+                return Err(match failure {
+                    WaypointFailure::Serialization => {
+                        WaypointError::Serialization(INJECTED_TEXT.to_string())
+                    }
+                    WaypointFailure::SchemaVersion => WaypointError::SchemaVersionUnsupported {
+                        found: INJECTED_TEXT.to_string(),
+                        supported: "v1".to_string(),
+                    },
+                    WaypointFailure::Backend => WaypointError::Backend {
+                        source: INJECTED_TEXT.into(),
+                    },
+                });
+            }
             Ok(self.latest.lock().unwrap().get(thread.as_str()).cloned())
         }
 
@@ -1903,6 +2082,36 @@ mod tests {
     #[derive(Default)]
     struct MockRunRepository {
         active: Mutex<HashMap<String, Run>>,
+        /// Seeded run history for the thread visibility gate: `list` honors
+        /// `RunQuery.thread_id`, `scope` and `limit` over these, ordered
+        /// `(submitted_at DESC, run_id DESC)` like every real repository.
+        runs: Mutex<Vec<Run>>,
+        /// When set, `get`, `list` and `active_run_for_thread` fail with a
+        /// `Serialization` error carrying this text (Phase 53 thread gate tests).
+        fail_reads_with: Mutex<Option<String>>,
+    }
+
+    impl MockRunRepository {
+        fn seed_run(&self, run: Run) {
+            self.runs.lock().unwrap().push(run);
+        }
+
+        fn fail_reads_with(&self, message: &str) {
+            *self.fail_reads_with.lock().unwrap() = Some(message.to_string());
+        }
+
+        fn read_failure(
+            &self,
+        ) -> Result<(), paladin_ports::output::run_repository_port::RunRepositoryError> {
+            match self.fail_reads_with.lock().unwrap().as_ref() {
+                Some(message) => Err(
+                    paladin_ports::output::run_repository_port::RunRepositoryError::Serialization {
+                        message: message.clone(),
+                    },
+                ),
+                None => Ok(()),
+            }
+        }
     }
 
     #[async_trait]
@@ -1916,10 +2125,17 @@ mod tests {
 
         async fn get(
             &self,
-            _run_id: &RunId,
+            run_id: &RunId,
         ) -> Result<Option<Run>, paladin_ports::output::run_repository_port::RunRepositoryError>
         {
-            Ok(None)
+            self.read_failure()?;
+            Ok(self
+                .runs
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|run| &run.run_id == run_id)
+                .cloned())
         }
 
         async fn update_status(
@@ -1942,13 +2158,36 @@ mod tests {
 
         async fn list(
             &self,
-            _query: paladin_ports::output::run_repository_port::RunQuery,
+            query: paladin_ports::output::run_repository_port::RunQuery,
         ) -> Result<
             paladin_ports::output::run_repository_port::RunPage,
             paladin_ports::output::run_repository_port::RunRepositoryError,
         > {
+            self.read_failure()?;
+            let mut items: Vec<Run> = self
+                .runs
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|run| {
+                    query
+                        .thread_id
+                        .as_ref()
+                        .is_none_or(|thread| &run.thread_id == thread)
+                        && query.scope.permits(run)
+                })
+                .cloned()
+                .collect();
+            items.sort_by(|a, b| {
+                b.submitted_at
+                    .cmp(&a.submitted_at)
+                    .then_with(|| b.run_id.to_string().cmp(&a.run_id.to_string()))
+            });
+            if query.limit > 0 {
+                items.truncate(query.limit as usize);
+            }
             Ok(paladin_ports::output::run_repository_port::RunPage {
-                items: vec![],
+                items,
                 next_cursor: None,
             })
         }
@@ -1958,6 +2197,7 @@ mod tests {
             thread_id: &ThreadId,
         ) -> Result<Option<Run>, paladin_ports::output::run_repository_port::RunRepositoryError>
         {
+            self.read_failure()?;
             Ok(self.active.lock().unwrap().get(thread_id.as_str()).cloned())
         }
 
@@ -2014,6 +2254,432 @@ mod tests {
             },
             serde_json::json!({}),
         )
+    }
+
+    // --- Tenant visibility of single-thread routes (Phase 53, plan 53-03, TENANT-03) ---
+
+    use axum::response::Response;
+    use paladin_core::platform::container::principal::{RunAttribution, TenantId};
+
+    /// The four auth-enabled keys every visibility test uses (research Pitfall 6: with
+    /// auth disabled every caller is Admin and the gate would never be exercised):
+    /// `owner-key` and `peer-key` are `User`s of `acme`, `foreign-key` a `User` of
+    /// `globex`, `admin-key` an Admin of `ops-tenant`.
+    fn tenant_thread_auth() -> crate::agent_auth::AgentAuthConfig {
+        let mut api_keys = HashMap::new();
+        api_keys.insert(
+            "owner-key".to_string(),
+            Principal::new("svc-a", UserRole::User, TenantId::new("acme").unwrap()),
+        );
+        api_keys.insert(
+            "peer-key".to_string(),
+            Principal::new("svc-a2", UserRole::User, TenantId::new("acme").unwrap()),
+        );
+        api_keys.insert(
+            "foreign-key".to_string(),
+            Principal::new("svc-b", UserRole::User, TenantId::new("globex").unwrap()),
+        );
+        api_keys.insert(
+            "admin-key".to_string(),
+            Principal::new("ops", UserRole::Admin, TenantId::new("ops-tenant").unwrap()),
+        );
+        crate::agent_auth::AgentAuthConfig {
+            enabled: true,
+            api_keys,
+            token_verifier: None,
+            bearer_tenant: None,
+        }
+    }
+
+    /// A run on `thread` attributed to `tenant`/`key`, submitted at `at`.
+    fn run_on(thread: &ThreadId, tenant: &str, key: &str, at: DateTime<Utc>) -> Run {
+        let mut run = sample_run_for(thread)
+            .with_submitted_by(RunAttribution::new(TenantId::new(tenant).unwrap(), key));
+        run.submitted_at = at;
+        run
+    }
+
+    /// The doubles behind a visibility test, kept so a test can seed more runs after the
+    /// router is built.
+    struct ThreadFixture {
+        waypoints: Arc<MockWaypointStore>,
+        runs: Arc<MockRunRepository>,
+    }
+
+    impl ThreadFixture {
+        fn new() -> Self {
+            Self {
+                waypoints: Arc::new(MockWaypointStore::default()),
+                runs: Arc::new(MockRunRepository::default()),
+            }
+        }
+
+        /// Seed a latest Waypoint for `name`.
+        fn waypoint(&self, name: &str) -> ThreadId {
+            let t = thread(name);
+            self.waypoints
+                .seed_latest(sample_waypoint(&t, 1, WaypointStatus::Completed));
+            t
+        }
+
+        /// A state with the four-key auth, both stores and (when `with_runs`) the run store.
+        fn state(&self, with_runs: bool) -> ThreadApiState {
+            let state = ThreadApiState::new()
+                .with_waypoints(self.waypoints.clone())
+                .with_auth(tenant_thread_auth());
+            if with_runs {
+                state.with_runs(self.runs.clone())
+            } else {
+                state
+            }
+        }
+    }
+
+    async fn send_thread_request(
+        app: &axum::Router,
+        method: &str,
+        uri: String,
+        key: &str,
+        body: Option<serde_json::Value>,
+        extra_headers: &[(&str, &str)],
+    ) -> Response {
+        let mut builder = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("x-api-key", key);
+        for (name, value) in extra_headers {
+            builder = builder.header(*name, *value);
+        }
+        let request = match body {
+            Some(json) => builder
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&json).unwrap())),
+            None => builder.body(Body::empty()),
+        };
+        app.clone()
+            .oneshot(request.expect("request builds"))
+            .await
+            .expect("router responds")
+    }
+
+    /// `(status, sorted headers, body text)` of a response.
+    async fn response_parts(response: Response) -> (StatusCode, Vec<(String, String)>, String) {
+        let status = response.status();
+        let mut headers: Vec<(String, String)> = response
+            .headers()
+            .iter()
+            .filter(|(name, _)| name.as_str() != "content-length")
+            .map(|(name, value)| {
+                (
+                    name.as_str().to_string(),
+                    value.to_str().unwrap_or("<non-utf8>").to_string(),
+                )
+            })
+            .collect();
+        headers.sort();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        (
+            status,
+            headers,
+            String::from_utf8(bytes.to_vec()).expect("utf8 body"),
+        )
+    }
+
+    /// Hidden must equal missing in status, every header and body bytes once the two ids
+    /// are swapped (ADR-0054 rule 5). `content-length` is the one derived header left out
+    /// of the header comparison: it is a pure function of the body, and the two ids differ
+    /// in length, so it differs by exactly that difference; the swapped-body equality below
+    /// is what proves the lengths agree, so a length oracle is still caught.
+    async fn assert_hidden_equals_missing(
+        hidden: Response,
+        missing: Response,
+        hidden_id: &str,
+        missing_id: &str,
+        what: &str,
+    ) {
+        let (h_status, h_headers, h_body) = response_parts(hidden).await;
+        let (m_status, m_headers, m_body) = response_parts(missing).await;
+        assert_eq!(h_status, m_status, "{what}: status");
+        assert_eq!(h_headers, m_headers, "{what}: headers");
+        assert_eq!(
+            h_body.replace(hidden_id, missing_id),
+            m_body,
+            "{what}: body bytes after the id swap"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_thread_is_visible_to_its_tenant_and_admin_and_hidden_from_others() {
+        let fixture = ThreadFixture::new();
+        let t = fixture.waypoint("acme-thread-1");
+        fixture
+            .runs
+            .seed_run(run_on(&t, "acme", "svc-a", Utc::now()));
+        let app = thread_router(fixture.state(true));
+
+        for key in ["owner-key", "peer-key", "admin-key"] {
+            let response = send_thread_request(
+                &app,
+                "GET",
+                "/v1/threads/acme-thread-1".to_string(),
+                key,
+                None,
+                &[],
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK, "{key} sees its thread");
+        }
+
+        let hidden = send_thread_request(
+            &app,
+            "GET",
+            "/v1/threads/acme-thread-1".to_string(),
+            "foreign-key",
+            None,
+            &[],
+        )
+        .await;
+        assert_eq!(hidden.status(), StatusCode::NOT_FOUND);
+        let missing = send_thread_request(
+            &app,
+            "GET",
+            "/v1/threads/no-such-9f3a".to_string(),
+            "foreign-key",
+            None,
+            &[],
+        )
+        .await;
+        assert_hidden_equals_missing(
+            hidden,
+            missing,
+            "acme-thread-1",
+            "no-such-9f3a",
+            "GET /v1/threads/{id} as a foreign tenant",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn zero_run_thread_is_visible_to_admin_only() {
+        let fixture = ThreadFixture::new();
+        fixture.waypoint("zero-run-thread");
+        let app = thread_router(fixture.state(true));
+
+        let admin_response = send_thread_request(
+            &app,
+            "GET",
+            "/v1/threads/zero-run-thread".to_string(),
+            "admin-key",
+            None,
+            &[],
+        )
+        .await;
+        assert_eq!(admin_response.status(), StatusCode::OK);
+
+        for key in ["owner-key", "foreign-key"] {
+            let hidden = send_thread_request(
+                &app,
+                "GET",
+                "/v1/threads/zero-run-thread".to_string(),
+                key,
+                None,
+                &[],
+            )
+            .await;
+            let missing = send_thread_request(
+                &app,
+                "GET",
+                "/v1/threads/no-such-9f3a".to_string(),
+                key,
+                None,
+                &[],
+            )
+            .await;
+            assert_eq!(hidden.status(), StatusCode::NOT_FOUND, "{key}");
+            assert_hidden_equals_missing(
+                hidden,
+                missing,
+                "zero-run-thread",
+                "no-such-9f3a",
+                "zero-run thread for a non-admin",
+            )
+            .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn mixed_tenant_thread_belongs_to_the_latest_runs_tenant() {
+        let fixture = ThreadFixture::new();
+        let t = fixture.waypoint("legacy-thread");
+        let t0 = Utc::now();
+        fixture.runs.seed_run(run_on(&t, "acme", "svc-a", t0));
+        fixture.runs.seed_run(run_on(
+            &t,
+            "globex",
+            "svc-b",
+            t0 + chrono::Duration::seconds(1),
+        ));
+        let app = thread_router(fixture.state(true));
+        let status_for = |key: &'static str| {
+            let app = app.clone();
+            async move {
+                send_thread_request(
+                    &app,
+                    "GET",
+                    "/v1/threads/legacy-thread".to_string(),
+                    key,
+                    None,
+                    &[],
+                )
+                .await
+                .status()
+            }
+        };
+
+        // The newest run is globex's: globex and Admin see the thread, acme does not.
+        assert_eq!(status_for("foreign-key").await, StatusCode::OK);
+        assert_eq!(status_for("admin-key").await, StatusCode::OK);
+        assert_eq!(status_for("owner-key").await, StatusCode::NOT_FOUND);
+
+        // A still newer acme run moves the thread back to acme.
+        fixture.runs.seed_run(run_on(
+            &t,
+            "acme",
+            "svc-a",
+            t0 + chrono::Duration::seconds(2),
+        ));
+        assert_eq!(status_for("owner-key").await, StatusCode::OK);
+        assert_eq!(status_for("admin-key").await, StatusCode::OK);
+        assert_eq!(status_for("foreign-key").await, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn thread_routes_fail_closed_for_non_admin_without_a_run_store() {
+        let fixture = ThreadFixture::new();
+        fixture.waypoint("acme-thread-1");
+        // D-07: a waypoint store but no run store -- ownership cannot be established.
+        let app = thread_router(fixture.state(false));
+
+        let admin_response = send_thread_request(
+            &app,
+            "GET",
+            "/v1/threads/acme-thread-1".to_string(),
+            "admin-key",
+            None,
+            &[],
+        )
+        .await;
+        assert_eq!(admin_response.status(), StatusCode::OK);
+
+        let hidden = send_thread_request(
+            &app,
+            "GET",
+            "/v1/threads/acme-thread-1".to_string(),
+            "owner-key",
+            None,
+            &[],
+        )
+        .await;
+        let missing = send_thread_request(
+            &app,
+            "GET",
+            "/v1/threads/no-such-9f3a".to_string(),
+            "owner-key",
+            None,
+            &[],
+        )
+        .await;
+        assert_eq!(hidden.status(), StatusCode::NOT_FOUND);
+        assert_hidden_equals_missing(
+            hidden,
+            missing,
+            "acme-thread-1",
+            "no-such-9f3a",
+            "no run store, non-admin",
+        )
+        .await;
+    }
+
+    /// An unreadable Waypoint or run row under a thread id is an existence signal, so for
+    /// a `Tenant` scope it is the missing-thread `404` and for an Admin the fixed `500`;
+    /// an Admin performs no owner lookup, so a run-store failure does not touch its `GET`
+    /// (D-09, PD-03-5). No body carries the injected backend text.
+    #[tokio::test]
+    async fn unreadable_rows_on_get_thread_follow_the_role_aware_redaction() {
+        let get = |app: axum::Router, id: &'static str, key: &'static str| async move {
+            send_thread_request(&app, "GET", format!("/v1/threads/{id}"), key, None, &[]).await
+        };
+
+        // Waypoint `Serialization` on `latest()`.
+        let fixture = ThreadFixture::new();
+        let t = fixture.waypoint("acme-thread-1");
+        fixture
+            .runs
+            .seed_run(run_on(&t, "acme", "svc-a", Utc::now()));
+        fixture
+            .waypoints
+            .fail_latest(WaypointFailure::Serialization);
+        let app = thread_router(fixture.state(true));
+        for key in ["owner-key", "foreign-key"] {
+            let hidden = get(app.clone(), "acme-thread-1", key).await;
+            let missing = get(app.clone(), "no-such-9f3a", key).await;
+            let (status, _, body) = response_parts(hidden).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{key}");
+            assert!(!body.contains(INJECTED_TEXT), "{key}: {body}");
+            // Both ids fail identically under the seam, so the responses must be equal.
+            let missing_parts = response_parts(missing).await;
+            assert_eq!(missing_parts.0, StatusCode::NOT_FOUND, "{key}");
+            assert_eq!(
+                body.replace("acme-thread-1", "no-such-9f3a"),
+                missing_parts.2,
+                "{key}"
+            );
+        }
+        let (status, _, body) = response_parts(get(app, "acme-thread-1", "admin-key").await).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(body.contains(THREAD_STORE_ERROR_MESSAGE), "{body}");
+        assert!(!body.contains(INJECTED_TEXT), "{body}");
+
+        // A newer-schema Waypoint is hideable too; a `Backend` outage never is (it is not an
+        // existence signal), so even a `Tenant` scope gets the fixed 500.
+        for (failure, tenant_status) in [
+            (WaypointFailure::SchemaVersion, StatusCode::NOT_FOUND),
+            (WaypointFailure::Backend, StatusCode::INTERNAL_SERVER_ERROR),
+        ] {
+            let fixture = ThreadFixture::new();
+            let t = fixture.waypoint("acme-thread-1");
+            fixture
+                .runs
+                .seed_run(run_on(&t, "acme", "svc-a", Utc::now()));
+            fixture.waypoints.fail_latest(failure);
+            let app = thread_router(fixture.state(true));
+            let (status, _, body) =
+                response_parts(get(app.clone(), "acme-thread-1", "owner-key").await).await;
+            assert_eq!(status, tenant_status);
+            assert!(!body.contains(INJECTED_TEXT), "{body}");
+            if tenant_status == StatusCode::INTERNAL_SERVER_ERROR {
+                assert!(body.contains(THREAD_STORE_ERROR_MESSAGE), "{body}");
+            }
+        }
+
+        // Run-store `Serialization` on the owner lookup.
+        let fixture = ThreadFixture::new();
+        let t = fixture.waypoint("acme-thread-1");
+        fixture
+            .runs
+            .seed_run(run_on(&t, "acme", "svc-a", Utc::now()));
+        fixture.runs.fail_reads_with(INJECTED_TEXT);
+        let app = thread_router(fixture.state(true));
+        for key in ["owner-key", "foreign-key"] {
+            let (status, _, body) =
+                response_parts(get(app.clone(), "acme-thread-1", key).await).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{key}");
+            assert!(!body.contains(INJECTED_TEXT), "{key}: {body}");
+        }
+        let admin_response = get(app, "acme-thread-1", "admin-key").await;
+        assert_eq!(admin_response.status(), StatusCode::OK);
     }
 
     #[tokio::test]

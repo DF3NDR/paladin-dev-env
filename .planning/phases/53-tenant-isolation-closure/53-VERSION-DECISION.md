@@ -55,3 +55,80 @@ is red.
 
 - **coverage:** CI `Coverage` job (`cargo llvm-cov --fail-under-lines`, 82 % workspace floor, ADR-0006). `cargo-llvm-cov` is
   not installed in this environment, so this is CI-only evidence and is not claimed locally.
+
+The sweep head is `4ef9ddd2a`. The commits made after it by this plan (`ff5b1167d` evidence section, `f2a906543`
+STATE/ROADMAP/MIGRATION edits) change only `.planning/` files and one sentence in `MIGRATION.md` section 11's intro;
+`make check-migration-allowlist` was re-run on `f2a906543` and is green (same two result lines as above).
+
+## Decision
+
+**Decision (2026-10-31): the milestone stays `v0.11.1` (patch). Every Phase 53 change is additive.**
+
+Reason, each point measured above or below:
+
+1. No change is registered in `MIGRATION.md` section 11.2: the table is header-only.
+2. `.cargo/semver-checks-allowlist.toml` holds zero `[[entry]]` tables.
+3. `Semver Checks (vs v0.11.0)` reproduced locally at `--release-type patch` reads `223 checks: 223 pass, 31 skip` for all
+   twelve published packages with `0 failure(s)` (see `## Semver evidence`; head `4ef9ddd2a`).
+4. `make api-surface` reports `API surface unchanged` and the other five gates are green (`## Gate sweep`).
+
+No persisted or public-surface break was forced by the security fixes, so D-02's `v0.12.0` branch does not apply and no
+human decision on a deliberate break is needed. The decision is taken in Phase 53, before Phase 58 opens, and is mirrored in
+`.planning/STATE.md` (`### Decisions`), `.planning/ROADMAP.md` (milestone row and the Phase 53 entry) and `MIGRATION.md`
+section 11's intro. Phase 58's pre-tag audit should re-run `scripts/check-semver.sh` on its own head and compare it with
+this record rather than rely on it: Phases 54 to 57 can still add public items, and a `#[deprecated]` attribute or an enum
+or signature change in any of them would turn a line red at patch level.
+
+## Register state
+
+`MIGRATION.md` section 11.2 as of head `f2a906543` (header and separator only, no data row):
+
+```
+| Crate | Type / Trait | Change | Mitigation | Deliberate-breaking? | Req |
+|---|---|---|---|---|---|
+```
+
+- `.cargo/semver-checks-allowlist.toml`: `[[entry]]` count `0` (header comment `EMPTY AS OF PHASE 52`).
+- `make check-migration-allowlist` on `f2a906543` (exit 0): `Allowlist is set-equal to the MIGRATION.md §11.2
+  deliberate-breaking register (crate|type pairs).` and `Every crate-wide cargo-semver-checks allow is mirrored by an
+  allowlist entry (crate|lint pairs).`
+- `MIGRATION.md` sections 9 and 10 were not touched by this plan.
+
+## Behavioral changes (not breaks)
+
+These are HTTP, boot and configuration behavior changes recorded in `MIGRATION.md` sections 11.1, 11.5, 11.6 and 11.8.
+None changes a Rust signature, a type or a serialized schema, so none is a section 11.2 break and none appears in the
+allowlist.
+
+| Id | Plan | Requirement | Behavioral change |
+|---|---|---|---|
+| `M-B-23` | 53-02 | TENANT-06 | An unreadable (`Serialization`) run row on the run id routes is the missing-run `404` for a non-admin and the fixed `run store error` 500 for an Admin. |
+| `M-B-24` | 53-03 | TENANT-03, TENANT-06 | `/v1/threads/{id}*` routes hide a foreign tenant's thread behind the missing-thread `404` (was `200` on reads, `403` on resume and delete); a thread belongs to its latest run's tenant. |
+| `M-B-25` | 53-04 | TENANT-03 | `GET /v1/threads` lists only the caller's tenant's threads; a page may be short (even empty) while `next_cursor` is set. |
+| `M-B-26` | 53-05 | TENANT-07 | `GET /v1/agents/{id}/jobs/{job_id}` answers `404 unknown job` to another tenant and to a wrong agent id (was `200`); legacy unowned jobs are Admin-only. |
+| `M-B-27` | 53-06 | TENANT-08 | A configured Treasurer with no engine factory on the run worker pool refuses to boot (`paladin-server` as shipped is unaffected). |
+| `M-B-28` | 53-06 | TENANT-10 | Boot logs one advisory `warn!` listing schedules with `NULL created_by`; boot is never blocked and nothing is backfilled. |
+| 11.5 entry | 53-06 | TENANT-09 | Reserved literals (`open-access`, `unattributed`, `anonymous` as key names; `open-access`, `unattributed` as tenants) are refused at config load. |
+
+## Deviations
+
+- **`get_job` is not marked `#[deprecated]` (PD-05-1, plan 53-05).** The orchestrator's option was to deprecate the
+  superseded unscoped `paladin_web::agent_controller::get_job`. Measured on 2026-10-31 in planning: one `#[deprecated]` on a
+  `pub fn` printed `223 checks: 222 pass, 1 fail, 0 warn, 31 skip` with `--- failure function_marked_deprecated ---`
+  (`semver requires new minor version`, exit 100), whereas added inherent methods, `pub` consts, structs and free
+  functions printed `223 checks: 223 pass, 31 skip`. The attribute would have forced either an allowlist entry or `v0.12.0`,
+  so D-02's "reshape to additive first" applied: `get_job` keeps its signature, body and `#[utoipa::path]`, is unrouted, and
+  the supersession is stated in its rustdoc and `MIGRATION.md` section 11.7. The phase-head line for the package that owns
+  it is `semver: paladin-web: 223 checks: 223 pass, 31 skip`. The attribute is deferred to the next minor
+  (`#[deprecated(note = "use get_job_scoped")]` plus its section 11.2 / 11.7 handling then).
+- **Known test failures carried through the sweep.** `cargo test --workspace` is not fully green on the head: the two
+  network-bound `run_api_wiring::tests::build_run_api_persists_*` tests fail as they did before this phase (TESTS-01,
+  Phase 55). They are recorded, not fixed, skipped or deleted.
+- **Coverage not measured locally.** `cargo-llvm-cov` is not installed here; the 82 % floor is CI's `Coverage` job.
+- **Two measurement retries.** Two earlier executors of this plan stopped on red gates that were then repaired on the
+  phase branch (`ef86cb46a`: six intra-doc links to the private `load_visible_thread`; `4ef9ddd2a`: the regenerated
+  `crates/paladin-web/openapi.json` baseline, six description strings, no path, schema or operationId change). Nothing
+  from those attempts is reused: every line above was re-measured on `4ef9ddd2a`.
+- **Commit order.** The plan wants this file's commit to be the last of the phase. The executor protocol then adds one
+  metadata commit (this plan's SUMMARY, STATE position and ROADMAP progress); that commit contains no code and does not
+  alter this decision.

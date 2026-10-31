@@ -382,7 +382,7 @@ Plans:
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
-- [ ] 53-08-PLAN.md — Phase-head gate sweep and twelve-package patch-level semver evidence; `53-VERSION-DECISION.md` recorded last (SC5)
+- [x] 53-08-PLAN.md — Phase-head gate sweep and twelve-package patch-level semver evidence; `53-VERSION-DECISION.md` recorded last (SC5)
 
 **Scope notes**:
 

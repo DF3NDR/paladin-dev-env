@@ -5,12 +5,12 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 54
 current_phase_name: First-Run Usability
 status: planning
-stopped_at: Completed 53-08-PLAN.md
-last_updated: "2026-10-31T18:04:48.427Z"
+stopped_at: Phase 54 context gathered
+last_updated: "2026-10-31T22:32:25.083Z"
 last_activity: 2026-10-31
 last_activity_desc: Phase 53 complete, transitioned to Phase 54
 progress:
-  total_phases: 2
+  total_phases: 3
   completed_phases: 2
   total_plans: 16
   completed_plans: 16
@@ -731,7 +731,9 @@ Four pending todos were acknowledged as deferred at the v0.11.0 close (see *Defe
   transfers to whoever submitted the latest run, including an Admin fork or an unattributed schedule run
   (row 87). Proposed owner Phase 55 (correctness fixes); `open_count` is now 16, and the `v0.11.1` exit
   criterion needs 0, so Phase 55 or Phase 57 must fix or waive them.
-- **Phase 53 work is on `claude/laughing-dirac-e0h2ax`, not yet merged to `main`.**
+- ~~**Phase 53 work is on `claude/laughing-dirac-e0h2ax`, not yet merged to `main`.**~~ — **merged by the
+  maintainer** (PR #62, merge commit `8b23cb4c5` on `main`, 2026-10-31); the branch was restarted from that
+  merge for Phase 54.
 
 **Phase 52 close (2026-10-30, 52-VERIFICATION `passed` 5/5, 52-UAT 3/3, 52-SECURITY 0 open):**
 
@@ -1057,16 +1059,16 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-10-31T18:10:00.000Z
-Stopped at: Phase 53 complete, ready to plan Phase 54
-Resume file: None
+Last session: 2026-10-31T22:32:24.387Z
+Stopped at: Phase 54 context gathered
+Resume file: .planning/phases/54-first-run-usability/54-CONTEXT.md
 
 ## Operator Next Steps
 
 - **Phase 53 is complete (2026-10-31):** verification `passed`, UAT 2/2, security 0 open, ADR-0063 minted,
   `v0.11.1` stays a patch. Review warnings WR-01…03 are open WINDOWS rows 85-87 for a later phase. The work
-  is on `claude/laughing-dirac-e0h2ax` (not yet on `main`). Next: `/clear` then `/gsd-discuss-phase 54`
-  (First-Run Usability).
+  merged to `main` (PR #62, `8b23cb4c5`, 2026-10-31). Phase 54 context gathered 2026-10-31
+  (`54-CONTEXT.md`); next: `/gsd-plan-phase 54`.
 
 - **Phase 52 is complete (2026-10-30):** verification `passed`, UAT 3/3, security 0 open. PR #61 is merged
   (`84686acfb` on `main`, 2026-10-30); the one maintainer act still ahead is the `v0.11.1` tag in Phase 58. Next: `/clear` then `/gsd-discuss-phase 53` (Tenant Isolation Closure — verify Phase 40's

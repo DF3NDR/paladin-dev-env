@@ -79,7 +79,11 @@
 //!    (`every_run_id_route_hides_foreign_runs_behind_the_missing_run_404`)
 //!    reads the `/runs/{run_id}*` operations from this router's own OpenAPI
 //!    document and fails if any of them is not in its table, so a future
-//!    route cannot skip the gate unnoticed.
+//!    route cannot skip the gate unnoticed. A run row the store cannot read
+//!    (`RunRepositoryError::Serialization`) answers a non-admin the same
+//!    missing-run `404` and an Admin the fixed `500 "run store error"`,
+//!    through `run_repo_error_for_scope` (TENANT-06, D-09); the detail is
+//!    logged and never rendered.
 //!
 //! `RunResponse::submitted_by` exposes the recorded tenant and API key name
 //! (never the key value, never the role; `null` when no principal was
@@ -1581,6 +1585,10 @@ mod tests {
         /// this text -- proves the handlers never echo raw repository text to the
         /// client (WR-03/WR-04).
         fail_reads_with: Mutex<Option<String>>,
+        /// When `Some`, `get` fails with a `Backend` (outage-class) error carrying this
+        /// text -- proves a non-`Serialization` error stays the fixed `500` for every role
+        /// rather than becoming an existence signal (D-09, T-53-09).
+        fail_get_with_backend: Mutex<Option<String>>,
     }
 
     impl MockRepository {
@@ -1591,12 +1599,30 @@ mod tests {
             }
         }
 
+        /// `get` fails with `RunRepositoryError::Backend` (`list` is unaffected).
+        fn failing_reads_with_backend(message: &str) -> Self {
+            Self {
+                fail_get_with_backend: Mutex::new(Some(message.to_string())),
+                ..Self::default()
+            }
+        }
+
         fn read_failure(&self) -> Option<RunRepositoryError> {
             self.fail_reads_with
                 .lock()
                 .unwrap()
                 .clone()
                 .map(|message| RunRepositoryError::Serialization { message })
+        }
+
+        fn backend_get_failure(&self) -> Option<RunRepositoryError> {
+            self.fail_get_with_backend
+                .lock()
+                .unwrap()
+                .clone()
+                .map(|message| RunRepositoryError::Backend {
+                    source: message.into(),
+                })
         }
 
         fn seed(&self, run: Run) {
@@ -1624,6 +1650,9 @@ mod tests {
 
         async fn get(&self, run_id: &RunId) -> Result<Option<Run>, RunRepositoryError> {
             if let Some(err) = self.read_failure() {
+                return Err(err);
+            }
+            if let Some(err) = self.backend_get_failure() {
                 return Err(err);
             }
             Ok(self.runs.lock().unwrap().get(run_id.as_str()).cloned())
@@ -3408,6 +3437,194 @@ mod tests {
                 "RunSubmissionPort::cancel must be reached only by the owner, the same-tenant \
                  peer and the Admin -- never by the foreign key (D-13, T-40-19)"
             );
+        }
+
+        // --- Unreadable rows (Phase 53, plan 53-02, TENANT-06, D-09) ---
+
+        /// A failing-read and an empty-healthy router over the same state shape the matrix
+        /// uses (recording cancel port, event stream, webhook deliveries, four-key auth),
+        /// plus the recording cancel double of the failing router.
+        fn failing_and_healthy_routers(
+            failing: Arc<MockRepository>,
+        ) -> (
+            axum::Router,
+            axum::Router,
+            utoipa::openapi::OpenApi,
+            Arc<RecordingCancelPort>,
+        ) {
+            let cancel_port = Arc::new(RecordingCancelPort {
+                cancel_callers: Mutex::new(Vec::new()),
+            });
+            let build = |repository: Arc<MockRepository>, submission: Arc<RecordingCancelPort>| {
+                versioned_run_parts(
+                    RunApiState::new()
+                        .with_submission(submission as Arc<dyn RunSubmissionPort>)
+                        .with_repository(repository)
+                        .with_run_events(Arc::new(MockRunEventStreamPort { events: Vec::new() }))
+                        .with_webhook_deliveries(Arc::new(MockWebhookDeliveries::default()))
+                        .with_auth(tenant_auth_config()),
+                )
+            };
+            let (failing_app, api) = build(failing, Arc::clone(&cancel_port));
+            let (healthy_app, _) = build(
+                Arc::new(MockRepository::default()),
+                Arc::new(RecordingCancelPort {
+                    cancel_callers: Mutex::new(Vec::new()),
+                }),
+            );
+            (failing_app, healthy_app, api, cancel_port)
+        }
+
+        /// AC-09 / AC-10 on the WHOLE `/v1/runs/{run_id}*` route set, read from the router's
+        /// own OpenAPI document: for every operation a `Serialization` error from
+        /// `RunRepositoryPort::get` is, for a non-admin, byte-identical (status, every
+        /// header, body bytes) to the same route's missing-run 404 for the same id, and for
+        /// an Admin a `500` whose message is exactly `run store error`; no body ever carries
+        /// the injected repository text and the cancel port is never reached.
+        #[tokio::test]
+        async fn serialization_on_every_run_id_route_is_hidden_for_tenant_and_redacted_for_admin() {
+            let (failing_app, healthy_app, api, cancel_port) = failing_and_healthy_routers(
+                Arc::new(MockRepository::failing_reads(LEAKY_REPO_TEXT)),
+            );
+
+            let operations = published_run_id_operations(&api);
+            assert_eq!(
+                operations.len(),
+                4,
+                "expected exactly the four /v1/runs/{{run_id}}* operations, got {operations:?}"
+            );
+
+            for (method, template) in operations {
+                let uri = template.replace("{run_id}", &RunId::new_v7().to_string());
+
+                for key in ["owner-key", "foreign-key"] {
+                    let hidden =
+                        capture(send_as(&failing_app, &method, uri.clone(), key).await).await;
+                    let missing =
+                        capture(send_as(&healthy_app, &method, uri.clone(), key).await).await;
+                    assert_eq!(
+                        hidden.0,
+                        StatusCode::NOT_FOUND,
+                        "{method} {template} as {key}: an unreadable row must be the missing-run 404"
+                    );
+                    assert_eq!(
+                        hidden, missing,
+                        "{method} {template} as {key}: an unreadable row must be byte-identical \
+                         to the missing-run 404 (status, headers, body)"
+                    );
+                    let text = String::from_utf8_lossy(&hidden.2);
+                    assert!(
+                        !text.contains("db.internal")
+                            && !text.contains("attribution is incomplete"),
+                        "{method} {template} as {key}: body leaked repository text: {text}"
+                    );
+                }
+
+                let admin = send_as(&failing_app, &method, uri.clone(), "admin-key").await;
+                assert_eq!(
+                    admin.status(),
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "{method} {template} as an Admin must be the fixed 500"
+                );
+                let text = read_response_body(admin).await;
+                let body: serde_json::Value = serde_json::from_str(&text).expect("json body");
+                assert_eq!(body["error"]["code"], "internal");
+                assert_eq!(
+                    body["error"]["message"], "run store error",
+                    "{method} {template}: the Admin message is the ASCII constant"
+                );
+                assert!(
+                    !text.contains("db.internal") && !text.contains("attribution is incomplete"),
+                    "{method} {template} as an Admin: body leaked repository text: {text}"
+                );
+            }
+
+            assert!(
+                cancel_port.cancel_callers.lock().unwrap().is_empty(),
+                "an unreadable row must never reach RunSubmissionPort::cancel"
+            );
+        }
+
+        /// D-09: `GET /v1/runs` is a list -- there is no single object to hide -- so a
+        /// `Serialization` error stays the fixed `500 "run store error"` for a non-admin
+        /// and an Admin alike.
+        #[tokio::test]
+        async fn run_list_serialization_stays_a_fixed_500_for_every_role() {
+            let (failing_app, _, _, _) = failing_and_healthy_routers(Arc::new(
+                MockRepository::failing_reads(LEAKY_REPO_TEXT),
+            ));
+
+            for key in ["foreign-key", "admin-key"] {
+                let response = send_as(&failing_app, "GET", "/v1/runs".to_string(), key).await;
+                assert_eq!(
+                    response.status(),
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "{key}"
+                );
+                let text = read_response_body(response).await;
+                let body: serde_json::Value = serde_json::from_str(&text).expect("json body");
+                assert_eq!(body["error"]["message"], "run store error", "{key}");
+                assert!(
+                    !text.contains("db.internal") && !text.contains("attribution is incomplete"),
+                    "{key}: list body leaked repository text: {text}"
+                );
+            }
+        }
+
+        /// D-09, T-53-09: only `Serialization` is hideable. A `Backend` (outage-class) error
+        /// stays the fixed `500` for a non-admin -- never a 404 -- so a store outage says
+        /// nothing about a specific id.
+        #[tokio::test]
+        async fn run_backend_error_stays_a_fixed_500_for_a_tenant() {
+            let (failing_app, _, _, _) = failing_and_healthy_routers(Arc::new(
+                MockRepository::failing_reads_with_backend(LEAKY_REPO_TEXT),
+            ));
+            let uri = format!("/v1/runs/{}", RunId::new_v7());
+
+            for key in ["foreign-key", "admin-key"] {
+                let response = send_as(&failing_app, "GET", uri.clone(), key).await;
+                assert_eq!(
+                    response.status(),
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "{key}"
+                );
+                let text = read_response_body(response).await;
+                let body: serde_json::Value = serde_json::from_str(&text).expect("json body");
+                assert_eq!(body["error"]["code"], "internal", "{key}");
+                assert_eq!(body["error"]["message"], "run store error", "{key}");
+                assert!(
+                    !text.contains("db.internal") && !text.contains("attribution is incomplete"),
+                    "{key}: body leaked repository text: {text}"
+                );
+            }
+        }
+
+        /// AC-11 (ADR-0054 rule 3): a valid run with no recorded principal is hidden from a
+        /// non-admin as the missing-run 404 and visible to an Admin.
+        #[tokio::test]
+        async fn unattributed_valid_run_is_hidden_from_tenant_and_visible_to_admin() {
+            let repository = Arc::new(MockRepository::default());
+            let run = sample_run("t-unattributed");
+            assert!(
+                run.submitted_by.is_none(),
+                "the fixture must be unattributed"
+            );
+            let run_id = run.run_id.clone();
+            repository.seed(run);
+            let (seeded_app, healthy_app, _, _) = failing_and_healthy_routers(repository);
+            let uri = format!("/v1/runs/{run_id}");
+
+            let hidden = capture(send_as(&seeded_app, "GET", uri.clone(), "owner-key").await).await;
+            let missing =
+                capture(send_as(&healthy_app, "GET", uri.clone(), "owner-key").await).await;
+            assert_eq!(hidden.0, StatusCode::NOT_FOUND);
+            assert_eq!(
+                hidden, missing,
+                "an unattributed run must be byte-identical to the missing-run 404 for a non-admin"
+            );
+
+            let admin = send_as(&seeded_app, "GET", uri, "admin-key").await;
+            assert_eq!(admin.status(), StatusCode::OK);
         }
 
         // --- RunResponse.submitted_by (Phase 40, 40-05, D-19, TENANT-02) ---

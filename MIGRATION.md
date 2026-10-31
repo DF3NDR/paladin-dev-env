@@ -8,7 +8,9 @@ v0.11.1 is the Dogfood Cleanup release (milestone opened 2026-10-27, Phases 52 t
 
 ## 11.1 Behavioral changes (user-visible without code changes)
 
-No behavioral change is recorded since `v0.11.0`. A later v0.11.1 change of this kind adds its entry here in the same commit.
+| ID | Change | Who is affected | Required user action |
+|---|---|---|---|
+| M-B-23 | **Unreadable run rows are hidden from non-admin principals (TENANT-06, Phase 53 plan 53-02, D-09).** When the run store cannot read a run row as a `Run` (a corrupt or half-attributed row, reported by the repository as a `Serialization` error), `GET /v1/runs/{run_id}`, `GET /v1/runs/{run_id}/stream`, `GET /v1/runs/{run_id}/webhook-deliveries` and `POST /v1/runs/{run_id}/cancel` now answer a non-admin principal the same `404 not_found` as a missing run (byte-identical status, headers and body) instead of `500`, so a tenant can no longer learn that an unreadable row exists under an id. An Admin still receives `500` with the fixed message `run store error`. Every other repository error (an outage, a state error) stays the fixed `500 run store error` for every role, and `GET /v1/runs` (a list, with no single object to hide) keeps the fixed `500` for every role. The repository detail is written to the server log at `error` level and never to a response body. | HTTP clients that authenticate with user-role API keys and treated a `500` on these routes as a signal to retry or alert; operators who watched for that `500` (the detail now appears in the server log, still at `error`). | None required. A client that handled `500` from these routes for a non-admin key now sees `404`; operators find the unreadable row in the server log. |
 
 ## 11.2 Rust API changes (compile-affecting; the X-10 register)
 
@@ -35,7 +37,14 @@ No configuration or environment change is recorded since `v0.11.0`. A later v0.1
 
 ## 11.6 HTTP API
 
-No HTTP API change is recorded since `v0.11.0`. A later v0.11.1 change of this kind adds its entry here in the same commit.
+**Unreadable run rows answer a non-admin the missing-run `404` -- landed Phase 53 (plan 53-02), TENANT-06, D-09 (`M-B-23`, section 11.1).**
+On `GET /v1/runs/{run_id}`, `GET /v1/runs/{run_id}/stream`, `GET /v1/runs/{run_id}/webhook-deliveries`
+and `POST /v1/runs/{run_id}/cancel`, a run row the store cannot read (a `Serialization` error from the
+repository) now returns a user-role principal the same `404 not_found` a missing run returns, with
+identical status, headers and body, where v0.11.0 returned `500`. An admin-role principal still gets
+`500` with the message `run store error`. No other status, code or response shape changes, and
+`GET /v1/runs` keeps its fixed `500` for every role. The OpenAPI document is unchanged: the `404`
+and `500` responses were already published on these operations.
 
 ## 11.7 Deprecations
 

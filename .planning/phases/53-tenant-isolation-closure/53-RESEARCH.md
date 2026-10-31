@@ -465,8 +465,7 @@ pub fn get_visible(&self, id: &str, agent_id: &str, scope: &RunReadScope) -> Opt
 | A5 | "Schedule store exists" in D-14 means run store enabled, regardless of `schedules.enabled` | Pitfall 11 | Operators with `schedules.enabled: false` may see a warning for rows that do not fire |
 | A6 | Local root-crate tests cannot run until disk space is freed; CI will run them | Environment Availability | Plans that gate on local root-crate runs would stall |
 
-## Open Questions
-
+## Open Questions (RESOLVED)
 1. **`get_job` signature vs the additive-only rule (blocks D-11 and D-02).**
    - What we know: any added extractor parameter is a major semver break; D-11 assumed `JobRecord` was the only public surface.
    - What's unclear: whether the owner prefers (a) additive `get_job_scoped` + deprecated unscoped `get_job` (milestone stays `v0.11.1`, one `#[deprecated]` entry in §11.7), (b) a route-layer gate with `get_job` untouched, or (c) the deliberate break (`MIGRATION.md` §11.2 row, mirrored allowlist entry, milestone `v0.12.0`).
@@ -475,6 +474,13 @@ pub fn get_visible(&self, id: &str, agent_id: &str, scope: &RunReadScope) -> Opt
 3. **Scan gate: run store enabled vs `schedules.enabled`** (Pitfall 11). Recommendation: follow D-14 literally.
 4. **Thread-route error text constant.** Reuse `"run store error"` or a new `"thread store error"`. Recommendation: a new constant naming the thread store; the SPEC fixes the run constant only.
 5. **`53-VERSION-DECISION.md` timing.** It needs the CI `Semver Checks (vs v0.11.0)` line from the phase PR head, which cannot be produced locally while the disk is full. The final plan needs a checkpoint that waits for the PR job (or a local run once disk is freed).
+
+**Resolutions (plan-phase, 2026-10-31, orchestrator under --auto):**
+1. RESOLVED → 53-05: `get_job` keeps its signature and body and is unrouted; additive `get_job_scoped` serves the route; deprecation in rustdoc and MIGRATION §11.7 only (a `#[deprecated]` attribute fails the patch gate, `function_marked_deprecated`); milestone stays `v0.11.1`.
+2. RESOLVED → 53-04: a foreign thread whose latest-run lookup hits `Serialization` is skipped and logged for a `Tenant` scope; other errors stay the fixed `500`.
+3. RESOLVED → 53-06: the scan runs whenever the schedule store exists (D-14 literal), regardless of `schedules.enabled`.
+4. RESOLVED → 53-03: waypoint-store failures render the new `"thread store error"` constant; run-repository failures keep `"run store error"` (AC-09).
+5. RESOLVED → 53-08: local semver reproduction for the twelve packages first (disk freed 2026-10-31); the PR job line is the fallback behind a checkpoint; `53-VERSION-DECISION.md` is the last artifact.
 
 ## Environment Availability
 

@@ -4,7 +4,7 @@
 
 # 11. Upgrading from v0.11.0 to v0.11.1
 
-v0.11.1 is the Dogfood Cleanup release (milestone opened 2026-10-27, Phases 52 to 58): it closes the security, correctness, release-process and first-run gaps v0.11.0 left behind, with no new features. It is a patch release unless a security fix forces a minor bump, which is decided at Phase 53's decision point. This part starts empty and records only what a consumer or operator moving from the published `v0.11.0` to `v0.11.1` must act on; each later v0.11.1 change adds its entry to the matching section below in the same commit as the change.
+v0.11.1 is the Dogfood Cleanup release (milestone opened 2026-10-27, Phases 52 to 58): it closes the security, correctness, release-process and first-run gaps v0.11.0 left behind, with no new features. It is a patch release: Phase 53 decided `v0.11.1` on 2026-10-31 because every change is additive (the `Semver Checks (vs v0.11.0)` script reports no failure at `--release-type patch` for all twelve published packages, section 11.2 has no row and the allowlist has no entry; see `.planning/phases/53-tenant-isolation-closure/53-VERSION-DECISION.md`). This part starts empty and records only what a consumer or operator moving from the published `v0.11.0` to `v0.11.1` must act on; each later v0.11.1 change adds its entry to the matching section below in the same commit as the change.
 
 ## 11.1 Behavioral changes (user-visible without code changes)
 

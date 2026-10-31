@@ -6,7 +6,7 @@ current_phase: 53
 current_phase_name: Tenant Isolation Closure
 status: executing
 stopped_at: Completed 53-07-PLAN.md
-last_updated: "2026-10-31T14:21:34.125Z"
+last_updated: "2026-10-31T15:16:58.057Z"
 last_activity: 2026-10-31
 last_activity_desc: Phase 53 execution started
 progress:
@@ -695,6 +695,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: Phase 53-06: schedule creator scan runs whenever the schedule repository exists, is read-only and advisory, emits at most one warn and one error
 - [Phase ?]: Phase 53-06: reserved literals open-access/unattributed (key name, key tenant, bearer tenant) and anonymous (key name) are refused at config load, exact and case-sensitive
 - [Phase ?]: ADR-0063 (Phase 53-07): threads belong to the tenant of their latest run, jobs to their enqueuing agent id and tenant; amends ADR-0054; get_job #[deprecated] deferred to next minor
+- [Phase ?]: Phase 53-08 (2026-10-31): v0.11.1 patch decided, every change additive. Evidence: local reproduction of Semver Checks (vs v0.11.0) with scripts/check-semver.sh at --release-type patch on head 4ef9ddd2a, 223 checks: 223 pass, 31 skip for all twelve packages, 0 failure(s); MIGRATION.md 11.2 has no row, allowlist has no entry. Recorded in .planning/phases/53-tenant-isolation-closure/53-VERSION-DECISION.md
 
 ### Pending Todos
 

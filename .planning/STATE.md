@@ -5,15 +5,15 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 53
 current_phase_name: Tenant Isolation Closure
 status: executing
-stopped_at: Phase 53 context gathered
-last_updated: "2026-10-31T01:58:14.818Z"
+stopped_at: Completed 53-01-PLAN.md
+last_updated: "2026-10-31T02:09:27.821Z"
 last_activity: 2026-10-31
 last_activity_desc: Phase 53 execution started
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 16
-  completed_plans: 8
+  completed_plans: 9
 ---
 
 # Project State
@@ -51,11 +51,11 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 ## Current Position
 
 Phase: 53 (Tenant Isolation Closure) — EXECUTING
-Plan: 1 of 8
-Status: Executing Phase 53
+Plan: 2 of 8
+Status: Ready to execute
 Last activity: 2026-10-31 — Phase 53 execution started
 
-Progress: [███░░░░░░░░░░░░░░░░░] 1/7 phases (14%) — Phase 52 plans [████████████████████] 8/8 (100%)
+Progress: [███░░░░░░░░░░░░░░░░░] 1/7 phases ([██████░░░░] 56%) — Phase 52 plans [████████████████████] 8/8 (100%)
 
 ## Performance Metrics
 
@@ -363,6 +363,7 @@ Progress: [███░░░░░░░░░░░░░░░░░] 1/7 pha
 | Phase 52 P06 | 35min | 3 tasks | 7 files |
 | Phase 52 P07 | 70min | 3 tasks | 1 files |
 | Phase 52 P08 | about 19h wall clock (3 sessions) | 3 tasks | 3 files |
+| Phase 53 P01 | 10min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -678,6 +679,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 52]: 52-07: semver red proof via leaf-crate cron_field_count pub->pub(crate); local RED-PROVEN (222 pass/1 fail, function_missing); CI red job capture and remote scratch-branch delete handed over as H-03 (gh pr create refused, GraphQL 403)
 - [Phase ?]: 52-08: PD-06-1 confirmed by the maintainer; Semver Checks (vs v0.11.0) is a required check, live ruleset 20868126 carries 46 contexts equal to the committed record
 - [Phase ?]: 52-08: H-06 local make coverage deferred to the maintainer (Docker-capable machine); todo stays pending, resolves_phase 56, no coverage gate changed
+- [Phase ?]: 53-01: RunReadScope::permits_thread is the one thread-owner rule (latest run by submitted_at, run_id tiebreak); ensure_thread_visible calls it only with Some(&latest) so thread birth stays open
 
 ### Pending Todos
 
@@ -1025,9 +1027,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-10-30T23:37:36.805Z
-Stopped at: Phase 53 context gathered
-Resume file: .planning/phases/53-tenant-isolation-closure/53-CONTEXT.md
+Last session: 2026-10-31T02:09:27.804Z
+Stopped at: Completed 53-01-PLAN.md
+Resume file: None
 
 ## Operator Next Steps
 

@@ -72,11 +72,11 @@ fails is rebuilt.*
       a principal of another tenant gets 404 and cannot enumerate or read another tenant's threads or
       Waypoint state — A1, WINDOWS row 58
 
-- [ ] **TENANT-04**: `POST /v1/runs {thread_id}` and `POST /v1/threads/{id}/fork` refuse a thread
+- [x] **TENANT-04**: `POST /v1/runs {thread_id}` and `POST /v1/threads/{id}/fork` refuse a thread
       owned by another tenant (hidden == missing), so a user-role principal cannot run against or
       mutate it — A2, 40-REVIEW WR-01
 
-- [ ] **TENANT-05**: `RunSubmissionService::cancel` enforces the tenant at the service layer (not
+- [x] **TENANT-05**: `RunSubmissionService::cancel` enforces the tenant at the service layer (not
       only in the HTTP controller), so library and future-route callers cannot bypass it — A3, WR-02
 
 - [ ] **TENANT-06**: A corrupt or half-attributed run row, and any `Serialization` error, surfaces
@@ -315,8 +315,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CIREL-08 | Phase 55 | Pending |
 | CIREL-09 | Phase 52 | Complete |
 | TENANT-03 | Phase 53 | Pending |
-| TENANT-04 | Phase 53 | Pending |
-| TENANT-05 | Phase 53 | Pending |
+| TENANT-04 | Phase 53 | Complete |
+| TENANT-05 | Phase 53 | Complete |
 | TENANT-06 | Phase 53 | Pending |
 | TENANT-07 | Phase 53 | Pending |
 | TENANT-08 | Phase 53 | Pending |

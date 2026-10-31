@@ -29,7 +29,7 @@ unversioned.
 | `POST /v1/agents/{id}/execute` | Run an agent, return the full result as JSON |
 | `POST /v1/agents/{id}/execute/stream` | Run an agent, stream tokens as SSE (`chunk` … `done`) |
 | `POST /v1/agents/{id}/jobs` | Enqueue an async run; returns a `job_id` |
-| `GET /v1/agents/{id}/jobs/{job_id}` | Poll a job (`running` → `completed`/`failed`/`timed_out`) |
+| `GET /v1/agents/{id}/jobs/{job_id}` | Poll a job (`running` → `completed`/`failed`/`timed_out`); answers only the tenant that enqueued it, under the agent id it was enqueued on (or an admin key), else the same `404` as an unknown job |
 | `GET /v1/agents` · `GET /v1/agents/{id}` | Discover registered agents |
 | `POST /v1/agents` · `DELETE /v1/agents/{id}` | Register / deregister at runtime (**admin**) |
 | `GET /health` · `GET /ready` | Liveness / readiness probes (unauthenticated) |
@@ -114,7 +114,9 @@ tenant, and read access follows that attribution — `GET /runs` and every `/run
 route (`GET`, `/stream`, `/cancel`, `/webhook-deliveries`) show a `user`-role key only its own
 tenant's runs, while an `admin`-role key sees every run, including runs recorded without a
 principal. Another tenant's run answers the same `404` as a run that does not exist — never a
-`403`, so a caller cannot learn that a foreign run is there. With `http.auth.enabled: false`,
+`403`, so a caller cannot learn that a foreign run is there. The `/threads` routes follow the
+same rule through each thread's latest run (a thread with no run is visible to `admin` keys
+only). With `http.auth.enabled: false`,
 every request is an `admin` principal in the `open-access` tenant, which is why open mode keeps
 its deployment-wide read behaviour.
 

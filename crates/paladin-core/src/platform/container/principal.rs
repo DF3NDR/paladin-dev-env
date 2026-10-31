@@ -18,12 +18,15 @@
 //! (`crate::platform::container::treasury_ledger::LedgerScope`) are deliberately different
 //! literals: `"open-access"` names a principal that exists when auth is disabled (an Admin,
 //! by the D-11 rule, sees every run); `"unattributed"` names the absence of any principal on
-//! a ledger row. Never conflate the two.
+//! a ledger row. Never conflate the two. [`RESERVED_PRINCIPAL_LITERALS`] and
+//! [`RESERVED_KEY_NAME_LITERALS`] collect the literals a configuration may not take for a key
+//! name or tenant (TENANT-09).
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::platform::container::run::Run;
+use crate::platform::container::treasury_ledger::LedgerScope;
 use crate::platform::container::user::UserRole;
 
 /// Maximum length, in bytes, of a [`TenantId`].
@@ -31,6 +34,45 @@ use crate::platform::container::user::UserRole;
 /// This is a **byte** limit (`str::len()`, the UTF-8 encoded length). `ThreadId` allows 256;
 /// `TenantId` is bounded to 128 to keep the new `idx_runs_tenant_submitted` index key short.
 pub const TENANT_ID_MAX_LEN: usize = 128;
+
+/// Literals no configured API key name or tenant may take: the two sentinels
+/// [`TenantId::OPEN_ACCESS`] and `LedgerScope::UNATTRIBUTED`.
+///
+/// A configured tenant or key named like a sentinel would be indistinguishable from the open-access
+/// principal or from an unattributed ledger row. Matching is exact and case-sensitive (`Open-Access`
+/// is not reserved). `AuthConfig::validate` in the root crate rejects them at config load, naming
+/// the entry (TENANT-09, Phase 40 IN-01); [`TenantId::new`] itself does not reject them, because
+/// the open-access principal legitimately carries one.
+///
+/// # Examples
+///
+/// ```
+/// use paladin_core::platform::container::principal::{RESERVED_PRINCIPAL_LITERALS, TenantId};
+///
+/// assert!(RESERVED_PRINCIPAL_LITERALS.contains(&"open-access"));
+/// assert!(RESERVED_PRINCIPAL_LITERALS.contains(&"unattributed"));
+/// assert!(!RESERVED_PRINCIPAL_LITERALS.contains(&"Open-Access"));
+/// // The constructor still accepts them: the check lives at config load.
+/// assert!(TenantId::new("open-access").is_ok());
+/// ```
+pub const RESERVED_PRINCIPAL_LITERALS: &[&str] =
+    &[TenantId::OPEN_ACCESS, LedgerScope::UNATTRIBUTED];
+
+/// Literals that may not be an API key *name* in addition to [`RESERVED_PRINCIPAL_LITERALS`]:
+/// `"anonymous"`, the principal id the open-access (auth disabled) principal carries.
+///
+/// Exact and case-sensitive, rejected at config load by `AuthConfig::validate` (TENANT-09).
+/// `paladin-web` owns the matching `OPEN_ACCESS_PRINCIPAL_ID` constant and core cannot import it,
+/// so a root-crate test asserts the two stay equal.
+///
+/// # Examples
+///
+/// ```
+/// use paladin_core::platform::container::principal::RESERVED_KEY_NAME_LITERALS;
+///
+/// assert_eq!(RESERVED_KEY_NAME_LITERALS, &["anonymous"]);
+/// ```
+pub const RESERVED_KEY_NAME_LITERALS: &[&str] = &["anonymous"];
 
 /// Identity of a tenant: a plain identifier (D-00e -- not a Medieval-military officer word)
 /// naming the organization or deployment scope an authenticated principal belongs to.

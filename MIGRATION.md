@@ -38,7 +38,9 @@ No persistence or schema change is recorded since `v0.11.0`. A later v0.11.1 cha
 
 ## 11.5 Configuration & environment
 
-No configuration or environment change is recorded since `v0.11.0`. A later v0.11.1 change of this kind adds its entry here in the same commit.
+- **Reserved principal literals are refused at config load** (TENANT-09, Phase 53 plan 53-06, D-13). `http.auth.api_keys[].name` may not be `open-access`, `unattributed` or `anonymous`, and `http.auth.api_keys[].tenant` and `http.auth.bearer_token.tenant` (when bearer is enabled) may not be `open-access` or `unattributed`. Matching is exact and case-sensitive, so `Open-Access` is accepted. A configuration that uses one now fails at load with a message naming the entry (`http.auth.api_keys[#<index>]`, `http.auth.api_keys[<name>]` or `http.auth.bearer_token`) and never printing the key value. Action: rename the key or the tenant, then update any `treasurer.allowance` entry that names the old key or tenant.
+
+A later v0.11.1 change of this kind adds its entry here in the same commit.
 
 ## 11.6 HTTP API
 

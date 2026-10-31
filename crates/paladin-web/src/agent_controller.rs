@@ -933,7 +933,7 @@ pub async fn get_job_scoped(
 /// It answers any job id to any caller (it neither reads the caller's [`Principal`] nor
 /// checks the agent id), so it does not isolate tenants. It keeps its signature, and its
 /// `#[utoipa::path]` annotation (which generates a public item), but carries no
-/// `#[deprecated]` attribute yet: a patch release cannot add one (see `MIGRATION.md` §11.7).
+/// deprecation attribute yet: a patch release cannot add one (see `MIGRATION.md` §11.7).
 ///
 /// `GET /agents/{id}/jobs/{job_id}` — poll an async job's status and result.
 ///

@@ -250,11 +250,23 @@ A 15-second heartbeat comment line is emitted on **both** paths to defeat idle-p
 
 ## Threads
 
+Every thread route is tenant-scoped, by the same rule as the run routes. A thread belongs to the
+tenant of its **latest run** (newest `submitted_at`); a `user`-role principal sees only its own
+tenant's threads, an `admin`-role key sees every thread, and a thread with no run is visible to
+`admin` keys only. A thread the caller may not see answers the same `404` as a thread that does
+not exist -- never `403`, on every route below, including `resume` and `delete` -- and the tenant
+is derived from the credential alone (no header, query parameter or body field can name one).
+`GET /v1/threads` therefore lists a `user`-role principal only its own tenant's threads: a page
+may hold **fewer than `limit` items while `next_cursor` is still non-null**, because the server
+examines a bounded number of threads per request, so keep paging until `next_cursor` is `null`.
+`GET /v1/threads/{thread_id}/history` of an unknown thread is `404`. The rule is ADR-0063
+(amending ADR-0054); see `MIGRATION.md` section 11.
+
 | Route | Behavior |
 |---|---|
-| `GET /v1/threads?limit=&cursor=` | Paginated thread summaries |
-| `GET /v1/threads/{thread_id}` | A single thread's summary (404 if unknown) |
-| `GET /v1/threads/{thread_id}/history` | Paginated Chronicle history: `?limit=20&cursor=...` (limit ≤ 100), `{ items, next_cursor }` |
+| `GET /v1/threads?limit=&cursor=` | Paginated thread summaries visible to the caller; a page can be shorter than `limit` with a non-null `next_cursor` (page until `null`) |
+| `GET /v1/threads/{thread_id}` | A single thread's summary (404 if unknown or not visible) |
+| `GET /v1/threads/{thread_id}/history` | Paginated Chronicle history: `?limit=20&cursor=...` (limit ≤ 100), `{ items, next_cursor }`; 404 if the thread is unknown or not visible |
 | `GET /v1/threads/{thread_id}/state` | The thread's latest status, plus outstanding `parleys`/`responses` when suspended |
 | `POST /v1/threads/{thread_id}/resume` | `{ "responses": [{ "parley_id", "value", "responded_by" }] }` → `202 { thread_id, state_url, run_id }` |
 | `POST /v1/threads/{thread_id}/fork` | `{ "from_waypoint_id", "edit"? }` → submits a **new** run on the same thread from an earlier Waypoint, with `edit` applied → `202 { run_id, thread_id }`; `409 thread_busy` while a run is active; `429 allowance_exhausted` (with `Retry-After`) while the caller's allowance is exhausted -- see [Resuming a halted run](#resuming-a-halted-run) |
@@ -267,7 +279,7 @@ D-21) lets a caller poll `GET /v1/runs/{run_id}` directly after a resume instead
 fallback behavior unchanged.
 
 > **Never template a secret or credential into a Gate's payload.** `GET /v1/threads/{id}/state`
-> returns that payload verbatim to any authenticated caller.
+> returns that payload verbatim to every caller who may see the thread.
 
 ## Assistants
 
@@ -644,10 +656,10 @@ tenant's run. `RunResponse.submitted_by` shows the recording tenant and API key 
 key value or the role. A client that used to read other principals' runs must use an
 admin-role key.
 
-`/v1/threads/*` reads are **not yet tenant-scoped**: threads carry no tenant, so
-`GET /threads`, `GET /threads/{id}/state` and `GET /threads/{id}/history` remain
-deployment-wide for any authenticated principal. That gap is tracked in the project's
-broken-windows ledger, not implied closed by the run scope above.
+`/v1/threads/*` routes follow the same rule through the thread's latest run: another tenant's
+thread answers the same `404` as a missing one, a thread with no run is visible to `admin` keys
+only, and `GET /threads` lists a `user`-role principal only its own tenant's threads (see
+[Threads](#threads)).
 
 ### Allowance refusals
 

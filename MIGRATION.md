@@ -4,11 +4,18 @@
 
 # 11. Upgrading from v0.11.0 to v0.11.1
 
-v0.11.1 is the Dogfood Cleanup release (milestone opened 2026-10-27, Phases 52 to 58): it closes the security, correctness, release-process and first-run gaps v0.11.0 left behind, with no new features. It is a patch release unless a security fix forces a minor bump, which is decided at Phase 53's decision point. This part starts empty and records only what a consumer or operator moving from the published `v0.11.0` to `v0.11.1` must act on; each later v0.11.1 change adds its entry to the matching section below in the same commit as the change.
+v0.11.1 is the Dogfood Cleanup release (milestone opened 2026-10-27, Phases 52 to 58): it closes the security, correctness, release-process and first-run gaps v0.11.0 left behind, with no new features. It is a patch release: Phase 53 decided `v0.11.1` on 2026-10-31 because every change is additive (the `Semver Checks (vs v0.11.0)` script reports no failure at `--release-type patch` for all twelve published packages, section 11.2 has no row and the allowlist has no entry; see `.planning/phases/53-tenant-isolation-closure/53-VERSION-DECISION.md`). This part starts empty and records only what a consumer or operator moving from the published `v0.11.0` to `v0.11.1` must act on; each later v0.11.1 change adds its entry to the matching section below in the same commit as the change.
 
 ## 11.1 Behavioral changes (user-visible without code changes)
 
-No behavioral change is recorded since `v0.11.0`. A later v0.11.1 change of this kind adds its entry here in the same commit.
+| ID | Change | Who is affected | Required user action |
+|---|---|---|---|
+| M-B-23 | **Unreadable run rows are hidden from non-admin principals (TENANT-06, Phase 53 plan 53-02, D-09).** When the run store cannot read a run row as a `Run` (a corrupt or half-attributed row, reported by the repository as a `Serialization` error), `GET /v1/runs/{run_id}`, `GET /v1/runs/{run_id}/stream`, `GET /v1/runs/{run_id}/webhook-deliveries` and `POST /v1/runs/{run_id}/cancel` now answer a non-admin principal the same `404 not_found` as a missing run (byte-identical status, headers and body) instead of `500`, so a tenant can no longer learn that an unreadable row exists under an id. An Admin still receives `500` with the fixed message `run store error`. Every other repository error (an outage, a state error) stays the fixed `500 run store error` for every role, and `GET /v1/runs` (a list, with no single object to hide) keeps the fixed `500` for every role. The repository detail is written to the server log at `error` level and never to a response body. | HTTP clients that authenticate with user-role API keys and treated a `500` on these routes as a signal to retry or alert; operators who watched for that `500` (the detail now appears in the server log, still at `error`). | None required. A client that handled `500` from these routes for a non-admin key now sees `404`; operators find the unreadable row in the server log. |
+| M-B-24 | **Thread routes are tenant-scoped (TENANT-03, Phase 53 plan 53-03, D-05 to D-07).** A thread belongs to the tenant of its latest run (newest by `submitted_at`, `run_id` as the tiebreak). A user-role principal of another tenant now gets `404 not_found` (was `200`) on `GET /v1/threads/{id}`, `GET /v1/threads/{id}/state`, `GET /v1/threads/{id}/history` and `POST /v1/threads/{id}/fork`, and `404 not_found` (was `403`) on `POST /v1/threads/{id}/resume` and `DELETE /v1/threads/{id}`; the `404` is byte-identical to the response for a thread that does not exist, because the visibility check now runs before the admin check. A thread with no run is visible to an Admin only. A deployment that has a waypoint store but has the run store disabled shows non-admin principals no thread at all, because ownership cannot be established. An Admin is unaffected on every route. | HTTP clients that authenticate with user-role API keys and read, fork, resume or delete threads their tenant did not start; operators running a waypoint store without `run_store.backend`; clients that relied on a `403` from `resume` or `delete` to detect an existing thread. | Use an Admin key for threads that have no run, and enable `run_store.backend` so non-admin keys can see their own threads. A client that handled `403` from `resume` or `delete` for a foreign thread now sees `404`. |
+| M-B-25 | **`GET /v1/threads` is tenant-filtered (TENANT-03, Phase 53 plan 53-04, D-04).** A user-role principal now lists only the threads whose latest run belongs to its tenant; other tenants' threads and threads with no run are omitted (an Admin still lists every thread, and a deployment with a waypoint store but no run store shows a non-admin an empty list). Because the filter is applied after a page is read, a page may now hold fewer than `limit` items, even none, while `next_cursor` is non-null: a request examines at most 500 threads, and the response is `{"items":[],"next_cursor":null}` only when the walk has ended with nothing visible. | HTTP clients that page `GET /v1/threads` with user-role API keys and relied on seeing every thread in the deployment, or that stop paging at the first short or empty page. | Page by cursor: keep requesting with `next_cursor` until it is `null` rather than stopping at a short page. Use an Admin key to list threads that have no run. |
+| M-B-26 | **Job polls are tenant-scoped (TENANT-07, Phase 53 plan 53-05, D-11).** `GET /v1/agents/{id}/jobs/{job_id}` now answers `404 not_found` with the message `unknown job '<job_id>'` (was `200` with the job's status and result) to a user-role principal of another tenant, and to a principal of the owning tenant that polls under a different agent id than the one the job was enqueued under; the `404` is byte-identical to the response for a job id that does not exist or was evicted, so no `403` and no distinct code reveals that a job exists. Any principal of the enqueuing tenant, under the enqueuing agent id, still gets `200`; an Admin still gets `200` for every job under any agent id. The agent id segment of the path is now checked (it was ignored). A job's owner is the `(agent id, tenant)` recorded when `POST /v1/agents/{id}/jobs` accepted it; the tenant is derived from the authenticated principal and never from a header, query parameter or body. Jobs live in memory and are lost on restart, as before. | HTTP clients that share job ids across tenants, or that poll a job under an agent id other than the one that enqueued it (for example a poller that passes a fixed placeholder agent id). | Poll with a key of the enqueuing tenant, under the agent id the job was enqueued under, or use an Admin key. |
+| M-B-27 | **A configured Treasurer without the engine-factory path refuses to boot (TENANT-08, Phase 53 plan 53-06, D-12).** `build_run_api_with_cadence` now stops with `treasurer configured but the run worker pool has no engine factory; settlement, spend guard and cancel probe would not attach` when `treasurer.allowance` has entries but the run worker pool was built without `with_engine_factory`, before any worker is spawned and, in `paladin-server`, before any listener binds. Settlement, the per-run spend guard and the cancel probe attach only through that factory, so such a pool used to boot and enforce nothing. The shipped wiring always installs the factory and is unaffected, as is a deployment with no `treasurer.allowance` entries. There is no configuration switch to bypass the refusal. | Embedders that build their own `RunWorkerPool` wiring and attach a Treasurer without `with_engine_factory`; no one running `paladin-server` as shipped. | Call `RunWorkerPool::with_engine_factory` on the pool before attaching the Treasurer (the new `has_engine_factory` reports whether it was applied), or remove the `treasurer.allowance` entries. |
+| M-B-28 | **Boot logs one warning for schedules with no recorded creator (TENANT-10, Phase 53 plan 53-06, D-14).** Whenever the run store is enabled (whatever `schedules.enabled` says), boot reads the schedule store once, read-only, and logs a single `warn!` giving the count, every schedule id in ascending order and the action `re-create via POST /v1/schedules` when any schedule has `created_by` NULL (created before Phase 41 or by a principal-less embedder). Such a schedule fires unattributed and is not gated by any allowance. An unreadable schedule row (a half-attributed one) ends the scan with one fixed `error!` line naming the cursor position, never the row content; boot continues. The scan never writes: no backfill, re-assignment, disable or delete. | Operators with schedules created before Phase 41 or by embedders without a principal; log pipelines that alert on `warn!` at boot. | See section 11.8: re-create each listed schedule through `POST /v1/schedules` with the intended tenant's key and delete the old one. |
 
 ## 11.2 Rust API changes (compile-affecting; the X-10 register)
 
@@ -31,19 +38,77 @@ No persistence or schema change is recorded since `v0.11.0`. A later v0.11.1 cha
 
 ## 11.5 Configuration & environment
 
-No configuration or environment change is recorded since `v0.11.0`. A later v0.11.1 change of this kind adds its entry here in the same commit.
+- **Reserved principal literals are refused at config load** (TENANT-09, Phase 53 plan 53-06, D-13). `http.auth.api_keys[].name` may not be `open-access`, `unattributed` or `anonymous`, and `http.auth.api_keys[].tenant` and `http.auth.bearer_token.tenant` (when bearer is enabled) may not be `open-access` or `unattributed`. Matching is exact and case-sensitive, so `Open-Access` is accepted. A configuration that uses one now fails at load with a message naming the entry (`http.auth.api_keys[#<index>]`, `http.auth.api_keys[<name>]` or `http.auth.bearer_token`) and never printing the key value. Action: rename the key or the tenant, then update any `treasurer.allowance` entry that names the old key or tenant.
+
+A later v0.11.1 change of this kind adds its entry here in the same commit.
 
 ## 11.6 HTTP API
 
-No HTTP API change is recorded since `v0.11.0`. A later v0.11.1 change of this kind adds its entry here in the same commit.
+**Unreadable run rows answer a non-admin the missing-run `404` -- landed Phase 53 (plan 53-02), TENANT-06, D-09 (`M-B-23`, section 11.1).**
+On `GET /v1/runs/{run_id}`, `GET /v1/runs/{run_id}/stream`, `GET /v1/runs/{run_id}/webhook-deliveries`
+and `POST /v1/runs/{run_id}/cancel`, a run row the store cannot read (a `Serialization` error from the
+repository) now returns a user-role principal the same `404 not_found` a missing run returns, with
+identical status, headers and body, where v0.11.0 returned `500`. An admin-role principal still gets
+`500` with the message `run store error`. No other status, code or response shape changes, and
+`GET /v1/runs` keeps its fixed `500` for every role. The OpenAPI document is unchanged: the `404`
+and `500` responses were already published on these operations.
+
+**Thread routes are tenant-scoped and hide a foreign thread behind the missing-thread `404` -- landed Phase 53 (plan 53-03), TENANT-03, TENANT-06 (`M-B-24`, section 11.1).**
+Every `/v1/threads/{id}*` route (`GET /v1/threads/{id}`, `.../state`, `.../history`, `POST .../resume`,
+`POST .../fork`, `DELETE /v1/threads/{id}`) now checks that the caller may see the thread before doing
+anything else. A user-role principal sees a thread only when its latest run belongs to the principal's
+tenant; an admin-role principal sees every thread; a thread with no run is Admin-only; and with no run
+store wired a non-admin sees no thread. A thread the caller may not see answers
+`404 {"error":{"code":"not_found","message":"unknown thread '<id>'"}}`, byte-identical to a thread that
+does not exist, where v0.11.0 returned `200` on the three `GET` routes and `fork`, and `403` on `resume`
+and `delete` for a non-admin. `resume` and `delete` run this check before the admin check, so a same-tenant
+non-admin still gets `403` and a foreign non-admin gets `404`. `GET /v1/threads/{id}/history` of an unknown
+thread now answers `404` for every role (it answered `200` with `{"items":[],"next_cursor":null}`), and
+its OpenAPI operation now lists the `404` response. A second `DELETE` of an already deleted thread is `404`
+for every role. Waypoint-store failures on these routes now render the fixed message `thread store error`
+and run-store failures `run store error`, never the backend's own text; a Waypoint or run row the store
+cannot read is the same missing-thread `404` for a non-admin and the fixed `500` for an Admin. The
+OpenAPI document changes only on `/v1/threads/...` operations (descriptions, and the history `404`).
+
+**`GET /v1/threads` is tenant-filtered and may return short pages -- landed Phase 53 (plan 53-04), TENANT-03 (`M-B-25`, section 11.1).**
+The thread list no longer enumerates other tenants' threads. A user-role principal receives only the
+threads whose latest run is attributed to its own tenant, newest activity first; threads of other tenants
+and threads with no run are omitted, an admin-role principal lists every thread exactly as before, and a
+non-admin on a deployment without a run store receives `{"items":[],"next_cursor":null}`. Because the
+filter runs after the store is read, a page may hold fewer than `limit` items (even none) while
+`next_cursor` is non-null; a client must follow `next_cursor` until it is `null` and must not treat a short
+page as the end of the list. A request examines at most 500 threads (in batches of 100), so one request
+cannot scan the whole store; the cursor is the `last_updated_at` of the last examined thread and no thread
+repeats across pages. The cursor is an exclusive timestamp, so, as before, two threads with an identical
+`last_updated_at` straddling a page boundary can be skipped (a keyset walk, not a snapshot). The response
+shape and the cursor encoding are unchanged; the OpenAPI document changes only the description of the list
+operation.
+
+**Job polls are tenant-scoped and hide a foreign job behind the unknown-job `404` -- landed Phase 53 (plan 53-05), TENANT-07 (`M-B-26`, section 11.1).**
+`GET /v1/agents/{id}/jobs/{job_id}` returns a job only to a principal of the tenant that enqueued it, under
+the agent id it was enqueued under, or to an admin-role principal (any job, any agent id). Every other poll,
+including another tenant's job, the owning tenant under another agent id, an evicted job and an unknown id,
+returns the same `404 not_found` with the message `unknown job '<job_id>'`, byte-identical apart from the id
+echoed in the message. The `{id}` path segment is now checked against the job's recorded agent. The OpenAPI
+document is unchanged: the operation keeps its operation id (`get_job`), summary, description and responses.
 
 ## 11.7 Deprecations
 
 No item is marked `#[deprecated]` since `v0.11.0`. A later v0.11.1 deprecation adds its entry here in the same commit.
 
+- **`paladin_web::agent_controller::get_job` is superseded by `get_job_scoped`** (TENANT-07, Phase 53 plan 53-05). `get_job` is unscoped (it neither reads the caller's `Principal` nor checks the agent id) and is no longer routed by `agent_openapi_router`, which now mounts `get_job_scoped` for `GET /v1/agents/{id}/jobs/{job_id}`. `get_job` keeps its signature and behavior, so a downstream router that mounts it itself still compiles; such an embedder should switch to `get_job_scoped`, which needs the `Extension<Principal>` the authentication middleware attaches and reads a job through `JobStore::get_visible`. `get_job` carries no `#[deprecated]` attribute in v0.11.1 because `cargo-semver-checks` rejects a newly deprecated function at a patch release (`function_marked_deprecated` requires a minor); the attribute lands in the next minor release.
+
 ## 11.8 Upgrade checklist
 
-No operator step is recorded since `v0.11.0`: a v0.11.0 deployment upgrades to v0.11.1 by replacing the binary. A later v0.11.1 change that needs an operator step adds it here in the same commit.
+### Operators: v0.11.0 -> v0.11.1
+
+1. After upgrading, look in the boot log for the one `warn!` that begins `<N> run schedule(s) have no recorded creator (NULL created_by)` (`M-B-28`, TENANT-10). It lists every such schedule id. No warning means every schedule has a creator and there is nothing to do.
+2. For each listed schedule, re-create it through `POST /v1/schedules` with the API key of the tenant that should own it (the creator is stamped from that key), then delete the old schedule. There is no backfill and no `PATCH` that assigns a creator (TENANT-11 is deferred), and the scan itself never changes a row.
+3. If boot instead logs the `error!` line saying the schedule scan stopped at an unreadable page, a schedule row is damaged (for example half-attributed); the line names the cursor position and nothing else. Inspect the `run_schedules` table directly from that position on.
+
+A deployment that attaches a Treasurer through its own `RunWorkerPool` wiring must now also install the engine factory, or boot refuses (`M-B-27`, TENANT-08); `paladin-server` as shipped is unaffected.
+
+A later v0.11.1 change that needs an operator step adds it here in the same commit.
 
 # 10. Upgrading from v0.10.1 to v0.11.0
 

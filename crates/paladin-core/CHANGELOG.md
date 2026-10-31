@@ -5,6 +5,20 @@ All notable changes to `paladin-core` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows lockstep workspace versioning.
 
+## [Unreleased]
+
+### Added
+
+- `RunReadScope::permits_thread` -- the thread-visibility rule: a thread belongs to the tenant of
+  its latest run (the newest by `submitted_at`, `run_id` as the tiebreak); `All` sees every
+  thread, a `Tenant` scope sees a thread only when its latest run is attributed to that tenant,
+  and a thread with no run is visible to `All` only (TENANT-03, Phase 53).
+- `RESERVED_PRINCIPAL_LITERALS` (`open-access`, `unattributed`) and `RESERVED_KEY_NAME_LITERALS`
+  (`anonymous`) in `platform::container::principal` -- the one source for the literals a
+  configured API key name or tenant may not take, exact and case-sensitive. `TenantId::new` is
+  unchanged and still accepts them; the root crate's `AuthConfig::validate` rejects them at config
+  load (TENANT-09, Phase 53).
+
 ## [0.11.0] - 2026-10-26
 
 ### Fixed

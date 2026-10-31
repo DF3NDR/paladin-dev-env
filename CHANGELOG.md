@@ -5,6 +5,18 @@ All notable changes to the Paladin project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `RunWorkerPool::has_engine_factory` reports whether `with_engine_factory` was applied to the pool. It is the boot-time inspector behind the Treasurer wiring refusal below (TENANT-08).
+
+### Security
+
+- Boot refuses a configured Treasurer whose run worker pool has no engine factory, naming the misconfiguration before any worker spawns or listener binds. The shipped `build_run_api` wiring always installs the factory and is unaffected; only an embedder building its own pool wiring can hit the refusal (TENANT-08).
+- The reserved literals `open-access` and `unattributed` are refused as an `http.auth.api_keys[].name`, `http.auth.api_keys[].tenant` or enabled `http.auth.bearer_token.tenant`, and `anonymous` as an `http.auth.api_keys[].name`, at config load with a message naming the entry and never the key (TENANT-09). Matching is exact and case-sensitive.
+- Boot logs one `warn!` listing schedules with no recorded creator (`NULL created_by`), read-only, with the re-create action; an unreadable schedule row is one fixed `error!` line and never blocks boot (TENANT-10).
+
 ## [0.11.0] - 2026-10-26
 
 This root entry is condensed to fit the GitHub Release body limit (Phase 47, B-1). Full per-change detail is in each crate's `CHANGELOG.md` `[0.11.0]` section, in `MIGRATION.md` section 10, and in the uncondensed text at commit `700a92d86f3d6b2e24bbd2c163daec7c307297e0` (`git show 700a92d86f3d6b2e24bbd2c163daec7c307297e0:CHANGELOG.md`).

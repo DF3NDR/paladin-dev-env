@@ -826,6 +826,28 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         self
     }
 
+    /// Whether [`RunWorkerPool::with_engine_factory`] has been applied to this pool.
+    ///
+    /// The boot-time inspector behind the Treasurer wiring refusal (TENANT-08, Phase 53 D-12):
+    /// settlement, the per-run spend guard and the cancel probe all attach through the
+    /// per-run engine factory, so a pool that carries a [`Treasurer`] but no factory would
+    /// enforce nothing. It reads whether the factory field is set; it cannot tell what the
+    /// factory builds, so a no-op closure is not detected here (code review is the control).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin::application::services::run::RunWorkerPool;
+    /// use paladin_ports::output::waypoint_port::WaypointPort;
+    ///
+    /// fn wired<W: WaypointPort + 'static>(pool: &RunWorkerPool<W>) -> bool {
+    ///     pool.has_engine_factory()
+    /// }
+    /// ```
+    pub fn has_engine_factory(&self) -> bool {
+        self.engine_factory.is_some()
+    }
+
     /// This pool's [`LocalRunTokens`] registry -- share the SAME clone with
     /// [`RunSubmissionService::with_local_tokens`](super::submission::RunSubmissionService::with_local_tokens)
     /// so `cancel` can observe local dispatch. A clone made before

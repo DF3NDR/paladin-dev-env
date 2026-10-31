@@ -303,19 +303,22 @@ BACKEND=sqlite|postgres`) is wired.
 > mechanism this page describes.
 
 > **Never template a secret or credential into a Gate's payload.** `GET /v1/threads/{id}/state`
-> returns that payload verbatim to any authenticated caller. A `payload_template` is
+> returns that payload verbatim to every caller who may see the thread (see "Who can see a thread"
+> below). A `payload_template` is
 > author-controlled, rendered from the Battlefield exactly like a prompt — treat it with the same
 > care you would a log line or an error message, never a place to carry an API key or a database
 > credential.
 
-> **Interim authorization posture.** The two read routes (`GET .../state`, `GET .../history`)
-> accept any authenticated caller, while answering an approval gate through `POST .../resume`
-> requires an admin-role credential and answers `403` otherwise. This narrows the phase's own
-> D-24 decision for the mutating route only, applied because neither `ThreadId` nor `Waypoint`
-> carries an owner or principal to scope against yet (CR-01, commit `00b1e552`, rationale
-> recorded in `thread_controller.rs`'s module rustdoc). This is a documented, accepted interim
-> posture, not an oversight: every credential configured for the resume route must be treated as
-> admin-equivalent until Phase 27's `PLAT-06` supplies real per-thread ownership scoping.
+> **Who can see a thread.** Every thread route is tenant-scoped. A principal sees a thread when
+> the thread's latest run (newest `submitted_at`) belongs to the principal's tenant; an
+> admin-role credential sees every thread; a thread with no run is visible to admin credentials
+> only. A thread you may not see answers `404`, exactly like a thread that does not exist -- never
+> `403` -- on `GET .../state`, `GET .../history`, `POST .../resume`, `POST .../fork` and
+> `DELETE` alike. Answering an approval gate through `POST .../resume` still requires an
+> admin-role credential: a key of another tenant gets `404`, a user-role key of the thread's own
+> tenant gets `403`. A request header, query parameter or body field cannot name a tenant. The
+> rule is recorded in ADR-0063 (which amends ADR-0054), and the upgrade notes are in
+> `MIGRATION.md` section 11.
 
 ## Notifying a Human a Parley Is Waiting
 

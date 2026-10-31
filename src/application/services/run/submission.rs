@@ -252,9 +252,11 @@ impl RunSubmissionService {
     ///
     /// A thread carries no tenant of its own, but every run on it carries
     /// `submitted_by`. When `requested_by` is `Some`, the thread's latest run
-    /// (looked up with the unrestricted `All` scope -- this is an internal
-    /// authorization read, not a caller-facing one) must be permitted by the
-    /// principal's [`RunReadScope`]; otherwise the caller is answered
+    /// (the newest by `submitted_at`, `run_id` as tiebreak; looked up with the
+    /// unrestricted `All` scope -- this is an internal authorization read, not
+    /// a caller-facing one) must be permitted by the principal's
+    /// [`RunReadScope`] under the one thread-owner rule,
+    /// [`RunReadScope::permits_thread`]; otherwise the caller is answered
     /// [`RunSubmissionError::UnknownThread`], the same value a `fork` against a
     /// thread with no runs yields, so a hidden thread is not distinguishable
     /// from a missing one on this path. A thread with no runs stays open, and a
@@ -266,6 +268,12 @@ impl RunSubmissionService {
     /// a hidden thread is refused -- thread ids are unguessable in practice
     /// (UUIDv7 by default) and full tenant-namespacing of threads is the
     /// deferred thread-tenancy work (40-CONTEXT D-14).
+    ///
+    /// Thread birth is why this calls `permits_thread` only with `Some(&latest)`:
+    /// asking it about "no run" would refuse every first submit by a non-admin.
+    /// A corrupt latest-run row surfaces as the redacted `500 "run store error"`
+    /// (a repository error, no backend text); the role-dependent `404` mapping
+    /// is confined to the read-path load helpers.
     async fn ensure_thread_visible(
         &self,
         thread_id: &ThreadId,
@@ -288,9 +296,12 @@ impl RunSubmissionService {
             .await
             .map_err(map_repository_error)?;
         match page.items.into_iter().next() {
-            Some(latest) if !scope.permits(&latest) => Err(RunSubmissionError::UnknownThread {
-                thread_id: thread_id.clone(),
-            }),
+            Some(latest) if !scope.permits_thread(Some(&latest)) => {
+                Err(RunSubmissionError::UnknownThread {
+                    thread_id: thread_id.clone(),
+                })
+            }
+            // A latest run the scope permits, or no run row at all (thread birth).
             _ => Ok(()),
         }
     }

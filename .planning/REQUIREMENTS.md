@@ -67,33 +67,33 @@ error text), which the inventory built from `40-REVIEW.md` alone did not see. TE
 are therefore prove-against-the-tree-and-add-the-missing-regression-test requirements; only what
 fails is rebuilt.*
 
-- [ ] **TENANT-03**: Every `/v1/threads/*` handler (list, get, state, history, resume, fork, delete)
+- [x] **TENANT-03**: Every `/v1/threads/*` handler (list, get, state, history, resume, fork, delete)
       resolves the thread through one visibility gate (as `run_controller::load_visible_run` does), so
       a principal of another tenant gets 404 and cannot enumerate or read another tenant's threads or
       Waypoint state — A1, WINDOWS row 58
 
-- [ ] **TENANT-04**: `POST /v1/runs {thread_id}` and `POST /v1/threads/{id}/fork` refuse a thread
+- [x] **TENANT-04**: `POST /v1/runs {thread_id}` and `POST /v1/threads/{id}/fork` refuse a thread
       owned by another tenant (hidden == missing), so a user-role principal cannot run against or
       mutate it — A2, 40-REVIEW WR-01
 
-- [ ] **TENANT-05**: `RunSubmissionService::cancel` enforces the tenant at the service layer (not
+- [x] **TENANT-05**: `RunSubmissionService::cancel` enforces the tenant at the service layer (not
       only in the HTTP controller), so library and future-route callers cannot bypass it — A3, WR-02
 
-- [ ] **TENANT-06**: A corrupt or half-attributed run row, and any `Serialization` error, surfaces
+- [x] **TENANT-06**: A corrupt or half-attributed run row, and any `Serialization` error, surfaces
       to an API client as a redacted error that preserves the hidden-equals-missing guarantee; no
       backend text reaches the response body — A4, WR-03/WR-04
 
-- [ ] **TENANT-07**: `GET /agents/{id}/jobs/{job_id}` checks the principal and tenant before
+- [x] **TENANT-07**: `GET /agents/{id}/jobs/{job_id}` checks the principal and tenant before
       returning a job — A5, IN-04
 
-- [ ] **TENANT-08**: When a Treasurer is configured, server boot asserts that the worker pool was
+- [x] **TENANT-08**: When a Treasurer is configured, server boot asserts that the worker pool was
       built through `with_engine_factory` (settlement, spend guard and cancel probe attached) and
       refuses to start otherwise, with a test that proves the refusal — A8, audit G2
 
-- [ ] **TENANT-09**: Reserved literals are rejected as tenant and API-key names at config load — A6,
+- [x] **TENANT-09**: Reserved literals are rejected as tenant and API-key names at config load — A6,
       IN-01
 
-- [ ] **TENANT-10**: Server boot logs one `warn!` listing schedules with `NULL created_by`
+- [x] **TENANT-10**: Server boot logs one `warn!` listing schedules with `NULL created_by`
       (pre-Phase-41, firing unattributed and ungated); no backfill route — A7, WINDOWS row 63
 
 ### First-Run Usability (FIRST)
@@ -314,14 +314,14 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CIREL-07 | Phase 52 | Complete |
 | CIREL-08 | Phase 55 | Pending |
 | CIREL-09 | Phase 52 | Complete |
-| TENANT-03 | Phase 53 | Pending |
-| TENANT-04 | Phase 53 | Pending |
-| TENANT-05 | Phase 53 | Pending |
-| TENANT-06 | Phase 53 | Pending |
-| TENANT-07 | Phase 53 | Pending |
-| TENANT-08 | Phase 53 | Pending |
-| TENANT-09 | Phase 53 | Pending |
-| TENANT-10 | Phase 53 | Pending |
+| TENANT-03 | Phase 53 | Complete |
+| TENANT-04 | Phase 53 | Complete |
+| TENANT-05 | Phase 53 | Complete |
+| TENANT-06 | Phase 53 | Complete |
+| TENANT-07 | Phase 53 | Complete |
+| TENANT-08 | Phase 53 | Complete |
+| TENANT-09 | Phase 53 | Complete |
+| TENANT-10 | Phase 53 | Complete |
 | FIRST-01 | Phase 54 | Pending |
 | FIRST-02 | Phase 54 | Pending |
 | FIRST-03 | Phase 54 | Pending |

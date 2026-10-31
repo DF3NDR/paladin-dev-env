@@ -899,6 +899,30 @@ unless a phase adopts them):
 
 ### Validated
 
+**Dogfood Cleanup — v0.11.1, in progress (opened 2026-10-27).** Phase records in
+`.planning/phases/`; requirements in `.planning/REQUIREMENTS.md`.
+
+- ✓ Release-process and CI repair — semver gate re-pinned to the published `0.11.0` baseline at
+  `--release-type patch` through a tested `scripts/check-semver.sh` (12/12 crates incl. `paladin-eval`,
+  223 checks pass, zero-check tripwire, red proven on a scratch-branch leaf break, `Semver Checks
+  (vs v0.11.0)` required in the live ruleset); all six crate-wide semver allow tables removed and
+  `MIGRATION.md` §11 opened; `check-migration-allowlist` in the required cargo-deny job; Publish Dry
+  Run on every PR and End-to-End Tests under the `release` label; release body via `jq --rawfile`
+  with a shared size-fit helper (limit 125,000, reserve 5,000) proven on a 243,044-byte body; 37
+  CodeQL alerts registered in `CODEQL-DISMISSALS.md` and dismissed on the platform; issue #41 closed
+  (CIREL-01 … CIREL-07, CIREL-09; D1–D7) — Phase 52, verified 2026-10-30. CIREL-08 (the eight
+  `#![allow(rustdoc::…)]`) stays with Phase 55.
+- ✓ Tenant isolation closure — one visibility gate (`load_visible_thread`, `permits_thread`: a
+  thread belongs to the tenant of its latest run) on every `/v1/threads/*` route, held by an
+  OpenAPI-derived route matrix; `GET /v1/threads` a bounded owner-filtered walk; submit and fork
+  refuse a foreign thread with the missing-thread 404; `RunSubmissionService::cancel` tenant-checked
+  at the service layer; agent job reads scoped by agent id and tenant; unreadable rows hidden from a
+  tenant and redacted for an Admin; boot refuses a configured Treasurer without the engine-factory
+  path, rejects reserved tenant/key literals and warns once on `NULL created_by` schedules
+  (TENANT-03 … TENANT-10; A1–A5, A8) — Phase 53, verified 2026-10-31, ADR-0063; WINDOWS row 58
+  closed. Review warnings WR-01…03 (thread-list 500 on a newer-schema row, owner lockout from a
+  corrupt older row or a latest-run ownership transfer) carried as WINDOWS rows 85-87.
+
 **Treasurer Spend Governance — shipped v0.11.0, closed 2026-10-27; crates at `0.11.0`**
 (Phases 38-51, 174 plans, 63/66 requirements verified, ADOPT-01…03 superseded). Archive:
 `.planning/milestones/v0.11.0-ROADMAP.md`. Requirements:
@@ -1358,11 +1382,6 @@ while the code ships):
 **Milestone v0.11.1 "Dogfood Cleanup" (opened 2026-10-27).** Requirement IDs are minted in
 `.planning/REQUIREMENTS.md`; the themes below are the scope (inventory rows in parentheses):
 
-- [ ] Release-process and CI repair — semver gate re-pinned to the 0.11.0 baseline and actually
-      checking, allows dropped, allowlist check and `main`-only jobs on PRs, release-body cap fixed,
-      CodeQL triaged, issue #41 closed (D1–D7)
-- [ ] Tenant isolation closure — `/v1/threads/*`, run submission, fork, cancel, agent jobs all
-      tenant-gated; error bodies redacted; Treasurer attachment asserted at boot (A1–A5, A8)
 - [ ] First-run usability — unexpanded `${VAR}` auth keys refused at boot, version strings fixed and
       gated, changelog/doc/k8s corrections, API-surface snapshot refreshed (B1, C1–C8, C10)
 - [ ] Correctness small fixes — `todo!()` fenced, Failed-vs-Halted mapping, `Cancelled` eval
@@ -2111,6 +2130,7 @@ corpus:
 | [The base-layer wrapper becomes Entity<T> and "node" is reserved for the graph, as a clean break in v0.11.0](.planning/decisions/0060-base-entity-rename.md) (ADR-0060) | Supersedes corpus rule X-03 for Phase 48 only (decision (a)): ADR-0051 and ADR-0059 are copied as a shape, never inherited, and no deprecated alias is kept because a renamed field cannot be aliased. `Node<T>` becomes `Entity<T>` with payload `data`; persisted JSON keeps loading through serde read-aliases that are data compatibility, not an API shim, and a v0.10 binary cannot read v0.11 output (decision (c)). The five unused base items are retained pending the content / general data orchestration review, with a bounded list of entity-sense identifiers left inside them (decision (g)); the citadel placeholder types are unified with the real `PaladinData` / `PaladinStatus` (decision (h)); and "node" means a vertex in a WarGraph or Campaign graph while "Entity" means the base-layer wrapper, pinned by `tests/entity_rename_guard.rs` (decision (i)). | ✅ Implemented — Phase 48 (2026-10-14): `crates/paladin-core/src/base/entity/wrapper.rs`, `paladin-core/src/base/service/entity_version_service.rs`, `paladin-core/src/platform/container/{citadel,content,prompt}.rs`, `paladin-core/src/base/mod.rs`, `tests/entity_rename_guard.rs`, `entity_surfaces_are_renamed_in_the_tree`, `scanner_reports_planted_entity_rename_violations`, `pre_rename_citadel_snapshot_loads_through_file_citadel`, `entity_serde_compat` (11 tests), `entity_version_rejects_both_key_spellings`, `v0_10_citadel_statuses_load_into_the_unified_status`; Code Conformance `conforms` |
 | [Per-model parameter support: refuse an explicit value the target cannot honour, omit an auto-selected one visibly](.planning/decisions/0061-per-model-parameter-support-policy.md) (ADR-0061) | Amends ADR-0004 (supersedes its amendment A2 only). An explicit sampling parameter (temperature, `top_p`, penalties, stop sequences) that the target model cannot honour is refused at build time by name; an auto-selected value is omitted with a `warn!` and the `paladin.params_omitted` response-metadata key, never silently and never clamped. The shape is an additive `#[non_exhaustive]` `ModelProfile` returned by `LlmPort::model_profile` (default `None`), leaving `ProviderCapabilities` untouched; the Pricing, Cadence and Fallback decorators forward it (a fallback chain's profile is the intersection of its hops'). Owner readings R-1 (run-metadata reach: option-b, `PaladinResult.run_metadata` and the stream's terminal chunk) and R-2 (usage-cap evidence: all five compat presets accepted unverified) were answered 2026-10-16. | ✅ Implemented — Phase 50 (2026-10-16): `crates/paladin-ports/src/output/model_profile.rs`, `paladin-llm/src/{sampling,registry/mod,registry/seeded,response_guards,window,fallback}.rs`, `paladin-llm/src/config/{llm,layers,bridge}.rs`, `paladin-llm/src/provider_factory.rs`, `src/application/services/paladin/paladin_builder.rs`, `tests/provider_swap_matrix.rs`, `docs/src/user-guides/switching-providers.md` (drift test `switching_providers_page_lists_every_seeded_model`); Code Conformance `conforms` |
 | [Reasoning effort: one provider-neutral setting, honoured exactly or refused before HTTP](.planning/decisions/0062-reasoning-effort-fail-loud-policy.md) (ADR-0062) | Amends ADR-0004 and extends ADR-0061 to a parameter whose silent failure is expensive: at least four vendors answer HTTP 200 while ignoring or coercing the requested effort, and an unconfigured `kimi-k3` reasons at `max` and returns nothing. An explicit effort is sent in the vendor's exact native form or refused with `LlmError::UnsupportedParameter` before the call; substitution only under an explicit `reasoning_fallback`, with requested and effective values on the response and trace; per-model levels and budget bounds come only from the dated probe transcript (unprobed stays `Unmeasured`). | Accepted 2026-10-22 (Phase 51 plan 13). Shipped across plans 51-01..20; owner decisions at UAT 2026-10-23: Anthropic `Budget(n)` operator-override-only, Gemini 2.5 `Unmeasured`. Conformance across all nine adapters and a 54-combination host grid pin build, load and pre-flight verdicts equal to send time. |
+| [Threads and jobs are tenant-visible through the run-read rule](.planning/decisions/0063-thread-and-job-tenant-visibility.md) (ADR-0063) | Amends ADR-0054, which scoped the run routes and deferred the thread routes (Phase 40 D-14, WINDOWS row 58). A thread belongs to the tenant of its latest run (`RunReadScope::permits_thread`), a zero-run thread is Admin-only to read but open to birth, a job belongs to its enqueuing agent id and tenant, a hidden object answers exactly as a missing one, and one role-aware rule (`redact_store_error_for_scope`) hides an unreadable row from a tenant and redacts it for an Admin. No stored thread owner, so `GET /v1/threads` is a bounded over-fetch walk. | Accepted 2026-10-31 (Phase 53 plan 07), shipped across plans 53-01..06; residuals listed in the ADR (submit-on-unused-id oracle, timing, `UnknownSchemaVersion` stays 500, no-op factory). Owner UAT 2026-10-31: WR-01…03 carried as WINDOWS rows 85-87 (⚠️ Revisit before the `v0.11.1` tag). |
 
 **v0.9.0 (Phases 18-21) minted no new ADRs.** Its decisions were recorded as per-phase locked
 decisions (`D-xx`) in each phase's `CONTEXT.md`/`DISCUSSION-LOG.md`, now archived under
@@ -2293,7 +2313,21 @@ ADOPT-01…03 superseded by one web3sec move straight to `v0.11.0` (2026-10-14 �
 consumer bumps once); the `*Config::new` harmonisation as a registered clean break rather than a
 todo (2026-10-18 — ✓ Good); OBS-05's overhead figure accepted rather than met (2026-09-30 — ⚠️
 Revisit, the bar stands); Phase 47's one-PR, frozen-`main`, merge-commit tag cut with the
-maintainer alone performing the irreversible acts (D-00a..D-14 — ✓ Good, one tag sufficed).
+maintainer alone performing the irreversible acts (D-00a..D-14 — ✓ Good, one tag sufficed);
+Phase 52's owner decisions, no ADR minted (PD-05-4): the semver gate evaluates at `--release-type
+patch` fixed by flag, never inferred from the version delta (the `0.9.0` baseline went blind that way
+— ✓ Good, 223 checks); the allowlist gate runs inside the already-required cargo-deny job rather than
+the semver job (PD-01-3 — ✓ Good); the ruleset stays at 46 contexts with `Semver Checks (vs v0.11.0)`
+required (PD-06-1, confirmed 2026-10-29 — ✓ Good); no CodeQL alert was code-fixed because none of the
+31 newly triaged was a genuine leak (✓ Good; alert 54's News API key-in-URL is a Phase 55 candidate);
+the release-body guard triggers at the limit but fits to limit-minus-reserve (PD-02-1 — ⚠️ Revisit
+after its first live use at the `v0.11.1` tag, D-12). Phase 53's owner decisions outside ADR-0063:
+v0.11.1 stays a patch release, every tenant fix additive (53-VERSION-DECISION.md, 223/223 semver
+checks at patch for all twelve packages — ✓ Good); the Treasurer boot guard's no-op-factory blind
+spot is accepted as a code-review control after an owner read of the shipped wiring (AC-N5, UAT
+2026-10-31 — ✓ Good); review warnings WR-01…03 carried as follow-ups (WINDOWS rows 85-87, proposed
+owner Phase 55) and WR-04/05 accepted as ADR-0063 residuals (UAT 2026-10-31 — ⚠️ Revisit, the three
+rows must close or be waived before the `v0.11.1` tag).
 
 ## Evolution
 
@@ -2313,6 +2347,24 @@ This document evolves at phase transitions and milestone boundaries.
 2. Core Value check — still the right priority?
 3. Audit Out of Scope — reasons still valid?
 4. Update Context with current state
+
+---
+*Last updated: 2026-10-31 after **Phase 53: Tenant Isolation Closure** completed and verified — the
+milestone's only S1 cluster (8 plans, TENANT-03…10; verification `passed` 5/5 roadmap criteria and
+25/25 SPEC criteria, UAT 2/2, security 0 open). A tenant can no longer list, read, run against, fork,
+cancel or poll another tenant's threads, runs or jobs, and a configured Treasurer can no longer be
+silently dropped by worker-pool wiring. ADR-0063 minted; v0.11.1 stays a patch. "Tenant isolation
+closure" moved from Active to Validated; WINDOWS rows 85-87 opened for review warnings WR-01…03.
+Next: Phase 54.*
+
+---
+*Last updated: 2026-10-30 after **Phase 52: CI & Release Pipeline Repair** completed and verified —
+the first v0.11.1 phase (8 plans, CIREL-01…07 and 09; verification `passed` 5/5, UAT 3/3, security 0
+open). The gates every later phase runs under are now armed: semver against `0.11.0` at patch with a
+zero-check tripwire and a required context, the allows gone, allowlist/dry-run/E2E before merge, the
+release-body cap fixed, CodeQL triaged, issue #41 closed. "Release-process and CI repair" moved from
+Active to Validated; five owner decisions logged (no ADR). PR #61 merged to `main` on 2026-10-30
+(`84686acfb`); still ahead: the guard's first live run at the `v0.11.1` tag. Next: Phase 53.*
 
 ---
 *Last updated: 2026-10-27 after the **v0.11.0 "Treasurer Spend Governance" milestone close**

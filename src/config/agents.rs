@@ -9,7 +9,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use paladin_core::platform::container::principal::TenantId;
+use paladin_core::platform::container::principal::{
+    RESERVED_KEY_NAME_LITERALS, RESERVED_PRINCIPAL_LITERALS, TenantId,
+};
 use paladin_core::platform::container::reasoning::{ReasoningEffort, ReasoningFallback};
 use paladin_core::platform::container::user::UserRole;
 use serde::{Deserialize, Serialize};
@@ -160,6 +162,11 @@ impl AuthConfig {
     /// entry's; `key` must not repeat an earlier entry's value. Then, only when
     /// `bearer_token.enabled` is `true`, `bearer_token.tenant` must be present and valid.
     ///
+    /// Reserved literals (TENANT-09, Phase 53 D-13) are refused, exactly and case-sensitively:
+    /// `open-access` and `unattributed` as an API key `name`, an API key `tenant` or the bearer
+    /// `tenant`, and `anonymous` as an API key `name`
+    /// ([`RESERVED_PRINCIPAL_LITERALS`], [`RESERVED_KEY_NAME_LITERALS`]).
+    ///
     /// The API keys are validated even when `enabled` is `false`: a disabled section's keys
     /// take effect the moment auth is re-enabled, so a malformed mapping is never accepted.
     ///
@@ -194,6 +201,16 @@ impl AuthConfig {
                 format!("http.auth.api_keys[#{index}]: 'name' is not a valid API key id: {e}")
             })?;
             let name = entry.name.as_str();
+            // TENANT-09, D-13: exact, case-sensitive; the key value is never interpolated.
+            if RESERVED_PRINCIPAL_LITERALS.contains(&name)
+                || RESERVED_KEY_NAME_LITERALS.contains(&name)
+            {
+                return Err(format!(
+                    "http.auth.api_keys[#{index}]: 'name' is the reserved literal '{name}' -- \
+                     open-access, unattributed and anonymous name the open-access and \
+                     unattributed principals and cannot be configured"
+                ));
+            }
 
             if entry.tenant.is_empty() {
                 return Err(format!(
@@ -204,6 +221,14 @@ impl AuthConfig {
             TenantId::new(entry.tenant.as_str()).map_err(|e| {
                 format!("http.auth.api_keys[{name}]: 'tenant' is not a valid tenant id: {e}")
             })?;
+            if RESERVED_PRINCIPAL_LITERALS.contains(&entry.tenant.as_str()) {
+                return Err(format!(
+                    "http.auth.api_keys[{name}]: 'tenant' is the reserved literal '{}' -- \
+                     open-access and unattributed name the open-access principal and the \
+                     absence of one, and cannot be a configured tenant",
+                    entry.tenant
+                ));
+            }
 
             if !seen_names.insert(name) {
                 return Err(format!(
@@ -231,6 +256,13 @@ impl AuthConfig {
                     TenantId::new(tenant).map_err(|e| {
                         format!("http.auth.bearer_token: 'tenant' is not a valid tenant id: {e}")
                     })?;
+                    if RESERVED_PRINCIPAL_LITERALS.contains(&tenant) {
+                        return Err(format!(
+                            "http.auth.bearer_token: 'tenant' is the reserved literal '{tenant}' \
+                             -- open-access and unattributed name the open-access principal and \
+                             the absence of one, and cannot be a configured tenant"
+                        ));
+                    }
                 }
             }
         }
@@ -789,5 +821,145 @@ mod tests {
         let mut cfg = auth_with_keys(vec![api_key("ci", "sk-ci", "")]);
         cfg.enabled = false;
         assert!(cfg.validate().is_err());
+    }
+
+    // --- Phase 53 Plan 06 (D-13, TENANT-09): reserved principal literals ---
+
+    fn bearer_with_tenant(tenant: &str) -> AuthConfig {
+        AuthConfig {
+            enabled: true,
+            api_keys: Vec::new(),
+            bearer_token: BearerTokenAuthConfig {
+                enabled: true,
+                tenant: Some(tenant.to_string()),
+            },
+        }
+    }
+
+    /// AC-15: each reserved literal is refused in every position it is reserved in, with a
+    /// message that names the entry and never the key value.
+    #[test]
+    fn validate_rejects_reserved_literals_in_every_position() {
+        // (config, expected message prefix)
+        let mut cases: Vec<(AuthConfig, String)> = Vec::new();
+        for name in ["open-access", "unattributed", "anonymous"] {
+            // The reserved key is the second entry, so the index in the message is `#1`.
+            cases.push((
+                auth_with_keys(vec![
+                    api_key("ok", "sk-ok", "acme"),
+                    api_key(name, "sk-secret-value", "acme"),
+                ]),
+                "http.auth.api_keys[#1]: 'name'".to_string(),
+            ));
+        }
+        for tenant in ["open-access", "unattributed"] {
+            cases.push((
+                auth_with_keys(vec![api_key("ci", "sk-secret-value", tenant)]),
+                "http.auth.api_keys[ci]: 'tenant'".to_string(),
+            ));
+            cases.push((
+                bearer_with_tenant(tenant),
+                "http.auth.bearer_token: 'tenant'".to_string(),
+            ));
+        }
+        for (cfg, prefix) in cases {
+            let err = validation_error(&cfg);
+            assert!(
+                err.starts_with(&prefix),
+                "expected a message starting {prefix:?}, got: {err}"
+            );
+            assert!(
+                err.contains("reserved literal"),
+                "the message says why it was refused: {err}"
+            );
+            assert!(
+                !err.contains("sk-secret-value") && !err.contains("sk-ok"),
+                "never print the key value: {err}"
+            );
+        }
+    }
+
+    /// AC-15: the first offending entry in declaration order is the one named, even when a
+    /// later entry also offends and a bearer tenant offends too.
+    #[test]
+    fn validate_reports_the_first_reserved_offender() {
+        let cfg = AuthConfig {
+            enabled: true,
+            api_keys: vec![
+                api_key("fine", "sk-1", "acme"),
+                api_key("unattributed", "sk-2", "acme"),
+                api_key("anonymous", "sk-3", "open-access"),
+            ],
+            bearer_token: BearerTokenAuthConfig {
+                enabled: true,
+                tenant: Some("open-access".to_string()),
+            },
+        };
+        let err = validation_error(&cfg);
+        assert!(
+            err.starts_with("http.auth.api_keys[#1]: 'name'") && err.contains("'unattributed'"),
+            "the first offender (entry #1, name) is named: {err}"
+        );
+
+        // A reserved tenant on an earlier entry beats a reserved name on a later one.
+        let cfg = auth_with_keys(vec![
+            api_key("first", "sk-1", "open-access"),
+            api_key("anonymous", "sk-2", "acme"),
+        ]);
+        let err = validation_error(&cfg);
+        assert!(
+            err.starts_with("http.auth.api_keys[first]: 'tenant'"),
+            "{err}"
+        );
+    }
+
+    /// AC-16: matching is exact and case-sensitive with no trimming or folding, so case
+    /// variants are accepted; a padded literal is still rejected, by the existing
+    /// `TenantId::new` whitespace rule rather than by the reserved-literal check.
+    #[test]
+    fn validate_accepts_case_variants_of_reserved_literals() {
+        for literal in ["Open-Access", "Anonymous", "UNATTRIBUTED", "OPEN-ACCESS"] {
+            let cfg = auth_with_keys(vec![api_key(literal, "sk-a", literal)]);
+            assert_eq!(
+                cfg.validate(),
+                Ok(()),
+                "{literal} is not the reserved literal"
+            );
+            assert_eq!(bearer_with_tenant(literal).validate(), Ok(()), "{literal}");
+        }
+
+        let err = validation_error(&auth_with_keys(vec![api_key("ci", "sk-a", " open-access")]));
+        assert!(
+            err.starts_with("http.auth.api_keys[ci]: 'tenant' is not a valid tenant id: "),
+            "a padded literal fails the pre-existing check, not the new one: {err}"
+        );
+
+        // A disabled bearer section is still not validated, reserved tenant included.
+        let cfg = AuthConfig {
+            enabled: true,
+            api_keys: vec![api_key("ci", "sk-ci", "acme")],
+            bearer_token: BearerTokenAuthConfig {
+                enabled: false,
+                tenant: Some("open-access".to_string()),
+            },
+        };
+        assert_eq!(cfg.validate(), Ok(()));
+    }
+
+    /// D-13: the core constants are the one source for the reserved set, and the key-name-only
+    /// literal tracks `paladin-web`'s open-access principal id (core cannot import `paladin-web`,
+    /// so the drift check lives here).
+    #[test]
+    fn reserved_key_name_matches_the_open_access_principal_id() {
+        use paladin_core::platform::container::principal::{
+            RESERVED_KEY_NAME_LITERALS, RESERVED_PRINCIPAL_LITERALS,
+        };
+        use paladin_core::platform::container::treasury_ledger::LedgerScope;
+
+        assert!(
+            RESERVED_KEY_NAME_LITERALS.contains(&paladin_web::agent_auth::OPEN_ACCESS_PRINCIPAL_ID)
+        );
+        assert!(RESERVED_PRINCIPAL_LITERALS.contains(&TenantId::OPEN_ACCESS));
+        assert!(RESERVED_PRINCIPAL_LITERALS.contains(&LedgerScope::UNATTRIBUTED));
     }
 }

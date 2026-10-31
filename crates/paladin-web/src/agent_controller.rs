@@ -850,7 +850,8 @@ pub async fn enqueue_job(
     // C4: refuse before `jobs.create()` and before the spawn -- never a job id for refused work.
     let admission = admit_principal(&state, &principal, &entry.paladin.data.model).await?;
 
-    let job_id = state.jobs.create();
+    // D-11 (TENANT-07): record the owner `(agent id, tenant)` so a poll is scoped to it.
+    let job_id = state.jobs.create_owned(&id, &principal);
     let jobs = Arc::clone(&state.jobs);
     let jid = job_id.clone();
     let agent_id = id.clone();
@@ -884,6 +885,56 @@ pub async fn enqueue_job(
     Ok((StatusCode::ACCEPTED, ok_body(&json!({ "job_id": job_id }))))
 }
 
+/// `GET /agents/{id}/jobs/{job_id}` — poll an async job's status and result.
+///
+/// Returns `200 OK` with the [`JobRecord`], or `404` if no
+/// job is found under `job_id` (jobs are ephemeral and may have been evicted).
+#[utoipa::path(
+    get,
+    path = "/agents/{id}/jobs/{job_id}",
+    operation_id = "get_job",
+    tag = "agents",
+    params(
+        ("id" = String, Path, description = "Registry id of the agent"),
+        ("job_id" = String, Path, description = "Job id returned by enqueue"),
+    ),
+    responses(
+        (status = 200, description = "Job status/result", body = JobRecord),
+        (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
+        (status = 404, description = "Unknown job", body = ApiErrorBody),
+    ),
+    security(("api_key" = []), ("bearer_token" = [])),
+)]
+// Scoped poll (D-11, TENANT-07, ADR-0063): a non-Admin principal reads a job only when the
+// stored owner is exactly `(agent id in the path, the principal's tenant)`; an Admin reads
+// any job. A hidden job, a job under the wrong agent id, an evicted job and an unknown id
+// all answer the same `404 unknown job '<id>'` -- never a `403` -- so the route is no
+// existence oracle. The scope comes only from `Principal::read_scope()`, never from a
+// header, query parameter or body (ADR-0054 rule 1). This handler serves the operation that
+// [`get_job`] used to serve, hence the shared `operation_id`; plain comment, not rustdoc, so
+// the published OpenAPI text stays byte-identical -- see `enqueue_job`.
+pub async fn get_job_scoped(
+    State(state): State<AgentApiState>,
+    Extension(principal): Extension<Principal>,
+    Path((id, job_id)): Path<(String, String)>,
+) -> Result<(StatusCode, JsonValue), ApiError> {
+    match state
+        .jobs
+        .get_visible(&job_id, &id, &principal.read_scope())
+    {
+        Some(record) => Ok((StatusCode::OK, ok_body(&record))),
+        None => Err(ApiError::not_found(format!("unknown job '{job_id}'"))),
+    }
+}
+
+/// Superseded by [`get_job_scoped`]: this handler is **unscoped** and no longer routed by
+/// [`agent_openapi_router`] since 0.11.1; embedders that route it themselves should switch.
+///
+/// It answers any job id to any caller (it neither reads the caller's [`Principal`] nor
+/// checks the agent id), so it does not isolate tenants. It keeps its signature, and its
+/// `#[utoipa::path]` annotation (which generates a public item), but carries no
+/// deprecation attribute yet: a patch release cannot add one (see `MIGRATION.md` §11.7).
+///
 /// `GET /agents/{id}/jobs/{job_id}` — poll an async job's status and result.
 ///
 /// Returns `200 OK` with the [`JobRecord`], or `404` if no
@@ -947,7 +998,7 @@ pub fn agent_openapi_router(state: AgentApiState) -> OpenApiRouter {
         .routes(routes!(execute_agent))
         .routes(routes!(execute_agent_stream))
         .routes(routes!(enqueue_job))
-        .routes(routes!(get_job))
+        .routes(routes!(get_job_scoped))
         // Authenticate the agent routes (no-op when auth is disabled). `route_layer`
         // applies only to these routes, so the merged health probes stay open.
         .route_layer(axum::middleware::from_fn_with_state(
@@ -2149,8 +2200,9 @@ mod tests {
     /// Poll a job until it leaves `running` (or give up), returning the final record body.
     async fn poll_job(state: &AgentApiState, agent_id: &str, job_id: &str) -> serde_json::Value {
         for _ in 0..50 {
-            let (status, Json(body)) = get_job(
+            let (status, Json(body)) = get_job_scoped(
                 State(state.clone()),
+                admin(),
                 Path((agent_id.to_string(), job_id.to_string())),
             )
             .await
@@ -2207,6 +2259,33 @@ mod tests {
     #[tokio::test]
     async fn get_job_unknown_returns_404() {
         let state = state_with_agent("r", MockExecutor::Succeeds("x".to_string()));
+        let err = get_job_scoped(
+            State(state),
+            admin(),
+            Path(("r".to_string(), "no-such-job".to_string())),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// PD-05-3: the unscoped `get_job` is no longer routed but stays published for
+    /// embedders that mount it themselves; its behavior is unchanged (any caller, any
+    /// agent id, including a job nobody owns).
+    #[tokio::test]
+    async fn unscoped_get_job_is_kept_for_embedders() {
+        let state = state_with_agent("r", MockExecutor::Succeeds("x".to_string()));
+        let legacy_id = state.jobs.create();
+
+        let (status, Json(body)) = get_job(
+            State(state.clone()),
+            Path(("any-agent".to_string(), legacy_id)),
+        )
+        .await
+        .expect("unscoped lookup ok");
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["status"], "running");
+
         let err = get_job(
             State(state),
             Path(("r".to_string(), "no-such-job".to_string())),
@@ -2214,6 +2293,261 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err.status(), StatusCode::NOT_FOUND);
+    }
+
+    // --- Scoped job polls (TENANT-07, ADR-0063) -------------------------------------
+
+    /// Tenant-scoped `Principal` (role `User`) for the job-poll router tests.
+    fn tenant_user(id: &str, tenant: &str) -> Principal {
+        Principal::new(
+            id,
+            UserRole::User,
+            paladin_core::platform::container::principal::TenantId::new(tenant)
+                .expect("valid tenant"),
+        )
+    }
+
+    /// Auth-enabled state with agents `r` and `other-agent`, keys `owner-key` (acme
+    /// `svc-a`), `peer-key` (acme `svc-a2`), `foreign-key` (globex) and `admin-key` (Admin),
+    /// and a job store retaining `capacity` jobs.
+    fn job_poll_state(capacity: usize) -> AgentApiState {
+        let registry = AgentRegistry::new();
+        for id in ["r", "other-agent"] {
+            registry.insert(
+                id,
+                test_agent(id),
+                Arc::new(MockExecutor::Succeeds("done".to_string())),
+            );
+        }
+        let mut api_keys = std::collections::HashMap::new();
+        api_keys.insert("owner-key".to_string(), tenant_user("svc-a", "acme"));
+        api_keys.insert("peer-key".to_string(), tenant_user("svc-a2", "acme"));
+        api_keys.insert("foreign-key".to_string(), tenant_user("svc-g", "globex"));
+        api_keys.insert(
+            "admin-key".to_string(),
+            Principal::new(
+                "svc-admin",
+                UserRole::Admin,
+                paladin_core::platform::container::principal::TenantId::new("ops")
+                    .expect("valid tenant"),
+            ),
+        );
+        let mut state =
+            AgentApiState::new(Arc::new(registry)).with_auth(crate::agent_auth::AgentAuthConfig {
+                enabled: true,
+                api_keys,
+                token_verifier: None,
+                bearer_tenant: None,
+            });
+        state.jobs = Arc::new(JobStore::new(capacity));
+        state
+    }
+
+    /// What a client can observe of a response: status, headers (sorted, minus the derived
+    /// `content-length`) and body text.
+    #[derive(Debug, PartialEq)]
+    struct Observed {
+        status: StatusCode,
+        headers: Vec<(String, String)>,
+        body: String,
+    }
+
+    async fn observe(response: axum::response::Response) -> Observed {
+        let status = response.status();
+        let mut headers: Vec<(String, String)> = response
+            .headers()
+            .iter()
+            .filter(|(name, _)| name.as_str() != "content-length")
+            .map(|(name, value)| {
+                (
+                    name.as_str().to_string(),
+                    value.to_str().unwrap_or_default().to_string(),
+                )
+            })
+            .collect();
+        headers.sort();
+        Observed {
+            status,
+            headers,
+            body: read_body(response).await,
+        }
+    }
+
+    /// Send `method uri` through `app` as `key` with optional extra headers.
+    async fn send_as(
+        app: &Router,
+        method: &str,
+        uri: &str,
+        key: &str,
+        extra: &[(&str, &str)],
+    ) -> Observed {
+        let mut builder = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("x-api-key", key)
+            .header("content-type", "application/json");
+        for (name, value) in extra {
+            builder = builder.header(*name, *value);
+        }
+        let body = if method == "POST" {
+            Body::from(r#"{"input":"hi"}"#)
+        } else {
+            Body::empty()
+        };
+        let response = app
+            .clone()
+            .oneshot(builder.body(body).expect("request builds"))
+            .await
+            .expect("router responds");
+        observe(response).await
+    }
+
+    /// Enqueue a job on `agent` as `key` and return its id.
+    async fn enqueue_as(app: &Router, agent: &str, key: &str) -> String {
+        let observed = send_as(app, "POST", &format!("/v1/agents/{agent}/jobs"), key, &[]).await;
+        assert_eq!(observed.status, StatusCode::ACCEPTED, "{observed:?}");
+        let body: serde_json::Value = serde_json::from_str(&observed.body).expect("json body");
+        body["job_id"].as_str().expect("job_id").to_string()
+    }
+
+    /// The `404` answer for a poll of a job that does not exist, as `key` under `agent`.
+    async fn unknown_job_answer(app: &Router, agent: &str, key: &str) -> Observed {
+        send_as(
+            app,
+            "GET",
+            &format!("/v1/agents/{agent}/jobs/no-such-job-9f3a"),
+            key,
+            &[],
+        )
+        .await
+    }
+
+    /// Assert a poll of `job_id` as `key` under `agent` is byte-for-byte the unknown-job
+    /// `404` (status, headers, and body after swapping the job ids).
+    async fn assert_poll_is_the_unknown_job_404(
+        app: &Router,
+        agent: &str,
+        job_id: &str,
+        key: &str,
+        extra: &[(&str, &str)],
+    ) {
+        let mut hidden = send_as(
+            app,
+            "GET",
+            &format!("/v1/agents/{agent}/jobs/{job_id}"),
+            key,
+            extra,
+        )
+        .await;
+        assert_eq!(hidden.status, StatusCode::NOT_FOUND, "{hidden:?}");
+        hidden.body = hidden.body.replace(job_id, "no-such-job-9f3a");
+        let unknown = unknown_job_answer(app, agent, key).await;
+        assert_eq!(unknown.status, StatusCode::NOT_FOUND);
+        assert_eq!(hidden, unknown, "hidden job must equal unknown job");
+        assert!(
+            hidden.body.contains("unknown job 'no-such-job-9f3a'"),
+            "{hidden:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn job_poll_is_scoped_to_the_enqueuing_agent_and_tenant() {
+        let (app, _api) = versioned_agent_parts(job_poll_state(16));
+        let job_id = enqueue_as(&app, "r", "owner-key").await;
+        let uri = format!("/v1/agents/r/jobs/{job_id}");
+
+        for key in ["owner-key", "admin-key"] {
+            let observed = send_as(&app, "GET", &uri, key, &[]).await;
+            assert_eq!(observed.status, StatusCode::OK, "{key}: {observed:?}");
+        }
+        assert_poll_is_the_unknown_job_404(&app, "r", &job_id, "foreign-key", &[]).await;
+    }
+
+    #[tokio::test]
+    async fn job_poll_matrix_scopes_by_agent_and_tenant_with_an_admin_bypass() {
+        let (app, _api) = versioned_agent_parts(job_poll_state(16));
+        let job_id = enqueue_as(&app, "r", "owner-key").await;
+
+        // 200: the enqueuing key, a second key of the owner tenant, and the Admin on
+        // both the enqueuing agent and another agent id (full bypass, PD-05-2).
+        for (agent, key) in [
+            ("r", "owner-key"),
+            ("r", "peer-key"),
+            ("r", "admin-key"),
+            ("other-agent", "admin-key"),
+        ] {
+            let observed = send_as(
+                &app,
+                "GET",
+                &format!("/v1/agents/{agent}/jobs/{job_id}"),
+                key,
+                &[],
+            )
+            .await;
+            assert_eq!(
+                observed.status,
+                StatusCode::OK,
+                "{agent}/{key}: {observed:?}"
+            );
+            let body: serde_json::Value = serde_json::from_str(&observed.body).expect("json");
+            assert!(body["status"].is_string(), "{agent}/{key}: {observed:?}");
+        }
+
+        // 404 equal to unknown: another tenant, and the owner tenant under another agent.
+        for (agent, key) in [("r", "foreign-key"), ("other-agent", "owner-key")] {
+            assert_poll_is_the_unknown_job_404(&app, agent, &job_id, key, &[]).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn evicted_job_poll_is_404_for_every_role() {
+        let (app, _api) = versioned_agent_parts(job_poll_state(1));
+        let first = enqueue_as(&app, "r", "owner-key").await;
+        let _second = enqueue_as(&app, "r", "owner-key").await; // evicts `first`
+
+        for key in ["owner-key", "admin-key"] {
+            assert_poll_is_the_unknown_job_404(&app, "r", &first, key, &[]).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn job_poll_ignores_tenant_hints() {
+        let (app, _api) = versioned_agent_parts(job_poll_state(16));
+        let job_id = enqueue_as(&app, "r", "owner-key").await;
+
+        // A foreign key claiming the owner's tenant by header and query is still hidden.
+        let hinted = format!("/v1/agents/r/jobs/{job_id}?tenant_id=acme&tenant=acme");
+        let mut hidden = send_as(
+            &app,
+            "GET",
+            &hinted,
+            "foreign-key",
+            &[("x-tenant-id", "acme"), ("x-paladin-tenant", "acme")],
+        )
+        .await;
+        assert_eq!(hidden.status, StatusCode::NOT_FOUND, "{hidden:?}");
+        hidden.body = hidden.body.replace(&job_id, "no-such-job-9f3a");
+
+        let unknown = send_as(
+            &app,
+            "GET",
+            "/v1/agents/r/jobs/no-such-job-9f3a",
+            "foreign-key",
+            &[],
+        )
+        .await;
+        assert_eq!(hidden, unknown);
+
+        // And the owner is not locked out by a contradicting hint.
+        let owner = send_as(
+            &app,
+            "GET",
+            &hinted,
+            "owner-key",
+            &[("x-tenant-id", "globex")],
+        )
+        .await;
+        assert_eq!(owner.status, StatusCode::OK, "{owner:?}");
     }
 
     #[tokio::test]

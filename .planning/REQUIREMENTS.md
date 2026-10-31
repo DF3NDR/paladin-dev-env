@@ -83,7 +83,7 @@ fails is rebuilt.*
       to an API client as a redacted error that preserves the hidden-equals-missing guarantee; no
       backend text reaches the response body — A4, WR-03/WR-04
 
-- [ ] **TENANT-07**: `GET /agents/{id}/jobs/{job_id}` checks the principal and tenant before
+- [x] **TENANT-07**: `GET /agents/{id}/jobs/{job_id}` checks the principal and tenant before
       returning a job — A5, IN-04
 
 - [ ] **TENANT-08**: When a Treasurer is configured, server boot asserts that the worker pool was
@@ -318,7 +318,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TENANT-04 | Phase 53 | Complete |
 | TENANT-05 | Phase 53 | Complete |
 | TENANT-06 | Phase 53 | Complete |
-| TENANT-07 | Phase 53 | Pending |
+| TENANT-07 | Phase 53 | Complete |
 | TENANT-08 | Phase 53 | Pending |
 | TENANT-09 | Phase 53 | Pending |
 | TENANT-10 | Phase 53 | Pending |

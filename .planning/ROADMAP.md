@@ -370,7 +370,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 53-05-PLAN.md — Job polls scoped to (agent, tenant) through `JobStore::get_visible` and additive `get_job_scoped`; OpenAPI unchanged (TENANT-07)
+- [x] 53-05-PLAN.md — Job polls scoped to (agent, tenant) through `JobStore::get_visible` and additive `get_job_scoped`; OpenAPI unchanged (TENANT-07)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 

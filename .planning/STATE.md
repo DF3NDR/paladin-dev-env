@@ -5,15 +5,15 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 53
 current_phase_name: Tenant Isolation Closure
 status: executing
-stopped_at: Completed 53-04-PLAN.md
-last_updated: "2026-10-31T12:52:51.025Z"
+stopped_at: Completed 53-05-PLAN.md
+last_updated: "2026-10-31T13:02:31.583Z"
 last_activity: 2026-10-31
 last_activity_desc: Phase 53 execution started
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 16
-  completed_plans: 12
+  completed_plans: 13
 ---
 
 # Project State
@@ -51,11 +51,11 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 ## Current Position
 
 Phase: 53 (Tenant Isolation Closure) — EXECUTING
-Plan: 5 of 8
+Plan: 6 of 8
 Status: Ready to execute
 Last activity: 2026-10-31 — Phase 53 execution started
 
-Progress: [███░░░░░░░░░░░░░░░░░] 1/7 phases ([████████░░] 75%) — Phase 52 plans [████████████████████] 8/8 (100%)
+Progress: [███░░░░░░░░░░░░░░░░░] 1/7 phases ([████████░░] 81%) — Phase 52 plans [████████████████████] 8/8 (100%)
 
 ## Performance Metrics
 
@@ -367,6 +367,7 @@ Progress: [███░░░░░░░░░░░░░░░░░] 1/7 pha
 | Phase 53 P02 | 25min | 2 tasks | 3 files |
 | Phase 53 P03 | 70min | 3 tasks | 5 files |
 | Phase 53 P04 | 45min | 2 tasks | 4 files |
+| Phase 53 P05 | 40min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -687,6 +688,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 53-03: Admin scope skips the owner lookup in load_visible_thread; only DELETE (busy check) loads runs for an Admin and answers the fixed 'run store error' 500 (PD-03-5)
 - [Phase ?]: 53-03: waypoint Serialization/SchemaVersionUnsupported are hideable (tenant gets the missing-thread 404); Backend/NotFound stay the fixed 'thread store error' 500 (PD-03-3)
 - [Phase ?]: [Phase 53-04] GET /v1/threads for a Tenant scope walks list_threads in batches of 100 with a 500-thread examination cap, per-thread latest-run lookup (scope All) plus permits_thread; cursor is the last examined thread's last_updated_at; a Serialization owner lookup is skipped and logged, other run errors are the fixed 500; Admin keeps the single limit+1 fetch
+- [Phase ?]: 53-05: get_job keeps its #[utoipa::path] annotation (generated public __path_get_job item) and gets no #[deprecated]; get_job_scoped is routed with operation_id get_job so openapi.json stays byte-identical; JobStore owner (agent id, tenant) lives in private Inner.owners
 
 ### Pending Todos
 
@@ -1034,8 +1036,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-10-31T12:52:51.006Z
-Stopped at: Completed 53-04-PLAN.md
+Last session: 2026-10-31T13:02:31.564Z
+Stopped at: Completed 53-05-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

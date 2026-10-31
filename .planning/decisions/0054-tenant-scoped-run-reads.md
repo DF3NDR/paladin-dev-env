@@ -6,6 +6,8 @@ Accepted
 
 **Date:** 2026-09-29
 
+**Amended by ADR-0063** (2026-10-31, Phase 53): the thread routes deferred under Phase 40 D-14 (WINDOWS row 58) are now tenant-visible through the same rule -- a thread belongs to the tenant of its latest run, a hidden thread is the missing-thread `404`, `GET /threads` is a bounded filtered walk, the agent job poll is scoped to the enqueuing agent id and tenant, and an unreadable row is the missing-object `404` for a tenant and the fixed `500` for an Admin through one `redact_store_error_for_scope`. Rules 1 to 5 above stand; the statement that the thread routes are not tenant-scoped is superseded.
+
 ## Context
 
 `WINDOWS.md` row 32 (WR-03, Phase 27) recorded that the run read routes — `GET /runs`,

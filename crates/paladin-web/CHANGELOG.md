@@ -7,7 +7,20 @@ and this project follows lockstep workspace versioning.
 
 ## [Unreleased]
 
+### Added
+
+- `JobStore::create_owned` and `JobStore::get_visible` (TENANT-07, Phase 53 plan 53-05): a job's owner
+  `(agent id, tenant)` is recorded in the store's private state at enqueue and checked on read.
+- `agent_controller::get_job_scoped`: the scoped job-poll handler now routed for
+  `GET /v1/agents/{id}/jobs/{job_id}` (same `operation_id`, so `openapi.json` is unchanged). `get_job`
+  keeps its signature and is no longer routed; see `MIGRATION.md` section 11.7.
+
 ### Security
+
+- Scoped job polls (TENANT-07, Phase 53 plan 53-05; see `MIGRATION.md` section 11.1 `M-B-26`):
+  `GET /v1/agents/{id}/jobs/{job_id}` returns a job only to the tenant that enqueued it, under the agent id
+  it was enqueued under, or to an Admin; every other poll is the same `404 unknown job '<id>'` as a missing
+  or evicted job.
 
 - Corrupt-row redaction by role on the run routes (TENANT-06, Phase 53 plan 53-02; see `MIGRATION.md`
   section 11.1 `M-B-23`): `GET /v1/runs/{run_id}`, `.../stream`, `.../webhook-deliveries` and

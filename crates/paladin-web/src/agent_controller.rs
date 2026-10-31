@@ -2200,8 +2200,9 @@ mod tests {
     /// Poll a job until it leaves `running` (or give up), returning the final record body.
     async fn poll_job(state: &AgentApiState, agent_id: &str, job_id: &str) -> serde_json::Value {
         for _ in 0..50 {
-            let (status, Json(body)) = get_job(
+            let (status, Json(body)) = get_job_scoped(
                 State(state.clone()),
+                admin(),
                 Path((agent_id.to_string(), job_id.to_string())),
             )
             .await
@@ -2258,6 +2259,33 @@ mod tests {
     #[tokio::test]
     async fn get_job_unknown_returns_404() {
         let state = state_with_agent("r", MockExecutor::Succeeds("x".to_string()));
+        let err = get_job_scoped(
+            State(state),
+            admin(),
+            Path(("r".to_string(), "no-such-job".to_string())),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// PD-05-3: the unscoped `get_job` is no longer routed but stays published for
+    /// embedders that mount it themselves; its behavior is unchanged (any caller, any
+    /// agent id, including a job nobody owns).
+    #[tokio::test]
+    async fn unscoped_get_job_is_kept_for_embedders() {
+        let state = state_with_agent("r", MockExecutor::Succeeds("x".to_string()));
+        let legacy_id = state.jobs.create();
+
+        let (status, Json(body)) = get_job(
+            State(state.clone()),
+            Path(("any-agent".to_string(), legacy_id)),
+        )
+        .await
+        .expect("unscoped lookup ok");
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["status"], "running");
+
         let err = get_job(
             State(state),
             Path(("r".to_string(), "no-such-job".to_string())),
@@ -2433,6 +2461,93 @@ mod tests {
             assert_eq!(observed.status, StatusCode::OK, "{key}: {observed:?}");
         }
         assert_poll_is_the_unknown_job_404(&app, "r", &job_id, "foreign-key", &[]).await;
+    }
+
+    #[tokio::test]
+    async fn job_poll_matrix_scopes_by_agent_and_tenant_with_an_admin_bypass() {
+        let (app, _api) = versioned_agent_parts(job_poll_state(16));
+        let job_id = enqueue_as(&app, "r", "owner-key").await;
+
+        // 200: the enqueuing key, a second key of the owner tenant, and the Admin on
+        // both the enqueuing agent and another agent id (full bypass, PD-05-2).
+        for (agent, key) in [
+            ("r", "owner-key"),
+            ("r", "peer-key"),
+            ("r", "admin-key"),
+            ("other-agent", "admin-key"),
+        ] {
+            let observed = send_as(
+                &app,
+                "GET",
+                &format!("/v1/agents/{agent}/jobs/{job_id}"),
+                key,
+                &[],
+            )
+            .await;
+            assert_eq!(
+                observed.status,
+                StatusCode::OK,
+                "{agent}/{key}: {observed:?}"
+            );
+            let body: serde_json::Value = serde_json::from_str(&observed.body).expect("json");
+            assert!(body["status"].is_string(), "{agent}/{key}: {observed:?}");
+        }
+
+        // 404 equal to unknown: another tenant, and the owner tenant under another agent.
+        for (agent, key) in [("r", "foreign-key"), ("other-agent", "owner-key")] {
+            assert_poll_is_the_unknown_job_404(&app, agent, &job_id, key, &[]).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn evicted_job_poll_is_404_for_every_role() {
+        let (app, _api) = versioned_agent_parts(job_poll_state(1));
+        let first = enqueue_as(&app, "r", "owner-key").await;
+        let _second = enqueue_as(&app, "r", "owner-key").await; // evicts `first`
+
+        for key in ["owner-key", "admin-key"] {
+            assert_poll_is_the_unknown_job_404(&app, "r", &first, key, &[]).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn job_poll_ignores_tenant_hints() {
+        let (app, _api) = versioned_agent_parts(job_poll_state(16));
+        let job_id = enqueue_as(&app, "r", "owner-key").await;
+
+        // A foreign key claiming the owner's tenant by header and query is still hidden.
+        let hinted = format!("/v1/agents/r/jobs/{job_id}?tenant_id=acme&tenant=acme");
+        let mut hidden = send_as(
+            &app,
+            "GET",
+            &hinted,
+            "foreign-key",
+            &[("x-tenant-id", "acme"), ("x-paladin-tenant", "acme")],
+        )
+        .await;
+        assert_eq!(hidden.status, StatusCode::NOT_FOUND, "{hidden:?}");
+        hidden.body = hidden.body.replace(&job_id, "no-such-job-9f3a");
+
+        let unknown = send_as(
+            &app,
+            "GET",
+            "/v1/agents/r/jobs/no-such-job-9f3a",
+            "foreign-key",
+            &[],
+        )
+        .await;
+        assert_eq!(hidden, unknown);
+
+        // And the owner is not locked out by a contradicting hint.
+        let owner = send_as(
+            &app,
+            "GET",
+            &hinted,
+            "owner-key",
+            &[("x-tenant-id", "globex")],
+        )
+        .await;
+        assert_eq!(owner.status, StatusCode::OK, "{owner:?}");
     }
 
     #[tokio::test]

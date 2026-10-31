@@ -631,6 +631,26 @@ pub async fn build_run_api(
     .await
 }
 
+/// The refusal text for a configured Treasurer whose worker pool has no engine factory.
+const TREASURER_UNENFORCED_MESSAGE: &str = "treasurer configured but the run worker pool has no engine factory; settlement, spend guard and cancel probe would not attach";
+
+/// TENANT-08, D-12: a Treasurer is enforced only through the pool's per-run engine factory
+/// (settlement, the spend guard and the cancel probe attach there), so "Treasurer configured and
+/// no engine factory" would boot a deployment that silently enforces nothing.
+///
+/// Pure, so the whole table is tested without building a server. The contract is exactly this
+/// one refusal row (D-00f); there is no configuration switch that turns it off.
+fn assert_treasurer_enforced(
+    treasurer_configured: bool,
+    has_engine_factory: bool,
+) -> Result<(), String> {
+    if treasurer_configured && !has_engine_factory {
+        Err(TREASURER_UNENFORCED_MESSAGE.to_string())
+    } else {
+        Ok(())
+    }
+}
+
 /// [`build_run_api`] with the run engine's `PaladinPort` paced through the supplied `cadence`
 /// wiring (PACE-02, D-08).
 ///
@@ -644,7 +664,11 @@ pub async fn build_run_api(
 /// # Errors
 ///
 /// As [`build_run_api`]; `settings.treasurer.cadence` is validated when the run engine's port is
-/// built even though the wiring is supplied.
+/// built even though the wiring is supplied. Also an error: a Treasurer is configured but the
+/// run worker pool has no engine factory, so settlement, the spend guard and the cancel probe
+/// would not attach (TENANT-08); the shipped wiring always installs one, so this guards only a
+/// future edit. The refusal comes before any worker is spawned and, in `paladin-server`, before
+/// any listener binds.
 pub async fn build_run_api_with_cadence(
     configs: RunApiConfigs,
     settings: &Settings,
@@ -885,6 +909,10 @@ pub async fn build_run_api_with_cadence(
     if let Some(treasurer) = &treasurer {
         pool = pool.with_treasurer(Arc::clone(treasurer));
     }
+    // TENANT-08, D-12: refuse to boot a configured Treasurer whose pool lacks the engine-factory
+    // path (settlement, spend guard and cancel probe attach only through it). Runs before the
+    // pool is spawned, and `paladin-server` builds the run API before it binds a listener.
+    assert_treasurer_enforced(treasurer.is_some(), pool.has_engine_factory())?;
     let pool = Arc::new(pool);
 
     let mut tasks = Arc::clone(&pool).spawn(RunWorkerOptions::from(&configs.run_worker));
@@ -1535,6 +1563,135 @@ mod tests {
         cleanup(&run_path);
         cleanup(&wp_path);
 
+        unsafe {
+            std::env::remove_var("OPENAI_API_KEY");
+        }
+    }
+
+    // ---- Phase 53 (53-06, D-12): a configured Treasurer must not boot unenforced ----
+
+    /// TENANT-08, D-00f: the refusal fires on exactly one row of the four-row table, with the
+    /// exact D-12 message, and never on any other row.
+    #[test]
+    fn treasurer_assertion_refuses_a_configured_treasurer_without_an_engine_factory() {
+        assert_eq!(
+            assert_treasurer_enforced(true, false),
+            Err(
+                "treasurer configured but the run worker pool has no engine factory; settlement, \
+                 spend guard and cancel probe would not attach"
+                    .to_string()
+            )
+        );
+        assert_eq!(assert_treasurer_enforced(true, true), Ok(()));
+        assert_eq!(assert_treasurer_enforced(false, false), Ok(()));
+        assert_eq!(assert_treasurer_enforced(false, true), Ok(()));
+    }
+
+    /// AC-13: a REAL pool with a Treasurer attached and no `with_engine_factory` reports no
+    /// factory, so the boot check refuses it; the same pool with a factory passes. The message
+    /// carries no key value (P2).
+    #[tokio::test]
+    async fn pool_built_without_an_engine_factory_is_refused_with_a_treasurer() {
+        use paladin_core::platform::container::cost::CurrencyCode;
+        use paladin_core::platform::container::execution_result::PaladinResult;
+        use paladin_core::platform::container::paladin::Paladin;
+        use paladin_core::platform::container::paladin_error::PaladinError;
+        use paladin_ports::output::paladin_port::{PaladinPort, PaladinStream};
+        use paladin_storage::run::in_memory::InMemoryRunRepository;
+        use paladin_storage::run_queue::in_memory::InMemoryRunQueue;
+        use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
+        use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
+
+        struct UnusedPaladinPort;
+        #[async_trait]
+        impl PaladinPort for UnusedPaladinPort {
+            async fn execute(
+                &self,
+                _paladin: &Paladin,
+                _input: &str,
+            ) -> Result<PaladinResult, PaladinError> {
+                unreachable!("the boot assertion never dispatches a run")
+            }
+            async fn execute_stream(
+                &self,
+                _paladin: &Paladin,
+                _input: &str,
+            ) -> Result<PaladinStream, PaladinError> {
+                unreachable!("the boot assertion never dispatches a run")
+            }
+            fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+                Ok(())
+            }
+        }
+
+        let store = Arc::new(InMemoryWaypointStore::new());
+        let engine = Arc::new(WarEngine::new(Arc::new(UnusedPaladinPort), store.clone()));
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let resolver: Arc<dyn AssistantResolver> =
+            Arc::new(CodeAgentResolver::new(Arc::new(AgentRegistry::new())));
+        let ledger: Arc<dyn TreasuryLedgerPort> = Arc::new(InMemoryTreasuryLedger::new());
+        let policy = crate::application::services::treasurer::AllowancePolicy::new(
+            CurrencyCode::new("USD").expect("usd"),
+            80,
+        );
+        let treasurer = Arc::new(Treasurer::new(policy, ledger));
+
+        let pool = RunWorkerPool::new(
+            engine,
+            store.clone(),
+            repository,
+            queue,
+            resolver,
+            Duration::from_secs(30),
+        )
+        .with_treasurer(Arc::clone(&treasurer));
+        assert!(!pool.has_engine_factory(), "no factory was wired");
+        let refusal = assert_treasurer_enforced(true, pool.has_engine_factory())
+            .expect_err("a Treasurer without an engine factory is refused");
+        assert_eq!(refusal, TREASURER_UNENFORCED_MESSAGE);
+        assert!(
+            !refusal.contains("sk-"),
+            "the refusal names the misconfiguration, never a key"
+        );
+
+        let engine_store = store.clone();
+        let pool = pool.with_engine_factory(Arc::new(move |token| {
+            WarEngine::new(Arc::new(UnusedPaladinPort), engine_store.clone())
+                .with_cancellation_token(token)
+        }));
+        assert!(pool.has_engine_factory(), "the factory is now wired");
+        assert_eq!(
+            assert_treasurer_enforced(true, pool.has_engine_factory()),
+            Ok(())
+        );
+    }
+
+    /// AC-14: the shipped wiring with `treasurer.allowance` configured still boots and carries
+    /// the Treasurer (the refusal never fires on the production path).
+    #[tokio::test]
+    #[serial_test::serial(paladin_run_api_wiring_openai_api_key)]
+    async fn shipped_wiring_with_a_treasurer_boots() {
+        unsafe {
+            std::env::set_var("OPENAI_API_KEY", "sk-test-run-api-wiring-hermetic");
+        }
+        let (run_path, run_url) = temp_sqlite_url("shipped_treasurer");
+        let (wp_path, wp_url) = temp_sqlite_url("shipped_treasurer_wp");
+        let coordinator = ShutdownCoordinator::new();
+        let handles = build_run_api(
+            sqlite_configs(&run_url),
+            &allowance_settings(&[("svc-a", "1d", "2.50")], &[("acme", "7d", "25.00")]),
+            coordinator.clone(),
+            Some(sqlite_waypoints(&wp_url).await),
+            principal_auth(&[("secret-a", "svc-a", "acme")]),
+            Arc::new(AgentRegistry::new()),
+        )
+        .await
+        .expect("the shipped wiring with a Treasurer boots");
+        assert!(handles.treasurer.is_some(), "the Treasurer is present");
+        coordinator.cancel_and_wait(Duration::from_secs(1)).await;
+        cleanup(&run_path);
+        cleanup(&wp_path);
         unsafe {
             std::env::remove_var("OPENAI_API_KEY");
         }

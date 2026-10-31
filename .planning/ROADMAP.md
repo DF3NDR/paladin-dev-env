@@ -374,7 +374,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 53-06-PLAN.md — Boot guards: Treasurer-without-engine-factory refusal, one advisory `warn!` for `NULL created_by` schedules, reserved principal literals refused at config load (TENANT-08, TENANT-10, TENANT-09)
+- [x] 53-06-PLAN.md — Boot guards: Treasurer-without-engine-factory refusal, one advisory `warn!` for `NULL created_by` schedules, reserved principal literals refused at config load (TENANT-08, TENANT-10, TENANT-09)
 
 **Wave 6** *(blocked on Wave 5 completion)*
 

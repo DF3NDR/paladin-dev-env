@@ -86,14 +86,14 @@ fails is rebuilt.*
 - [x] **TENANT-07**: `GET /agents/{id}/jobs/{job_id}` checks the principal and tenant before
       returning a job — A5, IN-04
 
-- [ ] **TENANT-08**: When a Treasurer is configured, server boot asserts that the worker pool was
+- [x] **TENANT-08**: When a Treasurer is configured, server boot asserts that the worker pool was
       built through `with_engine_factory` (settlement, spend guard and cancel probe attached) and
       refuses to start otherwise, with a test that proves the refusal — A8, audit G2
 
-- [ ] **TENANT-09**: Reserved literals are rejected as tenant and API-key names at config load — A6,
+- [x] **TENANT-09**: Reserved literals are rejected as tenant and API-key names at config load — A6,
       IN-01
 
-- [ ] **TENANT-10**: Server boot logs one `warn!` listing schedules with `NULL created_by`
+- [x] **TENANT-10**: Server boot logs one `warn!` listing schedules with `NULL created_by`
       (pre-Phase-41, firing unattributed and ungated); no backfill route — A7, WINDOWS row 63
 
 ### First-Run Usability (FIRST)
@@ -319,9 +319,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TENANT-05 | Phase 53 | Complete |
 | TENANT-06 | Phase 53 | Complete |
 | TENANT-07 | Phase 53 | Complete |
-| TENANT-08 | Phase 53 | Pending |
-| TENANT-09 | Phase 53 | Pending |
-| TENANT-10 | Phase 53 | Pending |
+| TENANT-08 | Phase 53 | Complete |
+| TENANT-09 | Phase 53 | Complete |
+| TENANT-10 | Phase 53 | Complete |
 | FIRST-01 | Phase 54 | Pending |
 | FIRST-02 | Phase 54 | Pending |
 | FIRST-03 | Phase 54 | Pending |

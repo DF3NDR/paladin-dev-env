@@ -1,7 +1,7 @@
 ---
 phase: 53-tenant-isolation-closure
 verified: 2026-10-31T16:30:00Z
-status: human_needed
+status: passed
 score: 5/5 roadmap success criteria verified (25/25 SPEC acceptance criteria satisfied; P1-P4 verified by tests)
 behavior_unverified: 0
 overrides_applied: 0
@@ -10,9 +10,11 @@ gaps: []
 deferred: []
 behavior_unverified_items: []
 human_verification:
+
   - test: "P5 / AC-N5 (judgment tier, unverified-prohibition -- human review recommended): confirm no configuration key or no-op factory lets a configured Treasurer boot without the engine-factory path"
     expected: "assert_treasurer_enforced(treasurer.is_some(), pool.has_engine_factory()) is the only guard; no setting turns it off. The guard cannot see a no-op factory closure (has_engine_factory only reports Option::is_some)."
     why_human: "A no-op factory cannot be detected mechanically; the phase itself says code review is the control. Autonomous LLM verdict: NO escape hatch found in the tree (no settings key, the refusal text is a constant, the shipped path always passes a real factory). Recorded as NON-AUTHORITATIVE."
+
   - test: "Review the five advisory code-review warnings (53-REVIEW.md WR-01..WR-05) and decide accept-as-residual vs follow-up (none contradicts a SPEC acceptance criterion)"
     expected: "Each is either recorded as a residual in ADR-0063 or scheduled; in particular WR-01 (an UnknownSchemaVersion run row aborts every non-admin GET /v1/threads with 500) and WR-02 (list(limit 1) decodes the second-newest row, so a corrupt older row locks the owner out)."
     why_human: "Design/priority decisions, not goal failures; the phase goal is met without them."

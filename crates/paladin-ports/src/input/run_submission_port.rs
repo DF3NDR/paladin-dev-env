@@ -1,9 +1,9 @@
 //! Run Submission Port — Triggering a Run Without Naming the Engine (D-12)
 //!
-//! [`RunSubmissionPort`] lets `paladin-web` submit a run without ever
+//! [`RunSubmissionPort`](crate::input::run_submission_port::RunSubmissionPort) lets `paladin-web` submit a run without ever
 //! naming `paladin-battalion`, mirroring [`crate::input::parley_port::ParleyPort`]'s
 //! "facade implements, `paladin-web` calls" direction exactly (D-12: "exactly
-//! Phase 24's split"). Every type in [`RunSubmissionPort::submit`]'s
+//! Phase 24's split"). Every type in [`RunSubmissionPort::submit`](crate::input::run_submission_port::RunSubmissionPort::submit)'s
 //! signature is either a `paladin-core` value type or declared in this
 //! module (ADR-0031, ADR-0038).
 

@@ -4,7 +4,7 @@
 //!
 //! This crate sits at the **application boundary** of the hexagonal architecture,
 //! defining the abstract contracts (ports) that connect the core domain to external
-//! infrastructure. It depends only on [`paladin-core`] and standard utility crates —
+//! infrastructure. It depends only on `paladin-core` and standard utility crates —
 //! never on infrastructure SDKs, database drivers, or LLM provider libraries.
 //!
 //! ## Hexagonal Architecture Position

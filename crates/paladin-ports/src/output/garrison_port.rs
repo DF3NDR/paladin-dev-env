@@ -375,7 +375,7 @@ pub struct GarrisonStats {
 ///
 /// - [`LongTermGarrisonPort`] - Extended trait with vector embedding support
 /// - [`SanctumPort`] - Long-term persistent memory (alternative/superset)
-/// - [`GarrisonEntry`](paladin_core::platform::container::garrison::GarrisonEntry) - Entry data structure
+/// - [`GarrisonEntry`] - Entry data structure
 #[async_trait]
 pub trait GarrisonPort: Send + Sync {
     /// Stores a new entry in the Garrison

@@ -64,7 +64,7 @@
 //! - **I/O Error**: File system or network error
 //! - **Permission Denied**: Insufficient permissions for storage access
 //!
-//! All errors are represented via [`CitadelError`](paladin_core::platform::container::citadel_error::CitadelError)
+//! All errors are represented via [`CitadelError`]
 //! with detailed context for debugging and recovery.
 //!
 //! ## Common Use Cases
@@ -559,8 +559,8 @@ use paladin_core::platform::container::citadel_error::CitadelError;
 /// # See Also
 ///
 /// - [`PaladinState`](paladin_core::platform::container::citadel::PaladinState) - Paladin state structure
-/// - [`BattalionState`](paladin_core::platform::container::citadel::BattalionState) - Battalion state structure
-/// - [`StateSummary`](paladin_core::platform::container::citadel::StateSummary) - State metadata
+/// - [`BattalionState`] - Battalion state structure
+/// - [`StateSummary`] - State metadata
 /// - [`CitadelError`](paladin_core::platform::container::citadel_error::CitadelError) - Error types
 #[async_trait]
 pub trait CitadelPort: Send + Sync {

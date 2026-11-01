@@ -153,8 +153,8 @@ fn repair_prompt(
 ///
 /// The loop: attempt 1 calls `execute_fn` with `input` plus
 /// [`render_instruction_block`]. The output is run through
-/// [`extract_json`](paladin_core::platform::container::structured::extract_json)
-/// then [`shape_check`](paladin_core::platform::container::structured::shape_check);
+/// [`extract_json`]
+/// then [`shape_check`];
 /// on either failure, if attempts remain (`opts.max_repair_attempts`),
 /// `execute_fn` is called again with a re-prompt carrying the failure AND
 /// the offending output verbatim (via the crate-private `repair_prompt`

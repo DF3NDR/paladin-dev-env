@@ -1,10 +1,10 @@
 //! Run Event Stream Port — a `Stream` of core `RunStreamEvent`s (D-27, PLAT-FR-07)
 //!
-//! [`RunEventStreamPort`] lets `paladin-web` open `GET /v1/runs/{run_id}/stream`
+//! [`RunEventStreamPort`](crate::input::run_event_stream_port::RunEventStreamPort) lets `paladin-web` open `GET /v1/runs/{run_id}/stream`
 //! without ever naming the per-run broadcast bus, `paladin-battalion`'s
 //! `WarEngine`, or `TraceEvent` (ADR-0031, mirroring [`crate::input::parley_port`]'s
 //! own "core-typed only" convention). The facade decides live-versus-degraded
-//! (D-26) entirely behind [`RunEventStreamPort::stream`]'s return type; the
+//! (D-26) entirely behind [`RunEventStreamPort::stream`](crate::input::run_event_stream_port::RunEventStreamPort::stream)'s return type; the
 //! controller's only job is SSE framing and heartbeats.
 //!
 //! # Examples

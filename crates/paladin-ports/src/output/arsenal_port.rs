@@ -62,7 +62,7 @@
 //! - **Protocol Error**: MCP communication failure
 //! - **Transport Error**: Network/process communication failure
 //!
-//! All errors are represented via [`ArsenalError`](paladin_core::platform::container::arsenal::ArsenalError)
+//! All errors are represented via [`ArsenalError`]
 //! with context for debugging and recovery strategies.
 //!
 //! ## Common Use Cases
@@ -235,10 +235,10 @@
 //!
 //! ## Related Modules
 //!
-//! - [`Armament`](paladin_core::platform::container::arsenal::Armament) - Tool metadata
-//! - [`ArmamentCall`](paladin_core::platform::container::arsenal::ArmamentCall) - Tool invocation request
-//! - [`ArmamentResult`](paladin_core::platform::container::arsenal::ArmamentResult) - Tool execution result
-//! - [`ArsenalError`](paladin_core::platform::container::arsenal::ArsenalError) - Error types
+//! - [`Armament`] - Tool metadata
+//! - [`ArmamentCall`] - Tool invocation request
+//! - [`ArmamentResult`] - Tool execution result
+//! - [`ArsenalError`] - Error types
 //! - [`LlmPort`](crate::output::llm_port::LlmPort) - LLM integration (generates tool calls)
 //!
 //! ## See Also
@@ -464,8 +464,8 @@ use paladin_core::platform::container::arsenal::{
 /// - [`ArsenalRegistry`] - Tool registration and lifecycle management
 /// - [`Armament`](paladin_core::platform::container::arsenal::Armament) - Tool metadata structure
 /// - [`ArmamentCall`](paladin_core::platform::container::arsenal::ArmamentCall) - Invocation request
-/// - [`ArmamentResult`](paladin_core::platform::container::arsenal::ArmamentResult) - Execution result
-/// - [`ArsenalError`](paladin_core::platform::container::arsenal::ArsenalError) - Error types
+/// - [`ArmamentResult`] - Execution result
+/// - [`ArsenalError`] - Error types
 #[async_trait]
 pub trait ArsenalPort: Send + Sync {
     /// Lists all available tools in the Arsenal.

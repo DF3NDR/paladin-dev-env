@@ -1,6 +1,6 @@
 //! Assistant Admin Port — validate-then-publish assistant definitions (D-31, D-46)
 //!
-//! [`AssistantAdminPort`] is the whole surface the `paladin-web` assistant routes
+//! [`AssistantAdminPort`](crate::input::assistant_admin_port::AssistantAdminPort) is the whole surface the `paladin-web` assistant routes
 //! (`crates/paladin-web/src/assistant_controller.rs`) drive: create, publish a new
 //! version, read, list and soft-delete. There is deliberately **no update method** —
 //! immutability holds because the code to violate it does not exist, mirroring
@@ -12,8 +12,8 @@
 //! validation (D-31): `Agent` bodies validate structurally, `Workflow` bodies validate by
 //! deserialising to a `WarGraphDoc` and calling `compile()` against the server's live
 //! engine registries. A rejected definition is reported as
-//! [`AssistantAdminError::Invalid`], carrying a non-empty, machine-readable
-//! [`ValidationViolation`] list — nothing is ever persisted on that path.
+//! [`AssistantAdminError::Invalid`](crate::input::assistant_admin_port::AssistantAdminError::Invalid), carrying a non-empty, machine-readable
+//! [`ValidationViolation`](crate::input::assistant_admin_port::ValidationViolation) list — nothing is ever persisted on that path.
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -112,7 +112,7 @@ pub enum AssistantAdminError {
 ///
 /// This trait deliberately has no method that rewrites an existing version's
 /// `definition` — publishing always means [`Self::create`] (a brand-new assistant) or
-/// [`Self::append_version`]... (there is no `append_version` here either: publishing an
+/// `Self::append_version`... (there is no `append_version` here either: publishing an
 /// EXISTING assistant's next version is [`Self::publish_version`]). Neither ever accepts a
 /// target `version` to overwrite.
 ///

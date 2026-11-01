@@ -1,13 +1,13 @@
 //! Schedule Admin Port — validate-then-persist run schedules (PLAT-05, D-36..D-39, D-42, D-46)
 //!
-//! [`ScheduleAdminPort`] is the whole surface the `paladin-web` schedule routes
+//! [`ScheduleAdminPort`](crate::input::schedule_admin_port::ScheduleAdminPort) is the whole surface the `paladin-web` schedule routes
 //! (`crates/paladin-web/src/schedule_controller.rs`) drive: create, read, page, patch and
-//! delete a persisted [`RunSchedule`]. An implementation
+//! delete a persisted [`RunSchedule`](paladin_core::platform::container::run_schedule::RunSchedule). An implementation
 //! (`src/application/services/run/schedule/admin.rs`'s `ScheduleService`) validates a
-//! [`CreateRunSchedule`]/[`RunScheduleUpdate`] BEFORE any repository write — the cron (5 or
+//! [`CreateRunSchedule`](crate::input::schedule_admin_port::CreateRunSchedule)/[`RunScheduleUpdate`](paladin_core::platform::container::run_schedule::RunScheduleUpdate) BEFORE any repository write — the cron (5 or
 //! 6 fields), the IANA timezone, the assistant reference and the webhook URL (a write-time
-//! SSRF guard, D-42) all reject with [`ScheduleAdminError::Invalid`], carrying a non-empty,
-//! machine-readable [`ValidationViolation`] list (the SAME type
+//! SSRF guard, D-42) all reject with [`ScheduleAdminError::Invalid`](crate::input::schedule_admin_port::ScheduleAdminError::Invalid), carrying a non-empty,
+//! machine-readable [`ValidationViolation`](crate::input::assistant_admin_port::ValidationViolation) list (the SAME type
 //! [`crate::input::assistant_admin_port::ValidationViolation`] already defines) — nothing is
 //! ever persisted on that path.
 

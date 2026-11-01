@@ -81,14 +81,16 @@ impl Default for RateLimitConfig {
 
 /// One static API key mapped to a principal (`name` + `role` + `tenant`).
 ///
-/// The `key` should come from an environment variable / secret in practice, not be
-/// committed in plaintext. Every field is checked fail-closed at boot by
-/// [`AuthConfig::validate`]; nothing is trimmed, defaulted or clamped.
+/// The `key` is the literal secret. The server does not expand `${VAR}` here and refuses a
+/// value containing `${` at boot (FIRST-01); keep a config that holds it out of version
+/// control (a Kubernetes Secret or a mounted file). Every field is checked fail-closed at
+/// boot by [`AuthConfig::validate`]; nothing is trimmed, defaulted or clamped.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiKeyConfig {
-    /// The secret key value presented in the `X-API-Key` header. Must be non-empty and
-    /// unique across `api_keys` -- a shared secret would make the key lookup resolve an
-    /// arbitrary principal, and so an arbitrary tenant.
+    /// The secret key value presented in the `X-API-Key` header. Must be non-empty, must
+    /// not contain `${` (an unexpanded placeholder; the server expands nothing here) and
+    /// must be unique across `api_keys` -- a shared secret would make the key lookup
+    /// resolve an arbitrary principal, and so an arbitrary tenant.
     pub key: String,
     /// The API key id: the principal id, and the `api_key_id` recorded on every run and
     /// ledger row this key submits (Phase 40, D-06). Appears in logs. Must be unique across
@@ -157,7 +159,9 @@ impl AuthConfig {
     /// `http.auth.bearer_token` -- and never a key value.
     ///
     /// Per `api_keys` entry, in order: `key` must be non-empty; `name` must be a valid
-    /// identifier (the rules of [`TenantId`]); `tenant` must be present and a valid
+    /// identifier (the rules of [`TenantId`]); `key` must not contain `${` (an unexpanded
+    /// placeholder; the server does not expand environment variables in
+    /// `http.auth.api_keys`); `tenant` must be present and a valid
     /// [`TenantId`] (there is no implicit default tenant); `name` must not repeat an earlier
     /// entry's; `key` must not repeat an earlier entry's value. Then, only when
     /// `bearer_token.enabled` is `true`, `bearer_token.tenant` must be present and valid.
@@ -209,6 +213,16 @@ impl AuthConfig {
                     "http.auth.api_keys[#{index}]: 'name' is the reserved literal '{name}' -- \
                      open-access, unattributed and anonymous name the open-access and \
                      unattributed principals and cannot be configured"
+                ));
+            }
+            // FIRST-01, D-01/D-02: any '${' marks an unexpanded placeholder -- the server
+            // expands nothing in http.auth.api_keys. The message names the entry and never
+            // the value or the variable.
+            if entry.key.contains("${") {
+                return Err(format!(
+                    "http.auth.api_keys[{name}]: 'key' is an unexpanded '${{…}}' placeholder -- \
+                     the server does not expand environment variables in http.auth.api_keys; \
+                     set the literal key value"
                 ));
             }
 
@@ -961,5 +975,105 @@ mod tests {
         );
         assert!(RESERVED_PRINCIPAL_LITERALS.contains(&TenantId::OPEN_ACCESS));
         assert!(RESERVED_PRINCIPAL_LITERALS.contains(&LedgerScope::UNATTRIBUTED));
+    }
+
+    // --- Phase 54 (FIRST-01, D-01..D-03): unexpanded placeholder keys ---
+
+    /// The message prefix every placeholder refusal starts with for the entry `name`.
+    fn placeholder_prefix(name: &str) -> String {
+        format!("http.auth.api_keys[{name}]: 'key' is an unexpanded")
+    }
+
+    /// Asserts a refusal names the entry and leaks neither the key value nor a variable name.
+    fn assert_placeholder_refusal(err: &str, name: &str, key_value: &str) {
+        assert!(
+            err.starts_with(&placeholder_prefix(name)),
+            "expected the placeholder refusal for {name:?}, got: {err}"
+        );
+        assert!(
+            !err.contains(key_value),
+            "the refusal must never print the key value: {err}"
+        );
+        assert!(
+            !err.contains("SK_PLACEHOLDER_VAR"),
+            "the refusal must never print the variable name: {err}"
+        );
+    }
+
+    /// D-01: any `${` in a key is an unexpanded placeholder -- exact, embedded and
+    /// unterminated shapes alike.
+    #[test]
+    fn validate_refuses_an_unexpanded_placeholder_key() {
+        for key in [
+            "${SK_PLACEHOLDER_VAR}",
+            "pre${SK_PLACEHOLDER_VAR}post",
+            "${SK_PLACEHOLDER_VAR",
+        ] {
+            let cfg = auth_with_keys(vec![api_key("ci-runner", key, "platform-ops")]);
+            let err = validation_error(&cfg);
+            assert_placeholder_refusal(&err, "ci-runner", key);
+            assert!(
+                err.contains("does not expand environment variables"),
+                "the message says why and what to do: {err}"
+            );
+        }
+    }
+
+    /// D-01: a bare `$` (no `{` after it) is a legitimate key character.
+    #[test]
+    fn validate_accepts_a_bare_dollar_in_a_key() {
+        for key in ["$SK_PLACEHOLDER_VAR", "sk-$abc"] {
+            let cfg = auth_with_keys(vec![api_key("ci-runner", key, "platform-ops")]);
+            assert_eq!(cfg.validate(), Ok(()), "{key} has no `${{`");
+        }
+    }
+
+    /// D-02: the refusal does not depend on `enabled` -- a disabled section's keys take
+    /// effect the moment auth is re-enabled.
+    #[test]
+    fn validate_refuses_a_placeholder_key_while_auth_is_disabled() {
+        let key = "${SK_PLACEHOLDER_VAR}";
+        let mut cfg = auth_with_keys(vec![api_key("ci-runner", key, "platform-ops")]);
+        cfg.enabled = false;
+        let err = validation_error(&cfg);
+        assert_placeholder_refusal(&err, "ci-runner", key);
+    }
+
+    /// D-02: a later entry is named by its name, never by its list position.
+    #[test]
+    fn validate_names_a_later_entry_whose_key_is_a_placeholder() {
+        let key = "${SK_PLACEHOLDER_VAR}";
+        let cfg = auth_with_keys(vec![
+            api_key("ci-runner", "sk-ci", "platform-ops"),
+            api_key("frontend", key, "web-app"),
+        ]);
+        let err = validation_error(&cfg);
+        assert_placeholder_refusal(&err, "frontend", key);
+        assert!(!err.contains("#1"), "named by name, not by index: {err}");
+    }
+
+    /// D-02: the placeholder is reported before the tenant and duplicate-key checks.
+    #[test]
+    fn validate_reports_a_placeholder_key_before_tenant_and_duplicate_checks() {
+        let key = "${SK_PLACEHOLDER_VAR}";
+
+        // Two identical placeholder keys: the first entry is refused as a placeholder, not
+        // as a duplicate 'key'.
+        let cfg = auth_with_keys(vec![
+            api_key("first", key, "acme"),
+            api_key("second", key, "acme"),
+        ]);
+        let err = validation_error(&cfg);
+        assert_placeholder_refusal(&err, "first", key);
+        assert!(!err.contains("duplicate"), "not a duplicate report: {err}");
+
+        // A placeholder key with an empty tenant: the placeholder wins over the tenant check.
+        let cfg = auth_with_keys(vec![api_key("ci-runner", key, "")]);
+        let err = validation_error(&cfg);
+        assert_placeholder_refusal(&err, "ci-runner", key);
+        assert!(
+            !err.contains("'tenant' is required"),
+            "not a missing-tenant report: {err}"
+        );
     }
 }

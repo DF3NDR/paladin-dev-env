@@ -817,6 +817,39 @@ mod tests {
         );
     }
 
+    /// FIRST-01, D-03: an unexpanded `${...}` key is refused. `run()` calls
+    /// `build_auth_config` before `TcpListener::bind`, so this refusal happens before any
+    /// listener binds.
+    #[test]
+    fn build_auth_config_refuses_an_unexpanded_placeholder_key() {
+        let mut key = api_key("ci-runner");
+        key.key = "${PALADIN_API_KEY_CI}".to_string();
+        key.tenant = "platform-ops".to_string();
+        let cfg = AuthConfig {
+            enabled: true,
+            api_keys: vec![key],
+            bearer_token: BearerTokenAuthConfig {
+                enabled: false,
+                tenant: None,
+            },
+        };
+
+        match build_auth_config(&cfg) {
+            Ok(_) => panic!("a placeholder API key must refuse boot, not build an auth config"),
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    msg.starts_with("http.auth.api_keys[ci-runner]"),
+                    "the refusal names the entry: {msg}"
+                );
+                assert!(
+                    !msg.contains("PALADIN_API_KEY_CI"),
+                    "the refusal never prints the variable name: {msg}"
+                );
+            }
+        }
+    }
+
     // --- Phase 40 (TENANT-01, D-05): api_keys[].tenant / bearer_token.tenant fail-closed ---
 
     #[test]

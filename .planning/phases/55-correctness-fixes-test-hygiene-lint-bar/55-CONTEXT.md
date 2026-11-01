@@ -210,7 +210,7 @@ set), and the lockstep bump (Phase 58).
   `MIGRATION.md` §11.1 and `CHANGELOG.md` `[Unreleased]` record the status change.
   `[auto] Reason shape — Q: "New HaltReason variant, reuse LedgerUnavailable, or document the Failed mapping?" → "New additive variant model_unpriced" (recommended)`
   — **Reversibility:** reversible — a variant on a non-exhaustive enum; the wire tag is new.
-- **D-05 (FIXES-04): `RunStatusValue::Cancelled` is re-homed to the next minor, with the reason
+- **D-05:** **(FIXES-04) `RunStatusValue::Cancelled` is re-homed to the next minor, with the reason
   recorded; no code change in `paladin-eval` this phase.** Measured: `RunStatusValue` and
   `Assertion` are both exhaustive public enums of `paladin-eval`, a published package under the
   Phase 52 patch gate; adding a variant to either fires `enum_variant_added` (major), marking either
@@ -241,7 +241,7 @@ set), and the lockstep bump (Phase 58).
   Effect to record in `paladin-llm`'s `CHANGELOG.md` `[Unreleased]`: the Commissary / direct-config
   300 s reasoning-timeout default now applies to this model.
   `[auto] Evidence — Q: "Re-probe live or decide from the recorded probes?" → "From the recorded probes" (recommended)`
-- **D-07 (FIXES-06): one boot-time `warn!` per unpriced model that a metered principal can reach,
+- **D-07:** **(FIXES-06) one boot-time `warn!` per unpriced model that a metered principal can reach,
   in `build_run_api_with_cadence`, beside the TENANT-08 assertion.** A pure function
   (`unpriced_reachable_models(..)`, name the planner's) takes: whether a Treasurer is configured,
   whether any ceiling exists (`allowance.tenants` or `allowance.api_keys` non-empty — that is "a
@@ -353,7 +353,7 @@ set), and the lockstep bump (Phase 58).
 resolutions bind the plans; where they narrow a decision above, this note wins and the decision's
 original text stays as the record of what was first assumed.
 
-- **D-06 (FIXES-05) is reversed on the evidence: the `reasoning` flag stays `false`; FIXES-05 closes
+- **D-06:** **(FIXES-05, reconciled) reversed on the evidence: the `reasoning` flag stays `false`; FIXES-05 closes
   as verified-not-wrong.** `ModelProfile.reasoning` (`crates/paladin-llm/src/registry/model_profile.rs`)
   is documented as "whether the default call to this model returned reasoning text", not "can emit
   reasoning tokens". The 50.1 probe row 1 records `reasoning text: absent`; the 51 probe's default
@@ -373,7 +373,7 @@ original text stays as the record of what was first assumed.
   `Arc<dyn PaladinPort>` override; the two public functions keep their signatures and delegate
   with `None`. No public item is added, so `make api-surface` reads unchanged and no CHANGELOG
   line is owed for the seam itself.
-- **D-00f ordering is not binding.** `worker_tests.rs` already holds a hermetic test for the exact
+- **D-00f:** **(reconciled) the TESTS-01 → FIXES-03 ordering is not binding.** `worker_tests.rs` already holds a hermetic test for the exact
   arm (`agent_kind_run_whose_model_became_unpriced_fails_without_calling_the_llm`); FIXES-03's
   red-then-green is that test asserting `Halted` + `model_unpriced` (renamed accordingly). TESTS-01
   and FIXES-03 may land in either order or in parallel; an end-to-end check through the D-08 seam
@@ -396,7 +396,7 @@ original text stays as the record of what was first assumed.
   `engine/test_support.rs`). The scanner resolves such declarations to `name.rs` / `name/mod.rs`
   and excludes those files; the harness fixture includes this case. The red run reads 26 lines in
   3 files.
-- **D-11 sizing: 474 diagnostics under the default bar, 455 under the all-features bar, two
+- **D-11:** **(sizing, reconciled) 474 diagnostics under the default bar, 455 under the all-features bar, two
   classes, zero `invalid_html_tags`.** Per crate (default bar): ports 187, facade 140, llm 117,
   storage 27, notifications 3; 444 `unresolved link`, 30 `redundant explicit link target`. The two
   bars flag different sets, so every fix is checked under both. 380 diagnostics carry no source

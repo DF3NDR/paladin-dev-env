@@ -316,6 +316,21 @@ plant crates/x/src/lib.rs 'pub fn f() { #[cfg(test)] self_check(|| todo!()); }'
 assert_fire "${FX}" "#[cfg(test)] on an expression statement is reported (strict by design)" \
     "crates/x/src/lib.rs:${PLANT_LINE}: todo! outside #[cfg(test)]"
 
+# The raw identifier `r#where` is not the `where` keyword: it must not open a
+# where clause that stops the top-level `,` ending the scan (WR-03, round 4).
+fresh cfg-test-raw-where
+printf '%s\n' \
+    'pub struct S { #[cfg(test)] pub union: u8, pub other: u8 }' \
+    'pub fn make(r#where: u8) -> S {' \
+    '    S {' \
+    '        #[cfg(test)]' \
+    '        union: r#where,' \
+    '        other: todo!(),' \
+    '    }' \
+    '}' >"${FX}/crates/x/src/lib.rs"
+assert_fire "${FX}" "the raw identifier r#where opens no where clause" \
+    "crates/x/src/lib.rs:6: todo! outside #[cfg(test)]"
+
 fresh root-package
 printf '[package]\nname = "rootpkg"\nversion = "0.1.0"\n' >"${FX}/Cargo.toml"
 mkdir -p "${FX}/src"

@@ -405,7 +405,8 @@ def item_end(b, j):
             and paren == 0
             and brace == 0
             and WHERE_KW.match(b, k)
-            and not (b[k - 1].isalnum() or b[k - 1] == "_")
+            # `r#where` is a raw identifier, not the keyword
+            and not (b[k - 1].isalnum() or b[k - 1] in "_#")
         ):
             in_where = True
         elif c == "|":

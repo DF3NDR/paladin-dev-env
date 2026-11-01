@@ -11,6 +11,14 @@ and this project follows lockstep workspace versioning.
 
 - Correction to the `[0.11.0]` entry: this crate's own code did not change, but the `ContentItem` JSON it builds through `paladin-ai-core` now carries the entity under `entity` with its payload under `data` (v0.10 wrote `node`), one way. Anything that stores or exchanges that JSON must back up first and upgrade readers before writers (`MIGRATION.md` section 10.1 `M-B-12`; FIRST-05).
 
+### Removed
+
+- `services/content_filtering_service.rs`: a file that was commented out of the module tree and never compiled, holding six `todo!()` bodies. It exported nothing, so no consumer is affected (FIXES-01, Phase 55 plan 55-01).
+
+### Changed
+
+- `FileContentFetcher::ingest_content` returns an `Err` saying ingestion is unfinished and nothing was stored (after its per-type URL validation), where it returned `Ok(())` for an ingestion it never performed. No shipped caller of `ContentIngestionPort::ingest_content` exists (`MIGRATION.md` section 11.1 `M-B-33`; FIXES-02, Phase 55 plan 55-06).
+
 ## [0.11.0] - 2026-10-26
 
 No functional change; version bumped in lockstep with the workspace.

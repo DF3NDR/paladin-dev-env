@@ -11,11 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `RunWorkerPool::has_engine_factory` reports whether `with_engine_factory` was applied to the pool. It is the boot-time inspector behind the Treasurer wiring refusal below (TENANT-08).
 
+- Boot logs one `warn!` under the `paladin::pricing` target per model that has no `treasurer.pricing` row but is reachable by a metered principal (the code agent registry plus stored agent-kind assistants). Boot is never refused; the line names the model and the classes the check does not cover. Add the named rows (`MIGRATION.md` section 11.1 `M-B-32`, section 11.8; FIXES-06, Phase 55 plan 55-09).
+
 ### Changed
 
 - `k8s/server` now delivers the server config as the `config.yml` key of the `paladin-server-secrets` Secret, mounted by both Deployments. `k8s/server/configmap.yaml` and the per-caller API-key env injections and Secret keys are removed. The manifests' labels and image tags read the workspace version, which `make docker-build-server` now also tags (FIRST-01, FIRST-04; `MIGRATION.md` section 11.5).
 
 - `paladin-storage`: every `ContentListRepository` method on the SQLite and MySQL adapters returns `Err(RepositoryError::QueryError(..))` naming the method and backend instead of panicking; content lists were never persisted (`MIGRATION.md` section 11.1 `M-B-30`; FIXES-01, Phase 55).
+
+- An agent-kind run whose model lost its `treasurer.pricing` row between admission and dispatch now records `halted` with `halt_reason` `{"reason":"model_unpriced","model":"<name>"}` and no error, where v0.11.0 recorded `failed`; the webhook event is `halted`, and the call is still never made (`MIGRATION.md` section 11.1 `M-B-31`; FIXES-03, Phase 55 plan 55-02).
+
+- `PlanningService` (autonomous planning) no longer invents an expected output for a planned subtask: `Subtask.expected_output` is empty, and the subtask prompt omits its `EXPECTED OUTPUT` line when none is set (`MIGRATION.md` section 11.1 `M-B-35`; FIXES-02, Phase 55 plan 55-06).
 
 ### Security
 

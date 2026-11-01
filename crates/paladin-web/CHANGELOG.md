@@ -45,6 +45,8 @@ and this project follows lockstep workspace versioning.
 - `GET /v1/threads/{id}/history` of an unknown thread answers `404` for every role (was `200` with an
   empty page); the operation lists the `404` response in `openapi.json`.
 
+- The `RunResponse.halt_reason` documentation and the matching `openapi.json` description now name `model_unpriced` as a third halt reason. Only that description string changes; no schema, path or response shape changes (`MIGRATION.md` section 11.1 `M-B-31`, section 11.6; FIXES-03, Phase 55 plan 55-02).
+
 ## [0.11.0] - 2026-10-26
 
 ### Added

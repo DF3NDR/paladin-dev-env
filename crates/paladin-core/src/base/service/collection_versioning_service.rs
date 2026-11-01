@@ -56,7 +56,13 @@ pub struct CollectionVersionHistory<T> {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum CollectionChangeType {
     Created,
+    /// An item was added: the id of the affected item, or [`Uuid::nil`] when a
+    /// count-only comparison ([`CollectionVersionService::compare_collection_versions`])
+    /// could not tell which item changed.
     ItemAdded(Uuid),
+    /// An item was removed: the id of the affected item, or [`Uuid::nil`] when
+    /// a count-only comparison ([`CollectionVersionService::compare_collection_versions`])
+    /// could not tell which item changed.
     ItemRemoved(Uuid),
     ItemModified(Uuid),
     ItemsReordered,
@@ -97,6 +103,13 @@ pub trait CollectionVersionRepository<T> {
 }
 
 /// Collection Version Service
+///
+/// Unfinished scaffolding of the content / general-data orchestration system,
+/// retained pending the ADR-0060 (g) review. The review is recorded in
+/// `55-BASE-LAYER-REVIEW.md` (keep and fence). Change detection is count-only:
+/// it never names the item that was added or removed, and reports the nil
+/// [`Uuid`] sentinel instead of an invented id (see
+/// [`CollectionVersionComparison::detected_changes`]).
 ///
 /// # Examples
 ///
@@ -410,15 +423,18 @@ where
     ) -> Vec<CollectionChangeType> {
         let mut changes = Vec::new();
 
+        // A count-only comparison cannot tell which item was added or removed,
+        // so it reports the documented nil sentinel instead of an invented id.
+        // A per-item diff is not implemented (FIXES-02, D-03,
+        // `55-BASE-LAYER-REVIEW.md`).
         if items1.len() != items2.len() {
             if items1.len() < items2.len() {
-                changes.push(CollectionChangeType::ItemAdded(Uuid::new_v4())); // Simplified
+                changes.push(CollectionChangeType::ItemAdded(Uuid::nil()));
             } else {
-                changes.push(CollectionChangeType::ItemRemoved(Uuid::new_v4())); // Simplified
+                changes.push(CollectionChangeType::ItemRemoved(Uuid::nil()));
             }
         }
 
-        // In a real implementation, you'd do more sophisticated diff analysis
         if items1.len() == items2.len() && items1 != items2 {
             changes.push(CollectionChangeType::ItemsReordered);
         }
@@ -437,6 +453,12 @@ pub struct CollectionVersionComparison<T> {
     pub item_count_changed: bool,
     pub size_changed: bool,
     pub time_diff: chrono::Duration,
+    /// Count-based changes between the two versions. At most one
+    /// [`CollectionChangeType::ItemAdded`] or [`CollectionChangeType::ItemRemoved`]
+    /// entry, carrying the nil [`Uuid`] as the "item not tracked" sentinel of a
+    /// count-only comparison, when the item counts differ. When the counts are
+    /// equal and the items differ, the single entry
+    /// [`CollectionChangeType::ItemsReordered`]. Empty when the items are equal.
     pub detected_changes: Vec<CollectionChangeType>,
 }
 
@@ -1111,5 +1133,92 @@ mod tests {
         assert_eq!(history.current_version, 2);
         assert_eq!(history.versions[0].metadata.item_count, 1);
         assert_eq!(history.versions[1].metadata.item_count, 2);
+    }
+
+    /// Item fixture for the change-detection tests.
+    fn named(name: &str, value: i32) -> Item<TestItem> {
+        Item {
+            item: TestItem {
+                name: name.to_string(),
+                value,
+            },
+        }
+    }
+
+    /// Store `first` as version 1 and `second` as version 2 of one collection
+    /// and return the service with the collection id.
+    fn two_versions(
+        first: Vec<Item<TestItem>>,
+        second: Vec<Item<TestItem>>,
+    ) -> (CollectionVersionService<TestItem>, Uuid) {
+        let repository = Arc::new(InMemoryCollectionVersionRepository::<TestItem>::new());
+        let service = CollectionVersionService::new(repository, None);
+        let mut collection = CollectionType::new(Uuid::new_v4(), first);
+        service
+            .create_collection_version(&collection, ChangeType::Created, None, None)
+            .unwrap();
+        collection.items = second;
+        service
+            .create_collection_version(&collection, ChangeType::Updated, None, None)
+            .unwrap();
+        (service, collection.uuid)
+    }
+
+    #[test]
+    fn collection_count_changes_carry_the_nil_sentinel() {
+        let two = vec![named("a", 1), named("b", 2)];
+        let three = vec![named("a", 1), named("b", 2), named("c", 3)];
+
+        let (service, id) = two_versions(two.clone(), three.clone());
+        let grown = service.compare_collection_versions(id, 1, 2).unwrap();
+        assert_eq!(
+            grown.detected_changes,
+            vec![CollectionChangeType::ItemAdded(Uuid::nil())]
+        );
+
+        let (service, id) = two_versions(three, two);
+        let shrunk = service.compare_collection_versions(id, 1, 2).unwrap();
+        assert_eq!(
+            shrunk.detected_changes,
+            vec![CollectionChangeType::ItemRemoved(Uuid::nil())]
+        );
+        assert!(
+            !shrunk
+                .detected_changes
+                .contains(&CollectionChangeType::ItemsReordered)
+        );
+    }
+
+    #[test]
+    fn comparing_the_same_collection_versions_twice_is_identical() {
+        let (service, id) = two_versions(
+            vec![named("a", 1)],
+            vec![named("a", 1), named("b", 2), named("c", 3)],
+        );
+
+        let first = service.compare_collection_versions(id, 1, 2).unwrap();
+        let second = service.compare_collection_versions(id, 1, 2).unwrap();
+
+        assert_eq!(first.detected_changes, second.detected_changes);
+    }
+
+    #[test]
+    fn equal_collections_report_no_change() {
+        let items = vec![named("a", 1), named("b", 2)];
+
+        let (service, id) = two_versions(items.clone(), items.clone());
+        let same = service.compare_collection_versions(id, 1, 2).unwrap();
+        assert!(same.detected_changes.is_empty());
+
+        let (service, id) = two_versions(items, vec![named("a", 1), named("b", 3)]);
+        let differing = service.compare_collection_versions(id, 1, 2).unwrap();
+        assert_eq!(
+            differing.detected_changes,
+            vec![CollectionChangeType::ItemsReordered]
+        );
+
+        let (service, id) = two_versions(Vec::new(), Vec::new());
+        let empty = service.compare_collection_versions(id, 1, 2).unwrap();
+        assert!(empty.detected_changes.is_empty());
     }
 }

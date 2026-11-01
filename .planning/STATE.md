@@ -5,15 +5,15 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 54
 current_phase_name: First-Run Usability
 status: executing
-stopped_at: Completed 54-04-PLAN.md
-last_updated: "2026-11-01T00:35:28.953Z"
+stopped_at: Completed 54-05-PLAN.md
+last_updated: "2026-11-01T00:45:36.101Z"
 last_activity: 2026-11-01
 last_activity_desc: Phase 54 execution started
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 25
-  completed_plans: 20
+  completed_plans: 21
 ---
 
 # Project State
@@ -51,11 +51,11 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 ## Current Position
 
 Phase: 54 (First-Run Usability) — EXECUTING
-Plan: 5 of 9
+Plan: 6 of 9
 Status: Ready to execute
 Last activity: 2026-11-01 — Phase 54 execution started
 
-Progress: [██████░░░░░░░░░░░░░░] 2/7 phases ([████████░░] 80%) — Phase 53 plans [████████████████████] 8/8 (100%)
+Progress: [██████░░░░░░░░░░░░░░] 2/7 phases ([████████░░] 84%) — Phase 53 plans [████████████████████] 8/8 (100%)
 
 ## Performance Metrics
 
@@ -376,6 +376,7 @@ Progress: [██████░░░░░░░░░░░░░░] 2/7 pha
 | Phase 54 P02 | 10min | 2 tasks | 3 files |
 | Phase 54 P03 | 5min | 2 tasks | 6 files |
 | Phase 54 P04 | 8min | 3 tasks | 10 files |
+| Phase 54 P05 | 15min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -706,6 +707,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: Phase 54-01: HTTP API keys containing '${' are refused at config load (substring check, any auth state, before tenant/duplicate checks); message names the entry, never the value or variable (FIRST-01)
 - [Phase ?]: 54-03: prose banners naming the current release made version-free (PD-03-1) so only gated pattern classes carry a literal workspace version
 - [Phase ?]: 54-04: present-tense version claims and deployment image tags made version-free (X.Y.Z placeholders matching release.yml), not bumped; architecture-decisions.md swept not exempted
+- [Phase ?]: 54-05: crate corrections under [Unreleased] ### Fixed; ADR-0056 amended in place citing ADR-0057; node-cache key/rotation text lives in fault-tolerance.md and is linked elsewhere
 
 ### Pending Todos
 
@@ -1067,8 +1069,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-11-01T00:35:28.935Z
-Stopped at: Completed 54-04-PLAN.md
+Last session: 2026-11-01T00:45:36.081Z
+Stopped at: Completed 54-05-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

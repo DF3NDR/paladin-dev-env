@@ -115,12 +115,12 @@ fails is rebuilt.*
 - [ ] **FIRST-04**: `k8s/server/worker-deployment.yaml` (`v0.10.0`) and `k8s/server/deployment.yaml`
       (`v0.6.0`) `version:` labels read the current release and are covered by FIRST-03's guard — C4
 
-- [ ] **FIRST-05**: The `[0.11.1]` entries of `crates/paladin-memory/CHANGELOG.md` and
+- [x] **FIRST-05**: The `[0.11.1]` entries of `crates/paladin-memory/CHANGELOG.md` and
       `crates/paladin-content/CHANGELOG.md` correct the `[0.11.0]` "No functional change" wording
       with the one-way persisted-key change (`paladin.node` → `paladin.data`, MIGRATION 10.1
       M-B-12) — C5, 47-REVIEW WR-01
 
-- [ ] **FIRST-06**: The `src/application/services/treasurer/tests.rs` doc comment and ADR-0056's
+- [x] **FIRST-06**: The `src/application/services/treasurer/tests.rs` doc comment and ADR-0056's
       Downstream Consumers line no longer say Phase 42 closes the over-admission race with a
       reservation; both cite ADR-0057 (check-only) — C6
 
@@ -132,7 +132,7 @@ fails is rebuilt.*
 - [ ] **FIRST-08**: `.project/current-exports.txt` is regenerated with `make api-surface` on the
       pinned nightly and committed, carrying the `UnsupportedParameter` / `check_reasoning` rows — C10
 
-- [ ] **FIRST-09**: The node-cache guide states that the server attaches no node cache (the PACE-04
+- [x] **FIRST-09**: The node-cache guide states that the server attaches no node cache (the PACE-04
       stampede lock is a library builder only) and documents the cache-key version and the
       `key_prefix` rotation for a provider-level default effort change — B10, B12
 
@@ -326,11 +326,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | FIRST-02 | Phase 54 | Complete |
 | FIRST-03 | Phase 54 | Pending |
 | FIRST-04 | Phase 54 | Pending |
-| FIRST-05 | Phase 54 | Pending |
-| FIRST-06 | Phase 54 | Pending |
+| FIRST-05 | Phase 54 | Complete |
+| FIRST-06 | Phase 54 | Complete |
 | FIRST-07 | Phase 54 | Pending |
 | FIRST-08 | Phase 54 | Pending |
-| FIRST-09 | Phase 54 | Pending |
+| FIRST-09 | Phase 54 | Complete |
 | FIXES-01 | Phase 55 | Pending |
 | FIXES-02 | Phase 55 | Pending |
 | FIXES-03 | Phase 55 | Pending |

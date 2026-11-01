@@ -170,7 +170,7 @@ fails is rebuilt.*
 - [x] **FIXES-05**: The `claude-opus-4-8` seeded registry row is verified against the 50.1 probe
       record and its `reasoning` flag corrected if wrong — B6, audit G7
 
-- [ ] **FIXES-06**: Server boot (or admission) warns once per model that is reachable by a metered
+- [x] **FIXES-06**: Server boot (or admission) warns once per model that is reachable by a metered
       principal but has no `treasurer.pricing` row; workflow assistants are not refused — B4,
       WINDOWS row 67
 
@@ -355,7 +355,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | FIXES-03 | Phase 55 | Complete |
 | FIXES-04 | Phase 55 | Re-homed (next minor) |
 | FIXES-05 | Phase 55 | Complete |
-| FIXES-06 | Phase 55 | Pending |
+| FIXES-06 | Phase 55 | Complete |
 | TESTS-01 | Phase 55 | Pending |
 | TESTS-02 | Phase 55 | Complete |
 | TESTS-03 | Phase 55 | Complete |

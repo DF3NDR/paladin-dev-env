@@ -5,15 +5,15 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 55
 current_phase_name: Correctness Fixes, Test Hygiene & Lint Bar
 status: executing
-stopped_at: Completed 55-11-PLAN.md
-last_updated: "2026-11-01T18:22:55.206Z"
+stopped_at: Completed 55-12-PLAN.md
+last_updated: "2026-11-01T18:56:00.704Z"
 last_activity: 2026-11-01
 last_activity_desc: Phase 55 execution started
 progress:
   total_phases: 4
   completed_phases: 3
   total_plans: 38
-  completed_plans: 36
+  completed_plans: 37
 ---
 
 # Project State
@@ -51,11 +51,11 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 ## Current Position
 
 Phase: 55 (Correctness Fixes, Test Hygiene & Lint Bar) — EXECUTING
-Plan: 12 of 13
+Plan: 13 of 13
 Status: Ready to execute
 Last activity: 2026-11-01 — Phase 55 execution started
 
-Progress: [█████████░░░░░░░░░░░] 3/7 phases ([██████████] 95%) — Phase 54 plans [████████████████████] 9/9 (100%)
+Progress: [█████████░░░░░░░░░░░] 3/7 phases ([██████████] 97%) — Phase 54 plans [████████████████████] 9/9 (100%)
 
 ## Performance Metrics
 
@@ -393,6 +393,7 @@ Progress: [█████████░░░░░░░░░░░] 3/7 pha
 | Phase 55 P09 | 11 min | 3 tasks | 3 files |
 | Phase 55 P10 | 40min | 2 tasks | 31 files |
 | Phase 55 P11 | 40 min | 3 tasks | 39 files |
+| Phase 55 P12 | 30min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -740,6 +741,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 55]: 55-09: the run engine's PaladinPort is injected only through the pub(crate) EnginePortSource seam (override Some only in run_api_wiring tests); the boot warning for unpriced reachable models is advisory, covers the code registry plus stored agent-kind assistants, and logs under paladin::pricing without refusing boot — D-07 and D-08 as reconciled: no public item added, B4 never refuses, three unchecked classes named in the warning and the guides
 - [Phase ?]: Phase 55-10: paladin-llm, paladin-storage and paladin-notifications crate-level rustdoc suppressions removed; feature-gated, private and pub(crate) link targets are plain code spans, unconditional ports/core targets get explicit paths; the workspace default bar unifies features so per-crate default, all-features and no-default-features runs are also checked (CIREL-08, D-11)
 - [Phase 55]: 55-11: all eight crate-level rustdoc suppressions removed; ADR-0033 amended in place (474/455 supersede 309); doc-coverage-report.md regenerated at 14ee125e7 — Implemented methods link to the trait method; feature-gated, private and cfg(test) targets are code spans; the workspace bars hide links a per-crate cargo doc -p run flags
+- [Phase 55]: Plan 55-12: base-layer review verdict is keep all eight items, fence five fabricating ones, remove/rename/finish nothing; options A/B/C are next-minor candidates
 
 ### Pending Todos
 
@@ -1111,8 +1113,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-11-01T18:22:55.165Z
-Stopped at: Completed 55-11-PLAN.md
+Last session: 2026-11-01T18:56:00.679Z
+Stopped at: Completed 55-12-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

@@ -469,7 +469,7 @@ Plans:
 **Wave 3** *(blocked on Wave 2 completion)*
 
 - [x] 55-11-PLAN.md — the facade's rustdoc fixed and its three suppressions removed, `make doc-check` green with all eight gone; ADR-0033 amended in place; `doc-coverage-report.md` regenerated as a dated measurement (CIREL-08)
-- [ ] 55-12-PLAN.md — CHANGELOG `[Unreleased]` entries (new `paladin-storage` anchor) and `MIGRATION.md` `M-B-30`..`M-B-35`, §11.6, §11.8; `55-BASE-LAYER-REVIEW.md`; the 2026-10-13 todo closed (FIXES-01, FIXES-02, FIXES-03, FIXES-06)
+- [x] 55-12-PLAN.md — CHANGELOG `[Unreleased]` entries (new `paladin-storage` anchor) and `MIGRATION.md` `M-B-30`..`M-B-35`, §11.6, §11.8; `55-BASE-LAYER-REVIEW.md`; the 2026-10-13 todo closed (FIXES-01, FIXES-02, FIXES-03, FIXES-06)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

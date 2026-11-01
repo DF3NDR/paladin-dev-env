@@ -152,7 +152,7 @@ fails is rebuilt.*
       `services/mod.rs` and not compiled — delete it or keep it fenced, it is not the reachable panic
       — B2, DF-03 (target corrected 2026-10-27 at roadmap time)
 
-- [ ] **FIXES-02**: The unfinished content / general-data base-layer items (`Field`, `Collection`,
+- [x] **FIXES-02**: The unfinished content / general-data base-layer items (`Field`, `Collection`,
       `element`, `FieldVersionService`, `CollectionVersioningService`) and the content-processing
       stubs (`planning_service.rs:417` placeholder output, `file_content_fetcher.rs` ingestion
       TODOs) are reviewed with a recorded keep / fence / remove decision each; anything kept and
@@ -337,7 +337,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | FIRST-08 | Phase 54 | Complete |
 | FIRST-09 | Phase 54 | Complete |
 | FIXES-01 | Phase 55 | Complete |
-| FIXES-02 | Phase 55 | Pending |
+| FIXES-02 | Phase 55 | Complete |
 | FIXES-03 | Phase 55 | Complete |
 | FIXES-04 | Phase 55 | Pending |
 | FIXES-05 | Phase 55 | Complete |

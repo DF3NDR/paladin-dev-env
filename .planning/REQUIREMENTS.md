@@ -158,7 +158,7 @@ fails is rebuilt.*
       TODOs) are reviewed with a recorded keep / fence / remove decision each; anything kept and
       unfinished refuses cleanly and says so in its rustdoc — G3, E9, todo 2026-10-13
 
-- [ ] **FIXES-03**: A `DispatchBudget::Unpriced` outcome on an agent-kind run records `Halted`, not
+- [x] **FIXES-03**: A `DispatchBudget::Unpriced` outcome on an agent-kind run records `Halted`, not
       `Failed` (or, if the mapping is not a local change, the behavior is documented in the Treasurer
       guide with the reason) — B3, audit G3
 
@@ -338,7 +338,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | FIRST-09 | Phase 54 | Complete |
 | FIXES-01 | Phase 55 | Complete |
 | FIXES-02 | Phase 55 | Pending |
-| FIXES-03 | Phase 55 | Pending |
+| FIXES-03 | Phase 55 | Complete |
 | FIXES-04 | Phase 55 | Pending |
 | FIXES-05 | Phase 55 | Pending |
 | FIXES-06 | Phase 55 | Pending |

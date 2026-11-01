@@ -5,6 +5,12 @@ All notable changes to `paladin-storage` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows lockstep workspace versioning.
 
+## [Unreleased]
+
+### Changed
+
+- Every `ContentListRepository` method on `SqliteStore` (feature `sqlite`) and `MySqlContentRepository` (feature `mysql`) now returns `Err(RepositoryError::QueryError("ContentListRepository::<method> is unfinished for the <backend> backend: content lists are not persisted"))` instead of panicking the calling thread. Neither backend persists content lists; a caller that used these methods must handle the `Err` (`MIGRATION.md` section 11.1 `M-B-30`; FIXES-01, Phase 55).
+
 ## [0.11.0] - 2026-10-26
 
 ### Fixed

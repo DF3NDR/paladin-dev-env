@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Boot refuses a configured Treasurer whose run worker pool has no engine factory, naming the misconfiguration before any worker spawns or listener binds. The shipped `build_run_api` wiring always installs the factory and is unaffected; only an embedder building its own pool wiring can hit the refusal (TENANT-08).
 - The reserved literals `open-access` and `unattributed` are refused as an `http.auth.api_keys[].name`, `http.auth.api_keys[].tenant` or enabled `http.auth.bearer_token.tenant`, and `anonymous` as an `http.auth.api_keys[].name`, at config load with a message naming the entry and never the key (TENANT-09). Matching is exact and case-sensitive.
 - Boot logs one `warn!` listing schedules with no recorded creator (`NULL created_by`), read-only, with the re-create action; an unreadable schedule row is one fixed `error!` line and never blocks boot (TENANT-10).
+- An `http.auth.api_keys[].key` containing `${` is refused at config load, naming the entry and never the value; the text was previously accepted as the key itself, so a key copied from the example config authenticated any caller who sent that text. `config.example.yml` now ships no loadable key, so the `Dockerfile.server` image needs a mounted config with a literal key (FIRST-01; `MIGRATION.md` `M-B-29`).
 
 ## [0.11.0] - 2026-10-26
 

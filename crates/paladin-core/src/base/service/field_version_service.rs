@@ -69,6 +69,14 @@ pub trait FieldVersionRepository<T> {
         &self,
         field_id: Uuid,
     ) -> Result<Option<FieldVersion<T>>, VersioningError>;
+    /// Return the complete, version-ordered history of a field.
+    ///
+    /// # Errors
+    ///
+    /// [`VersioningError::EntityNotFound`] carrying `field_id` when the field
+    /// has no stored version: there is no history and no parent id to report
+    /// (FIXES-02, D-03). Storage failures surface as
+    /// [`VersioningError::StorageError`].
     fn get_field_version_history(
         &self,
         field_id: Uuid,
@@ -90,6 +98,13 @@ pub trait FieldVersionRepository<T> {
 }
 
 /// Field Version Service
+///
+/// Unfinished scaffolding of the content / general-data orchestration system,
+/// retained pending the ADR-0060 (g) review. The review is recorded in
+/// `55-BASE-LAYER-REVIEW.md` (keep and fence). The fence is that a field with
+/// no stored version is refused with [`VersioningError::EntityNotFound`] for
+/// its history rather than given an invented parent id. The in-memory
+/// repository is the only implementation.
 ///
 /// # Examples
 ///
@@ -244,6 +259,12 @@ where
     }
 
     /// Get complete version history for a field
+    ///
+    /// # Errors
+    ///
+    /// [`VersioningError::EntityNotFound`] carrying `field_id` when the field
+    /// has no stored version, because there is no history and no parent id to
+    /// report (FIXES-02, D-03).
     pub fn get_field_version_history(
         &self,
         field_id: Uuid,
@@ -481,10 +502,12 @@ where
 
         let current_version = current_versions.get(&field_id).copied().unwrap_or(0);
         let total_versions = field_versions.len() as u32;
+        // A field with no stored version has no history and no parent id to
+        // report. Refuse instead of inventing a `node_id` (FIXES-02, D-03).
         let node_id = field_versions
             .first()
             .map(|v| v.node_id)
-            .unwrap_or_else(Uuid::new_v4);
+            .ok_or(VersioningError::EntityNotFound(field_id))?;
 
         Ok(FieldVersionHistory {
             field_id,
@@ -532,7 +555,12 @@ where
         field_id: Uuid,
         keep_count: u32,
     ) -> Result<u32, VersioningError> {
-        let history = self.get_field_version_history(field_id)?;
+        let history = match self.get_field_version_history(field_id) {
+            Ok(history) => history,
+            // Nothing stored means nothing to purge, which is an honest `Ok(0)`.
+            Err(VersioningError::EntityNotFound(_)) => return Ok(0),
+            Err(other) => return Err(other),
+        };
 
         if history.total_versions <= keep_count {
             return Ok(0);
@@ -596,5 +624,35 @@ mod tests {
         let history = service.get_field_version_history(field.fid).unwrap();
         assert_eq!(history.total_versions, 2);
         assert_eq!(history.current_version, 2);
+        assert_eq!(history.node_id, field.nid);
+    }
+
+    #[test]
+    fn field_version_history_of_an_unversioned_field_is_entity_not_found() {
+        let repository = Arc::new(InMemoryFieldVersionRepository::<String>::new());
+        let service = FieldVersionService::new(repository.clone(), None);
+        let field_id = Uuid::new_v4();
+
+        match service.get_field_version_history(field_id) {
+            Err(VersioningError::EntityNotFound(id)) => assert_eq!(id, field_id),
+            Err(other) => panic!("expected EntityNotFound, got {other:?}"),
+            Ok(history) => panic!("expected a refusal, got a history for {}", history.node_id),
+        }
+        match repository.get_field_version_history(field_id) {
+            Err(VersioningError::EntityNotFound(id)) => assert_eq!(id, field_id),
+            Err(other) => panic!("expected EntityNotFound, got {other:?}"),
+            Ok(history) => panic!("expected a refusal, got a history for {}", history.node_id),
+        }
+    }
+
+    #[test]
+    fn purging_an_unversioned_field_purges_nothing() {
+        let repository = InMemoryFieldVersionRepository::<String>::new();
+
+        let purged = repository
+            .purge_old_field_versions(Uuid::new_v4(), 1)
+            .unwrap();
+
+        assert_eq!(purged, 0);
     }
 }

@@ -578,9 +578,9 @@ default a model cannot honour is found when the agent is built.
 
 The Aegis node cache key includes an agent's `reasoning_effort` and `reasoning_fallback` when they
 are set, so an A/B run at `low` and then `high` is not served from the cache. An unset effort adds
-nothing, so existing keys are unchanged. A **provider-level** default is not part of the key: after
-changing `llm.<provider>.reasoning_effort`, start with a fresh node-cache namespace (change the
-`key_prefix`, see [Aegis](fault-tolerance.md)) or clear the cache.
+nothing, so existing keys are unchanged. A **provider-level** default is not part of the key; see
+[Cache key version and rotation](fault-tolerance.md#cache-key-version-and-rotation) before changing
+`llm.<provider>.reasoning_effort`.
 
 ### Reasoning text is not requested
 

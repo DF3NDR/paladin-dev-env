@@ -668,8 +668,9 @@ rollout and outage behaviour.
 - **`lock_ttl_secs`:** the lifetime of the cache stampede lock a library-built `WarEngine` takes
   around a cached node (`WarEngine::with_cadence`, shipped in the same release). Choose a value
   above the p99 duration of a cached node including its retries: the lock is not renewed, and a
-  waiter that outlasts it runs the node itself. `paladin-server` attaches no node cache, so the key
-  has no effect on the shipped server today.
+  waiter that outlasts it runs the node itself. `paladin-server` attaches no node cache
+  ([Node cache on the shipped server](../user-guides/fault-tolerance.md#node-cache-on-the-shipped-server)),
+  so the key has no effect on the shipped server today.
 
 `backend` has no environment override: the Redis URL travels only through the variable
 `url_env` names, so it never appears in a config file, a serialised config or a log line. A

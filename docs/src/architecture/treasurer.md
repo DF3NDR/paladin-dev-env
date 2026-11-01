@@ -99,6 +99,18 @@ such a model is refused `422 model_unpriced`. The key format, the numeric limits
 cases are in the [Treasurer pricing](../getting-started/configuration.md#treasurer-pricing)
 reference.
 
+**Boot warning.** At boot, when an allowance is configured, the server logs one warning under the
+log target `paladin::pricing` for every code-registered agent model and every stored agent-kind
+assistant model that has no row. Boot continues, and workflow assistants are not refused. The
+warning does not check workflow graph-node models (the assistant resolver cannot list them),
+agents provisioned at runtime, or agent-kind assistants created after boot. Graph-node pricing
+coverage is an accepted, documented gap (`.planning/WINDOWS.md` row 67), so price every model a
+graph can reach. One line looks like this:
+
+```text
+model `example-model` is reachable by a metered principal but has no treasurer.pricing row: agent-kind calls on it are refused at admission (422 model_unpriced) or halted at dispatch (model_unpriced); workflow assistants are not refused; workflow graph-node models, runtime-provisioned agents and agent-kind assistants created after boot are not checked here -- add a treasurer.pricing row for it
+```
+
 ## Rate pacing (Cadence)
 
 Cadence is the one who sets the marching pace. It paces calls per (provider, model) after a

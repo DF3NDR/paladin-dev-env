@@ -806,9 +806,11 @@ fn unpriced_model_warning_line(model: &str) -> String {
     format!(
         "model `{}` is reachable by a metered principal but has no treasurer.pricing row: \
          agent-kind calls on it are refused at admission (422 model_unpriced) or halted at \
-         dispatch (model_unpriced); workflow assistants are not refused; workflow graph-node \
-         models, runtime-provisioned agents and agent-kind assistants created after boot are \
-         not checked here -- add a treasurer.pricing row for it",
+         dispatch (model_unpriced); workflow assistants are not refused; every stored version \
+         (including pinned older ones) of the agent-kind assistants stored at boot is checked, \
+         but workflow graph-node models, runtime-provisioned agents and agent-kind assistants \
+         or versions created after boot are not checked here -- add a treasurer.pricing row \
+         for it",
         model.escape_debug()
     )
 }
@@ -816,11 +818,12 @@ fn unpriced_model_warning_line(model: &str) -> String {
 /// How many assistants each page of the boot-time stored-model scan asks for (D-07).
 const ASSISTANT_SCAN_PAGE: u32 = 100;
 
-/// What the boot-time stored-model scan found: the model of every stored, non-deleted agent-kind
-/// assistant at its latest version, and where the walk stopped if something could not be read.
+/// What the boot-time stored-model scan found: the model of every agent-kind version of every
+/// stored, non-deleted assistant, and where the walk stopped if something could not be read.
 #[derive(Debug, Default)]
 struct StoredAgentModelScan {
-    /// One entry per agent-kind assistant read, in page order (not de-duplicated).
+    /// One entry per agent-kind version read, in assistant page order and then ascending version
+    /// order (not de-duplicated: [`unpriced_reachable_models`] de-duplicates).
     models: Vec<String>,
     /// `Some` when a page or a version could not be read: the id of the last assistant read
     /// completely before the stop (`None` inside means the very first page). Carries no error
@@ -828,14 +831,15 @@ struct StoredAgentModelScan {
     stopped_after: Option<Option<AssistantId>>,
 }
 
-/// FIXES-06, D-07: walk every stored, non-deleted assistant once, read-only, and collect the
-/// `model` of each agent-kind assistant's latest version -- the models a stored assistant can send
-/// a metered run to.
+/// FIXES-06, D-07, WR-01: walk every stored, non-deleted assistant once, read-only, and collect
+/// the `model` of every agent-kind version in its history -- the models a stored assistant can
+/// send a metered run to, since a run or schedule may pin any version, not only the latest.
 ///
-/// Pages with `list(ASSISTANT_SCAN_PAGE, cursor, false)` to exhaustion and reads one
-/// `get_version(id, latest)` per item; only those two read methods are ever called. An unreadable
-/// page or version ends the walk and is recorded without its error text; the function never
-/// returns an error, so the boot that called it is never blocked.
+/// Pages with `list(ASSISTANT_SCAN_PAGE, cursor, false)` to exhaustion and walks each item's
+/// history with `list_versions(id, ASSISTANT_SCAN_PAGE, cursor)`; only those two read methods are
+/// ever called. An unreadable page or version page (or a version cursor that does not advance)
+/// ends the walk and is recorded without its error text; the function never returns an error, so
+/// the boot that called it is never blocked.
 async fn scan_stored_agent_models(repo: &dyn AssistantRepositoryPort) -> StoredAgentModelScan {
     scan_stored_agent_models_paged(repo, ASSISTANT_SCAN_PAGE).await
 }
@@ -860,28 +864,61 @@ async fn scan_stored_agent_models_paged(
             }
         };
         for item in &page.items {
-            match repo.get_version(&item.assistant_id, item.latest).await {
-                Ok(Some(version)) if version.definition.kind == AssistantKind::Agent => {
-                    if let Some(model) = version
-                        .definition
-                        .body
-                        .get("model")
-                        .and_then(serde_json::Value::as_str)
-                    {
-                        scan.models.push(model.to_owned());
-                    }
-                }
-                Ok(_) => {}
-                Err(_) => {
-                    scan.stopped_after = Some(last_read);
-                    return scan;
-                }
+            if !collect_agent_version_models(repo, &item.assistant_id, page_size, &mut scan.models)
+                .await
+            {
+                scan.stopped_after = Some(last_read);
+                return scan;
             }
             last_read = Some(item.assistant_id.clone());
         }
         match page.next_cursor {
             Some(next) => cursor = Some(next),
             None => return scan,
+        }
+    }
+}
+
+/// Walk one stored assistant's whole version history with `list_versions(id, page_size, cursor)`
+/// (ascending by version, `next_cursor` followed until `None`) and push the `model` of every
+/// agent-kind version onto `models` (WR-01): a run or schedule can pin any version from 1 to
+/// `latest`, so an older version's model is as reachable as the latest one's. A non-agent version,
+/// or one whose body has no string `model`, is skipped.
+///
+/// Returns `false` when the history could not be read to its end: a version page failed, or the
+/// store handed back a cursor that does not advance (not greater than the previous one, or a
+/// non-empty cursor on an empty page), which would otherwise loop boot forever. The error text is
+/// dropped here; the caller records only the position (P2 of D-14).
+async fn collect_agent_version_models(
+    repo: &dyn AssistantRepositoryPort,
+    assistant_id: &AssistantId,
+    page_size: u32,
+    models: &mut Vec<String>,
+) -> bool {
+    let mut cursor: Option<u32> = None;
+    loop {
+        let Ok(page) = repo.list_versions(assistant_id, page_size, cursor).await else {
+            return false;
+        };
+        models.extend(
+            page.items
+                .iter()
+                .filter(|version| version.definition.kind == AssistantKind::Agent)
+                .filter_map(|version| {
+                    version
+                        .definition
+                        .body
+                        .get("model")
+                        .and_then(serde_json::Value::as_str)
+                })
+                .map(str::to_owned),
+        );
+        match page.next_cursor {
+            None => return true,
+            Some(next) if page.items.is_empty() || cursor.is_some_and(|prev| next <= prev) => {
+                return false;
+            }
+            Some(next) => cursor = Some(next),
         }
     }
 }
@@ -1978,7 +2015,8 @@ mod tests {
             "workflow assistants are not refused",
             "graph-node",
             "runtime-provisioned",
-            "created after boot",
+            "every stored version (including pinned older ones)",
+            "agent-kind assistants or versions created after boot",
         ] {
             assert!(line.contains(needle), "missing {needle:?} in {line}");
         }
@@ -2023,13 +2061,15 @@ mod tests {
         }
     }
 
-    /// FIXES-06, D-07: the stored scan reads agent-kind assistants only, at their latest version,
-    /// skips workflow and soft-deleted ones, pages to exhaustion, and reports no stop.
+    /// FIXES-06, D-07, WR-01: the stored scan reads agent-kind assistants only, at EVERY stored
+    /// version (a pinned older version still runs), skips workflow and soft-deleted ones, pages
+    /// to exhaustion, and reports no stop.
     #[tokio::test]
     async fn stored_agent_model_scan_reads_agent_kind_models_only() {
         use paladin_storage::assistant::in_memory::InMemoryAssistantRepository;
         let repo = InMemoryAssistantRepository::new();
-        // `stored-a` is republished: only the LATEST version's model counts.
+        // `stored-a` is republished: v1 stays reachable by a pinned run or schedule, so its
+        // model counts as well as the latest one's.
         seed_assistant_version(
             &repo,
             "stored-a",
@@ -2063,7 +2103,10 @@ mod tests {
             .expect("soft delete");
 
         let scan = scan_stored_agent_models_paged(&repo, 1).await;
-        assert_eq!(scan.models, vec!["stored-a".to_string()]);
+        assert_eq!(
+            scan.models,
+            vec!["stored-old".to_string(), "stored-a".to_string()]
+        );
         assert!(scan.stopped_after.is_none(), "{:?}", scan.stopped_after);
         assert!(stored_scan_stop_line(&scan).is_none());
 
@@ -2072,15 +2115,71 @@ mod tests {
         assert_eq!(default_scan.models, scan.models);
     }
 
-    /// An `AssistantRepositoryPort` that delegates to an in-memory store except that its SECOND
-    /// `list` call fails with an error text that must never reach a log line.
-    struct FailsSecondListAssistants {
+    /// FIXES-06, D-07, WR-01: a version history longer than one page is walked to its end, in
+    /// ascending version order, and a version without a string `model` is skipped.
+    #[tokio::test]
+    async fn stored_agent_model_scan_pages_through_every_version() {
+        use paladin_storage::assistant::in_memory::InMemoryAssistantRepository;
+        let repo = InMemoryAssistantRepository::new();
+        for body in [
+            serde_json::json!({"model": "hist-1", "system_prompt": "p"}),
+            serde_json::json!({"system_prompt": "no model on this version"}),
+            serde_json::json!({"model": "hist-3", "system_prompt": "p"}),
+            serde_json::json!({"model": 7, "system_prompt": "not a string"}),
+            serde_json::json!({"model": "hist-5", "system_prompt": "p"}),
+        ] {
+            seed_assistant_version(&repo, "hist", AssistantKind::Agent, body).await;
+        }
+        seed_assistant_version(
+            &repo,
+            "later",
+            AssistantKind::Agent,
+            serde_json::json!({"model": "later-1", "system_prompt": "p"}),
+        )
+        .await;
+
+        // Two versions per page: `hist` takes three version pages.
+        let scan = scan_stored_agent_models_paged(&repo, 2).await;
+        assert_eq!(
+            scan.models,
+            ["hist-1", "hist-3", "hist-5", "later-1"]
+                .map(str::to_string)
+                .to_vec()
+        );
+        assert!(scan.stopped_after.is_none(), "{:?}", scan.stopped_after);
+    }
+
+    /// An `AssistantRepositoryPort` that delegates to an in-memory store, except that it can fail
+    /// one chosen `list` or `list_versions` call (0-based) with an error text that must never
+    /// reach a log line, or hand back a version cursor that never advances.
+    struct ScriptedAssistants {
         inner: paladin_storage::assistant::in_memory::InMemoryAssistantRepository,
         list_calls: std::sync::atomic::AtomicUsize,
+        fail_list_call: Option<usize>,
+        version_calls: std::sync::atomic::AtomicUsize,
+        fail_version_call: Option<usize>,
+        stuck_version_cursor: bool,
+    }
+
+    impl ScriptedAssistants {
+        fn new(
+            fail_list_call: Option<usize>,
+            fail_version_call: Option<usize>,
+            stuck_version_cursor: bool,
+        ) -> Self {
+            Self {
+                inner: paladin_storage::assistant::in_memory::InMemoryAssistantRepository::new(),
+                list_calls: std::sync::atomic::AtomicUsize::new(0),
+                fail_list_call,
+                version_calls: std::sync::atomic::AtomicUsize::new(0),
+                fail_version_call,
+                stuck_version_cursor,
+            }
+        }
     }
 
     #[async_trait]
-    impl AssistantRepositoryPort for FailsSecondListAssistants {
+    impl AssistantRepositoryPort for ScriptedAssistants {
         async fn create(
             &self,
             assistant_id: &AssistantId,
@@ -2132,7 +2231,7 @@ mod tests {
             let call = self
                 .list_calls
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            if call == 1 {
+            if Some(call) == self.fail_list_call {
                 return Err(
                     paladin_ports::output::assistant_repository_port::AssistantRepositoryError::Serialization {
                         message: "row 2 is corrupt: secret-row-detail".to_string(),
@@ -2150,7 +2249,25 @@ mod tests {
             paladin_ports::output::assistant_repository_port::AssistantVersionPage,
             paladin_ports::output::assistant_repository_port::AssistantRepositoryError,
         > {
-            self.inner.list_versions(assistant_id, limit, cursor).await
+            let call = self
+                .version_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if Some(call) == self.fail_version_call {
+                return Err(
+                    paladin_ports::output::assistant_repository_port::AssistantRepositoryError::Serialization {
+                        message: "version 2 is corrupt: secret-version-detail".to_string(),
+                    },
+                );
+            }
+            let mut page = self
+                .inner
+                .list_versions(assistant_id, limit, cursor)
+                .await?;
+            if self.stuck_version_cursor {
+                // A buggy store: always the same cursor, so a naive walk never ends.
+                page.next_cursor = Some(1);
+            }
+            Ok(page)
         }
         async fn soft_delete(
             &self,
@@ -2166,10 +2283,7 @@ mod tests {
     /// The scan returns a value, never an error, so boot is never blocked.
     #[tokio::test]
     async fn stored_agent_model_scan_stops_at_an_unreadable_page() {
-        let repo = FailsSecondListAssistants {
-            inner: paladin_storage::assistant::in_memory::InMemoryAssistantRepository::new(),
-            list_calls: std::sync::atomic::AtomicUsize::new(0),
-        };
+        let repo = ScriptedAssistants::new(Some(1), None, false);
         for (id, model) in [("a-1", "model-1"), ("a-2", "model-2"), ("a-3", "model-3")] {
             seed_assistant_version(
                 &repo.inner,
@@ -2204,6 +2318,84 @@ mod tests {
 
         // The reporter is infallible and logs through the pricing target.
         report_unpriced_reachable_models(&["model-1".to_string()], Some(line));
+    }
+
+    /// FIXES-06, D-07, WR-01, P2 of D-14: an unreadable version page stops the whole walk. The
+    /// stop records the last assistant whose history was read completely, and the rendered line
+    /// carries no error text.
+    #[tokio::test]
+    async fn stored_agent_model_scan_stops_at_an_unreadable_version_page() {
+        // Version calls, page size 1: a-1 v1 (0), a-2 v1 (1), a-2 v2 (2, fails).
+        let repo = ScriptedAssistants::new(None, Some(2), false);
+        seed_assistant_version(
+            &repo.inner,
+            "a-1",
+            AssistantKind::Agent,
+            serde_json::json!({"model": "model-1", "system_prompt": "p"}),
+        )
+        .await;
+        for model in ["model-2a", "model-2b"] {
+            seed_assistant_version(
+                &repo.inner,
+                "a-2",
+                AssistantKind::Agent,
+                serde_json::json!({"model": model, "system_prompt": "p"}),
+            )
+            .await;
+        }
+        seed_assistant_version(
+            &repo.inner,
+            "a-3",
+            AssistantKind::Agent,
+            serde_json::json!({"model": "model-3", "system_prompt": "p"}),
+        )
+        .await;
+
+        let scan = scan_stored_agent_models_paged(&repo, 1).await;
+        assert!(
+            !scan
+                .models
+                .iter()
+                .any(|m| m == "model-2b" || m == "model-3"),
+            "nothing after the unreadable version page is read: {:?}",
+            scan.models
+        );
+        assert_eq!(
+            scan.stopped_after,
+            Some(Some(AssistantId::new("a-1").expect("id"))),
+            "the stop records the last assistant whose whole history was read"
+        );
+        let line = stored_scan_stop_line(&scan).expect("a stop renders one line");
+        assert!(line.contains("a-1"), "{line}");
+        assert!(
+            !line.contains("secret-version-detail") && !line.contains("corrupt"),
+            "no error text in the line: {line}"
+        );
+    }
+
+    /// FIXES-06, D-07, WR-01: a store whose version cursor never advances cannot loop the boot
+    /// scan forever; the walk stops and records the position like an unreadable page.
+    #[tokio::test]
+    async fn stored_agent_model_scan_stops_at_a_non_advancing_version_cursor() {
+        let repo = ScriptedAssistants::new(None, None, true);
+        for model in ["loop-1", "loop-2", "loop-3"] {
+            seed_assistant_version(
+                &repo.inner,
+                "looping",
+                AssistantKind::Agent,
+                serde_json::json!({"model": model, "system_prompt": "p"}),
+            )
+            .await;
+        }
+
+        let scan = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            scan_stored_agent_models_paged(&repo, 1),
+        )
+        .await
+        .expect("the scan terminates");
+        assert_eq!(scan.stopped_after, Some(None), "{:?}", scan.stopped_after);
+        assert!(stored_scan_stop_line(&scan).is_some());
     }
 
     /// B4, D-07: a metered principal that can reach an unpriced code-registered model still

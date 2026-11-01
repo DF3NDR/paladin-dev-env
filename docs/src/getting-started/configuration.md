@@ -482,9 +482,10 @@ no price is ever invented. What that means depends on the path:
   (`.planning/WINDOWS.md` row 67), not a guarantee; give every model a graph can reach a row.
 - At boot, when an allowance is configured, the server logs one warning under `paladin::pricing`
   for every code-registered agent model and every stored agent-kind assistant model that has no
-  row, and boot continues. The warning does not check workflow graph-node models, agents
-  provisioned at runtime, or agent-kind assistants created after boot, and it does not refuse
-  workflow assistants; see the [Treasurer guide](../architecture/treasurer.md#pricing-as-the-cost-source).
+  row, and boot continues. Every stored version of each agent-kind assistant present at boot is
+  checked, including pinned older ones. The warning does not check workflow graph-node models,
+  agents provisioned at runtime, or agent-kind assistants or versions created after boot, and it
+  does not refuse workflow assistants; see the [Treasurer guide](../architecture/treasurer.md#pricing-as-the-cost-source).
 
 ### Treasurer allowances
 

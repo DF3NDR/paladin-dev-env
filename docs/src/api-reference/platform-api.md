@@ -61,7 +61,7 @@ POST /v1/runs
   "webhook": {                // optional; validated by the SSRF guard before anything is persisted
     "url": "https://example.com/hooks/paladin",
     "secret": "whsec_...",
-    "events": ["completed", "failed", "awaiting_input"]
+    "events": ["completed", "failed", "halted", "cancelled", "awaiting_input"]
   }
 }
 ```

@@ -412,7 +412,7 @@ Plans:
 - [x] 54-01-PLAN.md — `AuthConfig::validate` refuses any `http.auth.api_keys[].key` containing `${` (boot test before bind); `config.example.yml` ships `api_keys: []` with commented `key: ""` entries; MIGRATION `M-B-29` and CHANGELOG (FIRST-01)
 - [x] 54-02-PLAN.md — Docker first run mounts a literal-key `config.yml` (compose, `Dockerfile.server` header, `http-service-host.md`); explicit k8s apply sequence (FIRST-01)
 - [x] 54-03-PLAN.md — README, Quickstart, Installation, crate map, feature flags and Sentinel pins and `Current version` at the workspace version; README literal-key first run (FIRST-02, FIRST-01)
-- [ ] 54-04-PLAN.md — User-guide and contributor pins at the workspace version; present-tense "current v0.10.0" banners and the deployment guides' image tags made version-free (FIRST-02)
+- [x] 54-04-PLAN.md — User-guide and contributor pins at the workspace version; present-tense "current v0.10.0" banners and the deployment guides' image tags made version-free (FIRST-02)
 - [ ] 54-05-PLAN.md — memory/content `[Unreleased]` corrections of "No functional change"; ADR-0056 amended to cite ADR-0057; node-cache guide: no cache on the server, `k1` key version, `key_prefix` rotation (FIRST-05, FIRST-06, FIRST-09)
 
 **Wave 2** *(blocked on Wave 1 completion)*

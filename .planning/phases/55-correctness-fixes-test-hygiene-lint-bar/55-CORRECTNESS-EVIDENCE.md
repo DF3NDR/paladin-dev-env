@@ -203,6 +203,72 @@ The 41 reasoning tokens sit on a non-default request (`max` with `thinking: adap
 
 FIXES-05 verified against both probe records, flag not wrong
 
+## Semver (D-13)
+
+- **Source of the lines:** `SEMVER_PRUNE_LOCAL_CACHE=1 CARGO_INCREMENTAL=0 ./scripts/check-semver.sh`, run in this session on the head `8202da48c` (the same script CI's `Semver Checks (vs v0.11.0)` job runs; `cargo semver-checks check-release --package <pkg> --default-features --baseline-version 0.11.0 --release-type patch` for each of the twelve published packages, baselines from crates.io). Script exit status `0`. The run took about 12 minutes.
+- **Classification: GREEN.** Twelve package lines, each with the same `223 checks: 223 pass, 31 skip` as the Phase 52 and Phase 53 baselines, and the verdict `0 failure(s)`.
+
+Lines copied verbatim from the script's output:
+
+```
+semver: paladin-ai-core: 223 checks: 223 pass, 31 skip
+semver: paladin-ports: 223 checks: 223 pass, 31 skip
+semver: paladin-herald: 223 checks: 223 pass, 31 skip
+semver: paladin-battalion: 223 checks: 223 pass, 31 skip
+semver: paladin-llm: 223 checks: 223 pass, 31 skip
+semver: paladin-memory: 223 checks: 223 pass, 31 skip
+semver: paladin-web: 223 checks: 223 pass, 31 skip
+semver: paladin-notifications: 223 checks: 223 pass, 31 skip
+semver: paladin-content: 223 checks: 223 pass, 31 skip
+semver: paladin-storage: 223 checks: 223 pass, 31 skip
+semver: paladin-eval: 223 checks: 223 pass, 31 skip
+semver: paladin-ai: 223 checks: 223 pass, 31 skip
+semver: 12 package(s) checked against 0.11.0 at --release-type patch; 0 failure(s)
+```
+
+- Phase 55 added one public item, `HaltReason::ModelUnpriced { model }`, on a `#[non_exhaustive]` enum in `paladin-ai-core` (an additive change), and no lint fired. Nothing was registered to get here: `.cargo/semver-checks-allowlist.toml` is unchanged since the phase-start SHA `7f2eabe93` and still holds zero entries; `MIGRATION.md` section 11.2 is byte-identical to its phase-start text (the table is header-only; `md5sum` of the section matches, and `git diff 7f2eabe93 HEAD -- MIGRATION.md` shows only the 14 added lines of 55-12 in 11.1, 11.6 and 11.8).
+- **API surface.** `make api-surface` on the pinned `nightly-2026-09-20`: `exit 0`, `API surface extracted ... (4325 items)`, `API surface unchanged`. `grep -c 'HaltReason' .project/current-exports.txt` prints `0`: the facade snapshot lists the facade crate's own exports, and `HaltReason` lives in `paladin-ai-core`, which the facade does not re-export, so the one public addition cannot move this snapshot. No `make api-surface-update` was needed and PD-13-2 did not fire; there is no deviation to record.
+
+## Phase-head gates (D-00a)
+
+Head SHA when the gates ran: `d8b2fdc529abb30b2c978fe7e16d35fe5c05d917` (the plan's Task 2 commit). `git diff --stat 8202da48c d8b2fdc52 -- . ':!.planning'` is empty, so the code under test is the phase head `8202da48c` exactly. Every command below was run in this session, in this order, with `CARGO_INCREMENTAL=0`; the result line is quoted from the run.
+
+| Gate | Command | Result |
+|------|---------|--------|
+| Tests | `cargo test --workspace --no-fail-fast` | exit `0`; 62 `test result:` lines (unit, integration and doc binaries), 7803 passed, 0 failed, 229 ignored (the largest, the facade lib: `test result: ok. 1490 passed; 0 failed`) |
+| Format | `cargo fmt --check` | exit `0`, no output |
+| Clippy | `cargo clippy --workspace --all-targets -- -D warnings` | exit `0`, no `warning:` or `error` line, `Finished dev profile` |
+| Clean code | `make clean-code` (`fmt lint lint-shell check doc-check check-api-examples`) | exit `0`; `shellcheck clean`; `doc-check passed (ADR-0033)` (both bars plus `cargo test --workspace --doc`); `All 105 D-05 public API entry points carry a plural '# Examples' heading.` |
+| Gates | `make check-gates` | exit `0`; includes `OK: scanned 623 file(s) (19 test-only), 0 finding(s)` (the new `check-no-stub-panics` member), `12 publishable crate(s) checked, all match the allow-list exactly`, `37 governed dismissal(s) checked` and `OK: 128 file(s) scanned, every copyable version string equals '0.11.0'` |
+| Shell guards | `make test-shell-guards` | exit `0`; 18 harnesses, 650 assertions passed (run on a clean tree, which the `ci.yml`-sensitive harnesses require) |
+| Security | `make security` | exit `0`; `cargo audit` loaded 1395 advisories, scanned `Cargo.lock` (691 crate dependencies), `warning: 9 allowed warnings found` (the allowlisted `.cargo/audit.toml` entries, unchanged by this phase); `cargo deny`: `advisories ok, bans ok, licenses ok, sources ok` (its `duplicate` lines are the existing warn-level multiple-versions notes) |
+| Migration allowlist | `make check-migration-allowlist` | exit `0`; `Allowlist is set-equal to the MIGRATION.md §11.2 deliberate-breaking register (crate\|type pairs).` and `Every crate-wide cargo-semver-checks allow is mirrored by an allowlist entry (crate\|lint pairs).` |
+| Version strings | `make check-version-strings` | exit `0`; `OK: 128 file(s) scanned, every copyable version string equals '0.11.0'` |
+| Doc config | `make check-doc-config` | exit `0`; `Results: 161 YAML block(s) checked, 0 failed` |
+| API surface | `make api-surface` | exit `0`; `API surface unchanged` (4325 items) |
+| Semver | `./scripts/check-semver.sh` | exit `0`; twelve lines, `0 failure(s)` (see `## Semver (D-13)`) |
+
+**CI-only gates, not run here.** The 82 % workspace line-coverage floor (ADR-0006) is enforced by CI's `Coverage` job (`cargo llvm-cov --fail-under-lines`); `cargo-llvm-cov` is not installed in this sandbox, so no coverage figure is claimed in this file. `actionlint` is enforced by CI's `Workflow Lint` job; it is not installed here either, so the `ci.yml` step added in 55-01 was checked only by YAML parsing and the offline workflow guards inside `make check-gates` (WINDOWS rows 83 and 84 record the same gap for Phase 52). Neither is recorded as passing.
+
+Environment notes: `src/lib.rs` was touched before the first test command (Pitfall 6), and no stale-target path failure occurred in any run, so there is no second run to record. `target/debug/incremental` was not deleted; the disk stayed above 5 GB free, with `CARGO_INCREMENTAL=0` throughout.
+
+## Manual credential-handling review
+
+Per `.github/instructions/security.instructions.md` ("Manual review still matters"). **CodeQL runs advisory-only and does not gate a merge** (it was evaluated and disqualified as a required-check-grade Rust SAST at CodeQL `2.26.3`, 2026-08-25), so this review, with `make security` and `cargo clippy -- -D warnings` above, is the control for the new messages. Each message family introduced in this phase was read in the source on the head. Checks: **(a)** no key value, key name or tenant interpolated; **(b)** no backend or response text embedded; **(c)** no credential-carrying config newly `Debug`-formatted or serialized outward; **(d)** no new HTTP client or redirect behaviour.
+
+| Message or log text | file:line | (a) | (b) | (c) | (d) |
+|---------------------|-----------|-----|-----|-----|-----|
+| Storage refusal, SQLite: `ContentListRepository::{method} is unfinished for the sqlite backend: content lists are not persisted` | `crates/paladin-storage/src/sqlite_content_repository.rs:650-654` | pass: only the method name, a literal at each of ten call sites | pass: built from no `sqlx` error; the rustdoc states it carries no backend text, URL or key | pass: no config type involved | n/a: no HTTP |
+| Storage refusal, MySQL: the same sentence with `mysql` | `crates/paladin-storage/src/mysql_content_repository.rs:627-631` | pass (same) | pass (same) | pass | n/a |
+| `ingest_content` refusal: `FileContentFetcher::ingest_content is unfinished: content ingestion is not implemented, nothing was stored` | `crates/paladin-content/src/adapters/input/file_content_fetcher.rs:16`, returned at `:194` | pass: a `const` string; the content's URL is validated but never echoed | pass: no fetch happens on this path | pass | n/a: the fetch path (`fetch_content`) is untouched |
+| `model_unpriced` serde form `{"reason":"model_unpriced","model":"<model>"}`, `as_str`, wire JSON | `crates/paladin-core/src/platform/container/allowance.rs:255`, `:281`, `:396-398` | pass: the variant carries `model` only; the three pinning tests (`model_unpriced_serde_form_names_only_the_model`, `model_unpriced_wire_json_matches_the_serde_form`, `model_unpriced_herald_line_names_the_model`) fail if a tenant id, key name or figure is added | pass: no error text | pass: the wire JSON is built by `serde_json::json!`, so the model text is JSON-escaped | n/a |
+| `model_unpriced` herald line: `halted: model {model} has no treasurer.pricing row` | `crates/paladin-core/src/platform/container/allowance.rs:354-356` | pass: model name only | pass | pass | n/a. Observation, recorded in `## Known residuals`: unlike the boot warning, this line interpolates the model name without `escape_debug`. It reaches the Herald output (`herald.rs:703` puts it in a JSON string value, which is escaped), not a `log::` call, and in the ordinary path the text is an operator-priced model name. No change made. |
+| Boot warning (per unpriced reachable model): ``model `{model}` is reachable by a metered principal but has no treasurer.pricing row: ...`` | `src/infrastructure/web/run_api_wiring.rs:805-815`, logged at `:909` under `paladin::pricing` | pass: model name only, never a tenant, key name or key value; the model passes through `str::escape_debug` because a stored assistant's model is caller-supplied text, so a newline cannot forge a second log line (T-55-21, T-55-24); `unpriced_model_warning_line_names_the_model_and_the_gaps` pins it | pass: no error or row content | pass: no config type is formatted; the pricing table is only queried | n/a |
+| Boot scan stop line: `stored agent-kind assistant scan for unpriced models stopped at an unreadable page or version ({position}); assistants from there on were not checked -- inspect the assistants store directly` | `src/infrastructure/web/run_api_wiring.rs:891-902`, logged at `:912` | pass: the position is an assistant id or `at start`; no tenant, key name or key value | pass: the sentence carries no error text and no row content (`stored_agent_model_scan_stops_at_an_unreadable_page` pins both stop shapes) | pass | n/a |
+| Guard finding and summary lines: `path:line: todo! outside #[cfg(test)] in a published crate`, `scanned N file(s) (M test-only), K finding(s)`, `OK:` and the guidance lines | `scripts/check-no-stub-panics.sh:76`, `:341-374` | pass: only repository paths, line numbers, a macro name and counts | pass: the script prints no file content and no error text | pass: it reads `Cargo.toml` manifests only for `publish` and the package name; no secret is read | n/a: offline, check-only, no network |
+
+Test egress: the two trace tests set no key and need none. `OPENAI_API_KEY` appears 0 times inside `persisted_trace_records`; the `env -u` run above removed every proxy variable and the key and still passed. The 55-09 seam (`build_run_api_with_engine_port`) is `pub(crate)`, and its only `paladin_port_override: Some(..)` constructions are inside `mod tests`, so production code cannot select a scripted port. No new HTTP client was added anywhere in the phase, and no redirect behaviour changed (the webhook client's `Policy::none()` is untouched). No real credential appears in this file: a search for key-shaped strings (`sk-` followed by twenty or more alphanumerics) over it finds nothing.
+
 ## WINDOWS rows 73 and 67 (D-07, D-08)
 
 Both rows were dispositioned only after their closing evidence was re-run on the head `8202da48c` in this session.
@@ -255,3 +321,16 @@ Six of eleven, as expected. The five that carry an anchor are `paladin-content`,
 - The base-layer finish or retire options A, B and C in `55-BASE-LAYER-REVIEW.md` (every item is kept and fenced this milestone).
 - The graph-node pricing check: a registration-time coverage check needs a listing method on `AssistantResolver` (the row 67 waiver text).
 - Widening `ModelProfile.reasoning` beyond the default-call contract (deferred by D-06 as reconciled; see `## FIXES-05 verification`).
+
+## Known residuals
+
+Each residual has a pointer; none is hidden by a passing gate above.
+
+- **Graph-node models, runtime-provisioned agents and post-boot assistants are not checked by the boot warning.** The warning covers code-registered agents and stored agent-kind assistants at boot; the accepted contract and its limits are in the WINDOWS row 67 waiver and in `docs/src/architecture/treasurer.md` ("Pricing as the cost source"). Pointer: `## WINDOWS rows 73 and 67`, `## Carry-forward` (next minor).
+- **Collection change detection is count-only,** and the detector reports the `Uuid::nil()` sentinel instead of an item id. Pointer: `55-BASE-LAYER-REVIEW.md` (the `CollectionVersionService` row) and `55-05-SUMMARY.md`.
+- **`ingest_content` and the three file-fetcher metadata helpers remain unimplemented** (`ingest_content` now refuses; the helpers return `None`). Pointer: `55-BASE-LAYER-REVIEW.md` and `55-06-SUMMARY.md`.
+- **`RunStatusValue::Cancelled` is re-homed (FIXES-04).** Adding the variant to an exhaustive public enum is a break, so it waits for the next minor. Pointer: `deferred-items.md` in this directory, and `.planning/REQUIREMENTS.md` v2 `### Eval harness`.
+- **The full-binary flake proof was run in this sandbox only.** The 20-run loop (55-03) and the unskipped head run are one machine with 4 CPUs; CI is the wider proof.
+- **The coverage figure is CI-only** (the `Coverage` job; `cargo-llvm-cov` is absent here), and `actionlint` is CI-only (the `Workflow Lint` job). Pointer: `## Phase-head gates`.
+- **The `model_unpriced` herald line does not escape the model name** (`allowance.rs:354-356`), unlike the boot warning. In the ordinary path the name is an operator-priced model (admission refuses an unpriced one), and the line goes to the Herald output rather than a log call, so no change was made in an evidence-only plan. If plain-text Herald output is ever fed from caller-supplied model text, apply `escape_debug` there and update the pinning test. Pointer: `## Manual credential-handling review`.
+- **A pre-existing single-feature test failure is out of this phase's scope:** `cargo test -p paladin-llm --offline --lib --no-default-features --features mock` fails three "at least one provider is compiled" guard tests by design (55-04 `Deferred Issues`); the clippy matrix, which compiles those tests, is green.

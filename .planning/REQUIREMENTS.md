@@ -112,7 +112,7 @@ fails is rebuilt.*
       user-facing version string (README, `docs/src`, `k8s/`, `openapi.json`) lags the workspace
       version, so a Phase-46-style currency sweep cannot miss it again — C1 gate
 
-- [ ] **FIRST-04**: `k8s/server/worker-deployment.yaml` (`v0.10.0`) and `k8s/server/deployment.yaml`
+- [x] **FIRST-04**: `k8s/server/worker-deployment.yaml` (`v0.10.0`) and `k8s/server/deployment.yaml`
       (`v0.6.0`) `version:` labels read the current release and are covered by FIRST-03's guard — C4
 
 - [x] **FIRST-05**: The `[0.11.1]` entries of `crates/paladin-memory/CHANGELOG.md` and
@@ -325,7 +325,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | FIRST-01 | Phase 54 | Complete |
 | FIRST-02 | Phase 54 | Complete |
 | FIRST-03 | Phase 54 | Pending |
-| FIRST-04 | Phase 54 | Pending |
+| FIRST-04 | Phase 54 | Complete |
 | FIRST-05 | Phase 54 | Complete |
 | FIRST-06 | Phase 54 | Complete |
 | FIRST-07 | Phase 54 | Pending |

@@ -417,7 +417,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 54-06-PLAN.md — `k8s/server` config delivered as a Secret (`configmap.yaml` retired), labels and image tags at the workspace version, `make docker-build-server` tags it; README quick start, CHANGELOG, MIGRATION (FIRST-01, FIRST-04)
+- [x] 54-06-PLAN.md — `k8s/server` config delivered as a Secret (`configmap.yaml` retired), labels and image tags at the workspace version, `make docker-build-server` tags it; README quick start, CHANGELOG, MIGRATION (FIRST-01, FIRST-04)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

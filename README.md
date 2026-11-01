@@ -105,7 +105,7 @@ Add Paladin to your project:
 
 ```toml
 [dependencies]
-paladin-ai = "0.5"                      # default features: ["llm-openai"]
+paladin-ai = "0.11.0"                  # default features: ["llm-openai"]
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -117,11 +117,13 @@ coordinate several.
 ### Running agents behind an HTTP API
 
 To serve configured agents over HTTP (the *HTTP service-host* topology), copy
-[`config.example.yml`](config.example.yml) to `config.yml`, edit its `agents:` section, and run
-the `paladin-server` binary:
+[`config.example.yml`](config.example.yml) to `config.yml`, paste a literal API key into its
+`http.auth.api_keys` (or set `http.auth.enabled: false` for local development), edit its `agents:`
+section, and run the `paladin-server` binary:
 
 ```bash
-# API keys come from the environment, not the config file.
+# The LLM provider key comes from the environment; HTTP API keys are literal values in
+# config.yml (the server refuses a key containing `${`).
 OPENAI_API_KEY=sk-... cargo run --bin paladin-server --features web-server
 # or point at a specific config: PALADIN_CONFIG=./config.yml paladin-server
 ```
@@ -180,7 +182,7 @@ API docs & versioning (the `http.docs` section):
 
 ## Project Status
 
-Current version: **0.8.0**. Stability guarantees and the public-API policy are documented in the
+Current version: **0.11.0**. Stability guarantees and the public-API policy are documented in the
 [Stable API reference](https://df3ndr.github.io/paladin-dev-env/api-reference/stable-api.html); see
 [`CHANGELOG.md`](CHANGELOG.md) for release history.
 

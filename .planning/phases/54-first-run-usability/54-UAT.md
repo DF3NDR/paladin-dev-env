@@ -1,20 +1,14 @@
 ---
-status: testing
+status: complete
 phase: 54-first-run-usability
 source: [54-VERIFICATION.md]
 started: 2026-11-01T02:35:00Z
-updated: 2026-11-01T03:15:00Z
+updated: 2026-11-01T03:25:00Z
 ---
 
 ## Current Test
 
-number: 3
-name: Docker compose first run without step 1 (no `config.yml` yet)
-expected: |
-  Following `docker/docker-compose.server.yml` header step 2 before step 1 either fails with a clear error,
-  or the recipe prevents Docker from creating a root-owned `config.yml/` directory and a
-  `restart: unless-stopped` loop (54-REVIEW WR-03).
-awaiting: user response
+[testing complete]
 
 ## Tests
 
@@ -28,14 +22,14 @@ result: pass
 
 ### 3. Docker compose first run without step 1 (no `config.yml` yet)
 expected: Following `docker/docker-compose.server.yml` header step 2 before step 1 either fails with a clear error, or the recipe prevents Docker from creating a root-owned `config.yml/` directory and a `restart: unless-stopped` loop (54-REVIEW WR-03)
-result: [pending]
+result: pass
 
 ## Summary
 
 total: 3
-passed: 2
+passed: 3
 issues: 0
-pending: 1
+pending: 0
 skipped: 0
 blocked: 0
 

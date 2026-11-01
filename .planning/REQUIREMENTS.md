@@ -108,7 +108,7 @@ fails is rebuilt.*
       `docs/src/appendix/sentinel.md:66`, `crate-map.md:190`, `feature-flags.md:132,167,333`
       (`"0.10.0"`); historical rows inside the migration guide are exempt — C1, C2, DF-02
 
-- [ ] **FIRST-03**: A `check-version-strings` guard in `make check-gates` and CI fails when any
+- [x] **FIRST-03**: A `check-version-strings` guard in `make check-gates` and CI fails when any
       user-facing version string (README, `docs/src`, `k8s/`, `openapi.json`) lags the workspace
       version, so a Phase-46-style currency sweep cannot miss it again — C1 gate
 
@@ -124,7 +124,7 @@ fails is rebuilt.*
       Downstream Consumers line no longer say Phase 42 closes the over-admission race with a
       reservation; both cite ADR-0057 (check-only) — C6
 
-- [ ] **FIRST-07**: Stale counts and versions are corrected: `release.toml:41,47` and
+- [x] **FIRST-07**: Stale counts and versions are corrected: `release.toml:41,47` and
       `scripts/finalize-crate-changelogs.sh:8` ("ten" crates), `ci.yml` count comment,
       `release.toml:49` (`cargo-release 1.1.2` → the version actually used), and the dangling
       `[Unreleased]: …/compare/v0.2.0...HEAD` link at `CHANGELOG.md:3396` — C7, C8, 47-REVIEW WR-02
@@ -324,11 +324,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TENANT-10 | Phase 53 | Complete |
 | FIRST-01 | Phase 54 | Complete |
 | FIRST-02 | Phase 54 | Complete |
-| FIRST-03 | Phase 54 | Pending |
+| FIRST-03 | Phase 54 | Complete |
 | FIRST-04 | Phase 54 | Complete |
 | FIRST-05 | Phase 54 | Complete |
 | FIRST-06 | Phase 54 | Complete |
-| FIRST-07 | Phase 54 | Pending |
+| FIRST-07 | Phase 54 | Complete |
 | FIRST-08 | Phase 54 | Pending |
 | FIRST-09 | Phase 54 | Complete |
 | FIXES-01 | Phase 55 | Pending |

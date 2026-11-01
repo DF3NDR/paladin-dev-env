@@ -63,9 +63,14 @@
 #
 # Out-of-line test modules: `#[cfg(test)] mod name;` resolves to `name.rs` or
 # `name/mod.rs` beside the declaring file (the file's own directory for
-# lib.rs, main.rs and mod.rs, otherwise the path without `.rs`). Those files
-# are test-only, transitively: a test-only file's own `mod child;` children are
-# test-only too. So crates/paladin-battalion/src/engine/test_support.rs reports
+# lib.rs, main.rs and mod.rs, otherwise the path without `.rs`). With a
+# `#[path = "..."]` attribute in its attribute run (before or after the cfg) it
+# resolves to that literal path only, relative to the declaring file's
+# directory, never to `name.rs`: `#[cfg(test)] #[path = "imp_mock.rs"] mod imp;`
+# makes imp_mock.rs test-only and leaves a production imp.rs scanned. A file
+# loaded through `#[path]` resolves its own children beside it, as rustc reads
+# it like a mod.rs. Those files are test-only, transitively: a test-only file's
+# own `mod child;` children are test-only too. So crates/paladin-battalion/src/engine/test_support.rs reports
 # nothing. The resolution is by file, not by the inline module nesting, which
 # is an over-approximation that can only exempt a file that exists at that
 # exact path.
@@ -134,8 +139,12 @@ INNER_CFG_TEST = re.compile(r'#\s*!\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]')
 INNER_ATTR_OPEN = re.compile(r'#\s*!\s*\[')
 ATTR_START = re.compile(r'\s*#\s*\[')
 # A module declaration header: optional visibility, `mod name ;`.
-MOD_ITEM = re.compile(r'\s*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+(\w+)\s*;')
-MOD_DECL = re.compile(r'\bmod\s+(\w+)\s*;')
+# An out-of-line module declaration `mod name;`, the visibility that may come
+# before it, and a `#[path = "..."]` attribute (read from the raw source, since
+# literals are blanked).
+MOD_DECL = re.compile(r'(?<![\w$])mod\s+(?:r#)?([A-Za-z_]\w*)\s*;')
+VIS_BEFORE = re.compile(r'(?<![\w$])pub\s*(?:\([^()]*\)\s*)?$')
+PATH_ATTR = re.compile(r'#\s*\[\s*path\s*=\s*"([^"\\]*)"\s*\]')
 # A real item head, read after any run of attributes: optional visibility
 # (`pub`, `pub(crate)`, `pub(super)`, `pub(in path)`), optional qualifiers
 # (`async`, `unsafe`, `const`, `default`, `extern "abi"`; the ABI string is
@@ -343,8 +352,29 @@ def attr_open(b, p):
     return p if p >= 0 and b[p] == "#" else None
 
 
+def attrs_before(b, i):
+    """(attrs, p) for the run of attributes that ends just before index i.
+
+    attrs: (start, end) of each `#[...]` or `#![...]` in the run, nearest
+    first. p: the index of the previous significant character before the run
+    (-1 at the start of the file), or None when a `]` there closes something
+    other than an attribute. Comments are already blanked.
+    """
+    attrs, p = [], i - 1
+    while True:
+        while p >= 0 and b[p].isspace():
+            p -= 1
+        if p < 0 or b[p] != "]":
+            return attrs, p
+        start = attr_open(b, p)
+        if start is None:
+            return attrs, None
+        attrs.append((start, p + 1))
+        p = start - 1
+
+
 def at_item_position(b, i):
-    """True when the attribute whose `#` is at i sits where an item can start.
+    """True when the attribute (or item) starting at i sits where an item can start.
 
     Looks back from i over whitespace (comments are already blanked) and any
     run of preceding attributes (`#[...]`, `#![...]`). An item position is the
@@ -352,19 +382,10 @@ def at_item_position(b, i):
     in particular after `<`, `(`, `,`, `|` or `=` (inside a generic parameter
     list, a parameter list, a field or arm list, closure parameters or an
     initialiser), the attribute cannot attach to an item, so it exempts nothing.
+    A `]` that closes something other than an attribute is not a position.
     """
-    p = i - 1
-    while True:
-        while p >= 0 and b[p].isspace():
-            p -= 1
-        if p < 0:
-            return True
-        if b[p] != "]":
-            return b[p] in ";{}"
-        start = attr_open(b, p)
-        if start is None:
-            return False
-        p = start - 1
+    _attrs, p = attrs_before(b, i)
+    return p is not None and (p < 0 or b[p] in ";{}")
 
 
 def item_end(b, j):
@@ -524,16 +545,48 @@ def in_groups(groups, i):
     return any(a < i < z for a, z in groups)
 
 
-def analyse(blanked):
-    """Return (hits, test_mods); hits is None when the whole file is test-only.
+def mod_decls(raw, b, groups):
+    """Every out-of-line `mod name;` at an item position outside macro input.
+
+    Each is a dict: `name`; `test`, true when its attribute run holds
+    `#[cfg(test)]` or `#[cfg(all(test, ...))]`; `path`, the literal of a
+    `#[path = "..."]` in that run (read from the raw source), else None.
+    """
+    decls = []
+    for m in MOD_DECL.finditer(b):
+        if in_groups(groups, m.start()):
+            continue  # macro input, not a declaration
+        head = m.start()
+        vis = VIS_BEFORE.search(b, max(0, head - 120), head)
+        if vis:
+            head = vis.start()
+        attrs, p = attrs_before(b, head)
+        if p is None or not (p < 0 or b[p] in ";{}"):
+            continue
+        path = None
+        for a, z in attrs:
+            pm = PATH_ATTR.match(raw, a)
+            if pm and pm.end() <= z:
+                path = pm.group(1)
+        decls.append({
+            "name": m.group(1),
+            "test": any(CFG_TEST_ATTR.match(b, a) for a, _z in attrs),
+            "path": path,
+        })
+    return decls
+
+
+def analyse(raw, blanked):
+    """Return (hits, decls); hits is None when the whole file is test-only.
 
     hits: (line, macro) of each stub macro outside an exempt item.
-    test_mods: names of out-of-line `#[cfg(test)] mod name;` declarations.
+    decls: the file's out-of-line module declarations (see mod_decls).
     """
-    if leading_inner_cfg_test(blanked):
-        return None, []  # the file's own #![cfg(test)]: the whole file is test-only
-    spans, test_mods = [], []
     groups = macro_groups(blanked)
+    decls = mod_decls(raw, blanked, groups)
+    if leading_inner_cfg_test(blanked):
+        return None, decls  # the file's own #![cfg(test)]: the whole file is test-only
+    spans = []
     for m in CFG_TEST_ATTR.finditer(blanked):
         if in_groups(groups, m.start()):
             continue  # macro input, not an item
@@ -542,22 +595,37 @@ def analyse(blanked):
         end = item_end(blanked, m.end())
         if end is not None:
             spans.append((m.start(), end))
-        decl = MOD_ITEM.match(blanked, skip_attrs(blanked, m.end()))
-        if decl:
-            test_mods.append(decl.group(1))
     hits = [
         (blanked.count("\n", 0, m.start()) + 1, m.group(1))
         for m in STUB.finditer(blanked)
         if not any(a <= m.start() <= z for a, z in spans)
     ]
-    return hits, test_mods
+    return hits, decls
+
+
+# Files rustc loads through a `#[path]` attribute. rustc treats every such file
+# like a mod.rs: its own `mod child;` resolves beside it.
+path_loaded = set()
 
 
 def module_dir(path):
     base = os.path.basename(path)
-    if base in ("lib.rs", "main.rs", "mod.rs"):
+    if base in ("lib.rs", "main.rs", "mod.rs") or path in path_loaded:
         return os.path.dirname(path)
     return path[: -len(".rs")]
+
+
+def decl_files(path, decl):
+    """The files rustc may load for the out-of-line module decl in path.
+
+    A `#[path = "..."]` names exactly one file, relative to the declaring
+    file's directory; the module name is then never used. Otherwise
+    `name.rs` or `name/mod.rs` under module_dir(path).
+    """
+    if decl["path"] is not None:
+        return [os.path.normpath(os.path.join(os.path.dirname(path), decl["path"]))]
+    d = module_dir(path)
+    return [os.path.join(d, decl["name"] + ".rs"), os.path.join(d, decl["name"], "mod.rs")]
 
 
 # --- The published packages. ---
@@ -595,27 +663,28 @@ files = sorted({
     if filename.endswith(".rs")
 })
 
-blanked = {}
+parsed = {}
 unreadable = []
 for path in files:
     try:
         with open(path, "r", encoding="utf-8") as fh:
-            blanked[path] = blank(fh.read())
+            raw = fh.read()
     except (UnicodeDecodeError, OSError):
         unreadable.append(path)
+        continue
+    parsed[path] = analyse(raw, blank(raw))
+test_only = {path for path, (hits, _decls) in parsed.items() if hits is None}
+for path, (_hits, decls) in parsed.items():
+    for decl in decls:
+        if decl["path"] is not None:
+            path_loaded.update(decl_files(path, decl))
 
-parsed = {path: analyse(text) for path, text in blanked.items()}
-test_only = {path for path, (hits, _mods) in parsed.items() if hits is None}
 
-
-def resolve_children(path, names):
-    """Mark every `name.rs` / `name/mod.rs` declared beside `path` as test-only."""
+def resolve_children(path, decls):
+    """Mark every scanned file that a decl in `decls` (declared in `path`) loads as test-only."""
     added = []
-    for name in names:
-        for cand in (
-            os.path.join(module_dir(path), name + ".rs"),
-            os.path.join(module_dir(path), name, "mod.rs"),
-        ):
+    for decl in decls:
+        for cand in decl_files(path, decl):
             if cand in parsed and cand not in test_only:
                 test_only.add(cand)
                 added.append(cand)
@@ -625,8 +694,8 @@ def resolve_children(path, names):
 # `#[cfg(test)] mod x;` in any file makes x test-only; then, transitively, every
 # `mod y;` declared inside a test-only file.
 queue = []
-for path, (_hits, mods) in parsed.items():
-    queue += resolve_children(path, mods)
+for path, (_hits, decls) in parsed.items():
+    queue += resolve_children(path, [d for d in decls if d["test"]])
 queue += [p for p in test_only]
 seen = set()
 while queue:
@@ -634,7 +703,7 @@ while queue:
     if path in seen:
         continue
     seen.add(path)
-    queue += resolve_children(path, MOD_DECL.findall(blanked[path]))
+    queue += resolve_children(path, parsed[path][1])
 
 findings = sorted(
     (rel(path), line, macro)

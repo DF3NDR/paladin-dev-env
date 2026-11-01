@@ -400,6 +400,33 @@ printf '%s\n' \
 assert_fire "${FX}" "#[cfg(test)] inside a macro invocation's input exempts nothing" \
     "crates/x/src/lib.rs:4: todo! outside #[cfg(test)]"
 
+# A `#[cfg(test)]` out-of-line module with a `#[path = "..."]` attribute loads
+# that literal path, never `name.rs`: the mock-swap pattern must not exempt the
+# production file of the same name (WR-03, round 4).
+fresh cfg-test-path-mod
+printf '%s\n' \
+    '#[cfg(not(test))]' \
+    'pub mod imp;' \
+    '#[cfg(test)]' \
+    '#[path = "imp_mock.rs"]' \
+    'pub mod imp;' >"${FX}/crates/x/src/lib.rs"
+printf 'pub fn run() -> u8 { todo!() }\n' >"${FX}/crates/x/src/imp.rs"
+printf 'pub fn run() -> u8 { 0 }\n' >"${FX}/crates/x/src/imp_mock.rs"
+assert_fire "${FX}" "#[cfg(test)] #[path] mod imp; does not make the production imp.rs test-only" \
+    "crates/x/src/imp.rs:1: todo! outside #[cfg(test)]"
+
+fresh cfg-test-path-first-mod
+printf '%s\n' \
+    '#[cfg(not(test))]' \
+    'pub mod imp;' \
+    '#[path = "imp_mock.rs"]' \
+    '#[cfg(test)]' \
+    'pub mod imp;' >"${FX}/crates/x/src/lib.rs"
+printf 'pub fn run() -> u8 { todo!() }\n' >"${FX}/crates/x/src/imp.rs"
+printf 'pub fn run() -> u8 { 0 }\n' >"${FX}/crates/x/src/imp_mock.rs"
+assert_fire "${FX}" "#[path] before #[cfg(test)] on mod imp; does not make imp.rs test-only either" \
+    "crates/x/src/imp.rs:1: todo! outside #[cfg(test)]"
+
 fresh root-package
 printf '[package]\nname = "rootpkg"\nversion = "0.1.0"\n' >"${FX}/Cargo.toml"
 mkdir -p "${FX}/src"
@@ -586,6 +613,19 @@ plant crates/x/src/lib.rs 'mod support;'
 mkdir -p "${FX}/crates/x/src/support"
 printf 'pub fn s() { todo!() }\n' >"${FX}/crates/x/src/support/mod.rs"
 assert_silent "${FX}" "an out-of-line test module resolved to name/mod.rs is test-only" "OK"
+
+fresh out-of-line-path-test-mod
+printf '%s\n' \
+    '#[cfg(not(test))]' \
+    'pub mod imp;' \
+    '#[cfg(test)]' \
+    '#[path = "mocks/imp_mock.rs"]' \
+    'pub mod imp;' >"${FX}/crates/x/src/lib.rs"
+printf 'pub fn run() -> u8 { 0 }\n' >"${FX}/crates/x/src/imp.rs"
+mkdir -p "${FX}/crates/x/src/mocks"
+printf 'mod helper;\npub fn run() -> u8 { todo!() }\n' >"${FX}/crates/x/src/mocks/imp_mock.rs"
+printf 'pub fn h() { unimplemented!() }\n' >"${FX}/crates/x/src/mocks/helper.rs"
+assert_silent "${FX}" "a #[cfg(test)] #[path] module and its own children (beside it, as rustc reads a #[path] file) are test-only" "OK"
 
 fresh inner-cfg-test
 printf '#![cfg(test)]\nfn t() { todo!() }\n' >"${FX}/crates/x/src/lib.rs"

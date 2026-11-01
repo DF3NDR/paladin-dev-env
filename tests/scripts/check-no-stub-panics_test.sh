@@ -339,12 +339,25 @@ printf 'pub fn s() { todo!() }\n' >"${FX}/crates/stray/src/lib.rs"
 assert_silent "${FX}" "a crates/<dir> with no Cargo.toml is skipped silently" "OK"
 
 # --- The real tree ----------------------------------------------------------
-# Before the stubs are fixed (plan 55-01 Task 2) the real tree is red, so the
-# first real-tree case asserts only that the guard runs without mutating files.
+# After plan 55-01 Task 2 no published crate holds a stub macro outside test
+# code, so the real workspace is green and the guard reads zero findings.
 
 ASSERTIONS=$((ASSERTIONS + 1))
 LAST_OUTPUT="$("${GUARD}" 2>&1)"
 LAST_STATUS=$?
+if [ "${LAST_STATUS}" -ne 0 ]; then
+    echo "FAIL: expected zero exit for the real tree (got ${LAST_STATUS})"
+    echo "${LAST_OUTPUT}" | sed 's/^/  | /'
+    FAILED=$((FAILED + 1))
+elif ! grep -qF 'OK: scanned' <<<"${LAST_OUTPUT}" || ! grep -qF ', 0 finding(s)' <<<"${LAST_OUTPUT}"; then
+    echo "FAIL: the real-tree output carries no 'OK: scanned ..., 0 finding(s)' line"
+    echo "${LAST_OUTPUT}" | sed 's/^/  | /'
+    FAILED=$((FAILED + 1))
+else
+    echo "PASS (silent): the real tree passes with zero findings"
+fi
+
+ASSERTIONS=$((ASSERTIONS + 1))
 if grep -q 'test_support.rs' <<<"${LAST_OUTPUT}"; then
     echo "FAIL: the real-tree output names engine/test_support.rs (out-of-line test module misread)"
     FAILED=$((FAILED + 1))

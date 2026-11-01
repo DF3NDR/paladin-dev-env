@@ -172,11 +172,11 @@ To keep this guide honest:
 | Content delivery (`DeliverContentUseCase`) | ✅ Implemented |
 | **Web scraping** (`web-scraping` feature) | ⚠️ Feature/dep declared, **no adapter yet** |
 | **RSS/Atom feeds** (`rss` feature) | ⚠️ Feature/dep declared, **no adapter yet** |
-| **Filtering & deduplication** (`content_filtering_service`) | ⚠️ Module present but **disabled** (not compiled) |
+| **Filtering & deduplication** | ⚠️ **Not implemented**: no filtering module exists |
 
 For web-scraping and RSS today, fetch the raw resource with `HttpContentFetcher` and parse it in
-your own adapter. Filtering/dedup must likewise be done in caller code until the
-`content_filtering_service` module is completed and re-enabled.
+your own adapter. Filtering/dedup must likewise be done in caller code; the framework ships no
+filtering service.
 
 ---
 

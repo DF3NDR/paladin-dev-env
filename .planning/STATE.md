@@ -5,15 +5,15 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 55
 current_phase_name: Correctness Fixes, Test Hygiene & Lint Bar
 status: executing
-stopped_at: Completed 55-07-PLAN.md
-last_updated: "2026-11-01T16:42:44.412Z"
+stopped_at: Completed 55-08-PLAN.md
+last_updated: "2026-11-01T17:03:10.773Z"
 last_activity: 2026-11-01
 last_activity_desc: Phase 55 execution started
 progress:
   total_phases: 4
   completed_phases: 3
   total_plans: 38
-  completed_plans: 32
+  completed_plans: 33
 ---
 
 # Project State
@@ -51,11 +51,11 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 ## Current Position
 
 Phase: 55 (Correctness Fixes, Test Hygiene & Lint Bar) — EXECUTING
-Plan: 8 of 13
+Plan: 9 of 13
 Status: Ready to execute
 Last activity: 2026-11-01 — Phase 55 execution started
 
-Progress: [█████████░░░░░░░░░░░] 3/7 phases ([████████░░] 84%) — Phase 54 plans [████████████████████] 9/9 (100%)
+Progress: [█████████░░░░░░░░░░░] 3/7 phases ([█████████░] 87%) — Phase 54 plans [████████████████████] 9/9 (100%)
 
 ## Performance Metrics
 
@@ -389,6 +389,7 @@ Progress: [█████████░░░░░░░░░░░] 3/7 pha
 | Phase 55 P05 | 55 min | 3 tasks | 6 files |
 | Phase 55 P06 | 25min | 2 tasks | 3 files |
 | Phase 55 P07 | 15min | 2 tasks | 8 files |
+| Phase 55 P08 | 45min | 2 tasks | 43 files |
 
 ## Accumulated Context
 
@@ -732,6 +733,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 55]: 55-05: unversioned field history is EntityNotFound (repository), purge stays Ok(0); collection count changes carry Uuid::nil() sentinel; no VersioningError variant or pub item changed — D-03 as reconciled: least-destructive fences, removal is a next-minor semver decision
 - [Phase ?]: 55-06: ingest_content refuses with a named Err after validation (no shipped caller of the no-op); Subtask expected_output is empty and the prompt omits the empty line (D-03)
 - [Phase 55]: Phase 55-07: FIXES-04 re-homed to the next minor (D-05); RunStatusValue and Assertion are exhaustive public enums of published paladin-eval, so the variant is major at the patch gate; recorded in rustdoc, schema descriptions, guide, REQUIREMENTS v2 Eval harness, ROADMAP SC2, inventory B5 and phase deferred-items.md
+- [Phase 55]: 55-08: paladin-ports rustdoc suppressions removed; 187 diagnostics (170 unresolved, 17 redundant) fixed at source, 0 under both bars (CIREL-08, D-11)
 
 ### Pending Todos
 
@@ -1103,8 +1105,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-11-01T16:42:44.389Z
-Stopped at: Completed 55-07-PLAN.md
+Last session: 2026-11-01T17:03:10.752Z
+Stopped at: Completed 55-08-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

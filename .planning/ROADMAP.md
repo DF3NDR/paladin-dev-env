@@ -459,7 +459,7 @@ Plans:
 - [x] 55-05-PLAN.md — base-layer fences: an unversioned field's history is `EntityNotFound`, collection count changes carry a documented nil sentinel; rustdoc on `Field`, `CollectionType`/`Item`, `element` and `base/mod.rs` (FIXES-02)
 - [x] 55-06-PLAN.md — `FileContentFetcher::ingest_content` refuses instead of a no-op `Ok`; planned subtasks carry no fabricated expected output and the prompt omits the empty line (FIXES-02)
 - [x] 55-07-PLAN.md — FIXES-04 re-homed to the next minor with its reason: rustdoc and schema descriptions, eval guide, REQUIREMENTS v2 entry and traceability, SC2 note, inventory B5 pointer, phase `deferred-items.md` (FIXES-04)
-- [ ] 55-08-PLAN.md — `paladin-ports` rustdoc links fixed at the source and its two crate-level suppressions removed, green under both bars (CIREL-08)
+- [x] 55-08-PLAN.md — `paladin-ports` rustdoc links fixed at the source and its two crate-level suppressions removed, green under both bars (CIREL-08)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

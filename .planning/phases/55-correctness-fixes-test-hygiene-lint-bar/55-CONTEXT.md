@@ -347,6 +347,70 @@ set), and the lockstep bump (Phase 58).
   (`HaltReason::ModelUnpriced`, the wiring sibling, the inspector, the iterator). `deferred-items.md`
   carries FIXES-04 and the Deferred Ideas below.
 
+### Research reconciliation (2026-11-01, after `55-RESEARCH.md`; amends the decisions above in place)
+
+`55-RESEARCH.md` measured every D-00e fact against `a78338ddb` and raised six open questions. These
+resolutions bind the plans; where they narrow a decision above, this note wins and the decision's
+original text stays as the record of what was first assumed.
+
+- **D-06 (FIXES-05) is reversed on the evidence: the `reasoning` flag stays `false`; FIXES-05 closes
+  as verified-not-wrong.** `ModelProfile.reasoning` (`crates/paladin-llm/src/registry/model_profile.rs`)
+  is documented as "whether the default call to this model returned reasoning text", not "can emit
+  reasoning tokens". The 50.1 probe row 1 records `reasoning text: absent`; the 51 probe's default
+  and adaptive rows report 0 reasoning tokens, and the 41 tokens appear only on a non-default
+  `max` + `thinking: adaptive` request. Sibling rows with the same evidence are `false`. So the
+  seed is correct under the field's contract; D-06's "the model reasons → true" read the wrong
+  contract. The deliverable: correct the builder comment (drop the "listing truncated" reasoning;
+  cite the 50.1 row-1 `absent` and the 51 default/adaptive 0-token lines), keep
+  `.with_reasoning(false)`, pin the row in the registry test
+  (`anthropic_opus_4_8_seed_matches_the_transcript` or the planner's name), and record
+  "FIXES-05 verified against both probe records, flag not wrong" in `55-CORRECTNESS-EVIDENCE.md`
+  so audit G7 / inventory B6 close on that line. No CHANGELOG entry (no behaviour changes).
+  Widening the field to "can reason" (which would move the 300 s timeout default for every such
+  model and need a sibling sweep) is deferred, not taken.
+- **D-08: "byte-for-byte" means the public contract, not the literal text.** The body of
+  `build_run_api_with_cadence` moves into a `pub(crate)` function that takes the optional
+  `Arc<dyn PaladinPort>` override; the two public functions keep their signatures and delegate
+  with `None`. No public item is added, so `make api-surface` reads unchanged and no CHANGELOG
+  line is owed for the seam itself.
+- **D-00f ordering is not binding.** `worker_tests.rs` already holds a hermetic test for the exact
+  arm (`agent_kind_run_whose_model_became_unpriced_fails_without_calling_the_llm`); FIXES-03's
+  red-then-green is that test asserting `Halted` + `model_unpriced` (renamed accordingly). TESTS-01
+  and FIXES-03 may land in either order or in parallel; an end-to-end check through the D-08 seam
+  is optional, not required.
+- **D-07: the boot warning names every class it cannot see.** Besides graph-node models, runtime-
+  provisioned agents and stored agent-kind assistants are not in `AgentRegistry` at boot. If
+  `AssistantRepositoryPort::list` exists (research assumption A6, planner confirms first), the
+  pure function also takes the stored agent-kind assistants' models through one bounded page walk
+  on the D-14 pattern; otherwise they are a named gap. The warning text and
+  `docs/src/architecture/treasurer.md` list the uncovered classes either way.
+- **D-03 fences in `CollectionVersioningService`: least-destructive, recorded.**
+  `compare_collection_versions` is working and tested; only `detect_collection_changes` fabricates
+  item ids with `Uuid::new_v4()`. The fence is a documented nil-UUID sentinel ("item not tracked")
+  in `ItemAdded`/`ItemRemoved` with rustdoc saying so, not a refusal of the whole method; the
+  review file records the choice. `FieldVersionHistory.node_id` on a field with no versions returns
+  `Err(VersioningError::EntityNotFound(field_id))` after the test near
+  `field_version_service.rs:596` is read.
+- **D-01: the guard resolves out-of-line test modules.** A naive per-file scan reports 31 sites;
+  the true count is 26 because `#[cfg(test)] mod name;` declarations pull in whole files (e.g.
+  `engine/test_support.rs`). The scanner resolves such declarations to `name.rs` / `name/mod.rs`
+  and excludes those files; the harness fixture includes this case. The red run reads 26 lines in
+  3 files.
+- **D-11 sizing: 474 diagnostics under the default bar, 455 under the all-features bar, two
+  classes, zero `invalid_html_tags`.** Per crate (default bar): ports 187, facade 140, llm 117,
+  storage 27, notifications 3; 444 `unresolved link`, 30 `redundant explicit link target`. The two
+  bars flag different sets, so every fix is checked under both. 380 diagnostics carry no source
+  span and are located by grepping the printed link text. The facade's `invalid_html_tags` allow
+  is removed with nothing to fix. ADR-0033's 309 figure is superseded by this measurement in the
+  amendment note.
+- **D-10 matrix: every feature of `crates/paladin-llm/Cargo.toml`, `mock`-only included.** The
+  `reasoning_defaults` test module (ten warnings under `mock` alone) is gated on "a provider
+  feature is on"; the measured 13-combination loop is the proof.
+- **D-13 budget:** a full `scripts/check-semver.sh` over twelve packages is about 10-15 minutes
+  here (46 s measured for `paladin-eval`); crates.io was reachable through the proxy. `actionlint`
+  and `cargo-llvm-cov` are absent: the CI "Workflow Lint" and "Coverage" jobs are the proof of
+  record for those two, recorded as unrun locally.
+
 ### Claude's Discretion
 
 - Exact names: the guard script, the wiring sibling or overrides struct, the inspector, the

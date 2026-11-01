@@ -3708,6 +3708,20 @@ mod endpoint_builder_tests {
     /// The provider-level reasoning default builders `config_knob_builders!`'s `@common` arm
     /// generates (Phase 51, D-00e, D-05): every `*Config` starts with neither set (D-00i), the
     /// builders set both, and `Debug` names both fields while still redacting the key (T-51-22).
+    ///
+    /// Compiled only when a provider feature is on: with `mock` alone there is no `*Config` to
+    /// probe, so the body would be empty.
+    #[cfg(any(
+        feature = "openai",
+        feature = "anthropic",
+        feature = "deepseek",
+        feature = "kimi",
+        feature = "qwen",
+        feature = "grok",
+        feature = "ollama",
+        feature = "openai-compatible",
+        feature = "gemini"
+    ))]
     #[test]
     fn reasoning_default_builders_work_on_every_config() {
         use paladin_ports::output::llm_port::{ReasoningEffort, ReasoningFallback};

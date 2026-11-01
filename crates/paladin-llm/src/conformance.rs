@@ -272,6 +272,16 @@ pub trait ConformanceFixture {
 
 /// [`ConformanceFixture::effort_wire_value`] for a chat-completions body that carries the level
 /// at the top-level `reasoning_effort` (OpenAI, DeepSeek, Grok), else `None`.
+///
+/// Gated on the five adapters whose fixtures call it, so a build without them carries no unused
+/// helper.
+#[cfg(any(
+    feature = "openai",
+    feature = "deepseek",
+    feature = "grok",
+    feature = "ollama",
+    feature = "openai-compatible"
+))]
 pub fn chat_effort_wire_value(body: &Value) -> Option<String> {
     body.get("reasoning_effort")
         .and_then(Value::as_str)

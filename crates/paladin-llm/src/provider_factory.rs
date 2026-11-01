@@ -1170,7 +1170,20 @@ mod tests {
         use mockito::Matcher;
         use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
         use paladin_ports::output::llm_port::{LlmError, LlmRequest, LlmResponse};
-        use serde_json::{Value, json};
+        use serde_json::Value;
+        // Every user of `json!` here builds a provider's wire body, so it needs a provider.
+        #[cfg(any(
+            feature = "openai",
+            feature = "anthropic",
+            feature = "deepseek",
+            feature = "kimi",
+            feature = "qwen",
+            feature = "grok",
+            feature = "ollama",
+            feature = "openai-compatible",
+            feature = "gemini"
+        ))]
+        use serde_json::json;
         use std::collections::BTreeMap;
 
         // Only the tests behind the `kimi` feature call it, so a build without that feature
@@ -1219,6 +1232,16 @@ mod tests {
             keyed: bool,
         }
 
+        // Shared by the chat-completions providers' cases and Kimi's end-to-end tests.
+        #[cfg(any(
+            feature = "openai",
+            feature = "deepseek",
+            feature = "kimi",
+            feature = "qwen",
+            feature = "grok",
+            feature = "ollama",
+            feature = "openai-compatible"
+        ))]
         fn chat_response() -> Value {
             json!({
                 "id": "cmpl-1",
@@ -1237,6 +1260,16 @@ mod tests {
         #[allow(unused_mut, clippy::vec_init_then_push)]
         fn wire_cases() -> Vec<WireCase> {
             let mut cases: Vec<WireCase> = Vec::new();
+            // Used by the chat-completions providers' cases only.
+            #[cfg(any(
+                feature = "openai",
+                feature = "deepseek",
+                feature = "kimi",
+                feature = "qwen",
+                feature = "grok",
+                feature = "ollama",
+                feature = "openai-compatible"
+            ))]
             let chat = |provider: &'static str, model: &'static str, keyed: bool| WireCase {
                 provider,
                 model,
@@ -1927,12 +1960,30 @@ mod tests {
         // production path from `llm.<provider>` YAML to a constructed adapter, and reads the
         // request body a mock vendor captured.
 
+        //
+        // Compiled only when at least one provider feature is on: every case here builds a
+        // provider's adapter, so a `mock`-only build has nothing to drive and would carry an
+        // all-dead module.
+        #[cfg(any(
+            feature = "openai",
+            feature = "anthropic",
+            feature = "deepseek",
+            feature = "kimi",
+            feature = "qwen",
+            feature = "grok",
+            feature = "ollama",
+            feature = "openai-compatible",
+            feature = "gemini"
+        ))]
         mod reasoning_defaults {
             use super::*;
             use crate::reasoning::{
                 REASONING_EFFECTIVE_METADATA_KEY, REASONING_REQUESTED_METADATA_KEY, ReasoningWire,
             };
-            use paladin_ports::output::llm_port::{ReasoningEffort, ReasoningFallback};
+            use paladin_ports::output::llm_port::ReasoningEffort;
+            // Named only by the DeepSeek fallback case.
+            #[cfg(feature = "deepseek")]
+            use paladin_ports::output::llm_port::ReasoningFallback;
             use paladin_ports::output::model_profile::{EffortLevels, EffortSupport};
 
             /// What one provider needs to prove its default reaches the wire.
@@ -1955,10 +2006,32 @@ mod tests {
             /// A model no override or seed describes, so its effort is `Unmeasured`.
             const UNPROFILED: &str = "an-unprofiled-model";
 
+            // `level_spelling` and `levels` serve every provider's case except Qwen's (its wire has
+            // no level field), so they compile with any provider whose case calls them.
+            #[cfg(any(
+                feature = "openai",
+                feature = "anthropic",
+                feature = "deepseek",
+                feature = "kimi",
+                feature = "grok",
+                feature = "ollama",
+                feature = "openai-compatible",
+                feature = "gemini"
+            ))]
             fn level_spelling(effort: ReasoningEffort) -> Value {
                 json!(effort.to_string())
             }
 
+            #[cfg(any(
+                feature = "openai",
+                feature = "anthropic",
+                feature = "deepseek",
+                feature = "kimi",
+                feature = "grok",
+                feature = "ollama",
+                feature = "openai-compatible",
+                feature = "gemini"
+            ))]
             fn levels(levels: &[ReasoningEffort]) -> EffortSupport {
                 EffortSupport::Supported(EffortLevels::new(levels.iter().copied()))
             }

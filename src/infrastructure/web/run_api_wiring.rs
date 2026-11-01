@@ -825,9 +825,11 @@ struct StoredAgentModelScan {
     /// One entry per agent-kind version read, in assistant page order and then ascending version
     /// order (not de-duplicated: [`unpriced_reachable_models`] de-duplicates).
     models: Vec<String>,
-    /// `Some` when a page or a version could not be read: the id of the last assistant read
-    /// completely before the stop (`None` inside means the very first page). Carries no error
-    /// text and no row content (P2 of D-14).
+    /// `Some` when the walk stopped early: a page or a version page could not be read, or the
+    /// store handed back a cursor that does not advance (a repeated assistant cursor, a `Some`
+    /// cursor on an empty page, or a version cursor not greater than the previous one). Holds the
+    /// id of the last assistant read completely before the stop (`None` inside means the very
+    /// first page). Carries no error text and no row content (P2 of D-14).
     stopped_after: Option<Option<AssistantId>>,
 }
 
@@ -934,7 +936,8 @@ async fn collect_agent_version_models(
 }
 
 /// The position-only sentence for a scan that stopped early, or `None` when the walk completed.
-/// Never carries an error text or row content (P2 of D-14).
+/// It names both causes, an unreadable or a non-advancing page or version, because the scan does
+/// not record which one stopped it. Never carries an error text or row content (P2 of D-14).
 fn stored_scan_stop_line(scan: &StoredAgentModelScan) -> Option<String> {
     let stopped_after = scan.stopped_after.as_ref()?;
     let position = match stopped_after {
@@ -942,9 +945,9 @@ fn stored_scan_stop_line(scan: &StoredAgentModelScan) -> Option<String> {
         None => "at start".to_string(),
     };
     Some(format!(
-        "stored agent-kind assistant scan for unpriced models stopped at an unreadable page or \
-         version ({position}); assistants from there on were not checked -- inspect the \
-         assistants store directly"
+        "stored agent-kind assistant scan for unpriced models stopped at an unreadable or \
+         non-advancing page or version ({position}); assistants from there on were not checked \
+         -- inspect the assistants store directly"
     ))
 }
 
@@ -2322,6 +2325,7 @@ mod tests {
         );
         let line = stored_scan_stop_line(&scan).expect("a stop renders one line");
         assert!(line.contains("a-1"), "{line}");
+        assert!(line.contains("unreadable"), "{line}");
         assert!(
             !line.contains("secret-row-detail") && !line.contains("corrupt"),
             "no error text in the line: {line}"
@@ -2414,7 +2418,11 @@ mod tests {
         .await
         .expect("the scan terminates");
         assert_eq!(scan.stopped_after, Some(None), "{:?}", scan.stopped_after);
-        assert!(stored_scan_stop_line(&scan).is_some());
+        let line = stored_scan_stop_line(&scan).expect("a stop renders one line");
+        assert!(
+            line.contains("non-advancing"),
+            "every read succeeded: {line}"
+        );
     }
 
     /// FIXES-06, D-07, WR-01: a store whose assistant-list cursor never advances cannot loop the
@@ -2450,7 +2458,11 @@ mod tests {
             Some(Some(AssistantId::new("a-2").expect("id"))),
             "the stop records the last assistant read before the repeated cursor"
         );
-        assert!(stored_scan_stop_line(&scan).is_some());
+        let line = stored_scan_stop_line(&scan).expect("a stop renders one line");
+        assert!(
+            line.contains("non-advancing"),
+            "every read succeeded: {line}"
+        );
     }
 
     /// B4, D-07: a metered principal that can reach an unpriced code-registered model still

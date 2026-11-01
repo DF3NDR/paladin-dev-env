@@ -79,3 +79,17 @@ above), not to Phase 48.
 
 Also note that the two retained services now import `ChangeType`, `HashAlgorithm` and `VersioningError` from
 `entity_version_service` (plan 48-03), so the review should read that dependency when it weighs the options.
+
+## Resolution
+
+Reviewed in Phase 55 (plan 55-12, FIXES-02, D-03), on 2026-11-01. The decisions and their evidence are
+recorded in `.planning/phases/55-correctness-fixes-test-hygiene-lint-bar/55-BASE-LAYER-REVIEW.md`, one row per
+item: `Field`, `CollectionType` / `Item`, `element`, `FieldVersionService`, `CollectionVersionService`, the
+planner's expected-output placeholder, the `ingest_content` stub and the twenty `ContentListRepository` bodies.
+
+Every item is kept; none is removed, renamed or finished. The bodies that fabricated a value or reported a
+success they had not earned are fenced (a typed refusal or a documented sentinel), each pinned by a test and
+recorded in `MIGRATION.md` section 11.1 (`M-B-30`, `M-B-33` to `M-B-35`). The review found no design record
+beyond this todo's own account. Finishing the system (option A) and retiring it fully or partially (options
+B and C, including the entity-sense identifier renames listed above) remain next-minor candidates, decided in a
+release that may carry a breaking change.

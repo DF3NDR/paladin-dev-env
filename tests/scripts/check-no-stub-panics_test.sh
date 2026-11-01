@@ -466,6 +466,25 @@ printf '%s\n' \
 assert_fire "${FX}" "a raw C string ending in a backslash does not swallow the next line" \
     "crates/x/src/lib.rs:2: todo! outside #[cfg(test)]"
 
+# The macro can be reached under another name: a `use` that renames `todo` or
+# `unimplemented`, or the bare identifier handed to a macro that builds the
+# call (`call!(todo)` expanding `$m!()`). Both are reported (WR-03, round 4).
+fresh renamed-stub-import
+printf '%s\n' \
+    'use core::todo as later;' \
+    'pub use std::{fmt as _f, unimplemented as nope};' \
+    'pub fn f() -> u8 { later!() }' >"${FX}/crates/x/src/lib.rs"
+assert_fire "${FX}" "a use that renames todo or unimplemented is reported" \
+    "crates/x/src/lib.rs:1: todo! (renamed by use ... as) outside #[cfg(test)]" \
+    "crates/x/src/lib.rs:2: unimplemented! (renamed by use ... as) outside #[cfg(test)]"
+
+fresh stub-ident-macro-token
+printf '%s\n' \
+    'macro_rules! call { ($m:ident) => { $m!() }; }' \
+    'pub fn f() -> u8 { call!(todo) }' >"${FX}/crates/x/src/lib.rs"
+assert_fire "${FX}" "todo handed to a macro as a bare identifier is reported" \
+    "crates/x/src/lib.rs:2: todo! (passed to a macro as an identifier) outside #[cfg(test)]"
+
 fresh root-package
 printf '[package]\nname = "rootpkg"\nversion = "0.1.0"\n' >"${FX}/Cargo.toml"
 mkdir -p "${FX}/src"
@@ -686,6 +705,14 @@ assert_silent "${FX}" "a file whose first item is #![cfg(test)] is wholly test-o
 fresh inner-cfg-test-after-inner-attrs
 printf '//! Test-only crate.\n#![forbid(unsafe_code)]\n#![cfg(test)]\nfn t() { todo!() }\n' >"${FX}/crates/x/src/lib.rs"
 assert_silent "${FX}" "#![cfg(test)] after a doc comment and another inner attribute is still leading" "OK"
+
+fresh stub-names-not-macros
+plant crates/x/src/lib.rs '#[cfg(test)] use core::todo as later;'
+plant crates/x/src/lib.rs 'pub mod todo { pub fn f() {} }'
+plant crates/x/src/lib.rs 'use crate::todo::f as g;'
+plant crates/x/src/lib.rs 'pub struct T { pub todo: u8 }'
+plant crates/x/src/lib.rs 'pub fn h(t: &T) -> u8 { todo::f(); g(); m!(t.todo, crate::todo::f) }'
+assert_silent "${FX}" "a cfg(test) rename, a module or field named todo and a path through it pass" "OK"
 
 fresh unpublished-crate
 mkdir -p "${FX}/crates/y/src"

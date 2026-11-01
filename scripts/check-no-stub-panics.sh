@@ -99,6 +99,16 @@
 # is listed before exit, sorted by path and then by line, so two runs on one
 # tree print byte-identical output.
 #
+# Renamed and indirect calls: a `use` declaration that renames the macro
+# (`use core::todo as later;`, `use std::{unimplemented as nope}`) is a finding
+# at the rename, and so is the bare identifier `todo` or `unimplemented` inside
+# a macro invocation's tokens or a `macro_rules!` body (`call!(todo)`, whose
+# macro may expand `$m!()`), each named in the finding line. A path segment, a
+# field or a `$todo` metavariable is not the macro. Strict by design: a local
+# variable named `todo` handed to a macro (`println!("{}", todo)`) is reported
+# too; rename it. A call built some other way (a proc macro, `concat_idents!`)
+# is beyond a lexical gate.
+#
 # There is NO exemption list, no inline allow marker, no environment switch and
 # no path filter (D-01). To clear a finding, replace the stub with a typed `Err`
 # or delete the dead code.
@@ -139,6 +149,16 @@ root = os.path.abspath(sys.argv[1])
 # `todo!` / `unimplemented!` followed by an opening delimiter. `\b` keeps
 # `my_todo!` and `unimplemented_x!` out.
 STUB = re.compile(r'\b(todo|unimplemented)\s*!\s*[\(\[{]')
+# The same macros under another name: a `use` declaration that renames one
+# (`use core::todo as later;`), and the bare identifier handed to a macro,
+# which can build the call from it (`call!(todo)` expanding `$m!()`). A path
+# segment (`crate::todo::f`, `todo::f`), a field (`t.todo`, `todo: u8`) or a
+# `$todo` metavariable is not the macro.
+USE_DECL = re.compile(r'(?<![\w$])use\b[^;]*;')
+STUB_RENAME = re.compile(r'(?<![\w$])(todo|unimplemented)\s+as\b')
+STUB_IDENT = re.compile(r'(?<![\w$.:])(todo|unimplemented)\b(?!\s*[!:.\w])')
+RENAMED = " (renamed by use ... as)"
+MACRO_TOKEN = " (passed to a macro as an identifier)"
 # The two exempt attribute forms: cfg(test) and cfg(all(test, ...)).
 CFG_TEST_ATTR = re.compile(
     r'#\s*\[\s*cfg\s*\(\s*(?:test|all\s*\(\s*test\s*,[^\]]*\))\s*\)\s*\]'
@@ -601,7 +621,8 @@ def mod_decls(raw, b, groups):
 def analyse(raw, blanked):
     """Return (hits, decls); hits is None when the whole file is test-only.
 
-    hits: (line, macro) of each stub macro outside an exempt item.
+    hits: (line, macro, how) of each stub macro outside an exempt item; how is
+    "" for a direct `todo!(`, else RENAMED or MACRO_TOKEN.
     decls: the file's out-of-line module declarations (see mod_decls).
     """
     groups = macro_groups(blanked)
@@ -621,10 +642,21 @@ def analyse(raw, blanked):
             spans.append((m.start(), end))
     for d in decls:
         d["exempt"] = d["test"] or any(a <= d["at"] <= z for a, z in spans)
+    found = [(m.start(), m.group(1), "") for m in STUB.finditer(blanked)]
+    for u in USE_DECL.finditer(blanked):
+        found += [
+            (m.start(), m.group(1), RENAMED)
+            for m in STUB_RENAME.finditer(blanked, u.start(), u.end())
+        ]
+    found += [
+        (m.start(), m.group(1), MACRO_TOKEN)
+        for m in STUB_IDENT.finditer(blanked)
+        if in_groups(groups, m.start())
+    ]
     hits = [
-        (blanked.count("\n", 0, m.start()) + 1, m.group(1))
-        for m in STUB.finditer(blanked)
-        if not any(a <= m.start() <= z for a, z in spans)
+        (blanked.count("\n", 0, at) + 1, macro, how)
+        for at, macro, how in found
+        if not any(a <= at <= z for a, z in spans)
     ]
     return hits, decls
 
@@ -780,10 +812,10 @@ while queue:
     queue += resolve_children(path, parsed[path][1])
 
 findings = sorted(
-    (rel(path), line, macro)
+    (rel(path), line, macro, how)
     for path in files
     if path in parsed and path not in test_only
-    for line, macro in parsed[path][0]
+    for line, macro, how in parsed[path][0]
 )
 
 # --- Named failures, in status-line priority order. ---
@@ -811,8 +843,8 @@ if named or findings:
     print(named[0][0] if named else "FOUND")
     for _, detail in named:
         print(detail)
-    for path, line, macro in findings:
-        print(f"{path}:{line}: {macro}! outside #[cfg(test)] in a published crate")
+    for path, line, macro, how in findings:
+        print(f"{path}:{line}: {macro}!{how} outside #[cfg(test)] in a published crate")
     if files:
         print(summary)
     sys.exit(0)

@@ -5,6 +5,12 @@ All notable changes to `paladin-memory` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows lockstep workspace versioning.
 
+## [Unreleased]
+
+### Fixed
+
+- Correction to the `[0.11.0]` entry: 0.11.0 was not a no-op for this crate. `FileCitadel` now writes the Paladin payload under `paladin.data` (v0.10 wrote `paladin.node`) and reads either spelling, never both in one document. The change is one-way: a v0.10 binary cannot read a snapshot v0.11 wrote. Back up Citadel state before upgrading, and upgrade every reader before any writer (`MIGRATION.md` section 10.1 `M-B-12`; FIRST-05).
+
 ## [0.11.0] - 2026-10-26
 
 No functional change; version bumped in lockstep with the workspace.

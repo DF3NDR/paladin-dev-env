@@ -5,6 +5,12 @@ All notable changes to `paladin-content` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows lockstep workspace versioning.
 
+## [Unreleased]
+
+### Fixed
+
+- Correction to the `[0.11.0]` entry: this crate's own code did not change, but the `ContentItem` JSON it builds through `paladin-ai-core` now carries the entity under `entity` with its payload under `data` (v0.10 wrote `node`), one way. Anything that stores or exchanges that JSON must back up first and upgrade readers before writers (`MIGRATION.md` section 10.1 `M-B-12`; FIRST-05).
+
 ## [0.11.0] - 2026-10-26
 
 No functional change; version bumped in lockstep with the workspace.

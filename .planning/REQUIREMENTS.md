@@ -103,7 +103,7 @@ fails is rebuilt.*
       `k8s/server/configmap.yaml` (including its "expanded by the server at load time" header) no
       longer imply expansion — B1, C3, WINDOWS row 62, DF-01
 
-- [ ] **FIRST-02**: Every install snippet and version line a user copies from reads the current
+- [x] **FIRST-02**: Every install snippet and version line a user copies from reads the current
       release: `README.md:108` (`"0.5"`), `README.md:183` ("Current version: 0.8.0"),
       `docs/src/appendix/sentinel.md:66`, `crate-map.md:190`, `feature-flags.md:132,167,333`
       (`"0.10.0"`); historical rows inside the migration guide are exempt — C1, C2, DF-02
@@ -323,7 +323,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TENANT-09 | Phase 53 | Complete |
 | TENANT-10 | Phase 53 | Complete |
 | FIRST-01 | Phase 54 | Complete |
-| FIRST-02 | Phase 54 | Pending |
+| FIRST-02 | Phase 54 | Complete |
 | FIRST-03 | Phase 54 | Pending |
 | FIRST-04 | Phase 54 | Pending |
 | FIRST-05 | Phase 54 | Pending |

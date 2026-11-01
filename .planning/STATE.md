@@ -5,15 +5,15 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 54
 current_phase_name: First-Run Usability
 status: executing
-stopped_at: Completed 54-02-PLAN.md
-last_updated: "2026-11-01T00:25:56.695Z"
+stopped_at: Completed 54-03-PLAN.md
+last_updated: "2026-11-01T00:27:33.499Z"
 last_activity: 2026-11-01
 last_activity_desc: Phase 54 execution started
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 25
-  completed_plans: 18
+  completed_plans: 19
 ---
 
 # Project State
@@ -51,11 +51,11 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 ## Current Position
 
 Phase: 54 (First-Run Usability) — EXECUTING
-Plan: 3 of 9
+Plan: 4 of 9
 Status: Ready to execute
 Last activity: 2026-11-01 — Phase 54 execution started
 
-Progress: [██████░░░░░░░░░░░░░░] 2/7 phases ([███████░░░] 72%) — Phase 53 plans [████████████████████] 8/8 (100%)
+Progress: [██████░░░░░░░░░░░░░░] 2/7 phases ([████████░░] 76%) — Phase 53 plans [████████████████████] 8/8 (100%)
 
 ## Performance Metrics
 
@@ -374,6 +374,7 @@ Progress: [██████░░░░░░░░░░░░░░] 2/7 pha
 | Phase 53 P08 | 12min | 3 tasks | 4 files |
 | Phase 54 P01 | 25min | 3 tasks | 5 files |
 | Phase 54 P02 | 10min | 2 tasks | 3 files |
+| Phase 54 P03 | 5min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -702,6 +703,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: Phase 53-08 (2026-10-31): v0.11.1 patch decided, every change additive. Evidence: local reproduction of Semver Checks (vs v0.11.0) with scripts/check-semver.sh at --release-type patch on head 4ef9ddd2a, 223 checks: 223 pass, 31 skip for all twelve packages, 0 failure(s); MIGRATION.md 11.2 has no row, allowlist has no entry. Recorded in .planning/phases/53-tenant-isolation-closure/53-VERSION-DECISION.md
 - [Phase 53]: UAT (2026-10-31): AC-N5 passed on an owner read of the shipped wiring (the no-op-factory blind spot stays a code-review control); review warnings WR-01, WR-02, WR-03 carried as open WINDOWS rows 85-87 (proposed owner Phase 55), WR-04 and WR-05 recorded as ADR-0063 residuals
 - [Phase ?]: Phase 54-01: HTTP API keys containing '${' are refused at config load (substring check, any auth state, before tenant/duplicate checks); message names the entry, never the value or variable (FIRST-01)
+- [Phase ?]: 54-03: prose banners naming the current release made version-free (PD-03-1) so only gated pattern classes carry a literal workspace version
 
 ### Pending Todos
 
@@ -1063,8 +1065,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-11-01T00:25:56.675Z
-Stopped at: Completed 54-02-PLAN.md
+Last session: 2026-11-01T00:27:33.479Z
+Stopped at: Completed 54-03-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

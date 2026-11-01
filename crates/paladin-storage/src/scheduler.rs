@@ -1,4 +1,4 @@
-//! `TokioCronSchedulerAdapter` — a concrete [`SchedulerPort`] implementation
+//! `TokioCronSchedulerAdapter` — a concrete [`SchedulerPort`](paladin_ports::output::scheduler_port::SchedulerPort) implementation
 //! backed by [`tokio_cron_scheduler`].
 //!
 //! Until this adapter, the only `SchedulerPort` implementation shipped in the
@@ -14,9 +14,9 @@
 //! `tokio-cron-scheduler` 0.13's `JobScheduler` offers no status query, no
 //! job-info query, and no job listing — its public surface is essentially
 //! `add`/`remove`/`start`/`shutdown`/`time_till_next_job`/`next_tick_for_job`/
-//! `context`. Every field the [`JobInfo`] contract promises — `status`,
+//! `context`. Every field the [`JobInfo`](paladin_ports::output::scheduler_port::JobInfo) contract promises — `status`,
 //! `created_at`, `last_run`, `next_run`, `run_count`, `failure_count` — must
-//! therefore be tracked by this adapter itself, in [`JobRegistration`]. Only
+//! therefore be tracked by this adapter itself, in `JobRegistration`. Only
 //! `next_run` can be answered by the engine (via `next_tick_for_job`).
 //!
 //! # The identity rule
@@ -25,7 +25,7 @@
 //! way to ask it to reuse a previously known job id, so a `JobId` handed out
 //! by this adapter is process-lifetime-only. Callers that need a stable
 //! cross-restart identity for a scheduled job must key it on their own domain
-//! identifier (carried in [`JobSpec::metadata`]) and re-register on startup;
+//! identifier (carried in [`JobSpec::metadata`](paladin_ports::output::scheduler_port::JobSpec::metadata)) and re-register on startup;
 //! they must not persist this adapter's `JobId`.
 //!
 //! # The result-less tick closure
@@ -34,9 +34,9 @@
 //! `Pin<Box<dyn Future<Output = ()>>>`, not a `Result` — a tick's error or
 //! panic is invisible to the engine, and there is no failure counter inside
 //! it to propagate into. The only way the counters that
-//! [`SchedulerPort::get_job_status`]/[`SchedulerPort::get_job_info`] report
+//! [`SchedulerPort::get_job_status`](paladin_ports::output::scheduler_port::SchedulerPort::get_job_status)/[`SchedulerPort::get_job_info`](paladin_ports::output::scheduler_port::SchedulerPort::get_job_info) report
 //! can stay correct is for the tick closure to call
-//! [`TokioCronSchedulerAdapter::record_job_run`] itself, on every path, before
+//! [`TokioCronSchedulerAdapter::record_job_run`](crate::scheduler::TokioCronSchedulerAdapter::record_job_run) itself, on every path, before
 //! returning. That method is this adapter's own bookkeeping seam — deliberately
 //! not on the `SchedulerPort` trait, because it is recovery from a gap in the
 //! engine, not a capability the port promises.

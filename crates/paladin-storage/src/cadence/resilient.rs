@@ -1,7 +1,7 @@
 //! # Resilient Cadence -- a shared backend that degrades, never fails (PACE-05, D-05)
 //!
-//! [`ResilientCadence`] wraps a *primary* [`CadencePort`] (in production the Redis adapter,
-//! [`crate::cadence::redis::RedisCadence`]) and an in-process *fallback*
+//! [`ResilientCadence`] wraps a *primary* [`CadencePort`](paladin_ports::output::cadence_port::CadencePort) (in production the Redis adapter,
+//! `crate::cadence::redis::RedisCadence`) and an in-process *fallback*
 //! ([`InMemoryCadence`], built with a stricter multiplier). While the primary answers, every
 //! operation is served by it. The first primary error -- a backend failure or a timeout --
 //! latches *degraded mode*: that same call, and every later call, is served by the fallback, so
@@ -10,7 +10,7 @@
 //!
 //! ## Why the latch lives in an adapter
 //!
-//! The `CadenceLlmAdapter` decorator stays oblivious: it consults one [`CadencePort`] and never
+//! The `CadenceLlmAdapter` decorator stays oblivious: it consults one [`CadencePort`](paladin_ports::output::cadence_port::CadencePort) and never
 //! sees an error that matters. Putting the outage behaviour in a composite adapter keeps it
 //! testable without a Redis server (an injected failing port is enough) and lets any backend
 //! reuse it.
@@ -21,9 +21,9 @@
 //!   with `InMemoryCadence::with_multiplier` (default 2.0 from configuration): a delay-less
 //!   first 429 gates for `2 * base_backoff`, and a provider minimum is only ever multiplied up.
 //! * **One warning per outage.** The healthy-to-degraded edge emits exactly one `warn` under
-//!   the `paladin::cadence` log target ([`CADENCE_LOG_TARGET`]) and increments
+//!   the `paladin::cadence` log target ([`CADENCE_LOG_TARGET`](paladin_ports::output::cadence_port::CADENCE_LOG_TARGET)) and increments
 //!   [`ResilientCadence::degraded_transitions`]; recovery emits exactly one `info`. The warning
-//!   interpolates only the [`CadenceError`], whose messages are URL-free by construction.
+//!   interpolates only the [`CadenceError`](paladin_ports::output::cadence_port::CadenceError), whose messages are URL-free by construction.
 //! * **Probe back-off.** A dead Redis must not add a timeout to every LLM call (research
 //!   Pitfall 10). While degraded, the primary is attempted at most once per probe interval
 //!   ([`DEFAULT_PROBE_INTERVAL`], 5 s); a single claim flag means concurrent callers never wait
@@ -36,12 +36,12 @@
 //!
 //! ## The stampede lock fails open (D-13)
 //!
-//! [`CadencePort::try_lock`] and [`CadencePort::unlock`] follow the same latch, probe and
+//! [`CadencePort::try_lock`](paladin_ports::output::cadence_port::CadencePort::try_lock) and [`CadencePort::unlock`](paladin_ports::output::cadence_port::CadencePort::unlock) follow the same latch, probe and
 //! single-warning rules as the pacing methods: one outage, one warning, whichever method
 //! tripped it.
 //!
 //! * `try_lock`: healthy goes to the primary; a primary error latches and the same call is
-//!   served by the in-process fallback, which issues [`FencingToken::Local`] tokens, so tasks
+//!   served by the in-process fallback, which issues [`FencingToken::Local`](paladin_ports::output::cadence_port::FencingToken::Local) tokens, so tasks
 //!   inside one worker still coalesce even though the fleet can no longer be coordinated.
 //!   Degraded goes to the fallback unless this caller wins the probe.
 //! * `unlock` routes by token source: a `Distributed` token belongs to the primary, a `Local`

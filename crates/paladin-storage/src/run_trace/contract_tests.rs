@@ -6,13 +6,13 @@
 //! (`InMemoryRunTraceStore`, `SqliteRunTraceStore`, `PostgresRunTraceStore`)
 //! invokes these unchanged from its own `#[tokio::test]`s.
 //!
-//! One clause -- [`unsupported_schema_version_is_typed`] -- cannot be
+//! One clause -- [`unsupported_schema_version_is_typed`](crate::run_trace::contract_tests::unsupported_schema_version_is_typed) -- cannot be
 //! expressed purely over `&dyn RunTracePort`: writing a row with an
-//! unsupported schema version bypasses the normal [`RunTracePort::append`]
+//! unsupported schema version bypasses the normal [`RunTracePort::append`](paladin_ports::output::run_trace_port::RunTracePort::append)
 //! path (which always stamps the CURRENT schema version), so that clause
-//! takes a store implementing the additional [`RawSchemaVersionWriter`]
+//! takes a store implementing the additional [`RawSchemaVersionWriter`](crate::run_trace::contract_tests::RawSchemaVersionWriter)
 //! test-only capability instead, and is called directly by each backend's
-//! own test module rather than from [`run_all`].
+//! own test module rather than from [`run_all`](crate::run_trace::contract_tests::run_all).
 //!
 //! This module is plain (not `#[cfg(test)]`) so both unit tests inside each
 //! backend crate and future Docker-gated integration tests can call it.

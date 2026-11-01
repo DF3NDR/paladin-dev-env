@@ -3,10 +3,10 @@
 //! One generic async function per contract clause, each taking `&dyn TreasuryNoticePort` (or,
 //! for the race clause, `Arc<dyn TreasuryNoticePort>`) and asserting inside. Every backend
 //! (`InMemoryTreasuryLedger`, `SqliteTreasuryLedger`, `PostgresTreasuryLedger`) invokes these
-//! functions unchanged from its own `#[tokio::test]`s, mirroring [`super::contract_tests`]'s
+//! functions unchanged from its own `#[tokio::test]`s, mirroring [`super::contract_tests`](crate::treasury::contract_tests)'s
 //! house pattern, so "identical suite across backends" holds by construction.
 //!
-//! Every clause isolates itself with a unique tenant id (see [`notice_tenant`]) so a shared
+//! Every clause isolates itself with a unique tenant id (see [`notice_tenant`](crate::treasury::notice_contract_tests::notice_tenant)) so a shared
 //! database never leaks rows between clauses. Every instant is a whole second, so a notice reads
 //! back byte-identical on a backend that stores microseconds.
 

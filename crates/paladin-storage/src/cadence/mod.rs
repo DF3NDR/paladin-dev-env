@@ -3,9 +3,9 @@
 //! Implementations of `paladin_ports::output::cadence_port::CadencePort`, the
 //! shared rate-pacing state a provider 429 opens a gate in. Mirrors
 //! `node_cache/`'s module layout: an always-available in-memory backend now;
-//! the Redis backend ([`redis`], behind the `redis-cadence` feature, 43-07) shares
-//! pacing state across a worker fleet; [`contract_tests`] is the shared contract suite
-//! every backend runs unchanged (43-05, then 43-07 and 43-08); [`resilient`] composes a shared
+//! the Redis backend (`redis`, behind the `redis-cadence` feature, 43-07) shares
+//! pacing state across a worker fleet; [`contract_tests`](crate::cadence::contract_tests) is the shared contract suite
+//! every backend runs unchanged (43-05, then 43-07 and 43-08); [`resilient`](crate::cadence::resilient) composes a shared
 //! backend with an in-process fallback so an outage degrades pacing instead of failing a call.
 
 /// In-process implementation, always available (no feature gate, mirroring

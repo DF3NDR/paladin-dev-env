@@ -2,7 +2,7 @@
 //! `waypoint::retention::prune`, NOT a generalisation of it -- see
 //! `run_trace/mod.rs`'s own doc comment and 28-RESEARCH.md Q14 / Pitfall 3
 //! for why `waypoint::retention::prune`'s `&dyn WaypointPort` typing cannot
-//! accept [`RunTracePort`] too.
+//! accept [`RunTracePort`](paladin_ports::output::run_trace_port::RunTracePort) too.
 //!
 //! This routine has no opinion on what `before_superstep_for` should return
 //! for a given thread -- that policy (deriving a boundary from the SAME

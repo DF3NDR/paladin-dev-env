@@ -5,15 +5,15 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 55
 current_phase_name: Correctness Fixes, Test Hygiene & Lint Bar
 status: executing
-stopped_at: Completed 55-02-PLAN.md
-last_updated: "2026-11-01T15:03:05.856Z"
+stopped_at: Completed 55-03-PLAN.md
+last_updated: "2026-11-01T15:22:21.948Z"
 last_activity: 2026-11-01
 last_activity_desc: Phase 55 execution started
 progress:
   total_phases: 4
   completed_phases: 3
   total_plans: 38
-  completed_plans: 27
+  completed_plans: 28
 ---
 
 # Project State
@@ -51,11 +51,11 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 ## Current Position
 
 Phase: 55 (Correctness Fixes, Test Hygiene & Lint Bar) — EXECUTING
-Plan: 3 of 13
+Plan: 4 of 13
 Status: Ready to execute
 Last activity: 2026-11-01 — Phase 55 execution started
 
-Progress: [█████████░░░░░░░░░░░] 3/7 phases ([███████░░░] 71%) — Phase 54 plans [████████████████████] 9/9 (100%)
+Progress: [█████████░░░░░░░░░░░] 3/7 phases ([███████░░░] 74%) — Phase 54 plans [████████████████████] 9/9 (100%)
 
 ## Performance Metrics
 
@@ -384,6 +384,7 @@ Progress: [█████████░░░░░░░░░░░] 3/7 pha
 | Phase 54 P09 | 20min | 3 tasks | 6 files |
 | Phase 55 P01 | 12min | 3 tasks | 9 files |
 | Phase 55 P02 | 45min | 2 tasks | 8 files |
+| Phase 55 P03 | 35min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -722,6 +723,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: Phase 54-09: FIRST-08 reconciled by dated note, not by padding the facade snapshot; UnsupportedParameter and check_reasoning live in paladin-ports, guarded by make check-semver (WINDOWS row 59 precedent)
 - [Phase ?]: 55-01: check-no-stub-panics gate has no exemption list; out-of-line #[cfg(test)] mod files are exempt by transitive resolution only; refusal text for ContentListRepository is one helper per adapter file
 - [Phase ?]: 55-02: a model unpriced at dispatch records Halted with HaltReason::ModelUnpriced { model } (resumable), not Failed; ADR-0057 amended in place (FIXES-03)
+- [Phase ?]: 55-03: LocalRunTokens::is_registered is #[cfg(test)] pub(crate) and polled every 5 ms inside the 30 s timeout (not a watch/Notify signal); the four commander happy-path tests are kept, each pointing at its relocated error-path test
 
 ### Pending Todos
 
@@ -1093,8 +1095,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-11-01T15:03:05.834Z
-Stopped at: Completed 55-02-PLAN.md
+Last session: 2026-11-01T15:22:21.926Z
+Stopped at: Completed 55-03-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

@@ -178,7 +178,7 @@ fails is rebuilt.*
       against a scripted port with no network, pass in a sandbox, and WINDOWS row 73 is
       dispositioned — E1
 
-- [ ] **TESTS-02**: `cancel_tests::local_cancel_signals_token` waits on a dispatch-registration
+- [x] **TESTS-02**: `cancel_tests::local_cancel_signals_token` waits on a dispatch-registration
       signal instead of a fixed 50 ms sleep — E2
 
 - [ ] **TESTS-03**: Single-feature `cargo clippy --tests` on `paladin-llm` is warning-free (unused
@@ -194,7 +194,7 @@ fails is rebuilt.*
       the suspected duplicate in the config layer is found and folded in, or 51 IN-01 is closed as
       not-reproducing — E5
 
-- [ ] **TESTS-06**: The `commander.rs:3834+` "TODO: Enhance MockPaladinPort" test stubs are deleted
+- [x] **TESTS-06**: The `commander.rs:3834+` "TODO: Enhance MockPaladinPort" test stubs are deleted
       or point at `tests/integration/commander_error_paths_test.rs` — E7
 
 ### Dogfood Findings (DOGF)
@@ -343,11 +343,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | FIXES-05 | Phase 55 | Pending |
 | FIXES-06 | Phase 55 | Pending |
 | TESTS-01 | Phase 55 | Pending |
-| TESTS-02 | Phase 55 | Pending |
+| TESTS-02 | Phase 55 | Complete |
 | TESTS-03 | Phase 55 | Pending |
 | TESTS-04 | Phase 55 | Pending |
 | TESTS-05 | Phase 55 | Pending |
-| TESTS-06 | Phase 55 | Pending |
+| TESTS-06 | Phase 55 | Complete |
 | DOGF-01 | Phase 56 | Pending |
 | DOGF-02 | Phase 56 | Pending |
 | DOGF-03 | Phase 56 | Pending |

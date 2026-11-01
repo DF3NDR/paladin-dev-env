@@ -438,12 +438,10 @@ enum DispatchBudget {
     Unbounded,
     /// The run executes under this budget, carried on its `RunScope`.
     Derived(DerivedTokenBudget),
-    /// The allowance cannot cover a call: the run is recorded `Halted` with this reason and the
-    /// LLM is never called.
+    /// The allowance or the price table cannot cover a call (a spent or zero allowance, an
+    /// unreadable ledger, or a model that lost its `treasurer.pricing` row since admission): the
+    /// run is recorded `Halted` with this reason and the LLM is never called.
     Halt(HaltReason),
-    /// The model lost its `treasurer.pricing` row between admission and dispatch: the run is
-    /// recorded `Failed` with a typed error naming the model and the LLM is never called.
-    Unpriced(String),
 }
 
 /// Map a terminal/suspension [`RunStatus`] to the [`RunEventKind`] a
@@ -1670,7 +1668,8 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         // never from a figure persisted at submit time -- the allowance may have been spent while
         // the run sat in the queue. The three no-call outcomes (a zero or exhausted figure, an
         // unreadable ledger, a model that lost its price row) are decided before the LLM is
-        // reached, and each is recorded through the same one-terminal-event path as a call.
+        // reached, and all three are recorded as halts through the same one-terminal-event path
+        // as a call.
         let derived_budget = self.derive_dispatch_budget(run, &paladin.data.model).await;
         dispatcher.emit(TraceEvent::RunStarted {
             run_id: Some(run.run_id.clone()),
@@ -1685,18 +1684,6 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                     0,
                 );
                 let persisted = self.persist_agent_halt(leased, run, None, reason).await;
-                self.unbind_after_drain(run).await;
-                return persisted;
-            }
-            DispatchBudget::Unpriced(model) => {
-                emit_agent_run_finished(&dispatcher, RunFinishStatus::Failed, None, 0);
-                let persisted = self
-                    .persist_failure(
-                        leased,
-                        run,
-                        format!("model {model} has no treasurer.pricing row"),
-                    )
-                    .await;
                 self.unbind_after_drain(run).await;
                 return persisted;
             }
@@ -1868,8 +1855,9 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// - A backend error, or any error this code does not name (`AdmissionError` is
     ///   `#[non_exhaustive]`), halts `ledger_unavailable` -- fail closed (D-03). Logged at
     ///   `error` with the run id only, never a key value.
-    /// - `ModelUnpriced` records `Failed` naming the model: a deployment incoherence (the model
-    ///   lost its price row since admission), not quota exhaustion.
+    /// - `ModelUnpriced` halts with `model_unpriced` naming the model: the model lost its price
+    ///   row since admission, which is a resume point once the operator adds the row, not quota
+    ///   exhaustion.
     async fn derive_dispatch_budget(&self, run: &Run, model: &str) -> DispatchBudget {
         let (Some(treasurer), Some(attribution)) = (&self.treasurer, run.submitted_by.as_ref())
         else {
@@ -1881,7 +1869,9 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
             Err(AdmissionError::Refused(refusal)) => {
                 DispatchBudget::Halt(HaltReason::AllowanceExhausted(refusal))
             }
-            Err(AdmissionError::ModelUnpriced { model }) => DispatchBudget::Unpriced(model),
+            Err(AdmissionError::ModelUnpriced { model }) => {
+                DispatchBudget::Halt(HaltReason::ModelUnpriced { model })
+            }
             Err(AdmissionError::Backend { message }) => {
                 log::error!(
                     "run worker: allowance derivation failed at dispatch for run {}: {message}; \

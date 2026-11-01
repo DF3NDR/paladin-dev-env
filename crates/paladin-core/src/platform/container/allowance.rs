@@ -227,6 +227,12 @@ impl AllowanceRefusal {
 /// let reason = HaltReason::LedgerUnavailable;
 /// assert_eq!(reason.as_str(), "ledger_unavailable");
 /// assert_eq!(serde_json::to_string(&reason)?, r#"{"reason":"ledger_unavailable"}"#);
+///
+/// let unpriced = HaltReason::ModelUnpriced { model: "gpt-4".to_owned() };
+/// assert_eq!(
+///     serde_json::to_string(&unpriced)?,
+///     r#"{"reason":"model_unpriced","model":"gpt-4"}"#
+/// );
 /// # Ok::<(), serde_json::Error>(())
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -241,10 +247,21 @@ pub enum HaltReason {
     /// longer be trusted even though every read succeeded. The run halts fail-closed (D-03) and
     /// carries no figures; the wire object stays exactly `{"reason":"ledger_unavailable"}`.
     LedgerUnavailable,
+    /// The run's model had no `treasurer.pricing` row when the worker derived its budget at
+    /// dispatch (the row was removed after admission), so no spend could be metered and the LLM
+    /// was not called. The run halts resumably: add the price row, then resume or resubmit it.
+    /// It carries the model name only, never a tenant or a key (D-00g); the wire object is
+    /// exactly `{"reason":"model_unpriced","model":"<model>"}`.
+    ModelUnpriced {
+        /// The model that has no `treasurer.pricing` row. It is the model name only: never a
+        /// tenant id, an API key name or value, or a figure (D-00g).
+        model: String,
+    },
 }
 
 impl HaltReason {
-    /// The snake_case discriminator string: `"allowance_exhausted"` or `"ledger_unavailable"`.
+    /// The snake_case discriminator string: `"allowance_exhausted"`, `"ledger_unavailable"` or
+    /// `"model_unpriced"`.
     ///
     /// # Examples
     ///
@@ -252,19 +269,24 @@ impl HaltReason {
     /// use paladin_core::platform::container::allowance::HaltReason;
     ///
     /// assert_eq!(HaltReason::LedgerUnavailable.as_str(), "ledger_unavailable");
+    /// assert_eq!(
+    ///     HaltReason::ModelUnpriced { model: "gpt-4".to_owned() }.as_str(),
+    ///     "model_unpriced"
+    /// );
     /// ```
     pub fn as_str(&self) -> &'static str {
         match self {
             HaltReason::AllowanceExhausted(_) => "allowance_exhausted",
             HaltReason::LedgerUnavailable => "ledger_unavailable",
+            HaltReason::ModelUnpriced { .. } => "model_unpriced",
         }
     }
 
     /// The one-line operator rendering shared by the markdown, JSON and table heralds (D-19):
     /// `⛔ halted: allowance exhausted — 25.0000 of 25.0000 USD (api_key, window resets
     /// 2026-10-06T00:00:00Z)` for a window ceiling, `... (tenant, lifetime cap)` for a lifetime
-    /// one, and `⛔ halted: allowance could not be evaluated (ledger unavailable)` for a ledger
-    /// outage.
+    /// one, `⛔ halted: allowance could not be evaluated (ledger unavailable)` for a ledger
+    /// outage, and `⛔ halted: model gpt-4 has no treasurer.pricing row` for an unpriced model.
     ///
     /// It mirrors [`AllowanceWarning::herald_line`]: the line names the scope kind, never the
     /// tenant id or the key name, and never a key value (D-00g). Both figures go through
@@ -300,6 +322,10 @@ impl HaltReason {
     ///     HaltReason::LedgerUnavailable.herald_line(),
     ///     "\u{26D4} halted: allowance could not be evaluated (ledger unavailable)"
     /// );
+    /// assert_eq!(
+    ///     HaltReason::ModelUnpriced { model: "gpt-4".to_owned() }.herald_line(),
+    ///     "\u{26D4} halted: model gpt-4 has no treasurer.pricing row"
+    /// );
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn herald_line(&self) -> String {
@@ -325,6 +351,9 @@ impl HaltReason {
             HaltReason::LedgerUnavailable => {
                 "\u{26D4} halted: allowance could not be evaluated (ledger unavailable)".to_string()
             }
+            HaltReason::ModelUnpriced { model } => {
+                format!("\u{26D4} halted: model {model} has no treasurer.pricing row")
+            }
         }
     }
 
@@ -332,7 +361,8 @@ impl HaltReason {
     ///
     /// For [`HaltReason::AllowanceExhausted`] it is the refusal's
     /// [`AllowanceRefusal::details_json`] object with `"reason": "allowance_exhausted"` added;
-    /// for [`HaltReason::LedgerUnavailable`] it is exactly `{"reason":"ledger_unavailable"}`.
+    /// for [`HaltReason::LedgerUnavailable`] it is exactly `{"reason":"ledger_unavailable"}`; for
+    /// [`HaltReason::ModelUnpriced`] it is exactly `{"reason":"model_unpriced","model":"<model>"}`.
     ///
     /// # Examples
     ///
@@ -341,6 +371,12 @@ impl HaltReason {
     ///
     /// let wire = HaltReason::LedgerUnavailable.wire_json();
     /// assert_eq!(wire, serde_json::json!({"reason": "ledger_unavailable"}));
+    ///
+    /// let unpriced = HaltReason::ModelUnpriced { model: "gpt-4".to_owned() }.wire_json();
+    /// assert_eq!(
+    ///     unpriced,
+    ///     serde_json::json!({"reason": "model_unpriced", "model": "gpt-4"})
+    /// );
     /// ```
     pub fn wire_json(&self) -> serde_json::Value {
         match self {
@@ -356,6 +392,9 @@ impl HaltReason {
             }
             HaltReason::LedgerUnavailable => {
                 serde_json::json!({ "reason": self.as_str() })
+            }
+            HaltReason::ModelUnpriced { model } => {
+                serde_json::json!({ "reason": self.as_str(), "model": model })
             }
         }
     }
@@ -1356,10 +1395,11 @@ mod tests {
     }
 
     #[test]
-    fn halt_reason_as_str_names_the_two_tags() {
+    fn halt_reason_as_str_names_the_three_tags() {
         let exhausted = HaltReason::AllowanceExhausted(window_refusal(at(3, 23, 0, 0)));
         assert_eq!(exhausted.as_str(), "allowance_exhausted");
         assert_eq!(HaltReason::LedgerUnavailable.as_str(), "ledger_unavailable");
+        assert_eq!(model_unpriced().as_str(), "model_unpriced");
     }
 
     #[test]
@@ -1380,5 +1420,44 @@ mod tests {
         );
         let back: HaltReason = serde_json::from_value(unavailable).unwrap();
         assert_eq!(back, HaltReason::LedgerUnavailable);
+    }
+
+    fn model_unpriced() -> HaltReason {
+        HaltReason::ModelUnpriced {
+            model: "gpt-4".into(),
+        }
+    }
+
+    /// FIXES-03, D-04, D-00g: the persisted form names the model and nothing else.
+    #[test]
+    fn model_unpriced_serde_form_names_only_the_model() {
+        let reason = model_unpriced();
+        let json = serde_json::to_value(&reason).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"reason": "model_unpriced", "model": "gpt-4"})
+        );
+        assert_eq!(json.as_object().unwrap().len(), 2, "{json}");
+        let back: HaltReason = serde_json::from_value(json).unwrap();
+        assert_eq!(back, reason);
+        assert_eq!(reason.as_str(), "model_unpriced");
+    }
+
+    #[test]
+    fn model_unpriced_herald_line_names_the_model() {
+        assert_eq!(
+            model_unpriced().herald_line(),
+            "\u{26D4} halted: model gpt-4 has no treasurer.pricing row"
+        );
+    }
+
+    #[test]
+    fn model_unpriced_wire_json_matches_the_serde_form() {
+        let reason = model_unpriced();
+        assert_eq!(reason.wire_json(), serde_json::to_value(&reason).unwrap());
+        assert_eq!(
+            reason.wire_json(),
+            serde_json::json!({"reason": "model_unpriced", "model": "gpt-4"})
+        );
     }
 }

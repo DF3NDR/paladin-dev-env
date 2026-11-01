@@ -2970,10 +2970,11 @@ pub(super) mod agent_budget {
         );
     }
 
-    /// D-10: a model that lost its price row between admission and dispatch is `Failed` with a
-    /// typed error naming the model -- not a halt, and never a run of unmetered spend.
+    /// D-10, amended by FIXES-03 / D-04: a model that lost its price row between admission and
+    /// dispatch is `Halted` with `model_unpriced` naming the model -- a resume point once the
+    /// operator adds the row, and never a run of unmetered spend (the LLM is not called).
     #[tokio::test]
-    async fn agent_kind_run_whose_model_became_unpriced_fails_without_calling_the_llm() {
+    async fn agent_kind_run_whose_model_became_unpriced_halts_without_calling_the_llm() {
         let h = harness("gpt-4", "some-other-model", Some(CEILING_NANOS));
         let (run_id, mut rx) = submit_agent_run(&h, true).await;
 
@@ -2981,19 +2982,25 @@ pub(super) mod agent_budget {
 
         assert_eq!(h.llm.call_count(), 0);
         let run = h.repository.get(&run_id).await.unwrap().unwrap();
-        assert_eq!(run.status, RunStatus::Failed);
-        assert!(run.halt_reason.is_none());
-        let error = run.error.as_deref().expect("the typed error is on the row");
-        assert!(error.contains("gpt-4"), "names the model: {error}");
+        assert_eq!(run.status, RunStatus::Halted);
+        assert!(run.error.is_none(), "a halt is not a failure");
         assert!(
-            error.contains("treasurer.pricing"),
-            "names the missing row: {error}"
+            run.output.is_none(),
+            "nothing ran, so there is no partial output"
         );
+        let reason = HaltReason::ModelUnpriced {
+            model: "gpt-4".into(),
+        };
+        assert_eq!(run.halt_reason, Some(reason.clone()));
         let events = drain_events(&mut rx);
         assert_eq!(terminal_count(&events), 1, "got {events:?}");
-        assert_eq!(events.last().unwrap().kind, RunStreamEventKind::Error);
-        let (event, _payload) = only_delivery(&h, &run_id).await;
-        assert_eq!(event, RunEventKind::Failed);
+        let terminal = events.last().unwrap();
+        assert_eq!(terminal.kind, RunStreamEventKind::Done);
+        assert_eq!(terminal.payload["status"], "halted");
+        assert_eq!(terminal.payload["halt_reason"], reason.wire_json());
+        let (event, payload) = only_delivery(&h, &run_id).await;
+        assert_eq!(event, RunEventKind::Halted);
+        assert_eq!(payload["halt_reason"], reason.wire_json());
     }
 
     /// A principal with no configured ceiling, and a run that records no submitter, complete as

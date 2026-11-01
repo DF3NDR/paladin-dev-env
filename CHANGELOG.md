@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `paladin-storage`: every `ContentListRepository` method on the SQLite and MySQL adapters returns `Err(RepositoryError::QueryError(..))` naming the method and backend instead of panicking; content lists were never persisted (`MIGRATION.md` section 11.1 `M-B-30`; FIXES-01, Phase 55).
 
-- An agent-kind run whose model lost its `treasurer.pricing` row between admission and dispatch now records `halted` with `halt_reason` `{"reason":"model_unpriced","model":"<name>"}` and no error, where v0.11.0 recorded `failed`; the webhook event is `halted`, and the call is still never made (`MIGRATION.md` section 11.1 `M-B-31`; FIXES-03, Phase 55 plan 55-02).
+- An agent-kind run whose model lost its `treasurer.pricing` row between admission and dispatch now records `halted` with `halt_reason` `{"reason":"model_unpriced","model":"<name>"}` and no error, where v0.11.0 recorded `failed`; the webhook event is `halted`, and the call is still never made. A run or schedule whose `webhook.events` subscribes to `failed` but not `halted` no longer receives any delivery for this case; add `halted` to `webhook.events` (existing stored schedules must be updated) and match `halt_reason.reason == "model_unpriced"` (`MIGRATION.md` section 11.1 `M-B-31` and section 11.8 step 7; FIXES-03, Phase 55 plan 55-02).
 
 - `PlanningService` (autonomous planning) no longer invents an expected output for a planned subtask: `Subtask.expected_output` is empty, and the subtask prompt omits its `EXPECTED OUTPUT` line when none is set (`MIGRATION.md` section 11.1 `M-B-35`; FIXES-02, Phase 55 plan 55-06).
 

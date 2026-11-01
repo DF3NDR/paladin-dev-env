@@ -268,11 +268,45 @@ plant crates/x/src/lib.rs '}'
 assert_fire "${FX}" "#[cfg(test)] on an inline const block exempts only that block" \
     "crates/x/src/lib.rs:${STUB_LINE}: todo! outside #[cfg(test)]"
 
-# A `const` generic parameter is not followed by a `;`: it exempts nothing.
+# A `#[cfg(test)]` inside a generic parameter list sits after `<` or `,`, not
+# at an item position, so it exempts nothing: not the rest of the list, and
+# never the production items up to the next `;` later in the file (WR-03,
+# round 3). Each case ends with a later top-level `use ...;` so a scan that
+# ran on to a `;` would swallow the stubs before it.
 fresh cfg-test-const-generic
-plant crates/x/src/lib.rs 'pub fn g<#[cfg(test)] const N: usize>() { todo!() }'
-assert_fire "${FX}" "#[cfg(test)] on a const generic parameter does not exempt the fn body" \
-    "crates/x/src/lib.rs:${PLANT_LINE}: todo! outside #[cfg(test)]"
+printf '%s\n' \
+    'pub fn g<#[cfg(test)] const N: usize>() {}' \
+    'pub fn a() { todo!() }' \
+    'pub fn b() { unimplemented!() }' \
+    'use std::fmt as _f;' >"${FX}/crates/x/src/lib.rs"
+assert_fire "${FX}" "#[cfg(test)] on a const generic parameter exempts no later item" \
+    "crates/x/src/lib.rs:2: todo! outside #[cfg(test)]" \
+    "crates/x/src/lib.rs:3: unimplemented! outside #[cfg(test)]"
+
+fresh cfg-test-type-generic
+plant crates/x/src/lib.rs 'pub fn h<#[cfg(test)] T>() {}'
+plant crates/x/src/lib.rs 'pub fn a() { todo!() }'
+STUB_LINE="${PLANT_LINE}"
+plant crates/x/src/lib.rs 'use std::fmt as _f;'
+assert_fire "${FX}" "#[cfg(test)] on a type generic parameter exempts no later item" \
+    "crates/x/src/lib.rs:${STUB_LINE}: todo! outside #[cfg(test)]"
+
+fresh cfg-test-lifetime-generic
+plant crates/x/src/lib.rs "pub fn l<#[cfg(test)] 'a>() {}"
+plant crates/x/src/lib.rs 'pub fn a() { todo!() }'
+STUB_LINE="${PLANT_LINE}"
+plant crates/x/src/lib.rs 'use std::fmt as _f;'
+assert_fire "${FX}" "#[cfg(test)] on a lifetime parameter exempts no later item" \
+    "crates/x/src/lib.rs:${STUB_LINE}: todo! outside #[cfg(test)]"
+
+fresh cfg-test-impl-const-generic
+plant crates/x/src/lib.rs 'pub struct S;'
+plant crates/x/src/lib.rs 'impl<#[cfg(test)] const N: usize> S {}'
+plant crates/x/src/lib.rs 'pub fn a() { todo!() }'
+STUB_LINE="${PLANT_LINE}"
+plant crates/x/src/lib.rs 'use std::fmt as _f;'
+assert_fire "${FX}" "#[cfg(test)] on a const generic in an impl header exempts no later item" \
+    "crates/x/src/lib.rs:${STUB_LINE}: todo! outside #[cfg(test)]"
 
 # Deliberate, strict side: an expression statement is not an item, so it
 # exempts nothing even though rustc compiles it out of a non-test build. Wrap

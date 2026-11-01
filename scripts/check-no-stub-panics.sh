@@ -20,21 +20,32 @@
 # Exactly two cfg forms exempt code, and only the item or module block they
 # attach to: `#[cfg(test)]` and `#[cfg(all(test, ...))]`. `#[cfg(not(test))]`
 # is NOT exempt: it is production code. A file whose own top-level inner
-# attribute is `#![cfg(test)]` is wholly test-only. The attribute exempts
-# something only when (after any further attributes) a real item head follows:
-# optional visibility, optional `async`/`unsafe`/`const`/`default`/`extern
-# "abi"`, then `fn`, `mod`, `impl`, `struct`, `enum`, `union`, `trait`, `type`,
-# `const`, `static`, `use`, `extern`, `let`, `macro_rules!` or a macro
-# invocation such as `thread_local!`, or a block statement (`{`, `unsafe {`,
-# `async {`, inline `const {`). A block statement exempts exactly its block; a
-# macro invocation exactly its delimiter group (and a `;` right after it); a
+# attribute is `#![cfg(test)]` is wholly test-only.
+#
+# Position first: the attribute exempts something only at an item position,
+# that is, when the previous significant character before it (looking back over
+# whitespace, comments and any preceding `#[...]`/`#![...]` attributes) is the
+# start of the file, `;`, `{` or `}`. After `<`, `(`, `,`, `|`, `=` or anything
+# else it sits inside a generic parameter list (`fn g<#[cfg(test)] const N:
+# usize>`, a type or lifetime parameter, an impl header), a parameter list, a
+# field, variant or arm list, closure parameters or an initialiser, and exempts
+# nothing. Then the head: at an item position the attribute exempts something
+# only when (after any further attributes) a real item head follows: optional
+# visibility, optional `async`/`unsafe`/`const`/`default`/`extern "abi"`, then
+# `fn`, `mod`, `impl`, `struct`, `enum`, `union`, `trait`, `type`, `const`,
+# `static`, `use`, `extern`, `let`, `macro_rules!` or a macro invocation such
+# as `thread_local!`, or a block statement (`{`, `unsafe {`, `async {`, inline
+# `const {`). A block statement exempts exactly its block; a macro invocation
+# exactly its delimiter group (and a `;` right after it); a
 # `let`/`const`/`static`/`use`/`type` up to its top-level `;` (a closure
 # parameter list `|a, b|` inside it is read whole), and one with no `;` before
-# the enclosing block or the file ends exempts nothing. On a struct field, an
-# enum variant, a match arm (also one whose pattern is a macro), a function or
-# generic parameter, a struct-literal field or an expression it exempts
-# nothing, and the item scan stops at a top-level `=>`, a top-level `,` or an
-# unmatched closer, so it never runs past the enclosing block.
+# the enclosing block or the file ends exempts nothing. A struct field, enum
+# variant or match arm that passes the position rule (the first of its list
+# after `{`, or an arm after a `}`-bodied arm) is no item head, so it exempts
+# nothing; an arm whose pattern is a macro exempts only that macro's group. An
+# expression exempts nothing. The item scan stops at a top-level `=>`, a
+# top-level `,` or an unmatched closer, so it never runs past the enclosing
+# block.
 #
 # Strict by design: `#[cfg(test)]` on an expression statement such as
 # `self_check(|| todo!());` is not an item, so a stub inside it is reported
@@ -277,14 +288,66 @@ def closure_end(b, k):
     return None
 
 
+def attr_open(b, p):
+    """Index of the `#` opening the attribute whose closing `]` is at p, or None.
+
+    Matches `#[...]` and `#![...]` (whitespace allowed between the tokens) by
+    counting brackets backwards; comments and literals are already blanked.
+    None means the `]` closes something other than an attribute.
+    """
+    depth = 0
+    while p >= 0:
+        depth += (b[p] == "]") - (b[p] == "[")
+        if depth == 0:
+            break
+        p -= 1
+    if p < 0:
+        return None
+    p -= 1
+    while p >= 0 and b[p].isspace():
+        p -= 1
+    if p >= 0 and b[p] == "!":
+        p -= 1
+        while p >= 0 and b[p].isspace():
+            p -= 1
+    return p if p >= 0 and b[p] == "#" else None
+
+
+def at_item_position(b, i):
+    """True when the attribute whose `#` is at i sits where an item can start.
+
+    Looks back from i over whitespace (comments are already blanked) and any
+    run of preceding attributes (`#[...]`, `#![...]`). An item position is the
+    start of the file or just after `;`, `{` or `}`. After anything else, and
+    in particular after `<`, `(`, `,`, `|` or `=` (inside a generic parameter
+    list, a parameter list, a field or arm list, closure parameters or an
+    initialiser), the attribute cannot attach to an item, so it exempts nothing.
+    """
+    p = i - 1
+    while True:
+        while p >= 0 and b[p].isspace():
+            p -= 1
+        if p < 0:
+            return True
+        if b[p] != "]":
+            return b[p] in ";{}"
+        start = attr_open(b, p)
+        if start is None:
+            return False
+        p = start - 1
+
+
 def item_end(b, j):
     """End index of the item an exempt attribute ending at j attaches to, or None.
 
-    None means the attribute (after any further attributes) is not followed by
-    a real item head (ITEM_HEAD) or a block statement (BLOCK_HEAD): it sits on
-    a struct field, an enum variant, a match arm, a function parameter, a
-    generic parameter, a struct-literal field or an expression, and exempts
-    nothing.
+    The caller has already checked that the attribute is at an item position
+    (`at_item_position`); one inside a generic parameter list, a parameter
+    list, a field list, closure parameters or an initialiser never reaches
+    here. None means the attribute (after any further attributes) is not
+    followed by a real item head (ITEM_HEAD) or a block statement
+    (BLOCK_HEAD): it sits on a struct field, an enum variant or a match arm
+    that passed the position rule (the first of its list after `{`, or an arm
+    after a `}`), or on an expression, and exempts nothing.
 
     - A block statement (`{`, `unsafe {`, `async {`, `const {`) ends at the `}`
       matching its `{`.
@@ -294,8 +357,8 @@ def item_end(b, j):
       only ever exempts the group itself.
     - A statement-shaped item (`let`, `const`, `static`, `use`, `type`) ends at
       its top-level `;`, with braces nested inside it. One that reaches an
-      unmatched closer or the end of the file before any `;` (a `const`
-      generic parameter, say) is not a statement and exempts nothing.
+      unmatched closer or the end of the file before any `;` is not a
+      statement and exempts nothing.
     - Any other item ends at its first top-level `;`, or at the `}` matching
       its first top-level `{`.
 
@@ -395,6 +458,8 @@ def analyse(blanked):
             return None, []  # a top-level #![cfg(test)]: the whole file is test-only
     spans, test_mods = [], []
     for m in CFG_TEST_ATTR.finditer(blanked):
+        if not at_item_position(blanked, m.start()):
+            continue  # in a generic, parameter, field or arm list: not on an item
         end = item_end(blanked, m.end())
         if end is not None:
             spans.append((m.start(), end))

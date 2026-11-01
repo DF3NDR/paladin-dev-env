@@ -3801,6 +3801,9 @@ mod tests {
     }
 
     /// Test that fail-fast error strategy stops execution on first failure
+    ///
+    /// Error-path coverage: `tests/integration/commander_error_paths_test.rs`
+    /// `test_fail_fast_stops_on_first_error` (this test checks the happy path only).
     #[tokio::test]
     async fn test_error_handling_fail_fast() {
         // Create 3 paladins
@@ -3819,22 +3822,19 @@ mod tests {
             .build()
             .unwrap();
 
-        // Execute - should stop after second paladin (simulated failure)
-        // Note: For this test, we'll verify execution completes. Actual failure simulation
-        // would require MockPaladinPort to return errors, which we'll implement in follow-up
         let result = commander.execute("test input").await;
 
-        // For now, just verify the commander executes formation strategy successfully
         assert!(
             result.is_ok(),
             "Fail-fast strategy should execute: {:?}",
             result.err()
         );
-
-        // TODO: Enhance MockPaladinPort to support error injection for proper failure testing
     }
 
     /// Test that continue-on-error collects all errors and continues execution
+    ///
+    /// Error-path coverage: `tests/integration/commander_error_paths_test.rs`
+    /// `test_continue_on_error_collects_all_errors` (this test checks the happy path only).
     #[tokio::test]
     async fn test_error_handling_continue_on_error() {
         // Create 3 paladins
@@ -3866,11 +3866,12 @@ mod tests {
             "Continue-on-error strategy should complete: {:?}",
             result.err()
         );
-
-        // TODO: Verify all paladins executed and partial results collected
     }
 
     /// Test retry-then-continue strategy performs retries before continuing
+    ///
+    /// Error-path coverage: `tests/integration/commander_error_paths_test.rs`
+    /// `test_retry_then_continue_retries_failed_paladins` (this test checks the happy path only).
     #[tokio::test]
     async fn test_error_handling_retry_then_continue() {
         // Create paladins
@@ -3913,11 +3914,13 @@ mod tests {
             "Retry-then-continue should complete: {:?}",
             result.err()
         );
-
-        // TODO: Verify retry attempts were made (requires enhanced MockPaladinPort)
     }
 
     /// Test partial failure handling in parallel execution (Phalanx)
+    ///
+    /// Error-path coverage: `tests/integration/commander_error_paths_test.rs`
+    /// `test_partial_results_returned_with_errors`, which builds a Formation; no
+    /// Phalanx-specific error-path test exists (this test checks the happy path only).
     #[tokio::test]
     async fn test_partial_failure_handling() {
         // Create 4 paladins for parallel execution
@@ -3953,11 +3956,6 @@ mod tests {
             BattalionStatus::Completed,
             "Execution should complete"
         );
-
-        // TODO: When MockPaladinPort supports error injection:
-        // - Verify success_count and failure_count in metadata
-        // - Verify successful results are preserved
-        // - Verify failure details are captured
     }
 
     /// Mock Herald for `format_result` tests, mirroring `herald.rs`'s own `MockHerald` test

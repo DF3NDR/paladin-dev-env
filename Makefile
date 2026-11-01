@@ -240,7 +240,7 @@ check-release-consistency: ## Verify a release tag's version matches every publi
 	@./scripts/check-release-consistency.sh --tag "$(RELEASE_TAG)"
 
 .PHONY: check-consumer-surface
-# Deliberately NOT part of check-gates: the nine members of check-gates are
+# Deliberately NOT part of check-gates: the members of check-gates are
 # offline script guards that finish in about a second, while this target
 # compiles the facade crate. `make check` and `make lint` (so `make clean-code`)
 # and CI's clippy, all-targets check and integration-test steps already compile

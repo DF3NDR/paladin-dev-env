@@ -322,9 +322,9 @@ jobs:
           echo "  4. Commit the updated baseline"
 
   # MSRV verification (X-11.2, D-07). Dedicated job pinned to the workspace's
-  # declared `workspace.package.rust-version = "1.88"` (single source, all ten
-  # crate manifests inherit it via `rust-version.workspace = true`, see
-  # MIGRATION.md §9.3), independent of and parallel with every other job --
+  # declared `workspace.package.rust-version = "1.88"` (single source; every
+  # publishable crate manifest inherits it via `rust-version.workspace = true`,
+  # see MIGRATION.md §9.3), independent of and parallel with every other job --
   # no `needs:` edge, so it cannot gate or be gated by anything else. The
   # pinned dev toolchain (rust-toolchain.toml, 1.97.1) would otherwise
   # override whatever this job installs; RUSTUP_TOOLCHAIN is the same

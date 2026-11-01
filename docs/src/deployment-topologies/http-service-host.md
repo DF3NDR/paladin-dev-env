@@ -79,7 +79,10 @@ http:
   auth:
     enabled: true                  # fail-closed: the server refuses to start with no credentials
     api_keys:
-      - { key: "${PALADIN_API_KEY_CI}", name: "ci", role: "admin", tenant: "platform-ops" }
+      - key: ""                    # paste a literal secret (for example from openssl rand -hex 32); ${VAR} is not expanded here
+        name: "ci"
+        role: "admin"
+        tenant: "platform-ops"
   docs:
     enabled: true                  # GET /openapi.json + Swagger UI at /docs
 
@@ -99,6 +102,12 @@ verified against the server's own token store — not a signed or self-describin
 key/token maps to a role. Per-agent `allowed_roles` gate invocation, and runtime
 register/deregister require an `admin` role. `/health`, `/ready`, `/openapi.json`, and `/docs`
 are always reachable without a credential.
+
+**API key values are literal.** The server does not expand `${VAR}` in `http.auth.api_keys`,
+and a key that contains `${` stops the server at boot with an error naming the entry (never the
+value). Only `llm.<provider>.api_key` resolves an exact `"${NAME}"` from the environment. Keep the
+file that holds the literal keys out of version control: a mounted file, and on Kubernetes a
+Secret.
 
 **Tenants and what a key can read.** Every API key maps to exactly one tenant through
 `http.auth.api_keys[].tenant`. The field is **required**: a key without one, or with a value
@@ -133,8 +142,9 @@ ADR-0041 defers with a named trigger, not the store shipped today.
 **Binary:**
 
 ```bash
+cp config.example.yml config.yml   # then paste a literal key into http.auth.api_keys
 PALADIN_CONFIG=./config.yml \
-OPENAI_API_KEY=sk-... PALADIN_API_KEY_CI=sk-... \
+OPENAI_API_KEY=sk-... \
 cargo run --bin paladin-server --features web-server
 ```
 
@@ -142,18 +152,26 @@ cargo run --bin paladin-server --features web-server
 
 ```bash
 make docker-build-server
-docker run --rm -p 8080:8080 \
-  -e OPENAI_API_KEY=sk-... -e PALADIN_API_KEY_CI=sk-... paladin-server:latest
+docker run --rm -p 8080:8080 -v "$PWD/config.yml:/etc/paladin/config.yml:ro" \
+  -e OPENAI_API_KEY=sk-... paladin-server:latest
 # or: docker compose -f docker/docker-compose.server.yml up --build
 ```
 
+The image's baked default is `config.example.yml`, which configures no key, so it refuses to
+start until a config is mounted.
+
 **Kubernetes** ([`k8s/server/`](https://github.com/DF3NDR/paladin-dev-env/tree/main/k8s/server)) —
-Deployment + Service + ConfigMap with liveness `/health` and readiness `/ready` probes:
+Deployment + Service, with the server config delivered as the `config.yml` key of a Secret (it
+holds literal API keys), with liveness `/health` and readiness `/ready` probes:
 
 ```bash
 kubectl apply -f k8s/namespace.yaml
-kubectl apply -f k8s/server/secret.yaml -f k8s/server/
+cp k8s/server/secret.yaml.example k8s/server/secret.yaml   # paste literal keys into its config.yml and the provider key; the copy is gitignored
+kubectl apply -f k8s/server/secret.yaml -f k8s/server/deployment.yaml -f k8s/server/service.yaml
 ```
+
+The worker Deployment needs its own Secret and a database and queue; see
+[`k8s/README.md`](https://github.com/DF3NDR/paladin-dev-env/blob/main/k8s/README.md).
 
 ## Treasurer allowances
 

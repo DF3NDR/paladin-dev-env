@@ -164,6 +164,8 @@ fails is rebuilt.*
 
 - [ ] **FIXES-04**: `paladin-eval`'s `RunStatusValue` gains `Cancelled` so a scenario can assert
       `run_status: cancelled`; the schema snapshot is refreshed — B5, 42-06
+      *(Re-homed 2026-11-01, Phase 55, D-05: no additive shape exists at patch level; see v2
+      Requirements "Eval harness". Owner: the next minor's first phase.)*
 
 - [x] **FIXES-05**: The `claude-opus-4-8` seeded registry row is verified against the 50.1 probe
       record and its `reasoning` flag corrected if wrong — B6, audit G7
@@ -273,6 +275,18 @@ Deferred. Tracked, not in this roadmap.
 - **PROV-08**: Grok vendor `cost_in_usd_ticks` / `num_sources_used` parsed and compared with the
   Treasurer price under the ADR-0061 visibility rule — B9
 
+### Eval harness
+
+- **FIXES-04**: `paladin-eval`'s `RunStatusValue` gains `Cancelled` so a scenario can assert
+  `run_status: cancelled`; the schema snapshot is refreshed — B5, 42-06, Phase 55 D-05. Re-homed
+  from v0.11.1 because `RunStatusValue` and `Assertion` are exhaustive public enums of the
+  published `paladin-eval`: adding a variant fires `enum_variant_added` and marking either
+  `#[non_exhaustive]` fires `enum_marked_non_exhaustive`, both major at `--release-type patch`
+  against `0.11.0`, and the v0.11.1 scope guard forbids a non-security `MIGRATION.md` §11.2 break
+  (which would also make the milestone `v0.12.0`). Until then a run that finished `cancelled`
+  matches no `run_status` value, and the rustdoc, the schema description and the eval guide say
+  so. Owner: the next minor's first phase; the change is one variant plus `UPDATE_EVAL_SCHEMA=1`.
+
 ### Runtime
 
 - **TENANT-11**: Backfill or `PATCH` re-assignment route for pre-Phase-41 unattributed schedules — A7
@@ -339,7 +353,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | FIXES-01 | Phase 55 | Complete |
 | FIXES-02 | Phase 55 | Complete |
 | FIXES-03 | Phase 55 | Complete |
-| FIXES-04 | Phase 55 | Pending |
+| FIXES-04 | Phase 55 | Re-homed (next minor) |
 | FIXES-05 | Phase 55 | Complete |
 | FIXES-06 | Phase 55 | Pending |
 | TESTS-01 | Phase 55 | Pending |

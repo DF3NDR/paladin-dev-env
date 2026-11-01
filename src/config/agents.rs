@@ -1076,4 +1076,90 @@ mod tests {
             "not a missing-tenant report: {err}"
         );
     }
+
+    // --- Phase 54 (FIRST-01, D-03/D-04): the shipped example never loads a placeholder ---
+
+    /// Wrapper over the one section these tests read, so unrelated schema drift elsewhere in
+    /// `config.example.yml` cannot mask the pinned behaviour (the `web_server.rs` precedent).
+    #[derive(Debug, serde::Deserialize)]
+    struct Example {
+        #[serde(default)]
+        http: WebHttpConfig,
+    }
+
+    /// D-04: the shipped `http` section keeps auth enabled, configures no key, and passes
+    /// `AuthConfig::validate` with zero keys.
+    #[test]
+    fn shipped_example_http_auth_validates_and_configures_no_key() {
+        let example: Example = config::Config::builder()
+            .add_source(config::File::new(
+                "config.example.yml",
+                config::FileFormat::Yaml,
+            ))
+            .build()
+            .unwrap_or_else(|e| panic!("config.example.yml should build: {e}"))
+            .try_deserialize()
+            .unwrap_or_else(|e| panic!("config.example.yml's http section should parse: {e}"));
+
+        assert!(example.http.auth.enabled, "auth stays enabled by default");
+        assert!(
+            example.http.auth.api_keys.is_empty(),
+            "the shipped example configures no API key"
+        );
+        assert_eq!(example.http.auth.validate(), Ok(()));
+    }
+
+    /// D-04: uncommenting the example entries without editing them fails closed -- the `key`
+    /// is `""`, so the existing empty-key refusal fires, and the text holds no placeholder.
+    /// The example's own text is the fixture: only the `api_keys: []` line and the commented
+    /// entry lines between it and `bearer_token:` are rewritten.
+    #[test]
+    fn shipped_example_api_key_entries_uncommented_are_refused_as_empty() {
+        let text = std::fs::read_to_string("config.example.yml")
+            .unwrap_or_else(|e| panic!("config.example.yml should be readable: {e}"));
+
+        let mut in_entries = false;
+        let mut rewritten = Vec::new();
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed == "api_keys: []" {
+                in_entries = true;
+                rewritten.push(line.replacen("api_keys: []", "api_keys:", 1));
+            } else if in_entries && trimmed.starts_with("bearer_token:") {
+                in_entries = false;
+                rewritten.push(line.to_string());
+            } else if in_entries
+                && line.starts_with("    # ")
+                && (trimmed.starts_with("# - key:")
+                    || ["name:", "role:", "tenant:"]
+                        .iter()
+                        .any(|f| trimmed.starts_with(&format!("#   {f}"))))
+            {
+                // Drop only the leading `# `, keeping the entry's own indentation.
+                rewritten.push(line.replacen("# ", "", 1));
+            } else {
+                rewritten.push(line.to_string());
+            }
+        }
+        let rewritten = rewritten.join("\n");
+
+        let example: Example = config::Config::builder()
+            .add_source(config::File::from_str(&rewritten, config::FileFormat::Yaml))
+            .build()
+            .unwrap_or_else(|e| panic!("the uncommented example should build: {e}"))
+            .try_deserialize()
+            .unwrap_or_else(|e| panic!("the uncommented example should parse: {e}"));
+
+        let keys = &example.http.auth.api_keys;
+        assert_eq!(keys.len(), 2, "both commented example entries came back");
+        assert!(
+            keys.iter().all(|k| !k.key.contains("${")),
+            "no example entry carries a placeholder"
+        );
+        let err = validation_error(&example.http.auth);
+        assert!(
+            err.starts_with("http.auth.api_keys[#0]: 'key' must not be empty"),
+            "an unedited uncomment is refused as empty: {err}"
+        );
+    }
 }

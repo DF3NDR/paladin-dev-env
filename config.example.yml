@@ -1,9 +1,15 @@
 # Example Paladin configuration for the HTTP service host (`paladin-server`).
 #
-# Copy to `config.yml` and edit. API keys are read from the ENVIRONMENT
-# (e.g. OPENAI_API_KEY / ANTHROPIC_API_KEY / DEEPSEEK_API_KEY), never from this file.
+# Copy to `config.yml` and edit. LLM provider keys come from the ENVIRONMENT
+# (e.g. OPENAI_API_KEY / ANTHROPIC_API_KEY / DEEPSEEK_API_KEY): each `llm.<provider>.api_key`
+# below is an exact "${NAME}" read from the variable NAME (or is empty, which falls back to
+# the provider's own variable). Nothing else in this file is expanded. In particular
+# `http.auth.api_keys[].key` holds the LITERAL secret, so keep `config.yml` out of version
+# control; the treasurer webhook `secret` is set with APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET.
 #
 #   cp config.example.yml config.yml
+#   # paste a literal key into `http.auth.api_keys`, or set `http.auth.enabled: false` for
+#   # local development, then:
 #   OPENAI_API_KEY=sk-... cargo run --bin paladin-server --features web-server
 
 # Top-level LLM fields (legacy; unused by the agent host but required by the schema).
@@ -13,7 +19,7 @@ llm_api_key: "" # unused — keys come from environment variables
 
 # Structured, per-provider LLM configuration (optional — omit entirely and every field
 # below defaults to `None`/absent, matching pre-Phase-17 config.yml files byte-for-byte).
-# Every `api_key` below uses ${ENV_VAR} indirection naming the real variable; NEVER put a
+# Every `llm.<provider>.api_key` below uses ${ENV_VAR} indirection naming the real variable; NEVER put a
 # literal key in this file. Only the providers you actually compiled in (via the matching
 # `llm-<provider>` Cargo feature) are usable at runtime — an unused block here is inert.
 #
@@ -173,20 +179,24 @@ http:
   # probes are always open.
   auth:
     enabled: true
-    # Static API keys (header `X-API-Key`). Put real keys in env/secrets, not in VCS.
+    # Static API keys (header `X-API-Key`).
     # `role` is `admin` or `user`; admins may register/deregister agents at runtime.
     # `tenant` is REQUIRED on every key (Phase 40, TENANT-01): runs and spend are
     # attributed to it, and a key reads only its own tenant's runs unless its role is
     # admin. There is no implicit default tenant -- an empty/missing value fails boot.
-    api_keys:
-      - key: "${PALADIN_API_KEY_CI}" # service-to-service caller
-        name: "ci-runner"
-        role: "admin"
-        tenant: "platform-ops"
-      - key: "${PALADIN_API_KEY_APP}"
-        name: "frontend"
-        role: "user"
-        tenant: "web-app"
+    api_keys: []
+    # To add a key: paste a literal secret into `key` (for example from `openssl rand -hex 32`),
+    # delete the `[]` above and uncomment an entry. The server does not expand ${VAR} here,
+    # and a key containing `${` is refused at boot. Keep the config that holds a real key
+    # out of version control.
+    # - key: "" # service-to-service caller
+    #   name: "ci-runner"
+    #   role: "admin"
+    #   tenant: "platform-ops"
+    # - key: ""
+    #   name: "frontend"
+    #   role: "user"
+    #   tenant: "web-app"
     # Accept opaque server-issued bearer tokens via the wired AuthPort (in-process token
     # store). A random string checked against the store's own hashed records — not a
     # signed or self-describing token.
@@ -306,7 +316,7 @@ treasurer:
   #   and `tenants.open-access`.
   # - Admin keys are bound like any other key.
   # - The webhook `secret` is NOT read from a `${...}` placeholder (this loader does not expand
-  #   them): set it with APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET. A private-address `url` also
+  #   them, like `http.auth.api_keys`): set it with APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET. A private-address `url` also
   #   needs `webhooks.allow_private: true`.
   # allowance:
   #   warn_at: 80

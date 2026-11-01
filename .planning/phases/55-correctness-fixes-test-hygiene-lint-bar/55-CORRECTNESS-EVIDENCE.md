@@ -202,3 +202,56 @@ D-06 as reconciled (55-CONTEXT "Research reconciliation"): `claude-opus-4-8` kee
 The 41 reasoning tokens sit on a non-default request (`max` with `thinking: adaptive`), outside the field's stated contract ("the default call"). `crates/paladin-llm/src/registry/seeded.rs` `claude_opus_4_8` keeps `.with_reasoning(false)` and its comment cites probe 1 and the `### claude-opus-4-8` effort table. No live probe and no key were used for this verification.
 
 FIXES-05 verified against both probe records, flag not wrong
+
+## WINDOWS rows 73 and 67 (D-07, D-08)
+
+Both rows were dispositioned only after their closing evidence was re-run on the head `8202da48c` in this session.
+
+| Row | Closing evidence re-run on the head | Disposition |
+|-----|-------------------------------------|-------------|
+| 73 (phase 50, `run_api_wiring.rs`, the two network-bound tests) | the no-network command in `## Hermetic and flake proofs`: `test result: ok. 2 passed; 0 failed; ... finished in 1.40s`; the unskipped facade binary also passes both | `node .claude/gsd-core/bin/gsd-tools.cjs windows fixed 73`, then the reason cell set to cite `build_run_api_persists_run_traces_when_trace_persist_is_set`, `build_run_api_persists_no_run_traces_by_default`, the crate-private `build_run_api_with_engine_port` seam and this file |
+| 67 (phase 42, `settlement.rs`, the unpriced graph-node gap) | `cargo test -p paladin-ai --features web-server --lib --offline unpriced_reachable_models_table`: `test result: ok. 1 passed; 0 failed`; the wider `unpriced_` filter `11 passed` and `stored_agent_model_scan` `2 passed` (see the FIXES-06 row) | `node .claude/gsd-core/bin/gsd-tools.cjs windows waive 67 "<reason>"`, citing milestone decision B4 (the operator contract stands: price every model a metered principal can reach), the boot warning of plan 55-09 and the accepted graph-node contract in `treasurer.md` |
+
+The reason cell of row 73 was set by hand after `windows fixed 73`, because that subcommand takes no reason argument (rows 58, 62 and 63 were closed the same way). The edit was made in both places the ledger stores it, the table row and the JSON entry, and the file was then loaded with the tool's own `parseLedger` and re-rendered with `renderLedger`: the output is byte-identical to the file on disk.
+
+Counters, from `windows status`:
+
+| Counter | Plan start (`8202da48c`) | After |
+|---------|--------------------------|-------|
+| `open_count` | 15 | 13 |
+| `waived_count` | 39 | 40 |
+| `fixed_count` | 33 | 34 |
+| `total_count` | 87 | 87 |
+
+The entries tally agrees with the frontmatter (13 open, 40 waived, 34 fixed, 87 total). `git diff 8202da48c -- .planning/WINDOWS.md` touches the frontmatter and rows 67 and 73 only, in the table and in the JSON block.
+
+## Carry-forward
+
+**Phase 57 (register sweep).**
+
+- WINDOWS row 56 (`paladin-ai-core`, `cost.rs`, rustdoc `broken_intra_doc_links`) is fixed in fact and left unchanged here (PD-13-1; it is outside this phase's requirements). Measurement on the head:
+  `cargo doc -p paladin-ai-core --no-deps --offline 2>&1 | grep -c 'warning:'` prints `0`, and `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --offline` exits `0`; the whole workspace is clean under both ADR-0033 bars with no suppression left. Phase 57 can close the row on this measurement.
+- Rows 83 and 84 (`actionlint` unrun on the 52-01 and 52-06 `ci.yml` edits) stay `open` and await the CI `Workflow Lint` job. That job now also covers the `ci.yml` step added in 55-01 (`Check no stub panics in published crates (FIXES-01)`), which was likewise checked locally only by YAML parsing. No new row was opened for it (55-01 recorded the unrun check in its SUMMARY under PD-01-3).
+- Rows 85-87 (53-REVIEW WR-01..03, `thread_controller.rs` and `principal.rs`) are untouched and deferred to a `56.x` decimal phase, or `/gsd-phase edit 55`, per CONTEXT and `deferred-items.md` (they are code fixes outside FIXES-01..06).
+- The other CONTEXT `<deferred>` items (News API key in a URL, `${...}` in the treasurer webhook `secret`) stay with the same `56.x` phase; `deferred-items.md` holds each with its proposed home.
+
+**Phase 58 (pre-tag audit).** Crate changelogs without an `## [Unreleased]` or `## [0.11.1]` anchor, re-measured on the head:
+
+```
+$ for f in crates/*/CHANGELOG.md; do grep -qE '^## \[(Unreleased|0\.11\.1)\]' "$f" || echo "$f"; done
+crates/paladin-battalion/CHANGELOG.md
+crates/paladin-eval/CHANGELOG.md
+crates/paladin-herald/CHANGELOG.md
+crates/paladin-llm/CHANGELOG.md
+crates/paladin-notifications/CHANGELOG.md
+crates/paladin-ports/CHANGELOG.md
+```
+
+Six of eleven, as expected. The five that carry an anchor are `paladin-content`, `paladin-core`, `paladin-memory`, `paladin-storage` and `paladin-web`. A scratch run of `scripts/finalize-crate-changelogs.sh` in 55-12 proved that a changelog with an `[Unreleased]` heading finalizes; the six above need the heading before the 0.11.1 finalize step.
+
+**Next minor.**
+
+- FIXES-04: `RunStatusValue::Cancelled` plus the matching `run_status_matches` arm, then `UPDATE_EVAL_SCHEMA=1 cargo test -p paladin-eval --test schema_golden`, and replace the rustdoc and guide notes that name the gap (`RunStatusValue` is exhaustive, so adding the variant is a break; see the scout row).
+- The base-layer finish or retire options A, B and C in `55-BASE-LAYER-REVIEW.md` (every item is kept and fenced this milestone).
+- The graph-node pricing check: a registration-time coverage check needs a listing method on `AssistantResolver` (the row 67 waiver text).
+- Widening `ModelProfile.reasoning` beyond the default-call contract (deferred by D-06 as reconciled; see `## FIXES-05 verification`).

@@ -32,6 +32,8 @@ The Treasurer keeps three responsibilities deliberately separate:
   and after each model response in the agent loop, the same ceiling evaluation runs again. The
   next boundary after a ceiling is reached halts the run resumably with its checkpoint kept; a
   ledger that cannot be read halts the run too (`ledger_unavailable`), never a silent continue.
+  An agent-kind run whose model has no price row when the worker dispatches it halts with
+  `model_unpriced` beside `ledger_unavailable`, and the model is not called.
   ([ADR-0052](https://github.com/DF3NDR/paladin-dev-env/blob/main/.planning/decisions/0052-mid-run-treasurer-enforcement.md),
   [ADR-0057](https://github.com/DF3NDR/paladin-dev-env/blob/main/.planning/decisions/0057-mid-run-halt-contract.md))
 

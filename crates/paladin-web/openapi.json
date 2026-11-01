@@ -3981,7 +3981,7 @@
               "object",
               "null"
             ],
-            "description": "Why this run halted, when it halted on spend (ALLOW-03, Phase 42 D-06): a JSON object\ntagged by `reason` -- `\"allowance_exhausted\"` with the halted ceiling's own `scope`,\n`kind`, `balance`, `ceiling`, `window_start` and `window_end` (identical to the `details`\nof the Phase 41 `429 allowance_exhausted`), or `\"ledger_unavailable\"` with no other key\nwhen the ledger could not be read and the run halted fail-closed. `null` for every run\nthat did not halt on spend. A halt is a resume point, not a failure: `error` stays\n`null` beside it. Built only by `HaltReason::wire_json`; never carries another scope's\nfigures, a tenant id or an API key name or value. Always serialised, mirroring `cost`."
+            "description": "Why this run halted, when it halted on spend (ALLOW-03, Phase 42 D-06): a JSON object\ntagged by `reason` -- `\"allowance_exhausted\"` with the halted ceiling's own `scope`,\n`kind`, `balance`, `ceiling`, `window_start` and `window_end` (identical to the `details`\nof the Phase 41 `429 allowance_exhausted`), or `\"ledger_unavailable\"` with no other key\nwhen the ledger could not be read and the run halted fail-closed, or `\"model_unpriced\"`\nwith a `model` key naming the model, when the run's model had no `treasurer.pricing` row\nat dispatch and the LLM was not called. `null` for every run\nthat did not halt on spend. A halt is a resume point, not a failure: `error` stays\n`null` beside it. Built only by `HaltReason::wire_json`; never carries another scope's\nfigures, a tenant id or an API key name or value. Always serialised, mirroring `cost`."
           },
           "pending_responses": {
             "type": "integer",

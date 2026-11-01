@@ -159,7 +159,10 @@ ceiling's own figures -- the same keys, built by the same function, as the `deta
 `window_start`/`window_end` are RFC 3339 and `null` for a lifetime ceiling. When the spend ledger
 could not be read at the boundary, or one of the run's own superstep charges could not be written
 to it (so the run's balance can no longer be trusted), the run halts fail-closed and `halt_reason`
-is exactly `{ "reason": "ledger_unavailable" }`. The object never carries another scope's figures, a tenant
+is exactly `{ "reason": "ledger_unavailable" }`. When an agent-kind run's model has no
+`treasurer.pricing` row at dispatch (the row was removed after the run was admitted), the model is
+not called and `halt_reason` is `{ "reason": "model_unpriced", "model": "gpt-4" }`; the run resumes
+once an operator adds the row. The object never carries another scope's figures, a tenant
 id, or an API key name or value.
 
 The reason is written to the run row before the status flips to `halted`, so a reader never sees
@@ -226,7 +229,8 @@ and a `halt_reason` object -- the same object `GET /v1/runs/{run_id}` returns (s
 `{ "reason": "allowance_exhausted", "scope", "kind", "balance", "ceiling", "window_start",
 "window_end" }`; for a ledger that could not be read or written it is exactly
 `{ "reason": "ledger_unavailable" }` and is still a `done`, never an `error` (`error` is reserved
-for a `failed` run). A halt with no spend reason (a caller cancel or a token halt) keeps the
+for a `failed` run); for a model with no `treasurer.pricing` row at dispatch it is
+`{ "reason": "model_unpriced", "model": ... }`. A halt with no spend reason (a caller cancel or a token halt) keeps the
 payload without a `halt_reason` key. The live, degraded and replay paths agree on `status` and
 `halt_reason` for the same run, so a streaming client never needs a follow-up read to learn why a
 run stopped; a replayed stream takes both from the run row once the row is terminal, and
@@ -795,8 +799,9 @@ the model response that crosses the figure and is recorded `halted`, not `comple
 - A zero or exhausted figure at dispatch records the same halt, and an unreadable ledger records
   `halt_reason: { "reason": "ledger_unavailable" }` (fail closed); in both cases the model is not
   called.
-- A model that lost its `treasurer.pricing` row between admission and dispatch records `failed`
-  with an error naming the model; the model is not called.
+- A model that lost its `treasurer.pricing` row between admission and dispatch records `halted`
+  with `halt_reason: { "reason": "model_unpriced", "model": ... }` naming the model; the model is
+  not called, and the run resumes once an operator adds the row.
 
 **Agent-kind runs have no checkpoint.** The agent loop writes no Waypoint, so a halted agent-kind
 run has `final_waypoint_id: null` and cannot be forked from a checkpoint. Resume it by submitting a

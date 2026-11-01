@@ -243,6 +243,11 @@ unreadable figure at dispatch records `Halted` without calling the LLM (`allowan
 and dispatch records `Failed` with a typed error naming the model, also without calling the LLM, because that is a
 configuration incoherence and not a resume point. The figure is not persisted on the run row.
 
+**Amended 2026-11-01 (Phase 55, FIXES-03):** a model that lost its price row between admission and dispatch now
+records `Halted` with `halt_reason` `{"reason":"model_unpriced","model":...}` and still does not call the LLM. The
+run is a resume point once the operator adds the `treasurer.pricing` row. This supersedes the `Failed` mapping
+stated above; the original text is kept as the record of the first decision.
+
 **A5. What figures the halt reports.** When the derived budget halts the loop, the `halt_reason` reports the
 binding ceiling (the smallest remaining) with `balance` equal to the ceiling and that ceiling's window. This is a
 conservative bound, because the loop does not know the true post-spend balance, and the docs say so.

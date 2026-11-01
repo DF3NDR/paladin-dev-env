@@ -445,7 +445,9 @@ pub struct RunResponse {
     /// tagged by `reason` -- `"allowance_exhausted"` with the halted ceiling's own `scope`,
     /// `kind`, `balance`, `ceiling`, `window_start` and `window_end` (identical to the `details`
     /// of the Phase 41 `429 allowance_exhausted`), or `"ledger_unavailable"` with no other key
-    /// when the ledger could not be read and the run halted fail-closed. `null` for every run
+    /// when the ledger could not be read and the run halted fail-closed, or `"model_unpriced"`
+    /// with a `model` key naming the model, when the run's model had no `treasurer.pricing` row
+    /// at dispatch and the LLM was not called. `null` for every run
     /// that did not halt on spend. A halt is a resume point, not a failure: `error` stays
     /// `null` beside it. Built only by `HaltReason::wire_json`; never carries another scope's
     /// figures, a tenant id or an API key name or value. Always serialised, mirroring `cost`.

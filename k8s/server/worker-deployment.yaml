@@ -142,6 +142,13 @@ spec:
               cpu: "2"
               memory: "1Gi"
       volumes:
+        # The config holds literal API keys, so it is a Secret, not a ConfigMap. `items` projects
+        # only config.yml (the provider key is not also exposed as a file); 0440 plus the pod's
+        # fsGroup (65532) keeps it readable by the non-root user only.
         - name: config
-          configMap:
-            name: paladin-server-config
+          secret:
+            secretName: paladin-server-secrets
+            defaultMode: 0440
+            items:
+              - key: config.yml
+                path: config.yml

@@ -2,6 +2,7 @@
 #
 # Standalone: Milestone 12 agents are LLM + prompt only, so no Redis/MinIO is required.
 # Liveness and readiness probes target the server's unauthenticated /health and /ready.
+# The config is mounted from the paladin-server-secrets Secret (see secret.yaml.example).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -57,22 +58,13 @@ spec:
           env:
             - name: PALADIN_CONFIG
               value: /etc/paladin/config.yml
-            # Secrets injected from the Secret (see secret.yaml.example).
+            # Provider key injected from the Secret (see secret.yaml.example); config.yml's
+            # llm.openai.api_key resolves it as "${OPENAI_API_KEY}".
             - name: OPENAI_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: paladin-server-secrets
                   key: openai-api-key
-            - name: PALADIN_API_KEY_CI
-              valueFrom:
-                secretKeyRef:
-                  name: paladin-server-secrets
-                  key: api-key-ci
-            - name: PALADIN_API_KEY_APP
-              valueFrom:
-                secretKeyRef:
-                  name: paladin-server-secrets
-                  key: api-key-app
           volumeMounts:
             - name: config
               mountPath: /etc/paladin
@@ -97,6 +89,13 @@ spec:
               cpu: "1"
               memory: "512Mi"
       volumes:
+        # The config holds literal API keys, so it is a Secret, not a ConfigMap. `items` projects
+        # only config.yml (the provider key is not also exposed as a file); 0440 plus the pod's
+        # fsGroup (65532) keeps it readable by the non-root user only.
         - name: config
-          configMap:
-            name: paladin-server-config
+          secret:
+            secretName: paladin-server-secrets
+            defaultMode: 0440
+            items:
+              - key: config.yml
+                path: config.yml

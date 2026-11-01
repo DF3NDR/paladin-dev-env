@@ -355,10 +355,13 @@ thread_local! {
 }
 
 /// Restores the random spread when dropped.
-#[cfg(test)]
+///
+/// Compiled with the `mock` feature only: every user (the pacing tests here and in `fallback`)
+/// is a mock-driven test, so a build without `mock` would carry it unused.
+#[cfg(all(test, feature = "mock"))]
 pub(crate) struct PinnedSpread;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "mock"))]
 impl Drop for PinnedSpread {
     fn drop(&mut self) {
         PINNED_SPREAD.with(|pinned| pinned.set(None));
@@ -368,7 +371,7 @@ impl Drop for PinnedSpread {
 /// Test seam: pin the waiter-spread fraction on the current thread so a paused-clock test can
 /// assert exact send times (a fraction of `0.0` removes the spread). The returned guard restores
 /// the random draw. Thread-local on purpose: `#[tokio::test]` runs the whole test on one thread.
-#[cfg(test)]
+#[cfg(all(test, feature = "mock"))]
 pub(crate) fn pin_waiter_spread(fraction: f64) -> PinnedSpread {
     PINNED_SPREAD.with(|pinned| pinned.set(Some(fraction)));
     PinnedSpread

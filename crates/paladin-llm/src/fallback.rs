@@ -987,7 +987,10 @@ impl LlmPort for FallbackLlmAdapter {
 
 /// A scripted [`LlmPort`] that reports a fixed [`ModelProfile`] for one model, used by the
 /// decorator tests in this crate to prove `model_profile` is forwarded (ADR-0061, Pitfall 4).
-#[cfg(test)]
+///
+/// Compiled with the `mock` feature only: its users (the `cadence`, `fallback` and `pricing`
+/// decorator tests) are all mock-driven, so a build without `mock` would carry it unused.
+#[cfg(all(test, feature = "mock"))]
 pub(crate) mod test_support {
     use std::sync::Mutex;
 

@@ -16,8 +16,8 @@
 //!
 //! ## Read-only `gate`, state-changing `record_*`
 //!
-//! [`CadencePort::gate`] only reads. Only [`CadencePort::record_rate_limited`]
-//! and [`CadencePort::record_success`] mutate. A caller cancelled while it is
+//! [`CadencePort::gate`](crate::output::cadence_port::CadencePort::gate) only reads. Only [`CadencePort::record_rate_limited`](crate::output::cadence_port::CadencePort::record_rate_limited)
+//! and [`CadencePort::record_success`](crate::output::cadence_port::CadencePort::record_success) mutate. A caller cancelled while it is
 //! sleeping on a gate therefore leaves no state behind (there is no "reserve a
 //! slot, then sleep" step to leak), and a waiter that wakes re-checks the gate
 //! because a concurrent 429 may have extended it.
@@ -38,15 +38,15 @@
 //!
 //! ## Relative waits
 //!
-//! Every adapter reports waits as a [`Duration`] relative to "now", never as an
+//! Every adapter reports waits as a [`Duration`](std::time::Duration) relative to "now", never as an
 //! absolute timestamp, so no caller ever compares clocks across hosts.
 //!
 //! ## The stampede lock (PACE-04)
 //!
-//! The same port carries a small lock, [`CadencePort::try_lock`] and
-//! [`CadencePort::unlock`], so workers about to compute the same costly result can let
+//! The same port carries a small lock, [`CadencePort::try_lock`](crate::output::cadence_port::CadencePort::try_lock) and
+//! [`CadencePort::unlock`](crate::output::cadence_port::CadencePort::unlock), so workers about to compute the same costly result can let
 //! one of them do it. It is set-if-absent with expiry, hands out strictly increasing
-//! [`FencingToken`]s, and releases only for the token that owns it. Tokens carry their source
+//! [`FencingToken`](crate::output::cadence_port::FencingToken)s, and releases only for the token that owns it. Tokens carry their source
 //! (shared backend or one process) so a resource that checks them never ranks a per-process
 //! counter against a fleet-wide one. The lock is an optimisation: any error means "proceed
 //! without it".

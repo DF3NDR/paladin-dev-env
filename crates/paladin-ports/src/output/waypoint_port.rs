@@ -1,7 +1,7 @@
 //! # Waypoint Port — Superstep Checkpoint Persistence
 //!
 //! This module defines the port trait for persisting and reading back
-//! [`Waypoint`]s, the automatic per-superstep checkpoints written by the
+//! [`Waypoint`](paladin_core::platform::container::waypoint::Waypoint)s, the automatic per-superstep checkpoints written by the
 //! `WarEngine` (`paladin-battalion`'s `engine` module).
 //!
 //! ## Why this is separate from `CitadelPort`
@@ -11,7 +11,7 @@
 //! occasionally and explicitly. Waypoints are the opposite shape: they are
 //! written automatically, **once per superstep** — potentially many times a
 //! second in a tight cyclic graph — always addressed by a caller-supplied
-//! [`ThreadId`], and read back append-mostly (latest, history, or a specific
+//! [`ThreadId`](paladin_core::platform::container::waypoint::ThreadId), and read back append-mostly (latest, history, or a specific
 //! id) rather than replaced in place. Folding these into `CitadelPort` would
 //! force every Citadel backend to also support high-frequency, thread-scoped
 //! append semantics it does not otherwise need. Keeping them separate lets
@@ -21,7 +21,7 @@
 //! ## Missing is `None`, not an error
 //!
 //! Following [`CitadelPort`](crate::output::citadel_port::CitadelPort)'s
-//! contract: [`WaypointPort::latest`] and [`WaypointPort::get`] return
+//! contract: [`WaypointPort::latest`](crate::output::waypoint_port::WaypointPort::latest) and [`WaypointPort::get`](crate::output::waypoint_port::WaypointPort::get) return
 //! `Ok(None)` when nothing is found. A missing waypoint is the expected,
 //! normal case for a brand-new thread — it is never an error on its own.
 //! [`resume`](https://github.com/DF3NDR/paladin-dev-env) (in the engine) is
@@ -30,8 +30,8 @@
 //!
 //! ## `ThreadId` is not an authorization boundary
 //!
-//! [`ThreadId`] is a caller-supplied workflow identifier, not a capability
-//! token or a tenancy key. [`WaypointPort::list_threads`] enumerates **every
+//! [`ThreadId`](paladin_core::platform::container::waypoint::ThreadId) is a caller-supplied workflow identifier, not a capability
+//! token or a tenancy key. [`WaypointPort::list_threads`](crate::output::waypoint_port::WaypointPort::list_threads) enumerates **every
 //! thread the backend holds**, with no per-caller filtering — any code that
 //! exposes these methods over a network (a later HTTP epic) must add its own
 //! authorization layer in front of them; this port neither performs nor

@@ -1,6 +1,6 @@
 //! Run Queue Port — Lease-Based Work Queue for Runs (D-06)
 //!
-//! [`RunQueuePort`] is a NEW port distinct from
+//! [`RunQueuePort`](crate::output::run_queue_port::RunQueuePort) is a NEW port distinct from
 //! [`crate::output::queue_port::QueuePort`] (a general queue-lifecycle
 //! trait with no lease token). Adding lease semantics to that trait would
 //! break every existing implementor (X-10.4); `RunQueuePort` carries PRD
@@ -8,7 +8,7 @@
 //!
 //! ## A pointer, not a payload (D-07)
 //!
-//! [`QueuedRun`] carries only `run_id`/`thread_id`/`attempt`/`enqueued_at`
+//! [`QueuedRun`](crate::output::run_queue_port::QueuedRun) carries only `run_id`/`thread_id`/`attempt`/`enqueued_at`
 //! — never the run's `input`. A worker always re-reads the full `Run`
 //! through `RunRepositoryPort` on dequeue: the repository is the single
 //! source of truth for status, and a message that embedded the input could

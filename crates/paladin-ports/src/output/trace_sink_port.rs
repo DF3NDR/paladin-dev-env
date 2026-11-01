@@ -1,9 +1,9 @@
 //! # Trace Sink Port — Standardized Execution Observability (ENG-FR-21, OBS-01)
 //!
-//! Defines [`TraceSink`] over the authoritative [`TraceRecord`] envelope
+//! Defines [`TraceSink`](crate::output::trace_sink_port::TraceSink) over the authoritative [`TraceRecord`](paladin_core::platform::container::trace::TraceRecord) envelope
 //! (now defined in `paladin-core`, re-exported here per D-01), plus the
-//! synchronous [`TraceEmitter`] handle producers use to reach a dispatcher
-//! (D-03) and [`CompositeSink`], the panic-isolating fan-out (D-08).
+//! synchronous [`TraceEmitter`](crate::output::trace_sink_port::TraceEmitter) handle producers use to reach a dispatcher
+//! (D-03) and [`CompositeSink`](crate::output::trace_sink_port::CompositeSink), the panic-isolating fan-out (D-08).
 //!
 //! ## Why the authoritative types live in `paladin-core`, re-exported here (D-01)
 //!
@@ -33,7 +33,7 @@
 //!
 //! ## Errors are diagnostics only
 //!
-//! [`TraceSink::on_event`] returns `Result<(), TraceSinkError>` so an
+//! [`TraceSink::on_event`](crate::output::trace_sink_port::TraceSink::on_event) returns `Result<(), TraceSinkError>` so an
 //! implementation can surface its OWN failures (a network sink logging a
 //! dropped connection, for instance) — but the return value is never
 //! inspected by anything that decides a run's outcome. `TraceDispatcher`
@@ -253,7 +253,7 @@ pub fn current_trace_emitter() -> Option<Arc<dyn TraceEmitter>> {
 }
 
 /// A minimal, self-contained [`TraceEmitter`] for a producer that has no
-/// engine-owned [`TraceDispatcher`](paladin_battalion) to reach (28-06,
+/// engine-owned `TraceDispatcher` to reach (28-06,
 /// D-03): a bare `FallbackLlmAdapter` under unit test, or any below-engine
 /// producer constructed standalone (outside a run the worker's own
 /// composition root wired).

@@ -1,7 +1,7 @@
 //! # Run Trace Port — Durable, Per-Record Trace Persistence (OBS-02, D-17)
 //!
 //! This module defines the port trait for durably persisting and reading
-//! back [`TraceRecord`]s -- the per-event observability envelope a
+//! back [`TraceRecord`](paladin_core::platform::container::trace::TraceRecord)s -- the per-event observability envelope a
 //! `TraceDispatcher` (`paladin-battalion::engine::hooks`) stamps and fans
 //! out through a
 //! [`CompositeSink`](crate::output::trace_sink_port::CompositeSink).
@@ -12,7 +12,7 @@
 //! ## Missing is empty, not an error
 //!
 //! Following [`WaypointPort`](crate::output::waypoint_port::WaypointPort)'s
-//! contract: [`RunTracePort::read`] on a thread with no persisted rows
+//! contract: [`RunTracePort::read`](crate::output::run_trace_port::RunTracePort::read) on a thread with no persisted rows
 //! returns `Ok(vec![])`. A brand-new or never-traced thread is the
 //! expected, normal case, never an error on its own.
 //!
@@ -30,18 +30,18 @@
 //!
 //! ## `ThreadId` is not an authorization boundary
 //!
-//! Same caveat as `WaypointPort`'s: [`ThreadId`] is a caller-supplied
+//! Same caveat as `WaypointPort`'s: [`ThreadId`](paladin_core::platform::container::waypoint::ThreadId) is a caller-supplied
 //! workflow identifier, not a capability token or tenancy key. Any code
-//! exposing [`RunTracePort::read`] over a network must add its own
+//! exposing [`RunTracePort::read`](crate::output::run_trace_port::RunTracePort::read) over a network must add its own
 //! authorization layer in front of it; this port neither performs nor
 //! implies one.
 //!
 //! ## The table is append-only (D-17)
 //!
-//! [`RunTracePort::append`]'s `(thread_id, seq)` primary key makes a
+//! [`RunTracePort::append`](crate::output::run_trace_port::RunTracePort::append)'s `(thread_id, seq)` primary key makes a
 //! retried append of the same record idempotent, never a duplicate row (see
 //! `append`'s own rustdoc). There is no `update` or per-record `delete`
-//! method on this port -- [`prune_thread`](RunTracePort::prune_thread) is
+//! method on this port -- [`prune_thread`](crate::output::run_trace_port::RunTracePort::prune_thread) is
 //! the only removal path, and it removes by age (a superstep boundary),
 //! never by record identity.
 //!

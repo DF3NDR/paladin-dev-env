@@ -18,17 +18,17 @@
 //!
 //! ## Best-effort by construction (D-29)
 //!
-//! A cache read or write failure NEVER fails a run. [`NodeCachePort::get`]
+//! A cache read or write failure NEVER fails a run. [`NodeCachePort::get`](crate::output::node_cache_port::NodeCachePort::get)
 //! returning `Err` is treated by the engine exactly like `Ok(None)` -- a
-//! miss, so the node executes. [`NodeCachePort::put`] returning `Err` is
+//! miss, so the node executes. [`NodeCachePort::put`](crate::output::node_cache_port::NodeCachePort::put) returning `Err` is
 //! logged and never fails the node's run. This trait returns `Result` so a
 //! backend CAN report what went wrong (for logging/metrics), not so a
 //! caller MUST fail on it -- see each method's own rustdoc.
 //!
 //! ## Fenced writes (PACE-04, D-14)
 //!
-//! [`NodeCachePort::put_fenced`] is the one provided (defaulted) method: it takes the
-//! [`FencingToken`] of the stampede lock that produced the value and, by default, just calls
+//! [`NodeCachePort::put_fenced`](crate::output::node_cache_port::NodeCachePort::put_fenced) is the one provided (defaulted) method: it takes the
+//! [`FencingToken`](crate::output::cadence_port::FencingToken) of the stampede lock that produced the value and, by default, just calls
 //! `put`. An adapter that can check the token overrides it so a stale lock holder's late write
 //! cannot replace a newer holder's entry. No other method, signature or implementor changes.
 //!

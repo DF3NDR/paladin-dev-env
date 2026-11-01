@@ -1,6 +1,6 @@
 //! Treasury Notice Port -- the Treasurer's once-per-window allowance notices (ALLOW-04, D-16)
 //!
-//! [`TreasuryNoticePort`] records, reads back and releases the durable notice a warn-threshold
+//! [`TreasuryNoticePort`](crate::output::treasury_notice_port::TreasuryNoticePort) records, reads back and releases the durable notice a warn-threshold
 //! crossing produces. It is a sibling of
 //! [`TreasuryLedgerPort`](crate::output::treasury_ledger_port::TreasuryLedgerPort) -- the ledger
 //! port is unchanged -- and reuses its
@@ -8,11 +8,11 @@
 //!
 //! ## Store-enforced deduplication (D-16)
 //!
-//! [`TreasuryNoticePort::record`] must compile to a store-enforced constraint -- a unique index
+//! [`TreasuryNoticePort::record`](crate::output::treasury_notice_port::TreasuryNoticePort::record) must compile to a store-enforced constraint -- a unique index
 //! over `(scope_kind, tenant_id, api_key_id, limit_kind, window_start, ceiling, notice_kind)` with
 //! `INSERT ... ON CONFLICT ... DO NOTHING` -- never an application-level "have I already sent
 //! this?" check (the Phase 39 `settle` precedent, D-06). Zero rows written is
-//! [`NoticeOutcome::AlreadyRecorded`], never an error: losing a claim is the normal outcome for
+//! [`NoticeOutcome::AlreadyRecorded`](paladin_core::platform::container::allowance::NoticeOutcome::AlreadyRecorded), never an error: losing a claim is the normal outcome for
 //! every admission after the first in a window, on any replica. A tenant-scope notice is stored
 //! with an empty `api_key_id` and a lifetime notice with the Unix epoch as its `window_start`,
 //! so no key column is ever NULL (a NULL in a unique key never conflicts).
@@ -20,7 +20,7 @@
 //! ## Policy-free
 //!
 //! This port knows no allowance policy and no warn threshold: the Treasurer decides *whether* a
-//! crossing happened and hands over a complete [`NoticeRecord`]; the store only guarantees the
+//! crossing happened and hands over a complete [`NoticeRecord`](paladin_core::platform::container::allowance::NoticeRecord); the store only guarantees the
 //! identity is recorded at most once.
 //!
 //! # Examples

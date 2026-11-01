@@ -372,11 +372,11 @@
 //! # Related Modules
 //!
 //! - [`paladin_core::platform::container::paladin`] - Paladin domain entity
-//! - [`paladin_battalion::paladin`] - Paladin execution service (adapter)
-//! - [`paladin_ports::output::llm_port`] - LLM provider integration
-//! - [`paladin_ports::output::garrison_port`] - Conversation memory
-//! - [`paladin_ports::output::arsenal_port`] - Tool execution
-//! - [`paladin_battalion::battalion`] - Multi-agent orchestration
+//! - `paladin_battalion::paladin` - Paladin execution service (adapter)
+//! - [`paladin_ports::output::llm_port`](crate::output::llm_port) - LLM provider integration
+//! - [`paladin_ports::output::garrison_port`](crate::output::garrison_port) - Conversation memory
+//! - [`paladin_ports::output::arsenal_port`](crate::output::arsenal_port) - Tool execution
+//! - `paladin_battalion::battalion` - Multi-agent orchestration
 
 use std::collections::BTreeMap;
 

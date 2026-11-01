@@ -6,7 +6,7 @@
 //! (which is buffered) and is kept as a separate, focused trait so that buffered-only
 //! callers and registries are unaffected — an executor may implement one or both.
 //!
-//! Implementors produce a [`PaladinStream`] (an `mpsc` receiver of
+//! Implementors produce a [`PaladinStream`](crate::output::paladin_port::PaladinStream) (an `mpsc` receiver of
 //! [`PaladinStreamChunk`](crate::output::paladin_port::PaladinStreamChunk)s), forwarding
 //! incremental output as it is generated and a final chunk when execution completes.
 //!

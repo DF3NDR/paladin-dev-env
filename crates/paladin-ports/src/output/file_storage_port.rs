@@ -463,7 +463,7 @@
 //! - [`crate::output::citadel_port`] - State persistence (uses FileStoragePort)
 //! - [`crate::output::sanctum_port`] - Vector storage (stores embeddings)
 //! - [`crate::output::garrison_port`] - Conversation memory (may use file storage)
-//! - [`crate::infrastructure::adapters::file_storage`] - Concrete file storage adapters (MinIO, S3, Local)
+//! - `crate::infrastructure::adapters::file_storage` - Concrete file storage adapters (MinIO, S3, Local)
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};

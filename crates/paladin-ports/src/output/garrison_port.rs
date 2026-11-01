@@ -191,9 +191,9 @@
 //!
 //! ## See Also
 //!
-//! - [Application Ports](crate::application::ports)
+//! - Application Ports (`crate::application::ports`)
 //! - [Garrison Domain](paladin_core::platform::container::garrison)
-//! - [Infrastructure Adapters](crate::infrastructure::adapters::garrison)
+//! - Infrastructure Adapters (`crate::infrastructure::adapters::garrison`)
 
 use async_trait::async_trait;
 use paladin_core::platform::container::garrison::GarrisonEntry;
@@ -374,7 +374,7 @@ pub struct GarrisonStats {
 /// # See Also
 ///
 /// - [`LongTermGarrisonPort`] - Extended trait with vector embedding support
-/// - [`SanctumPort`] - Long-term persistent memory (alternative/superset)
+/// - [`SanctumPort`](crate::output::sanctum_port::SanctumPort) - Long-term persistent memory (alternative/superset)
 /// - [`GarrisonEntry`] - Entry data structure
 #[async_trait]
 pub trait GarrisonPort: Send + Sync {
@@ -649,8 +649,8 @@ pub trait GarrisonPort: Send + Sync {
 /// # See Also
 ///
 /// - [`GarrisonPort`] - Base trait (this extends it)
-/// - [`SanctumPort`] - Production-grade long-term memory with embeddings
-/// - [`EmbeddingPort`] - Generate vector embeddings
+/// - [`SanctumPort`](crate::output::sanctum_port::SanctumPort) - Production-grade long-term memory with embeddings
+/// - [`EmbeddingPort`](crate::output::embedding_port::EmbeddingPort) - Generate vector embeddings
 /// - [Vector Embeddings Guide](https://platform.openai.com/docs/guides/embeddings)
 #[async_trait]
 pub trait LongTermGarrisonPort: GarrisonPort {

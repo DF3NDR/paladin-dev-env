@@ -209,16 +209,16 @@
 //!
 //! ## Related Ports
 //!
-//! - [`VisionLlmPort`](crate::output::vision_llm_port::VisionLlmPort) - Extended LLM port with vision/image understanding
+//! - [`VisionCapableLlm`](crate::output::vision_llm_port::VisionCapableLlm) - Extended LLM port with vision/image understanding
 //! - [`EmbeddingPort`](crate::output::embedding_port::EmbeddingPort) - Generate vector embeddings from text
 //! - [`GarrisonPort`](crate::output::garrison_port::GarrisonPort) - Store conversation history for context
 //! - [`ArsenalPort`](crate::output::arsenal_port::ArsenalPort) - Provide tools for function calling
 //!
 //! ## See Also
 //!
-//! - [Application Ports](crate::application::ports)
+//! - Application Ports (`crate::application::ports`)
 //! - [Paladin Domain](paladin_core::platform::container::paladin)
-//! - [Infrastructure Adapters](crate::infrastructure::adapters::llm)
+//! - Infrastructure Adapters (`crate::infrastructure::adapters::llm`)
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};

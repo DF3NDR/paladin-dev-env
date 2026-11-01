@@ -1,6 +1,6 @@
 //! Run Repository Port — Persisting and Reading Back `Run`s (D-03)
 //!
-//! [`RunRepositoryPort`] is the WHOLE contract every backend adapter
+//! [`RunRepositoryPort`](crate::output::run_repository_port::RunRepositoryPort) is the WHOLE contract every backend adapter
 //! (`InMemoryRunRepository`, `SqliteRunRepository`, `PostgresRunRepository`,
 //! all `paladin-storage`) implements, defined here up front (interface
 //! first) so plans 27-02…27-15 build against a fixed interface rather than
@@ -8,17 +8,17 @@
 //!
 //! ## Compare-and-set, never read-modify-write (D-04)
 //!
-//! [`RunRepositoryPort::update_status`] must compile to a single
+//! [`RunRepositoryPort::update_status`](crate::output::run_repository_port::RunRepositoryPort::update_status) must compile to a single
 //! conditional update — `UPDATE runs SET status = ?to WHERE run_id = ?id
 //! AND status = ?from` on a SQL backend — never a read-then-write. Zero rows
-//! affected is [`RunRepositoryError::IllegalTransition`], never a silent
+//! affected is [`RunRepositoryError::IllegalTransition`](crate::output::run_repository_port::RunRepositoryError::IllegalTransition), never a silent
 //! no-op. This is what keeps monotonicity true under concurrent workers with
 //! no application lock.
 //!
 //! ## Tenant-scoped listing (D-12)
 //!
-//! [`RunQuery::scope`] carries the caller's [`RunReadScope`]. The default,
-//! [`RunReadScope::All`], is what every internal caller (fork's latest-run
+//! [`RunQuery::scope`](crate::output::run_repository_port::RunQuery::scope) carries the caller's [`RunReadScope`](paladin_core::platform::container::principal::RunReadScope). The default,
+//! [`RunReadScope::All`](paladin_core::platform::container::principal::RunReadScope::All), is what every internal caller (fork's latest-run
 //! lookup, the run inspector, the schedule service) relies on; only the HTTP
 //! `GET /runs` handler narrows it, from the authenticated principal. Every
 //! adapter applies the scope INSIDE its own query -- a `WHERE tenant_id = ?`

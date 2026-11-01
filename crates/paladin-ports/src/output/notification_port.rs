@@ -364,7 +364,7 @@
 //! - [`paladin_core::platform::container::notification`] - Domain types for notifications
 //! - [`crate::output::queue_port`] - Async notification delivery queue
 //! - [`crate::output::llm_port`] - LLM integration for generating notification content
-//! - [`crate::infrastructure::adapters::notification`] - Concrete notification adapters (SMTP, Twilio, etc.)
+//! - `crate::infrastructure::adapters::notification` - Concrete notification adapters (SMTP, Twilio, etc.)
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};

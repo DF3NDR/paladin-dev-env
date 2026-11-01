@@ -1,6 +1,6 @@
 //! # Spend Guard Port -- Mid-Run Allowance Halt (ALLOW-03, Phase 42 D-04, ADR-0057)
 //!
-//! Defines [`SpendGuard`], the seam a per-run allowance check attaches to the superstep engine
+//! Defines [`SpendGuard`](crate::output::spend_guard::SpendGuard), the seam a per-run allowance check attaches to the superstep engine
 //! through. `WarEngine::with_spend_guard` (`paladin-battalion`) consults an attached guard once
 //! per superstep boundary at the top of the loop, BESIDE and after the cancellation signals
 //! (`CancellationToken`, [`crate::output::cancellation_probe::CancellationProbe`]): a cancel
@@ -10,8 +10,8 @@
 //!
 //! The ceilings, the window arithmetic and the ledger balance live in the facade's `Treasurer`.
 //! The engine learns none of that: it asks "may the next superstep run?" and receives a
-//! [`SpendDecision`]. A halting decision carries the core
-//! [`HaltReason`] value, which the engine passes through untouched to the run's
+//! [`SpendDecision`](crate::output::spend_guard::SpendDecision). A halting decision carries the core
+//! [`HaltReason`](paladin_core::platform::container::allowance::HaltReason) value, which the engine passes through untouched to the run's
 //! outcome, so the worker, the persisted row and every wire surface read one typed value.
 //!
 //! ## Fallible by design -- a failed read is a halt, never a swallowed `Continue` (D-03)
@@ -19,9 +19,9 @@
 //! This is the deliberate difference from [`crate::output::cancellation_probe::CancellationProbe`],
 //! which answers a plain `bool` and swallows its own read failures. A guard that could not read
 //! the ledger must not let a metered run keep spending: it answers
-//! [`SpendDecision::Halt`] with [`HaltReason::LedgerUnavailable`] (fail closed). The same answer
+//! [`SpendDecision::Halt`](crate::output::spend_guard::SpendDecision::Halt) with [`HaltReason::LedgerUnavailable`](paladin_core::platform::container::allowance::HaltReason::LedgerUnavailable) (fail closed). The same answer
 //! covers a ledger that reads but no longer holds the run's own spend: see
-//! [`SpendGuard::note_unsettled_spend`].
+//! [`SpendGuard::note_unsettled_spend`](crate::output::spend_guard::SpendGuard::note_unsettled_spend).
 //!
 //! ## Thread Safety
 //!

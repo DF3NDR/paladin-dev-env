@@ -1,6 +1,6 @@
 //! # Token Counter Port — a synchronous, infallible counting seam (Doc 05 RT-FR-10, D-13)
 //!
-//! [`TokenCounterPort`] is the ONE counting path every budget feature added by the
+//! [`TokenCounterPort`](crate::output::token_counter_port::TokenCounterPort) is the ONE counting path every budget feature added by the
 //! v0.10.0 agent-runtime-enhancements phase consumes -- `HistoryTrimmer`
 //! (`src/application/services/paladin/middleware/history.rs`),
 //! `SummarizationMiddleware` and any future budget-shaped middleware. No budget
@@ -21,11 +21,11 @@
 //!
 //! - `paladin_memory::token_counter::HeuristicTokenCounter` -- the ungated
 //!   default, `text.chars().count() / 4` rounded up, approximate (±30%);
-//!   inherits [`TokenCounterPort::is_exact`]'s `false` default.
+//!   inherits [`TokenCounterPort::is_exact`](crate::output::token_counter_port::TokenCounterPort::is_exact)'s `false` default.
 //! - `paladin_memory::garrison::TiktokenCounter` (under the `content-processing`
 //!   feature) -- exact BPE tokenisation for OpenAI-family models, falling back
 //!   to its already-loaded encoding for any `model` string it is not asked to
-//!   re-resolve; overrides [`TokenCounterPort::is_exact`] to `true`.
+//!   re-resolve; overrides [`TokenCounterPort::is_exact`](crate::output::token_counter_port::TokenCounterPort::is_exact) to `true`.
 
 /// A synchronous, infallible token-counting adapter.
 ///

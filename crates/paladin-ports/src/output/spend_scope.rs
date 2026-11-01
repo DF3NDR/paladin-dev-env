@@ -20,11 +20,11 @@
 //! why a task-local is the only sound way to reach through the one shared `Arc<dyn PaladinPort>`
 //! singleton every concurrent run uses. The rule:
 //!
-//! - **The engine installs a fresh [`SpendScope`] around every attempt**, outside the attempt
+//! - **The engine installs a fresh [`SpendScope`](crate::output::spend_scope::SpendScope) around every attempt**, outside the attempt
 //!   future (`race_attempt` in `paladin-battalion`), so the accumulator outlives a future the
 //!   deadline drops. Attempts run in their own spawned tasks, so concurrent nodes and retries never
 //!   share a scope.
-//! - **The execution service records at every fold** through [`record_incurred_spend`]: each
+//! - **The execution service records at every fold** through [`record_incurred_spend`](crate::output::spend_scope::record_incurred_spend): each
 //!   buffered loop call, each billed failure, each structured call including every repair. Where
 //!   it spawns a task that makes model calls it captures the scope first
 //!   (`ATTEMPT_SPEND.try_with(Clone::clone)`) and re-installs it inside the task, because a
@@ -33,8 +33,8 @@
 //!   (A1-50-29). A successful Paladin attempt keeps reporting `PaladinResult.cost`, so one source
 //!   per outcome and no double count.
 //!
-//! Outside any scope -- a direct `PaladinPort` caller, a unit test -- [`record_incurred_spend`]
-//! is a no-op returning `false` and [`current_attempt_spend`] is `None`. A caller that wants a
+//! Outside any scope -- a direct `PaladinPort` caller, a unit test -- [`record_incurred_spend`](crate::output::spend_scope::record_incurred_spend)
+//! is a no-op returning `false` and [`current_attempt_spend`](crate::output::spend_scope::current_attempt_spend) is `None`. A caller that wants a
 //! failed execution's spend installs a scope itself:
 //!
 //! ```no_run
@@ -50,13 +50,13 @@
 //! # }
 //! ```
 //!
-//! The scope holds a [`TokenUsage`] sum and a [`Cost`] tally only -- never prompt text, content,
+//! The scope holds a [`TokenUsage`](paladin_core::platform::container::token_usage::TokenUsage) sum and a [`Cost`](paladin_core::platform::container::cost::Cost) tally only -- never prompt text, content,
 //! a model id or a credential (T-50-29-04).
 //!
 //! ## Hopped-past bills (G-50-5a remainder (a), plan 50-30)
 //!
-//! A second, narrower carrier lives beside the attempt scope: [`HoppedBills`], reached through
-//! the [`HOPPED_BILLS`] task-local. It spans ONE model call (all of its retries), not a whole
+//! A second, narrower carrier lives beside the attempt scope: [`HoppedBills`](crate::output::spend_scope::HoppedBills), reached through
+//! the [`HOPPED_BILLS`](crate::output::spend_scope::HOPPED_BILLS) task-local. It spans ONE model call (all of its retries), not a whole
 //! attempt. When a fallback chain moves past a hop whose error the vendor billed (a refusal
 //! under `hop_on_refusal`), that bill would be dropped with the error -- the served response
 //! (or the chain's `AllProvidersFailed`, which keeps only the last hop's bill) has nowhere to
@@ -65,18 +65,18 @@
 //! - **`PaladinExecutionService` installs a fresh collector around every model call**, buffered
 //!   and streamed (the streamed task re-installs the handle it captured before the spawn).
 //! - **`PricingLlmAdapter`, outside the chain, installs its pricer first**
-//!   ([`HoppedBills::install_pricer`]) before it delegates; the first pricer installed wins, so
+//!   ([`HoppedBills::install_pricer`](crate::output::spend_scope::HoppedBills::install_pricer)) before it delegates; the first pricer installed wins, so
 //!   the outermost decorator's table prices every hop bill, each against the entry's OWN model,
 //!   never the served model's rate.
-//! - **`FallbackLlmAdapter` fills it** through [`record_hopped_bill`] at its single hop decision
+//! - **`FallbackLlmAdapter` fills it** through [`record_hopped_bill`](crate::output::spend_scope::record_hopped_bill) at its single hop decision
 //!   point, only when it really hops past a billed error. The bill is priced and counted into
-//!   [`ATTEMPT_SPEND`] right then.
-//! - **The execution service takes the entries** with [`HoppedBills::count_and_take`] when the
+//!   [`ATTEMPT_SPEND`](crate::output::spend_scope::ATTEMPT_SPEND) right then.
+//! - **The execution service takes the entries** with [`HoppedBills::count_and_take`](crate::output::spend_scope::HoppedBills::count_and_take) when the
 //!   call ends, folds each into the run's tallies, and settles them in the call's own
 //!   settlement row with a per-model breakdown. It does not count them again: each entry carries
 //!   a counted flag, and `count_and_take` counts only the entries that were not counted yet.
 //!
-//! Entries are [`BilledUsage`] values: a model id, token counts and a [`Cost`], never refusal
+//! Entries are [`BilledUsage`](crate::output::llm_port::BilledUsage) values: a model id, token counts and a [`Cost`](paladin_core::platform::container::cost::Cost), never refusal
 //! text or a credential (T-50-30-04).
 //!
 //! ### Counted at the hop, however the attempt ends
@@ -89,11 +89,11 @@
 //! on a model with no price row, counts with `cost: None`, exactly as the end-of-call fold
 //! would have counted it.
 //!
-//! An entry recorded where no attempt scope was visible (a bare [`HoppedBills::push`], or a
-//! record made outside [`ATTEMPT_SPEND`]) is counted by [`HoppedBills::count_and_take`] if a
+//! An entry recorded where no attempt scope was visible (a bare [`HoppedBills::push`](crate::output::spend_scope::HoppedBills::push), or a
+//! record made outside [`ATTEMPT_SPEND`](crate::output::spend_scope::ATTEMPT_SPEND)) is counted by [`HoppedBills::count_and_take`](crate::output::spend_scope::HoppedBills::count_and_take) if a
 //! scope is visible when the collector is taken. A decorator that prices later with
-//! [`HoppedBills::price_unpriced`] reaches the call's ledger row but not the attempt scope, so
-//! an out-of-tree pricing decorator calls [`HoppedBills::install_pricer`] before it delegates.
+//! [`HoppedBills::price_unpriced`](crate::output::spend_scope::HoppedBills::price_unpriced) reaches the call's ledger row but not the attempt scope, so
+//! an out-of-tree pricing decorator calls [`HoppedBills::install_pricer`](crate::output::spend_scope::HoppedBills::install_pricer) before it delegates.
 
 use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, TryLockError};

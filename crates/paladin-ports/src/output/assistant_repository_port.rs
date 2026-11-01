@@ -1,6 +1,6 @@
 //! Assistant Repository Port — Append-Only Immutable Versions (D-28, D-29)
 //!
-//! [`AssistantRepositoryPort`] is the whole contract every backend adapter
+//! [`AssistantRepositoryPort`](crate::output::assistant_repository_port::AssistantRepositoryPort) is the whole contract every backend adapter
 //! (`InMemoryAssistantRepository`, `SqliteAssistantRepository`,
 //! `PostgresAssistantRepository`, all `paladin-storage`) implements.
 //!
@@ -14,10 +14,10 @@
 //! code to violate it does not exist, not because callers are trusted to
 //! avoid calling it.
 //!
-//! ## `latest` is a property of [`Assistant`], not of any version row
+//! ## `latest` is a property of [`Assistant`](paladin_core::platform::container::assistant::Assistant), not of any version row
 //!
-//! [`Assistant::latest`] is the most recently published version number.
-//! [`AssistantRepositoryPort::append_version`] both writes the new
+//! [`Assistant::latest`](paladin_core::platform::container::assistant::Assistant::latest) is the most recently published version number.
+//! [`AssistantRepositoryPort::append_version`](crate::output::assistant_repository_port::AssistantRepositoryPort::append_version) both writes the new
 //! `(assistant_id, version)` row and advances `latest` — an adapter must do
 //! both atomically (a single transaction on a SQL backend), since
 //! [`crate::output::run_repository_port::RunRepositoryPort::insert_with_latest`]

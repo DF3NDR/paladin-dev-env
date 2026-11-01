@@ -1,7 +1,7 @@
 //! Per-model parameter support and limits (ADR-0061, amending ADR-0004).
 //!
 //! Which sampling parameters a provider accepts, and with what values, varies **per model**, not
-//! per adapter. [`ModelProfile`] states that for one (provider, model) pair. It is returned by
+//! per adapter. [`ModelProfile`](crate::output::model_profile::ModelProfile) states that for one (provider, model) pair. It is returned by
 //! [`LlmPort::model_profile`](crate::output::llm_port::LlmPort::model_profile) and sits *beside*
 //! the adapter-wide [`ProviderCapabilities`](crate::output::llm_port::ProviderCapabilities), which
 //! is deliberately left untouched.
@@ -11,30 +11,30 @@
 //! An explicit sampling parameter the target model cannot honour is refused at build time, by
 //! name. An auto-selected one is omitted from the wire with a `warn!` and a
 //! `paladin.params_omitted` response-metadata entry. Nothing is ever clamped, snapped or rounded:
-//! [`ParamSupport::admits`] is the single admission rule both the build-time check and the wire
+//! [`ParamSupport::admits`](crate::output::model_profile::ParamSupport::admits) is the single admission rule both the build-time check and the wire
 //! filter use.
 //!
 //! # Fail closed
 //!
-//! [`ModelProfile::new`] states **nothing as sendable**. A profile that forgets a field refuses an
+//! [`ModelProfile::new`](crate::output::model_profile::ModelProfile::new) states **nothing as sendable**. A profile that forgets a field refuses an
 //! explicit value loudly instead of sending it. This is the lesson of the compat engine's
 //! `CompatRequestParameters`, which has no `Default` because a struct-update spread of one once
 //! made a vendor receive a parameter it rejects. `ModelProfile` has no `Default` either.
 //!
 //! # Future proofing
 //!
-//! [`ModelProfile`] and [`SamplingParam`] are `#[non_exhaustive]`, so a later phase can add
+//! [`ModelProfile`](crate::output::model_profile::ModelProfile) and [`SamplingParam`](crate::output::model_profile::SamplingParam) are `#[non_exhaustive]`, so a later phase can add
 //! further capabilities without a breaking change. Construct a profile only through
-//! [`ModelProfile::new`] plus the `with_*` setters.
+//! [`ModelProfile::new`](crate::output::model_profile::ModelProfile::new) plus the `with_*` setters.
 //!
 //! # Reasoning effort (Phase 51)
 //!
-//! [`EffortSupport`] states which reasoning efforts a model takes, and
-//! [`EffortSupport::resolve`] is the **one** admission rule for a requested
-//! [`ReasoningEffort`]: the adapters, the builder, the fallback pre-flight and the docs drift test
-//! all call it, so they cannot drift apart (the [`ParamSupport::admits`] precedent). It is fail
-//! closed: [`ModelProfile::new`] states [`EffortSupport::Unmeasured`], which refuses every effort.
-//! A level is substituted only when the caller chose a substituting [`ReasoningFallback`].
+//! [`EffortSupport`](crate::output::model_profile::EffortSupport) states which reasoning efforts a model takes, and
+//! [`EffortSupport::resolve`](crate::output::model_profile::EffortSupport::resolve) is the **one** admission rule for a requested
+//! [`ReasoningEffort`](paladin_core::platform::container::reasoning::ReasoningEffort): the adapters, the builder, the fallback pre-flight and the docs drift test
+//! all call it, so they cannot drift apart (the [`ParamSupport::admits`](crate::output::model_profile::ParamSupport::admits) precedent). It is fail
+//! closed: [`ModelProfile::new`](crate::output::model_profile::ModelProfile::new) states [`EffortSupport::Unmeasured`](crate::output::model_profile::EffortSupport::Unmeasured), which refuses every effort.
+//! A level is substituted only when the caller chose a substituting [`ReasoningFallback`](paladin_core::platform::container::reasoning::ReasoningFallback).
 
 use std::fmt;
 

@@ -1,8 +1,8 @@
 //! # Rate-limit hints -- the numbers a provider's 429 carries (PACE-01, D-04)
 //!
-//! A [`RateLimitHints`] is the typed snapshot of what a provider told us when it answered
+//! A [`RateLimitHints`](crate::output::rate_limit_hints::RateLimitHints) is the typed snapshot of what a provider told us when it answered
 //! `429 Too Many Requests`: an explicit retry delay (`Retry-After` / `retry-after-ms`) and, per
-//! [`RateLimitDimensionKind`], the limit, the remaining allowance and the time until it resets.
+//! [`RateLimitDimensionKind`](crate::output::rate_limit_hints::RateLimitDimensionKind), the limit, the remaining allowance and the time until it resets.
 //! It rides on [`LlmError::RateLimitExceeded`](crate::output::llm_port::LlmError) so a caller, a
 //! `RetryPolicy` above the Cadence decorator and the decorator itself can all read the provider's
 //! own number instead of guessing one.
@@ -10,7 +10,7 @@
 //! ## Parsed numbers only
 //!
 //! Header parsing happens at the HTTP edge, in `paladin-llm`; this module is the port-layer
-//! vocabulary it fills. The types here store parsed integers and [`Duration`]s -- there is
+//! vocabulary it fills. The types here store parsed integers and [`Duration`](std::time::Duration)s -- there is
 //! deliberately no field that holds a raw header string, because header values are
 //! provider-controlled and would otherwise be rendered by `Debug` wherever the error is logged.
 //!
@@ -18,7 +18,7 @@
 //!
 //! Remaining and reset values are carried for operators and for a future proactive-pacing phase.
 //! The Cadence gate opens on a 429 only, so a `remaining` figure alone never closes it. The one
-//! number the gate acts on is the one [`RateLimitHints::effective_retry_after`] returns, and it
+//! number the gate acts on is the one [`RateLimitHints::effective_retry_after`](crate::output::rate_limit_hints::RateLimitHints::effective_retry_after) returns, and it
 //! returns `None` -- never a guessed value -- when the provider said nothing usable.
 //!
 //! # Examples

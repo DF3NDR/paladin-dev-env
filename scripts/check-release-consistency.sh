@@ -592,7 +592,7 @@ PY
         echo "     exists but carries no '## [X.Y.Z]' heading for this tag version -- this"
         echo "     section is normally written by the release tooling, so a human seeing"
         echo "     this locally should run the release flow rather than hand-editing"
-        echo "     eleven files."
+        echo "     every changelog."
         echo "  6. MISMATCH_AND_CHANGELOG: both of the above are true for at least one"
         echo "     package in this run -- see the entries above for which."
         echo "  7. CI_MISMATCH: the tagged SHA's most recent completed ci.yml run did not"

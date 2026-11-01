@@ -5,9 +5,9 @@
 # Cargo workspace package -- including the root package's CHANGELOG.md --
 # for the version being released (D-09). This is what makes the strict,
 # no-exemptions check-release-consistency.sh gate satisfiable in one
-# invocation instead of an eleven-file manual chore: today all ten crate
-# changelogs sit at "## [Unreleased]" with no versioned section, which the
-# gate correctly refuses.
+# invocation instead of a manual edit of every publishable package's
+# changelog, each of which would otherwise lack a section for the release
+# version and be refused by the gate.
 #
 # Per RESEARCH.md Pitfall 5 and release.toml's own comment: cargo-release's
 # `pre-release-replacements` is package-scoped, not workspace-scoped, so a

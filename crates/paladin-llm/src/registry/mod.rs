@@ -1745,7 +1745,11 @@ mod seeded_tests {
         // Listing: max_input_tokens=1000000, max_tokens=128000.
         assert_eq!(p.context_window, Some(1_000_000));
         assert_eq!(p.max_output_tokens, Some(128_000));
-        // Probe 1 carried no reasoning text and the listing capabilities were truncated.
+        // `reasoning` records whether the default call returned reasoning text
+        // (`ModelProfile.reasoning`). 50.1-SEED-PROBE.md probe 1, the default call:
+        // `reasoning text: absent`. 51-EFFORT-PROBE.md `### claude-opus-4-8`: 0 reasoning
+        // tokens on the default and adaptive calls, 41 only on the non-default `max` +
+        // `thinking: adaptive` request. So `false`, pinned here (Phase 55, FIXES-05).
         assert!(!p.reasoning);
         // Probes 12 and 13: Anthropic has no JSON mode.
         assert!(!p.json_object && !p.json_schema);

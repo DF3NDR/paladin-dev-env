@@ -55,7 +55,7 @@ use std::collections::BTreeMap;
 use paladin_ports::output::llm_port::{ReasoningEffort, ReasoningFallback};
 
 use crate::config::llm::LlmProviderConfig;
-use crate::reasoning::ReasoningWire;
+use crate::reasoning::{ReasoningWire, SELF_HOSTED_PROVIDERS};
 use crate::registry::{ModelOverride, REASONING_DEFAULT_TIMEOUT_SECONDS};
 
 /// The longest model id construction accepts, in characters.
@@ -337,10 +337,6 @@ fn layered_number<T: std::str::FromStr>(
     }
 }
 
-/// The providers whose `llm.<provider>.reasoning_wire` the operator may set (Phase 51, D-10):
-/// the self-hosted endpoints, whose wire only the operator can know.
-const REASONING_WIRE_PROVIDERS: [&str; 2] = ["ollama", "openai-compatible"];
-
 /// The core of the layering: resolve every input, collecting each problem found while filling the
 /// field from the next layer down. The first problem is the one a strict caller reports.
 fn resolve(
@@ -496,7 +492,7 @@ fn resolve(
     // changes its wire through a Paladin release after the dated probe, never through
     // configuration, so a block that sets it is refused rather than silently ignored.
     let reasoning_wire = block.and_then(|b| b.reasoning_wire);
-    if reasoning_wire.is_some() && !REASONING_WIRE_PROVIDERS.contains(&provider) {
+    if reasoning_wire.is_some() && !SELF_HOSTED_PROVIDERS.contains(&provider) {
         problems.push(format!(
             "{subject_text}: `llm.{provider}.reasoning_wire` is only accepted for `ollama` and \
              `openai-compatible`; named vendors change their wire only through a Paladin release"
@@ -668,7 +664,7 @@ mod tests {
         assert!(error.contains("llm.acme.reasoning_wire"), "{error}");
         assert!(error.contains("Paladin release"), "{error}");
 
-        for provider in REASONING_WIRE_PROVIDERS {
+        for provider in SELF_HOSTED_PROVIDERS {
             let self_hosted = ProviderEnv {
                 provider,
                 key: None,
@@ -685,6 +681,39 @@ mod tests {
             .expect("a self-hosted endpoint may declare its wire");
             assert_eq!(layered.reasoning_wire, Some(ReasoningWire::TopLevelEffort));
         }
+    }
+
+    /// D-10, TESTS-05 (51 IN-01): the layering's `reasoning_wire` refusal and the effort
+    /// refusal's "set `llm.<provider>.reasoning_wire`" hint read ONE constant, so the two sites
+    /// cannot drift. The sibling test is
+    /// `reasoning::tests::wire_refusal_points_self_hosted_providers_at_reasoning_wire`.
+    #[test]
+    fn reasoning_wire_providers_are_the_self_hosted_pair() {
+        let shared = crate::reasoning::SELF_HOSTED_PROVIDERS;
+        assert_eq!(shared.len(), 2, "the self-hosted pair");
+        assert!(shared.contains(&"ollama"));
+        assert!(shared.contains(&"openai-compatible"));
+
+        let env = env_of(&[("ACME_API_KEY", "k")]);
+        let block = LlmProviderConfig::new("").with_reasoning_wire(ReasoningWire::TopLevelEffort);
+        for provider in shared {
+            let self_hosted = ProviderEnv {
+                provider,
+                key: None,
+                ..ENV
+            };
+            resolve_layers(
+                Some(&block),
+                None,
+                &self_hosted,
+                &DEFAULTS,
+                &never_reasoning,
+                &env,
+            )
+            .unwrap_or_else(|error| panic!("{provider} may declare its wire: {error}"));
+        }
+        let error = resolve_with(Some(&block), None, &env).expect_err("acme is a named vendor");
+        assert!(error.contains("llm.acme.reasoning_wire"), "{error}");
     }
 
     // ── placeholders ────────────────────────────────────────────────────────

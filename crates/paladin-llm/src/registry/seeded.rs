@@ -201,8 +201,12 @@ mod anthropic_table {
             // Listing: max_input_tokens=1000000, max_tokens=128000.
             .with_context_window(1_000_000)
             .with_max_output_tokens(128_000)
-            // Probe 1 (the default call) carried no reasoning text; the listing capabilities
-            // were truncated in the transcript, so reasoning is not evidenced.
+            // `reasoning` records whether the default call returned reasoning text
+            // (`ModelProfile.reasoning`). 50.1-SEED-PROBE.md probe 1, the default call:
+            // `reasoning text: absent`. 51-EFFORT-PROBE.md `### claude-opus-4-8`: 0 reasoning
+            // tokens on the default and adaptive calls, 41 only on the non-default `max` +
+            // `thinking: adaptive` request. So `false`; the effort data below carries what the
+            // model accepts.
             .with_reasoning(false)
             // Probes 12 and 13: NOT APPLICABLE, Anthropic has no JSON mode.
             .with_json_object(false)

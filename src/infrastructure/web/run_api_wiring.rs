@@ -25,7 +25,7 @@
 //! `WarEngine`/`RunWorkerPool`'s generic bound without this module (or its caller) ever
 //! needing to know or care whether the underlying backend is SQLite or Postgres.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -837,9 +837,10 @@ struct StoredAgentModelScan {
 ///
 /// Pages with `list(ASSISTANT_SCAN_PAGE, cursor, false)` to exhaustion and walks each item's
 /// history with `list_versions(id, ASSISTANT_SCAN_PAGE, cursor)`; only those two read methods are
-/// ever called. An unreadable page or version page (or a version cursor that does not advance)
-/// ends the walk and is recorded without its error text; the function never returns an error, so
-/// the boot that called it is never blocked.
+/// ever called. An unreadable page or version page, a version cursor that does not advance, or an
+/// assistant cursor that repeats one already followed (or arrives on an empty page) ends the walk
+/// and is recorded without its error text; the function never returns an error, so the boot that
+/// called it is never blocked and never loops.
 async fn scan_stored_agent_models(repo: &dyn AssistantRepositoryPort) -> StoredAgentModelScan {
     scan_stored_agent_models_paged(repo, ASSISTANT_SCAN_PAGE).await
 }
@@ -854,6 +855,11 @@ async fn scan_stored_agent_models_paged(
     let mut cursor: Option<AssistantId> = None;
     // The last assistant fully read: the position reported if the next read fails.
     let mut last_read: Option<AssistantId> = None;
+    // Every assistant cursor already followed. A store that hands one back again (or a cursor on
+    // an empty page) would loop boot forever, so either ends the walk like an unreadable page.
+    // Set membership, not `next > prev`: the store orders ids by its own collation (a Postgres
+    // locale can differ from byte order), so comparing ids here could stop a healthy walk.
+    let mut followed: HashSet<AssistantId> = HashSet::new();
     loop {
         let page = match repo.list(page_size, cursor.clone(), false).await {
             Ok(page) => page,
@@ -873,8 +879,12 @@ async fn scan_stored_agent_models_paged(
             last_read = Some(item.assistant_id.clone());
         }
         match page.next_cursor {
-            Some(next) => cursor = Some(next),
             None => return scan,
+            Some(next) if page.items.is_empty() || !followed.insert(next.clone()) => {
+                scan.stopped_after = Some(last_read);
+                return scan;
+            }
+            Some(next) => cursor = Some(next),
         }
     }
 }
@@ -2151,7 +2161,7 @@ mod tests {
 
     /// An `AssistantRepositoryPort` that delegates to an in-memory store, except that it can fail
     /// one chosen `list` or `list_versions` call (0-based) with an error text that must never
-    /// reach a log line, or hand back a version cursor that never advances.
+    /// reach a log line, or hand back a version or assistant cursor that never advances.
     struct ScriptedAssistants {
         inner: paladin_storage::assistant::in_memory::InMemoryAssistantRepository,
         list_calls: std::sync::atomic::AtomicUsize,
@@ -2159,6 +2169,9 @@ mod tests {
         version_calls: std::sync::atomic::AtomicUsize,
         fail_version_call: Option<usize>,
         stuck_version_cursor: bool,
+        /// When set, every `list` page names this id as its next cursor, however far the walk
+        /// has got: a buggy store whose assistant cursor never moves past it.
+        stuck_list_cursor: Option<AssistantId>,
     }
 
     impl ScriptedAssistants {
@@ -2174,6 +2187,7 @@ mod tests {
                 version_calls: std::sync::atomic::AtomicUsize::new(0),
                 fail_version_call,
                 stuck_version_cursor,
+                stuck_list_cursor: None,
             }
         }
     }
@@ -2238,7 +2252,12 @@ mod tests {
                     },
                 );
             }
-            self.inner.list(limit, cursor, include_deleted).await
+            let mut page = self.inner.list(limit, cursor, include_deleted).await?;
+            if let Some(stuck) = &self.stuck_list_cursor {
+                // A buggy store: the same cursor on every page, so a naive walk never ends.
+                page.next_cursor = Some(stuck.clone());
+            }
+            Ok(page)
         }
         async fn list_versions(
             &self,
@@ -2395,6 +2414,42 @@ mod tests {
         .await
         .expect("the scan terminates");
         assert_eq!(scan.stopped_after, Some(None), "{:?}", scan.stopped_after);
+        assert!(stored_scan_stop_line(&scan).is_some());
+    }
+
+    /// FIXES-06, D-07, WR-01: a store whose assistant-list cursor never advances cannot loop the
+    /// boot scan forever either. The walk reads each page once, stops at the first cursor it has
+    /// already followed, and records the last assistant read completely, like an unreadable page.
+    #[tokio::test]
+    async fn stored_agent_model_scan_stops_at_a_non_advancing_assistant_cursor() {
+        let mut repo = ScriptedAssistants::new(None, None, false);
+        repo.stuck_list_cursor = Some(AssistantId::new("a-1").expect("id"));
+        for (id, model) in [("a-1", "model-1"), ("a-2", "model-2"), ("a-3", "model-3")] {
+            seed_assistant_version(
+                &repo.inner,
+                id,
+                AssistantKind::Agent,
+                serde_json::json!({"model": model, "system_prompt": "p"}),
+            )
+            .await;
+        }
+
+        // Page size 1: page 1 (no cursor) is a-1, page 2 (cursor a-1) is a-2 and names a-1 again.
+        let scan = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            scan_stored_agent_models_paged(&repo, 1),
+        )
+        .await
+        .expect("the scan terminates");
+        assert_eq!(
+            scan.models,
+            vec!["model-1".to_string(), "model-2".to_string()]
+        );
+        assert_eq!(
+            scan.stopped_after,
+            Some(Some(AssistantId::new("a-2").expect("id"))),
+            "the stop records the last assistant read before the repeated cursor"
+        );
         assert!(stored_scan_stop_line(&scan).is_some());
     }
 

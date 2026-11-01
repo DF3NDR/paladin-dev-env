@@ -17,7 +17,7 @@ metadata:
   namespace: paladin
   labels:
     app: paladin-worker
-    version: v0.10.0
+    version: v0.11.0
 spec:
   replicas: 2
   strategy:
@@ -32,7 +32,7 @@ spec:
     metadata:
       labels:
         app: paladin-worker
-        version: v0.10.0
+        version: v0.11.0
     spec:
       # At least 2x APP_RUN_WORKER_LEASE_SECONDS is NOT the relevant ratio here -- lease expiry
       # is what lets a SECOND worker redeliver a run if this one is killed outright. This value
@@ -51,7 +51,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: paladin-worker
-          image: paladin-server:0.10.0
+          image: paladin-server:0.11.0
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false

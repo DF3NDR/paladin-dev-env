@@ -518,10 +518,16 @@ build-docker: ## Build Docker image
 	@echo "$(CYAN)Building Docker image...$(NC)"
 	@$(DOCKER) build -f Dockerfile -t $(PROJECT_NAME):latest .
 
+# The workspace version, read offline from the root Cargo.toml, is the tag the k8s/server manifests
+# pull (FIRST-04, D-10); `make release` moves it with the version bump. Not named VERSION: that is
+# the user parameter of `make release`.
+WORKSPACE_VERSION = $(shell python3 -c "import tomllib; print(tomllib.load(open('Cargo.toml','rb'))['package']['version'])")
+
 .PHONY: docker-build-server
-docker-build-server: ## Build the paladin-server HTTP API image (Dockerfile.server)
+docker-build-server: ## Build the paladin-server HTTP API image (Dockerfile.server), tagged :latest and :<workspace version>
 	@echo "$(CYAN)Building paladin-server image...$(NC)"
-	@$(DOCKER) build -f Dockerfile.server -t paladin-server:latest .
+	@test -n "$(WORKSPACE_VERSION)" || { echo "$(RED)❌ could not read [package].version from Cargo.toml (python3 with tomllib is required)$(NC)"; exit 1; }
+	@$(DOCKER) build -f Dockerfile.server -t paladin-server:latest -t paladin-server:$(WORKSPACE_VERSION) .
 
 ##@ Docker Services
 

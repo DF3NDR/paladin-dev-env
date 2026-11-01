@@ -10,7 +10,7 @@ metadata:
   namespace: paladin
   labels:
     app: paladin-server
-    version: v0.6.0
+    version: v0.11.0
 spec:
   replicas: 2
   strategy:
@@ -25,7 +25,7 @@ spec:
     metadata:
       labels:
         app: paladin-server
-        version: v0.6.0
+        version: v0.11.0
     spec:
       # 2x the default APP_ENGINE_SHUTDOWN_GRACE_SECS (30s, src/config/engine.rs)
       # so the kubelet's SIGKILL deadline never lands while paladin-server is
@@ -41,7 +41,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: paladin-server
-          image: paladin-server:0.6.0
+          image: paladin-server:0.11.0
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false

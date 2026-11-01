@@ -181,6 +181,13 @@ jobs:
       - name: Check user-facing version strings (FIRST-03)
         run: ./scripts/check-version-strings.sh
 
+      # Phase 55 D-01 (FIXES-01): holds every published crate free of stub
+      # panics (todo!/unimplemented!) outside #[cfg(test)]. CI runs each gate
+      # script itself and does not call `make check-gates`, so the gate needs
+      # its own step.
+      - name: Check no stub panics in published crates (FIXES-01)
+        run: ./scripts/check-no-stub-panics.sh
+
       # Phase 52 D-06 / CIREL-03: scripts/check-migration-allowlist.sh is the
       # single implementation of the semver-allowlist set-equality gate (the
       # inline awk copy that used to live in the `semver` job was deleted). It

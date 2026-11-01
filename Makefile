@@ -225,6 +225,10 @@ check-dependency-allowlist: ## Verify paladin-core / paladin-ports [dependencies
 check-version-strings: ## Verify every copyable version string (README, docs/src, k8s/, openapi.json) equals the workspace version (FIRST-03)
 	@./scripts/check-version-strings.sh
 
+.PHONY: check-no-stub-panics
+check-no-stub-panics: ## Fail on a todo!/unimplemented! reachable outside #[cfg(test)] in a published crate (FIXES-01)
+	@./scripts/check-no-stub-panics.sh
+
 .PHONY: check-release-consistency
 # Deliberately NOT part of check-gates: every sibling guard above is a
 # no-argument offline check runnable against the current tree as-is: this
@@ -265,7 +269,7 @@ check-semver: ## Run cargo-semver-checks for every publishable crate against the
 	@./scripts/check-semver.sh
 
 .PHONY: check-gates
-check-gates: check-changelogs check-crate-names check-advisory-register check-workflow-suppressions check-workflow-triggers check-codeql-dismissals check-migration-allowlist check-publish-order check-dependency-allowlist check-version-strings ## Run all offline release-gate guards
+check-gates: check-changelogs check-crate-names check-advisory-register check-workflow-suppressions check-workflow-triggers check-codeql-dismissals check-migration-allowlist check-publish-order check-dependency-allowlist check-version-strings check-no-stub-panics ## Run all offline release-gate guards
 
 .PHONY: test-shell-guards
 # Loops over every tests/scripts/*_test.sh rather than a hardcoded list, so

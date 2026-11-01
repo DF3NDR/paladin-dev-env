@@ -178,6 +178,59 @@ plant crates/x/src/lib.rs 'pub fn f() { unimplemented!{} }'
 assert_fire "${FX}" "the spelling unimplemented!{} is matched" \
     "crates/x/src/lib.rs:${PLANT_LINE}: unimplemented! outside #[cfg(test)]"
 
+# A `#[cfg(test)]` that sits on a non-item (a struct field, an enum variant, a
+# match arm, a function parameter, a struct-literal field) exempts nothing: it
+# must never claim the enclosing block or the next braced item (WR-03).
+
+fresh cfg-test-struct-field
+plant crates/x/src/lib.rs 'pub struct S { #[cfg(test)] probe: u8, real: u8, }'
+plant crates/x/src/lib.rs 'impl S { pub fn f(&self) -> u8 { todo!() } }'
+assert_fire "${FX}" "#[cfg(test)] on a struct field does not exempt the impl after it" \
+    "crates/x/src/lib.rs:${PLANT_LINE}: todo! outside #[cfg(test)]"
+
+fresh cfg-test-enum-variant
+plant crates/x/src/lib.rs 'pub enum E { #[cfg(test)] Mock, Real, }'
+plant crates/x/src/lib.rs 'pub fn f() { todo!() }'
+assert_fire "${FX}" "#[cfg(test)] on an enum variant does not exempt the fn after it" \
+    "crates/x/src/lib.rs:${PLANT_LINE}: todo! outside #[cfg(test)]"
+
+fresh cfg-test-match-arm
+plant crates/x/src/lib.rs 'pub fn f(e: u8) -> u8 {'
+plant crates/x/src/lib.rs '    match e {'
+plant crates/x/src/lib.rs '        #[cfg(test)]'
+plant crates/x/src/lib.rs '        0 => 0,'
+plant crates/x/src/lib.rs '        _ => todo!(),'
+STUB_LINE="${PLANT_LINE}"
+plant crates/x/src/lib.rs '    }'
+plant crates/x/src/lib.rs '}'
+assert_fire "${FX}" "#[cfg(test)] on a match arm does not exempt the arm next to it" \
+    "crates/x/src/lib.rs:${STUB_LINE}: todo! outside #[cfg(test)]"
+
+fresh cfg-test-fn-param
+plant crates/x/src/lib.rs 'pub fn f(#[cfg(test)] _x: u8, y: u8) -> u8 { todo!() }'
+assert_fire "${FX}" "#[cfg(test)] on a function parameter does not exempt the fn body" \
+    "crates/x/src/lib.rs:${PLANT_LINE}: todo! outside #[cfg(test)]"
+
+fresh cfg-test-struct-literal-field
+plant crates/x/src/lib.rs 'pub struct S { pub probe: u8, pub real: u8 }'
+plant crates/x/src/lib.rs 'pub fn f() -> S {'
+plant crates/x/src/lib.rs '    S {'
+plant crates/x/src/lib.rs '        #[cfg(test)]'
+plant crates/x/src/lib.rs '        probe: 0,'
+plant crates/x/src/lib.rs '        real: unimplemented!(),'
+STUB_LINE="${PLANT_LINE}"
+plant crates/x/src/lib.rs '    }'
+plant crates/x/src/lib.rs '}'
+assert_fire "${FX}" "#[cfg(test)] on a struct-literal field does not exempt the field next to it" \
+    "crates/x/src/lib.rs:${STUB_LINE}: unimplemented! outside #[cfg(test)]"
+
+fresh cfg-test-item-then-prod
+plant crates/x/src/lib.rs '#[cfg(test)]'
+plant crates/x/src/lib.rs 'fn t() { todo!() }'
+plant crates/x/src/lib.rs 'pub fn f() { todo!() }'
+assert_fire "${FX}" "an exempt #[cfg(test)] fn ends at its own closing brace" \
+    "crates/x/src/lib.rs:${PLANT_LINE}: todo! outside #[cfg(test)]"
+
 fresh root-package
 printf '[package]\nname = "rootpkg"\nversion = "0.1.0"\n' >"${FX}/Cargo.toml"
 mkdir -p "${FX}/src"
@@ -300,6 +353,25 @@ fresh all-test-mod
 plant crates/x/src/lib.rs '#[cfg(all(test, feature = "mock"))]'
 plant crates/x/src/lib.rs 'mod x { fn t() { unimplemented!() } }'
 assert_silent "${FX}" "an unimplemented!() inside #[cfg(all(test, ...))] passes" "OK"
+
+fresh item-heads
+plant crates/x/src/lib.rs '#[cfg(test)]'
+plant crates/x/src/lib.rs '#[inline]'
+plant crates/x/src/lib.rs 'pub(crate) async fn h() { todo!() }'
+plant crates/x/src/lib.rs '#[cfg(test)] pub(in crate) const unsafe fn k() { todo!() }'
+plant crates/x/src/lib.rs '#[cfg(test)] unsafe impl Send for W<u8, u16> { fn z() { todo!() } }'
+plant crates/x/src/lib.rs '#[cfg(test)] thread_local! { static T: u8 = todo!(); }'
+plant crates/x/src/lib.rs '#[cfg(test)] std::thread_local! { static U: u8 = todo!(); }'
+plant crates/x/src/lib.rs '#[cfg(test)] macro_rules! m { () => { todo!() }; }'
+plant crates/x/src/lib.rs '#[cfg(test)] const Q: u8 = todo!();'
+plant crates/x/src/lib.rs 'pub fn body() { #[cfg(test)] let _v: u8 = if true { 1 } else { todo!() }; }'
+plant crates/x/src/lib.rs '#[cfg(test)]'
+plant crates/x/src/lib.rs 'fn bounded<A, B>(a: A, b: B) -> u8'
+plant crates/x/src/lib.rs 'where'
+plant crates/x/src/lib.rs '    A: Clone,'
+plant crates/x/src/lib.rs '    B: Copy + '"'"'static,'
+plant crates/x/src/lib.rs '{ todo!() }'
+assert_silent "${FX}" "#[cfg(test)] on a real item head (visibility, qualifiers, macro, let) is exempt" "OK"
 
 fresh out-of-line-test-mod
 plant crates/x/src/lib.rs '#[cfg(test)]'

@@ -20,7 +20,15 @@
 # Exactly two cfg forms exempt code, and only the item or module block they
 # attach to: `#[cfg(test)]` and `#[cfg(all(test, ...))]`. `#[cfg(not(test))]`
 # is NOT exempt: it is production code. A file whose own top-level inner
-# attribute is `#![cfg(test)]` is wholly test-only.
+# attribute is `#![cfg(test)]` is wholly test-only. The attribute exempts
+# something only when (after any further attributes) a real item head follows:
+# optional visibility, optional `async`/`unsafe`/`const`/`default`/`extern
+# "abi"`, then `fn`, `mod`, `impl`, `struct`, `enum`, `union`, `trait`, `type`,
+# `const`, `static`, `use`, `extern`, `let`, `macro_rules!` or a macro
+# invocation such as `thread_local!`. On a struct field, an enum variant, a
+# match arm, a function parameter, a struct-literal field or an expression it
+# exempts nothing, and the item scan stops at a top-level `,` or an unmatched
+# closer, so it never runs past the enclosing block.
 #
 # Out-of-line test modules: `#[cfg(test)] mod name;` resolves to `name.rs` or
 # `name/mod.rs` beside the declaring file (the file's own directory for
@@ -96,6 +104,21 @@ ATTR_START = re.compile(r'\s*#\s*\[')
 # A module declaration header: optional visibility, `mod name ;`.
 MOD_ITEM = re.compile(r'\s*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+(\w+)\s*;')
 MOD_DECL = re.compile(r'\bmod\s+(\w+)\s*;')
+# A real item head, read after any run of attributes: optional visibility
+# (`pub`, `pub(crate)`, `pub(super)`, `pub(in path)`), optional qualifiers
+# (`async`, `unsafe`, `const`, `default`, `extern "abi"`; the ABI string is
+# already blanked), then an item keyword, `macro_rules!`, or a macro invocation
+# `path::ident!`. Anything else (a field, a variant, a match arm, a parameter,
+# a struct-literal field, an expression) is not an item, so exempts nothing.
+ITEM_HEAD = re.compile(
+    r'\s*(?:pub(?:\s*\([^)]*\)\s*|\s+))?'
+    r'(?:(?:async|unsafe|const|default|extern)\s+)*'
+    r'(?P<kind>(?:fn|mod|impl|struct|enum|union|trait|type|const|static|use|extern|let)\b'
+    r'|macro_rules\s*!|[A-Za-z_]\w*(?:\s*::\s*[A-Za-z_]\w*)*\s*!)'
+)
+# Items that end at their own top-level `;`, with any braces nested inside.
+STATEMENT_KINDS = {"let", "const", "static", "use", "type"}
+WHERE_KW = re.compile(r'where\b')
 RAW_OPEN = re.compile(r'(?:br|r)(#*)"')
 CHAR_LIT = re.compile(r"'(?:\\.[^']*|[^\\'])'")
 
@@ -189,14 +212,65 @@ def skip_attrs(b, j):
 
 
 def item_end(b, j):
-    """Index of the `;` or matching `}` that ends the item whose header starts at j."""
+    """End index of the item an exempt attribute ending at j attaches to, or None.
+
+    None means the attribute (after any further attributes) is not followed by
+    a real item head (ITEM_HEAD): it sits on a struct field, an enum variant, a
+    match arm, a function parameter, a struct-literal field or an expression,
+    and exempts nothing.
+
+    A statement-shaped item (`let`, `const`, `static`, `use`, `type`) ends at
+    its top-level `;`, with braces nested inside it. Any other item ends at its
+    first top-level `;`, or at the `}` matching its first top-level `{`. The
+    header scan also stops at a top-level `,` (outside a `where` clause, whose
+    predicates are comma-separated) and at an unmatched `)`, `]` or `}`, so it
+    can never run past the block that encloses the attribute.
+    """
     k = skip_attrs(b, j)
-    while k < len(b) and b[k] not in "{;":
+    head = ITEM_HEAD.match(b, k)
+    if not head:
+        return None
+    statement = head.group("kind") in STATEMENT_KINDS
+    k, n = head.end(), len(b)
+    paren = angle = brace = 0
+    in_where = False  # a `where` clause separates its predicates with top-level `,`
+    while k < n:
+        c = b[k]
+        if (
+            c == "w"
+            and paren == 0
+            and brace == 0
+            and WHERE_KW.match(b, k)
+            and not (b[k - 1].isalnum() or b[k - 1] == "_")
+        ):
+            in_where = True
+        elif c in "([":
+            paren += 1
+        elif c in ")]":
+            if paren == 0:
+                return k - 1  # an unmatched closer: the enclosing list ends here
+            paren -= 1
+        elif c == "<":
+            angle += 1
+        elif c == ">" and b[k - 1] not in "-=":
+            angle = max(0, angle - 1)
+        elif c == "{":
+            if paren == 0 and brace == 0 and not statement:
+                break  # the item's own body
+            brace += 1
+        elif c == "}":
+            if brace == 0:
+                return k - 1  # an unmatched `}`: the enclosing block ends here
+            brace -= 1
+        elif c == ";" and paren == 0 and brace == 0:
+            return k
+        elif c == "," and paren == 0 and angle == 0 and brace == 0 and not in_where:
+            return k - 1  # a top-level `,`: the enclosing list continues
         k += 1
-    if k >= len(b) or b[k] == ";":
+    if k >= n:
         return k
     depth = 0
-    while k < len(b):
+    while k < n:
         depth += (b[k] == "{") - (b[k] == "}")
         if depth == 0:
             break
@@ -217,7 +291,8 @@ def analyse(blanked):
     spans, test_mods = [], []
     for m in CFG_TEST_ATTR.finditer(blanked):
         end = item_end(blanked, m.end())
-        spans.append((m.start(), end))
+        if end is not None:
+            spans.append((m.start(), end))
         decl = MOD_ITEM.match(blanked, skip_attrs(blanked, m.end()))
         if decl:
             test_mods.append(decl.group(1))

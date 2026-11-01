@@ -50,7 +50,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 - [x] **CIREL-07**: GitHub issue `DF3NDR/paladin-dev-env#41` is closed with a reference to the
       `v0.11.0` GitHub Release created by `release.yml`, or restated with what is still missing — D6
 
-- [ ] **CIREL-08**: The eight crate-level `#![allow(rustdoc::…)]` lines (`paladin-ports` ×2,
+- [x] **CIREL-08**: The eight crate-level `#![allow(rustdoc::…)]` lines (`paladin-ports` ×2,
       `paladin-llm`, `paladin-storage`, `paladin-notifications`, root `src/lib.rs` ×3) are removed
       with `cargo doc` warning-free, and `doc-coverage-report.md` is regenerated — D10 (the
       all-features CI test job stays out by decision)
@@ -176,7 +176,7 @@ fails is rebuilt.*
 
 ### Tests and Lints (TESTS)
 
-- [ ] **TESTS-01**: `run_api_wiring::tests::build_run_api_persists_*` (2 tests) run hermetically
+- [x] **TESTS-01**: `run_api_wiring::tests::build_run_api_persists_*` (2 tests) run hermetically
       against a scripted port with no network, pass in a sandbox, and WINDOWS row 73 is
       dispositioned — E1
 
@@ -331,7 +331,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CIREL-05 | Phase 52 | Complete |
 | CIREL-06 | Phase 52 | Complete |
 | CIREL-07 | Phase 52 | Complete |
-| CIREL-08 | Phase 55 | Pending |
+| CIREL-08 | Phase 55 | Complete |
 | CIREL-09 | Phase 52 | Complete |
 | TENANT-03 | Phase 53 | Complete |
 | TENANT-04 | Phase 53 | Complete |
@@ -356,7 +356,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | FIXES-04 | Phase 55 | Re-homed (next minor) |
 | FIXES-05 | Phase 55 | Complete |
 | FIXES-06 | Phase 55 | Complete |
-| TESTS-01 | Phase 55 | Pending |
+| TESTS-01 | Phase 55 | Complete |
 | TESTS-02 | Phase 55 | Complete |
 | TESTS-03 | Phase 55 | Complete |
 | TESTS-04 | Phase 55 | Complete |

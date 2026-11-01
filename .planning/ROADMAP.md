@@ -473,7 +473,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 55-13-PLAN.md — `55-CORRECTNESS-EVIDENCE.md` (prove-then-lock, red runs, hermetic and flake proofs, lint and rustdoc bars, FIXES-05 verification), twelve-line semver record, API surface, WINDOWS rows 73 fixed / 67 waived, phase-head gates, credential review, carry-forward (all)
+- [x] 55-13-PLAN.md — `55-CORRECTNESS-EVIDENCE.md` (prove-then-lock, red runs, hermetic and flake proofs, lint and rustdoc bars, FIXES-05 verification), twelve-line semver record, API surface, WINDOWS rows 73 fixed / 67 waived, phase-head gates, credential review, carry-forward (all)
 
 **Scope notes**:
 

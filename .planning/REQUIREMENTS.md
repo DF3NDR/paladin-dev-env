@@ -165,7 +165,7 @@ fails is rebuilt.*
 - [ ] **FIXES-04**: `paladin-eval`'s `RunStatusValue` gains `Cancelled` so a scenario can assert
       `run_status: cancelled`; the schema snapshot is refreshed — B5, 42-06
 
-- [ ] **FIXES-05**: The `claude-opus-4-8` seeded registry row is verified against the 50.1 probe
+- [x] **FIXES-05**: The `claude-opus-4-8` seeded registry row is verified against the 50.1 probe
       record and its `reasoning` flag corrected if wrong — B6, audit G7
 
 - [ ] **FIXES-06**: Server boot (or admission) warns once per model that is reachable by a metered
@@ -181,16 +181,16 @@ fails is rebuilt.*
 - [x] **TESTS-02**: `cancel_tests::local_cancel_signals_token` waits on a dispatch-registration
       signal instead of a fixed 50 ms sleep — E2
 
-- [ ] **TESTS-03**: Single-feature `cargo clippy --tests` on `paladin-llm` is warning-free (unused
+- [x] **TESTS-03**: Single-feature `cargo clippy --tests` on `paladin-llm` is warning-free (unused
       `chat`, `cadence::PinnedSpread` / `pin_waiter_spread`, `fallback::test_support::ProfiledStubPort`)
       — E3
 
-- [ ] **TESTS-04**: The Phase 51 lint leftovers are cleared: the `NODE_CACHE_KEY_VERSION` rustdoc
+- [x] **TESTS-04**: The Phase 51 lint leftovers are cleared: the `NODE_CACHE_KEY_VERSION` rustdoc
       link in `engine/cache_key.rs`, redundant explicit links in `reasoning.rs`, dead
       `thinking_effort_wire_value` and the unused `provider_factory.rs` import under default
       features — E4
 
-- [ ] **TESTS-05**: The self-hosted provider pair (`ollama`, `openai-compatible`) is defined once;
+- [x] **TESTS-05**: The self-hosted provider pair (`ollama`, `openai-compatible`) is defined once;
       the suspected duplicate in the config layer is found and folded in, or 51 IN-01 is closed as
       not-reproducing — E5
 
@@ -340,13 +340,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 | FIXES-02 | Phase 55 | Pending |
 | FIXES-03 | Phase 55 | Complete |
 | FIXES-04 | Phase 55 | Pending |
-| FIXES-05 | Phase 55 | Pending |
+| FIXES-05 | Phase 55 | Complete |
 | FIXES-06 | Phase 55 | Pending |
 | TESTS-01 | Phase 55 | Pending |
 | TESTS-02 | Phase 55 | Complete |
-| TESTS-03 | Phase 55 | Pending |
-| TESTS-04 | Phase 55 | Pending |
-| TESTS-05 | Phase 55 | Pending |
+| TESTS-03 | Phase 55 | Complete |
+| TESTS-04 | Phase 55 | Complete |
+| TESTS-05 | Phase 55 | Complete |
 | TESTS-06 | Phase 55 | Complete |
 | DOGF-01 | Phase 56 | Pending |
 | DOGF-02 | Phase 56 | Pending |

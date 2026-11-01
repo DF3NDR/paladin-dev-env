@@ -5,15 +5,15 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 55
 current_phase_name: Correctness Fixes, Test Hygiene & Lint Bar
 status: executing
-stopped_at: Completed 55-03-PLAN.md
-last_updated: "2026-11-01T15:22:21.948Z"
+stopped_at: Completed 55-04-PLAN.md
+last_updated: "2026-11-01T15:36:27.625Z"
 last_activity: 2026-11-01
 last_activity_desc: Phase 55 execution started
 progress:
   total_phases: 4
   completed_phases: 3
   total_plans: 38
-  completed_plans: 28
+  completed_plans: 29
 ---
 
 # Project State
@@ -51,11 +51,11 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 ## Current Position
 
 Phase: 55 (Correctness Fixes, Test Hygiene & Lint Bar) — EXECUTING
-Plan: 4 of 13
+Plan: 5 of 13
 Status: Ready to execute
 Last activity: 2026-11-01 — Phase 55 execution started
 
-Progress: [█████████░░░░░░░░░░░] 3/7 phases ([███████░░░] 74%) — Phase 54 plans [████████████████████] 9/9 (100%)
+Progress: [█████████░░░░░░░░░░░] 3/7 phases ([████████░░] 76%) — Phase 54 plans [████████████████████] 9/9 (100%)
 
 ## Performance Metrics
 
@@ -385,6 +385,7 @@ Progress: [█████████░░░░░░░░░░░] 3/7 pha
 | Phase 55 P01 | 12min | 3 tasks | 9 files |
 | Phase 55 P02 | 45min | 2 tasks | 8 files |
 | Phase 55 P03 | 35min | 2 tasks | 3 files |
+| Phase 55 P04 | 50 min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -724,6 +725,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 55-01: check-no-stub-panics gate has no exemption list; out-of-line #[cfg(test)] mod files are exempt by transitive resolution only; refusal text for ContentListRepository is one helper per adapter file
 - [Phase ?]: 55-02: a model unpriced at dispatch records Halted with HaltReason::ModelUnpriced { model } (resumable), not Failed; ADR-0057 amended in place (FIXES-03)
 - [Phase ?]: 55-03: LocalRunTokens::is_registered is #[cfg(test)] pub(crate) and polled every 5 ms inside the 30 s timeout (not a watch/Notify signal); the four commander happy-path tests are kept, each pointing at its relocated error-path test
+- [Phase ?]: Phase 55-04: SELF_HOSTED_PROVIDERS is the single pub(crate) pair in reasoning.rs; claude-opus-4-8 keeps reasoning: false with the comment and pin citing the 50.1 and 51 probe rows (D-06 as reconciled); paladin-llm single-feature clippy fixed by cfg gates only (D-10)
 
 ### Pending Todos
 
@@ -1095,8 +1097,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-11-01T15:22:21.926Z
-Stopped at: Completed 55-03-PLAN.md
+Last session: 2026-11-01T15:36:27.603Z
+Stopped at: Completed 55-04-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

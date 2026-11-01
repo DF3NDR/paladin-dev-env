@@ -417,6 +417,8 @@ fn is_subsequence(needle: &[String], haystack: &[String]) -> bool {
 // run_status / total_tokens_max / supersteps_max
 // ---------------------------------------------------------------------------
 
+/// A `RunFinishStatus::Cancelled` matches no `RunStatusValue` until the next minor adds
+/// one (FIXES-04).
 fn run_status_matches(actual: &RunFinishStatus, expected: RunStatusValue) -> bool {
     matches!(
         (actual, expected),

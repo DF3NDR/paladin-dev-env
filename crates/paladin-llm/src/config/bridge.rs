@@ -1,4 +1,4 @@
-//! Conversion bridges between [`LlmProviderConfig`]/[`VisionConfig`]
+//! Conversion bridges between [`LlmProviderConfig`]/[`VisionConfig`](crate::config::vision::VisionConfig)
 //! (application config types with serde) and the runtime adapter config types
 //! within the same crate.
 //!

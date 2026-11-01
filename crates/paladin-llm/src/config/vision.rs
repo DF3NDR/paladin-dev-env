@@ -2,7 +2,7 @@
 //!
 //! These are the application-level config types (with `serde` support for
 //! YAML/TOML loading) for the vision feature. They map onto the adapter-level
-//! types in [`crate::openai::vision`] via `config_bridge`.
+//! types in `crate::openai::vision` via `config_bridge`.
 
 use serde::{Deserialize, Serialize};
 

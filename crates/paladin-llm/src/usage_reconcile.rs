@@ -2,7 +2,7 @@
 //!
 //! # The inclusive contract
 //!
-//! [`TokenUsage`] is inclusive: `prompt_tokens` carries **every** billed input token (cache reads
+//! [`TokenUsage`](paladin_core::platform::container::token_usage::TokenUsage) is inclusive: `prompt_tokens` carries **every** billed input token (cache reads
 //! and cache writes included), `completion_tokens` carries **every** billed output token
 //! (reasoning included), each sub-count sits inside its parent, and `total_tokens` is always
 //! `prompt_tokens + completion_tokens` (D-02, kept by owner decision 2026-10-17). The Treasurer
@@ -16,7 +16,7 @@
 //!
 //! # What is checked
 //!
-//! [`reconcile`] compares a mapped [`TokenUsage`] with the vendor's own reported total and with
+//! `reconcile` compares a mapped [`TokenUsage`](paladin_core::platform::container::token_usage::TokenUsage) with the vendor's own reported total and with
 //! the containment the type promises:
 //!
 //! - `total`: the vendor reported a `total_tokens` and it differs from the mapped total;
@@ -32,7 +32,7 @@
 //!
 //! The same two-part rule the sampling filter uses: the first time an adapter instance sees a
 //! given (model, check) finding it emits one `log::warn!` (target `paladin::usage`), and every
-//! response carrying a finding has [`USAGE_UNRECONCILED_METADATA_KEY`] in its metadata (the
+//! response carrying a finding has [`USAGE_UNRECONCILED_METADATA_KEY`](crate::usage_reconcile::USAGE_UNRECONCILED_METADATA_KEY) in its metadata (the
 //! buffered `LlmResponse.metadata`, or the terminal chunk's `StreamingResponse.metadata` on a
 //! streamed call). Warn text and metadata value carry provider, model, check name and token
 //! counts only -- never content, a URL or a credential.

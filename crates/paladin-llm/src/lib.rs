@@ -11,17 +11,17 @@
 //! | Feature flag | Provider | Types |
 //! |---|---|---|
 //! | `openai` (default) | OpenAI | [`openai::OpenAIAdapter`], [`openai::OpenAIConfig`] |
-//! | `anthropic` | Anthropic | [`anthropic::AnthropicAdapter`], [`anthropic::AnthropicConfig`] |
-//! | `deepseek` | DeepSeek | [`deepseek::DeepSeekAdapter`], [`deepseek::DeepSeekConfig`] |
-//! | `kimi` | Kimi (Moonshot AI) | [`kimi::KimiAdapter`], [`kimi::KimiConfig`] |
-//! | `qwen` | Qwen (Alibaba DashScope) | [`qwen::QwenAdapter`], [`qwen::QwenConfig`] |
-//! | `grok` | Grok (xAI) | [`grok::GrokAdapter`], [`grok::GrokConfig`] |
-//! | `ollama` | Ollama (self-hosted, keyless) | [`ollama::OllamaAdapter`], [`ollama::OllamaConfig`] |
-//! | `openai-compatible` | Any OpenAI-compatible endpoint (operator-configured) | [`openai_compatible::OpenAiCompatibleAdapter`], [`openai_compatible::OpenAiCompatibleConfig`] |
-//! | `gemini` | Google Gemini (text-only, bespoke protocol) | [`gemini::GeminiAdapter`], [`gemini::GeminiConfig`] |
+//! | `anthropic` | Anthropic | `anthropic::AnthropicAdapter`, `anthropic::AnthropicConfig` |
+//! | `deepseek` | DeepSeek | `deepseek::DeepSeekAdapter`, `deepseek::DeepSeekConfig` |
+//! | `kimi` | Kimi (Moonshot AI) | `kimi::KimiAdapter`, `kimi::KimiConfig` |
+//! | `qwen` | Qwen (Alibaba DashScope) | `qwen::QwenAdapter`, `qwen::QwenConfig` |
+//! | `grok` | Grok (xAI) | `grok::GrokAdapter`, `grok::GrokConfig` |
+//! | `ollama` | Ollama (self-hosted, keyless) | `ollama::OllamaAdapter`, `ollama::OllamaConfig` |
+//! | `openai-compatible` | Any OpenAI-compatible endpoint (operator-configured) | `openai_compatible::OpenAiCompatibleAdapter`, `openai_compatible::OpenAiCompatibleConfig` |
+//! | `gemini` | Google Gemini (text-only, bespoke protocol) | `gemini::GeminiAdapter`, `gemini::GeminiConfig` |
 //! | `mock` (default) | Testing | [`mock::MockLlmAdapter`], [`mock::MultiStepMockLlmPort`] |
 //! | *(none — always compiled)* | Model fallback chain over any of the above | [`fallback::FallbackLlmAdapter`] |
-//! | `openai-embeddings` | OpenAI Embeddings | [`openai::OpenAIEmbeddingAdapter`] |
+//! | `openai-embeddings` | OpenAI Embeddings | `openai::OpenAIEmbeddingAdapter` |
 //! | `vision` | Vision (multimodal) | Extends OpenAI and Anthropic adapters |
 //!
 //! ## Architecture
@@ -46,7 +46,6 @@
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
-#![allow(rustdoc::broken_intra_doc_links)]
 
 /// Rate pacing (PACE-02, D-01/D-07/D-08): [`cadence::CadenceLlmAdapter`] decorates an
 /// `Arc<dyn LlmPort>` with a per-(provider, model) gate that a provider 429 opens, over the shared

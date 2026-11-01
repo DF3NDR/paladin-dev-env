@@ -1,6 +1,6 @@
 //! Mock LLM adapters for testing.
 //!
-//! This module provides [`MockLlmAdapter`] and [`MultiStepMockLlmPort`] for
+//! This module provides [`MockLlmAdapter`](crate::mock::MockLlmAdapter) and [`MultiStepMockLlmPort`](crate::mock::MultiStepMockLlmPort) for
 //! use in unit and integration tests that need an in-process LLM adapter
 //! without real API calls.
 

@@ -1,4 +1,4 @@
-//! The per-model profile registry (ADR-0061 (c), D-05..D-07): which [`ModelProfile`] applies to
+//! The per-model profile registry (ADR-0061 (c), D-05..D-07): which [`ModelProfile`](paladin_ports::output::model_profile::ModelProfile) applies to
 //! which model of one provider, and how that was decided.
 //!
 //! # Precedence
@@ -6,16 +6,16 @@
 //! For a model id, **by exact match only** (a seed for `kimi-k3` does not match
 //! `kimi-k3-preview`):
 //!
-//! 1. a [`ModelOverride`] from configuration, applied **field by field** over
+//! 1. a [`ModelOverride`](crate::registry::ModelOverride) from configuration, applied **field by field** over
 //! 2. the seeded entry for that model, if one exists, else over
 //! 3. the adapter-wide fallback profile.
 //!
 //! A model with neither a seed nor an override runs on the adapter-wide fallback and is *visibly*
 //! unprofiled: the registry logs one `warn!` (target `paladin::registry`) per instance per model
-//! and the adapter stamps [`UNPROFILED_MODEL_METADATA_KEY`] on the response. An unknown model is
+//! and the adapter stamps [`UNPROFILED_MODEL_METADATA_KEY`](crate::registry::UNPROFILED_MODEL_METADATA_KEY) on the response. An unknown model is
 //! never a refusal (D-07) -- a deployment must be able to point at a model released yesterday.
 //!
-//! A [`ModelOverride`] is an explicit operator statement, so it is validated hard: finite,
+//! A [`ModelOverride`](crate::registry::ModelOverride) is an explicit operator statement, so it is validated hard: finite,
 //! ordered, non-zero, with a maximum output inside the context window, unknown keys rejected.
 //! The merged result is re-validated too, so an override that is fine alone but contradicts the
 //! seeded value it is laid over (a maximum output above the seeded window) is refused at

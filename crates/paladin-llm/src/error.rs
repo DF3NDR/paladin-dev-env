@@ -1,7 +1,7 @@
 //! # LLM Provider Errors
 //!
 //! Defines the error type for all LLM provider adapters in this crate.
-//! [`LlmProviderError`] is the crate-local error type; a `From` conversion
+//! [`LlmProviderError`](crate::error::LlmProviderError) is the crate-local error type; a `From` conversion
 //! to [`paladin_ports::output::llm_port::LlmError`] is provided so errors
 //! propagate cleanly across the port boundary.
 

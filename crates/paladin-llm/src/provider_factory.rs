@@ -2,16 +2,16 @@
 //!
 //! Creates [`paladin_ports::output::llm_port::LlmPort`] adapter instances by
 //! provider name: from the provider's legacy environment variables
-//! ([`create`](LlmProviderFactory::create)) or from an `llm.<provider>` configuration block
-//! ([`create_from_config`](LlmProviderFactory::create_from_config), D-12), both through the same
+//! ([`create`](crate::provider_factory::LlmProviderFactory::create)) or from an `llm.<provider>` configuration block
+//! ([`create_from_config`](crate::provider_factory::LlmProviderFactory::create_from_config), D-12), both through the same
 //! layering (D-13; `config::layers`).
 //!
 //! Backed by a single `cfg`-gated, table-driven registry (D-10):
-//! [`create`](LlmProviderFactory::create),
-//! [`get_default_provider`](LlmProviderFactory::get_default_provider),
-//! [`list_available_providers`](LlmProviderFactory::list_available_providers)
-//! and [`ProviderFactoryError::UnknownProvider`]'s message all derive from
-//! the same table. Adding a provider is one row in [`provider_registry`];
+//! [`create`](crate::provider_factory::LlmProviderFactory::create),
+//! [`get_default_provider`](crate::provider_factory::LlmProviderFactory::get_default_provider),
+//! [`list_available_providers`](crate::provider_factory::LlmProviderFactory::list_available_providers)
+//! and [`ProviderFactoryError::UnknownProvider`](crate::provider_factory::ProviderFactoryError::UnknownProvider)'s message all derive from
+//! the same table. Adding a provider is one row in `provider_registry`;
 //! a provider whose feature is compiled out is structurally absent from
 //! every one of those surfaces — there is no second lookup path to forget
 //! to `cfg`-gate (the defect this replaces:
@@ -535,7 +535,7 @@ impl LlmProviderFactory {
     /// by its credential: the provider is keyless (Ollama), or its block carries a usable key
     /// (non-empty, or an exact `${NAME}` placeholder whose variable is set), or its legacy key
     /// variable is set and non-blank. A provider configured purely in YAML is therefore
-    /// available (RESEARCH Pitfall 8), unlike [`list_available_providers`], which is
+    /// available (RESEARCH Pitfall 8), unlike [`list_available_providers`](Self::list_available_providers), which is
     /// environment-only.
     ///
     /// A block whose key is a placeholder with an unset variable is **not** configured, even when

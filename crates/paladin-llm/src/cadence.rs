@@ -1,6 +1,6 @@
 //! Cadence decorator -- `CadenceLlmAdapter` (PACE-02, D-01, D-07, D-08; Phase 43)
 //!
-//! [`CadenceLlmAdapter`] is a stateless `Arc<dyn LlmPort>` decorator that paces calls to one
+//! [`CadenceLlmAdapter`](crate::cadence::CadenceLlmAdapter) is a stateless `Arc<dyn LlmPort>` decorator that paces calls to one
 //! provider and model after that provider answered `429 Too Many Requests`. It holds no pacing
 //! state of its own: the gate lives behind the shared
 //! [`CadencePort`](paladin_ports::output::cadence_port::CadencePort), so the same provider
@@ -11,8 +11,8 @@
 //! `Pricing(Cadence(provider))`. Pricing stays outermost so it still prices the response that was
 //! actually served (ADR-0052); Cadence sits directly on each provider so its key is that
 //! provider's own name. A [`FallbackLlmAdapter`](crate::fallback::FallbackLlmAdapter) chain is
-//! paced per hop (plan 43-06), so [`with_cadence`] passes a port reporting
-//! [`FALLBACK_PROVIDER_NAME`] through unchanged -- gating the chain under `("fallback", model)`
+//! paced per hop (plan 43-06), so [`with_cadence`](crate::cadence::with_cadence) passes a port reporting
+//! [`FALLBACK_PROVIDER_NAME`](crate::fallback::FALLBACK_PROVIDER_NAME) through unchanged -- gating the chain under `("fallback", model)`
 //! would double-gate it.
 //!
 //! ## Gate, never retry (D-01)
@@ -29,26 +29,26 @@
 //!
 //! ## The provider's delay is a minimum (PACE-02, D-01, D-04)
 //!
-//! When a 429 carries a delay ([`LlmError::retry_after`]) the decorator hands it to the port as
+//! When a 429 carries a delay ([`LlmError::retry_after`](paladin_ports::output::llm_port::LlmError::retry_after)) the decorator hands it to the port as
 //! the *minimum* before the next send to that provider and model. The port adds nothing
 //! subtractive: jitter may lengthen a gate, never shorten one below the provider's own number.
 //! An explicit `Retry-After` / `retry-after-ms` value is passed through unreduced. A delay whose
-//! source is [`RetryDelaySource::ResetHeader`] is different in kind -- it is derived from a
+//! source is [`RetryDelaySource::ResetHeader`](paladin_ports::output::rate_limit_hints::RetryDelaySource::ResetHeader) is different in kind -- it is derived from a
 //! quota's full-replenishment time, which over-estimates the minimum -- so it is clamped to
-//! [`CadenceSettings::max_backoff`] before it reaches the port.
+//! [`CadenceSettings::max_backoff`](crate::cadence::CadenceSettings::max_backoff) before it reaches the port.
 //!
 //! ## A gate beyond `max_wait` is surfaced, not slept (D-06)
 //!
-//! A gate no longer than [`CadenceSettings::max_wait`] is waited out. A longer one makes the call
-//! return [`LlmError::RateLimitExceeded`] at once, carrying the remaining gate as its
-//! [`retry_after`](LlmError::retry_after), without calling the provider and without recording a
+//! A gate no longer than [`CadenceSettings::max_wait`](crate::cadence::CadenceSettings::max_wait) is waited out. A longer one makes the call
+//! return [`LlmError::RateLimitExceeded`](paladin_ports::output::llm_port::LlmError::RateLimitExceeded) at once, carrying the remaining gate as its
+//! [`retry_after`](paladin_ports::output::llm_port::LlmError::retry_after), without calling the provider and without recording a
 //! new 429 on the port: the refusal is the decorator's own typed error, so `RetryPolicy` exhausts
 //! or the run halts with an actionable message instead of a worker lease sitting idle for an
 //! hour, and a self-generated refusal can never escalate the shared streak.
 //!
 //! ## Streaming is paced like a buffered call (D-01)
 //!
-//! [`generate_stream`](LlmPort::generate_stream) runs the same gate loop (including the D-06
+//! [`generate_stream`](paladin_ports::output::llm_port::LlmPort::generate_stream) runs the same gate loop (including the D-06
 //! refusal) before it delegates. A 429 answered by the call itself is recorded and returned
 //! unchanged. Otherwise the stream's FIRST item is peeked, exactly as `FallbackLlmAdapter` does,
 //! and re-attached in front of the remainder so the consumer sees every item the provider
@@ -67,7 +67,7 @@
 //!
 //! ## Bookkeeping never fails a call
 //!
-//! A port error is logged under [`CADENCE_LOG_TARGET`] at `warn` (once per call) and the call
+//! A port error is logged under [`CADENCE_LOG_TARGET`](paladin_ports::output::cadence_port::CADENCE_LOG_TARGET) at `warn` (once per call) and the call
 //! proceeds: the decorator never fails a request because of its own bookkeeping.
 //!
 //! Log lines carry the provider name, model and durations only -- never request bodies,

@@ -1,9 +1,9 @@
 //! # Model fallback — `FallbackLlmAdapter` (Doc 04 FT-FR-16/17, D-24…D-26)
 //!
-//! Composes an ordered chain of plain [`LlmPort`] implementors into one
-//! [`LlmPort`]: every call starts at chain element 0 and moves to the next
+//! Composes an ordered chain of plain [`LlmPort`](paladin_ports::output::llm_port::LlmPort) implementors into one
+//! [`LlmPort`](paladin_ports::output::llm_port::LlmPort): every call starts at chain element 0 and moves to the next
 //! element only when the current one fails with an error whose
-//! [`LlmError::transience`] is `Transient` or `Unknown`. A `Permanent`
+//! [`LlmError::transience`](paladin_ports::output::llm_port::LlmError::transience) is `Transient` or `Unknown`. A `Permanent`
 //! error short-circuits, so a malformed or rejected prompt is never re-sent
 //! to every provider in the chain (T-25-35).
 //!
@@ -15,9 +15,9 @@
 //!
 //! A silent mid-run switch to a different provider on a rate limit breaks benchmark
 //! consistency, tool-call formats, token accounting and the provider's prompt cache, so a chain
-//! built with [`FallbackLlmAdapter::with_cadence`] treats a `429` differently from every other
-//! transient error. On a [`LlmError::RateLimitExceeded`] from a hop, the chain reads that hop's
-//! gate from the shared [`CadencePort`] and, while the time already spent pacing that hop in
+//! built with [`FallbackLlmAdapter::with_cadence`](crate::fallback::FallbackLlmAdapter::with_cadence) treats a `429` differently from every other
+//! transient error. On a [`LlmError::RateLimitExceeded`](paladin_ports::output::llm_port::LlmError::RateLimitExceeded) from a hop, the chain reads that hop's
+//! gate from the shared [`CadencePort`](paladin_ports::output::cadence_port::CadencePort) and, while the time already spent pacing that hop in
 //! this call plus the next gate still fits the pace budget
 //! ([`CadenceSettings::fallback_pace_budget`](crate::cadence::CadenceSettings::fallback_pace_budget),
 //! 60 s by default), retries the SAME provider: its own [`CadenceLlmAdapter`](crate::cadence::CadenceLlmAdapter)
@@ -30,48 +30,48 @@
 //! `Permanent` error short-circuits, and a gate that cannot be read, is already clear, or is
 //! longer than `max_wait` (the decorator refuses those without sleeping) is not paced -- with no
 //! wait to honour there is nothing to pace against, and retrying would only thrash. A chain
-//! without [`FallbackLlmAdapter::with_cadence`] has no gate to read and hops on a `429` exactly
+//! without [`FallbackLlmAdapter::with_cadence`](crate::fallback::FallbackLlmAdapter::with_cadence) has no gate to read and hops on a `429` exactly
 //! as before. The decorator still never retries (D-01); it is this chain, which already owns
 //! hops, that re-enters a hop, and only for a `429` with pacing attached.
 //!
-//! Paced retries are attempts: each one is listed in [`LlmError::AllProvidersFailed`]'s
+//! Paced retries are attempts: each one is listed in [`LlmError::AllProvidersFailed`](paladin_ports::output::llm_port::LlmError::AllProvidersFailed)'s
 //! `attempts` in order and logged at `debug` under
-//! [`CADENCE_LOG_TARGET`] (provider, model and durations only). A
-//! [`TraceEvent::FallbackHop`] is emitted only when a hop really happens.
+//! [`CADENCE_LOG_TARGET`](paladin_ports::output::cadence_port::CADENCE_LOG_TARGET) (provider, model and durations only). A
+//! [`TraceEvent::FallbackHop`](paladin_core::platform::container::trace::TraceEvent::FallbackHop) is emitted only when a hop really happens.
 //!
 //! ## One model per hop (D-15, PARITY-06, handoff B-3)
 //!
-//! [`FallbackLlmAdapter::new`] sends every hop the request's own model, which is only right when
+//! [`FallbackLlmAdapter::new`](crate::fallback::FallbackLlmAdapter::new) sends every hop the request's own model, which is only right when
 //! every hop serves that model. A chain across vendors (Anthropic, then Kimi) must not send
-//! `claude-*` to Moonshot, so [`FallbackLlmAdapter::from_steps`] takes [`FallbackStep`]s, each a
+//! `claude-*` to Moonshot, so [`FallbackLlmAdapter::from_steps`](crate::fallback::FallbackLlmAdapter::from_steps) takes [`FallbackStep`](crate::fallback::FallbackStep)s, each a
 //! port and the model it is sent. Before each hop the request's `model` is rewritten to the
 //! step's, on `generate` and `generate_stream`; the hop's own default model is never
 //! substituted, and the first hop's model is never reused on a later hop. That model also keys
 //! the pacing (Cadence keys on `(provider, model)`), so a 429 on hop 1 gates hop 1's model only.
-//! Every served response records the hop's provider under [`SERVED_BY_METADATA_KEY`] and the
-//! model it was sent under [`SERVED_MODEL_METADATA_KEY`], for both constructors. A streamed
+//! Every served response records the hop's provider under [`SERVED_BY_METADATA_KEY`](crate::fallback::SERVED_BY_METADATA_KEY) and the
+//! model it was sent under [`SERVED_MODEL_METADATA_KEY`](crate::fallback::SERVED_MODEL_METADATA_KEY), for both constructors. A streamed
 //! response has no metadata to carry them; the stream's chunks are the hop's own.
 //!
 //! ## A refusal stops the chain by default (D-10)
 //!
-//! [`LlmError::Refusal`] is `Permanent`, so it short-circuits like any other: an automatic hop
+//! [`LlmError::Refusal`](paladin_ports::output::llm_port::LlmError::Refusal) is `Permanent`, so it short-circuits like any other: an automatic hop
 //! would hide the refusal from the consumer and spend budget on every hop.
-//! [`FallbackLlmAdapter::hop_on_refusal`] is the explicit opt-in to trying the next step on a
+//! [`FallbackLlmAdapter::hop_on_refusal`](crate::fallback::FallbackLlmAdapter::hop_on_refusal) is the explicit opt-in to trying the next step on a
 //! refusal; it never widens to any other `Permanent` error.
 //!
 //! ## A hopped-past bill is carried, not dropped (G-50-5a remainder (a))
 //!
-//! A refusal the vendor billed carries its usage ([`LlmError::billed_usage`]). When the chain
+//! A refusal the vendor billed carries its usage ([`LlmError::billed_usage`](paladin_ports::output::llm_port::LlmError::billed_usage)). When the chain
 //! hops past such an error -- and only then -- it records the bill through
-//! [`record_hopped_bill`] into the call's `HOPPED_BILLS` collector
+//! [`record_hopped_bill`](paladin_ports::output::spend_scope::record_hopped_bill) into the call's `HOPPED_BILLS` collector
 //! (`paladin_ports::output::spend_scope`), which `PaladinExecutionService` installs around every
 //! model call. The bill is recorded at the one hop decision point and priced there, against the
 //! hop's own model (D-15), by the pricer the `PricingLlmAdapter` outside the chain installed. It
 //! is counted into the attempt's `ATTEMPT_SPEND` scope at once, so it is charged even when the
 //! attempt is cut off while a later hop is in flight; the execution service then settles it in
 //! the call's ledger row. An exhausted chain's last hop is not recorded:
-//! [`LlmError::AllProvidersFailed`] carries that bill itself. A billed hop with no collector
-//! installed (a direct [`LlmPort`] caller) is not silently lost: the chain logs one `warn!` per
+//! [`LlmError::AllProvidersFailed`](paladin_ports::output::llm_port::LlmError::AllProvidersFailed) carries that bill itself. A billed hop with no collector
+//! installed (a direct [`LlmPort`](paladin_ports::output::llm_port::LlmPort) caller) is not silently lost: the chain logs one `warn!` per
 //! (provider, model) under the `paladin::usage` log target, with token counts only. The chain's
 //! hop rules do not change: `hop_on_refusal` stays opt-in (D-10).
 //!
@@ -84,16 +84,16 @@
 //!
 //! ## No trait change, no policy type (D-24, RT-FR-09)
 //!
-//! The adapter adds nothing to [`LlmPort`]: provider names come from the
-//! existing [`LlmPort::get_provider_name`], the adapter itself reports
-//! `"fallback"`, [`LlmPort::get_capabilities`] answers with the first
-//! element's, and [`LlmPort::validate_model`] / [`LlmPort::get_available_models`]
+//! The adapter adds nothing to [`LlmPort`](paladin_ports::output::llm_port::LlmPort): provider names come from the
+//! existing [`LlmPort::get_provider_name`](paladin_ports::output::llm_port::LlmPort::get_provider_name), the adapter itself reports
+//! `"fallback"`, [`LlmPort::get_capabilities`](paladin_ports::output::llm_port::LlmPort::get_capabilities) answers with the first
+//! element's, and [`LlmPort::validate_model`](paladin_ports::output::llm_port::LlmPort::validate_model) / [`LlmPort::get_available_models`](paladin_ports::output::llm_port::LlmPort::get_available_models)
 //! answer with the first element that returns `Ok`. It is a plain port so
 //! Phase 26's retry/fallback middleware can delegate to it unchanged.
 //!
 //! ## The streaming first-chunk rule (D-25, T-25-33)
 //!
-//! [`LlmPort::generate_stream`] falls through only when the call itself
+//! [`LlmPort::generate_stream`](paladin_ports::output::llm_port::LlmPort::generate_stream) falls through only when the call itself
 //! returns `Err`, or when the stream's **first** item is `Err` — the adapter
 //! peeks that first item before handing the stream to the caller and still
 //! delivers it. After any `Ok` chunk has been observed an error propagates
@@ -102,16 +102,16 @@
 //!
 //! ## Per-hop observability (D-25, T-25-34, 28-06 D-03)
 //!
-//! Each hop emits [`TraceEvent::FallbackHop`] (`node_id: None` — a port
+//! Each hop emits [`TraceEvent::FallbackHop`](paladin_core::platform::container::trace::TraceEvent::FallbackHop) (`node_id: None` — a port
 //! below the superstep engine cannot know which node it serves) through
-//! whichever [`TraceEmitter`] handle is available, plus a `log::warn!`
+//! whichever [`TraceEmitter`](paladin_ports::output::trace_sink_port::TraceEmitter) handle is available, plus a `log::warn!`
 //! naming both providers. Two sources, checked in order:
 //!
-//! 1. An explicit handle set via [`FallbackLlmAdapter::with_trace_emitter`]
+//! 1. An explicit handle set via [`FallbackLlmAdapter::with_trace_emitter`](crate::fallback::FallbackLlmAdapter::with_trace_emitter)
 //!    — takes precedence, for a caller (typically a unit test, or any
 //!    standalone construction) that has no ambient per-run context.
 //! 2. `paladin_ports::output::trace_sink_port::current_trace_emitter` — the
-//!    run's own [`TraceEmitter`], set for the duration of one engine
+//!    run's own [`TraceEmitter`](paladin_ports::output::trace_sink_port::TraceEmitter), set for the duration of one engine
 //!    dispatch by the worker's own composition root
 //!    (`RUN_TRACE_EMITTER.scope`). This is how a REAL run reaches this
 //!    adapter: `FallbackLlmAdapter` is composed once, at boot, into a
@@ -125,7 +125,7 @@
 //! (X-03).
 //!
 //! A successful response is stamped with the serving provider under
-//! [`SERVED_BY_METADATA_KEY`] in the existing `LlmResponse.metadata` map
+//! [`SERVED_BY_METADATA_KEY`](crate::fallback::SERVED_BY_METADATA_KEY) in the existing `LlmResponse.metadata` map
 //! (D-26); `PaladinExecutionService` copies it into
 //! `PaladinResult.served_by`.
 //!
@@ -135,16 +135,16 @@
 //! yields `PaladinError::CircuitBreakerOpen` *above* the port boundary and is
 //! invisible to this adapter, so PRD 04's "or an open circuit breaker" clause
 //! is satisfied by composition, not by a new variant: a breaker wrapping an
-//! individual [`LlmPort`] must surface an [`LlmError`] the chain classifies
-//! `Transient` (a [`LlmError::NetworkError`] or a 503
-//! [`LlmError::ProviderError`], for instance) for the chain to hop past it.
+//! individual [`LlmPort`](paladin_ports::output::llm_port::LlmPort) must surface an [`LlmError`](paladin_ports::output::llm_port::LlmError) the chain classifies
+//! `Transient` (a [`LlmError::NetworkError`](paladin_ports::output::llm_port::LlmError::NetworkError) or a 503
+//! [`LlmError::ProviderError`](paladin_ports::output::llm_port::LlmError::ProviderError), for instance) for the chain to hop past it.
 //!
 //! ## No cross-call state of its own (T-25-36)
 //!
 //! The adapter holds only its immutable chain, sink and pacing handle. Nothing in the adapter
 //! records which provider served the previous call, so one call's hop never changes where the
 //! next call — or a concurrent one — starts. Pacing state lives behind the shared
-//! [`CadencePort`] its hops are wrapped with, keyed by provider and model, and is never read to
+//! [`CadencePort`](paladin_ports::output::cadence_port::CadencePort) its hops are wrapped with, keyed by provider and model, and is never read to
 //! choose a starting provider.
 //!
 //! Not feature-gated (ADR-0046): it composes whichever provider adapters are

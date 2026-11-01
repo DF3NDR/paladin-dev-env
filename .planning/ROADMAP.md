@@ -447,7 +447,34 @@ Plans:
   4. Single-feature `cargo clippy --tests` on `paladin-llm` is warning-free, the Phase 51 lint leftovers are cleared, and `cargo doc` is warning-free under both CI bars with the eight crate-level `#![allow(rustdoc::…)]` lines removed and `doc-coverage-report.md` regenerated.
   5. The self-hosted provider pair (`ollama`, `openai-compatible`) is defined once, or 51 IN-01 is closed as not-reproducing with the evidence recorded, and the `commander.rs` "TODO: Enhance MockPaladinPort" stubs are deleted or point at `tests/integration/commander_error_paths_test.rs`.
 
-**Plans**: TBD
+**Plans**: 13 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 55-01-PLAN.md — offline zero-exemption stub-panic guard (`scripts/check-no-stub-panics.sh` + harness, red run 26 lines) in `make check-gates` and CI; the twenty `ContentListRepository` stubs return a typed `QueryError`; the uncompiled `content_filtering_service.rs` deleted (FIXES-01)
+- [ ] 55-02-PLAN.md — `HaltReason::ModelUnpriced { model }`; an unpriced model at dispatch halts the run (row, SSE, webhook) instead of failing it; OpenAPI description, Platform API, Treasurer guide and an ADR-0057 dated note (FIXES-03)
+- [ ] 55-03-PLAN.md — `local_cancel_signals_token` waits on a `#[cfg(test)]` `LocalRunTokens::is_registered` inspector (20 full-binary runs); the four `commander.rs` to-do stubs point at their relocated error-path tests (TESTS-02, TESTS-06)
+- [ ] 55-04-PLAN.md — `paladin-llm` single-feature clippy clean over all 13 feature combinations with cfg gates, no suppression; TESTS-04's closed sites proven; one `SELF_HOSTED_PROVIDERS`; the `claude-opus-4-8` seed comment cites its probes and stays `reasoning: false` (TESTS-03, TESTS-04, TESTS-05, FIXES-05)
+- [ ] 55-05-PLAN.md — base-layer fences: an unversioned field's history is `EntityNotFound`, collection count changes carry a documented nil sentinel; rustdoc on `Field`, `CollectionType`/`Item`, `element` and `base/mod.rs` (FIXES-02)
+- [ ] 55-06-PLAN.md — `FileContentFetcher::ingest_content` refuses instead of a no-op `Ok`; planned subtasks carry no fabricated expected output and the prompt omits the empty line (FIXES-02)
+- [ ] 55-07-PLAN.md — FIXES-04 re-homed to the next minor with its reason: rustdoc and schema descriptions, eval guide, REQUIREMENTS v2 entry and traceability, SC2 note, inventory B5 pointer, phase `deferred-items.md` (FIXES-04)
+- [ ] 55-08-PLAN.md — `paladin-ports` rustdoc links fixed at the source and its two crate-level suppressions removed, green under both bars (CIREL-08)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 55-09-PLAN.md — crate-private `build_run_api_with_engine_port` seam making the two `build_run_api_persists_*` tests hermetic; boot warns once per unpriced model a metered principal can reach (code registry + stored agent-kind assistants), never refusing; guide paragraphs (TESTS-01, FIXES-06)
+- [ ] 55-10-PLAN.md — `paladin-llm`, `paladin-storage`, `paladin-notifications` rustdoc fixed and unsuppressed, one green commit each (CIREL-08)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 55-11-PLAN.md — the facade's rustdoc fixed and its three suppressions removed, `make doc-check` green with all eight gone; ADR-0033 amended in place; `doc-coverage-report.md` regenerated as a dated measurement (CIREL-08)
+- [ ] 55-12-PLAN.md — CHANGELOG `[Unreleased]` entries (new `paladin-storage` anchor) and `MIGRATION.md` `M-B-30`..`M-B-35`, §11.6, §11.8; `55-BASE-LAYER-REVIEW.md`; the 2026-10-13 todo closed (FIXES-01, FIXES-02, FIXES-03, FIXES-06)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 55-13-PLAN.md — `55-CORRECTNESS-EVIDENCE.md` (prove-then-lock, red runs, hermetic and flake proofs, lint and rustdoc bars, FIXES-05 verification), twelve-line semver record, API surface, WINDOWS rows 73 fixed / 67 waived, phase-head gates, credential review, carry-forward (all)
+
 **Scope notes**:
 
 - **FIXES-01 reachability (measured at roadmap time).** The file the requirement names, `crates/paladin-content/src/services/content_filtering_service.rs`, is commented out of `services/mod.rs` (`// pub mod content_filtering_service;`) and is not valid Rust (`content..contains(keyword)`), so that `ContentFilter` panic is not reachable today. The compiled, reachable stubs are the twenty `todo!()` bodies in `impl ContentListRepository` for `SqliteStore` (`crates/paladin-storage/src/sqlite_content_repository.rs`, feature `sqlite`) and `MySqlContentRepository` (`mysql_content_repository.rs`, feature `mysql`); all return `Result<_, RepositoryError>`, so a typed `Err` is a body-only change. The grep guard is the real bar; plan-phase re-measures (feature-gated sites included) before sizing.
@@ -539,7 +566,7 @@ Plans:
 | 52. CI & Release Pipeline Repair | v0.11.1 | 8/8 | Complete    | 2026-10-30 |
 | 53. Tenant Isolation Closure | v0.11.1 | 8/8 | Complete    | 2026-10-31 |
 | 54. First-Run Usability | v0.11.1 | 9/9 | Complete    | 2026-11-01 |
-| 55. Correctness Fixes, Test Hygiene & Lint Bar | v0.11.1 | 0/TBD | Not started | - |
+| 55. Correctness Fixes, Test Hygiene & Lint Bar | v0.11.1 | 0/13 | Planned | - |
 | 56. Dogfood Findings | v0.11.1 | 0/TBD | Not started | - |
 | 57. Register Hygiene Close-Out | v0.11.1 | 0/TBD | Not started | - |
 | 58. Crate Release | v0.11.1 | 0/TBD | Not started | - |

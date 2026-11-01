@@ -2175,6 +2175,9 @@ mod tests {
         /// When set, every `list` page names this id as its next cursor, however far the walk
         /// has got: a buggy store whose assistant cursor never moves past it.
         stuck_list_cursor: Option<AssistantId>,
+        /// When set, every `list` page comes back with no items and a fresh, never-repeated next
+        /// cursor (`ghost-<call>`): a buggy store that a set of followed cursors alone never stops.
+        empty_list_pages: bool,
     }
 
     impl ScriptedAssistants {
@@ -2191,6 +2194,7 @@ mod tests {
                 fail_version_call,
                 stuck_version_cursor,
                 stuck_list_cursor: None,
+                empty_list_pages: false,
             }
         }
     }
@@ -2259,6 +2263,11 @@ mod tests {
             if let Some(stuck) = &self.stuck_list_cursor {
                 // A buggy store: the same cursor on every page, so a naive walk never ends.
                 page.next_cursor = Some(stuck.clone());
+            }
+            if self.empty_list_pages {
+                // A buggy store: an empty page that still names a new cursor every time.
+                page.items.clear();
+                page.next_cursor = Some(AssistantId::new(format!("ghost-{call}")).expect("id"));
             }
             Ok(page)
         }
@@ -2463,6 +2472,39 @@ mod tests {
             line.contains("non-advancing"),
             "every read succeeded: {line}"
         );
+    }
+
+    /// FIXES-06, D-07, WR-01: a store that answers every `list` with an empty page and a fresh
+    /// next cursor never repeats a cursor, so only the empty-page half of the assistant-cursor
+    /// guard stops it. The walk stops on the first page, before any assistant was read, and the
+    /// line names the start of the walk.
+    #[tokio::test]
+    async fn stored_agent_model_scan_stops_at_an_empty_page_with_a_cursor() {
+        let mut repo = ScriptedAssistants::new(None, None, false);
+        repo.empty_list_pages = true;
+        seed_assistant_version(
+            &repo.inner,
+            "a-1",
+            AssistantKind::Agent,
+            serde_json::json!({"model": "model-1", "system_prompt": "p"}),
+        )
+        .await;
+
+        let scan = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            scan_stored_agent_models_paged(&repo, 1),
+        )
+        .await
+        .expect("the scan terminates");
+        assert!(scan.models.is_empty(), "{:?}", scan.models);
+        assert_eq!(scan.stopped_after, Some(None), "{:?}", scan.stopped_after);
+        assert_eq!(
+            repo.list_calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the walk stops at the first empty page"
+        );
+        let line = stored_scan_stop_line(&scan).expect("a stop renders one line");
+        assert!(line.contains("at start"), "{line}");
     }
 
     /// B4, D-07: a metered principal that can reach an unpriced code-registered model still

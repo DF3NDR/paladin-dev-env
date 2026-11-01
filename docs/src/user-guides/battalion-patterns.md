@@ -48,7 +48,7 @@ LLM provider libraries directly.
 
 ```toml
 [dependencies]
-paladin-ai = { version = "0.10.0", features = ["llm-openai"] }
+paladin-ai = { version = "0.11.0", features = ["llm-openai"] }
 tokio = { version = "1", features = ["full"] }
 ```
 

@@ -642,7 +642,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-paladin-ai = { version = "0.5", default-features = false }
+paladin-ai = { version = "0.11.0", default-features = false }
 async-trait = "0.1"
 reqwest = { version = "0.11", features = ["json"] }
 serde = { version = "1.0", features = ["derive"] }

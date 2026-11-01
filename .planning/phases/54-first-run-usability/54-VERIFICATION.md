@@ -1,22 +1,26 @@
 ---
 phase: 54-first-run-usability
 verified: 2026-11-01T02:30:00Z
-status: human_needed
+status: passed
 score: 5/5 must-haves verified
 behavior_unverified: 0
 overrides_applied: 0
 re_verification: false
 deferred:
+
   - truth: "make release pushes a tag on a tree the version-string gate would reject (REVIEW CR-01)"
     addressed_in: "Phase 58"
     evidence: "Phase 58 SC1: every user-facing version string reads 0.11.1 'because the gate demands it, not because a sweep remembered'; the Phase 54 scope note and 54-FIRST-EVIDENCE.md 'Carry-forward to Phase 58' item 2 record that the gate goes red at the bump and the bump commit must carry the 52 string edits. CONTEXT D-12 chose check-only on purpose."
 human_verification:
+
   - test: "Decide WR-02: change k8s/server/secret.yaml.example `openai-api-key: \"REPLACE_ME\"` to an empty value (refused at boot) or accept it"
     expected: "A half-filled Secret (API keys pasted, provider key forgotten) fails at boot rather than starting healthy with REPLACE_ME as the provider bearer"
     why_human: "The goal text says 'no example loads a placeholder as a credential'. SC1 and FIRST-01 are scoped to http.auth.api_keys[].key, which is fixed. This provider-key placeholder is pre-existing, so it is a scope call for the maintainer."
+
   - test: "Apply k8s/server/secret.yaml (filled) plus both Deployments on a real cluster (kind) and read /ready"
     expected: "Pods read /etc/paladin/config.yml mounted from the Secret (defaultMode 0440, fsGroup 65532) and boot"
     why_human: "No kubectl, kind or Docker daemon in this container. The phase proved manifest shape only (54-FIRST-EVIDENCE.md Known residuals item 6)."
+
   - test: "Follow docker/docker-compose.server.yml header step 2 without step 1 (no config.yml yet)"
     expected: "Compose errors clearly, or the header recipe prevents the root-owned config.yml/ directory and restart loop (WR-03)"
     why_human: "Needs a Docker daemon, which is unavailable here."

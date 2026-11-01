@@ -463,7 +463,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 55-09-PLAN.md — crate-private `build_run_api_with_engine_port` seam making the two `build_run_api_persists_*` tests hermetic; boot warns once per unpriced model a metered principal can reach (code registry + stored agent-kind assistants), never refusing; guide paragraphs (TESTS-01, FIXES-06)
+- [x] 55-09-PLAN.md — crate-private `build_run_api_with_engine_port` seam making the two `build_run_api_persists_*` tests hermetic; boot warns once per unpriced model a metered principal can reach (code registry + stored agent-kind assistants), never refusing; guide paragraphs (TESTS-01, FIXES-06)
 - [ ] 55-10-PLAN.md — `paladin-llm`, `paladin-storage`, `paladin-notifications` rustdoc fixed and unsuppressed, one green commit each (CIREL-08)
 
 **Wave 3** *(blocked on Wave 2 completion)*

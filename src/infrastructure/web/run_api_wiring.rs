@@ -37,12 +37,14 @@ use tokio_util::sync::CancellationToken;
 use paladin_battalion::engine::WarEngine;
 use paladin_battalion::engine::registries::EngineRegistries;
 use paladin_battalion::engine::shutdown::ShutdownCoordinator;
-use paladin_core::platform::container::assistant::AssistantSource;
+use paladin_core::platform::container::assistant::{AssistantId, AssistantKind, AssistantSource};
+use paladin_core::platform::container::cost::PriceTable;
 use paladin_core::platform::container::principal::TenantId;
 use paladin_core::platform::container::run::AssistantRef;
 use paladin_core::platform::container::run_schedule::RunScheduleId;
 use paladin_core::platform::container::waypoint::{ThreadId, Waypoint, WaypointId};
 use paladin_llm::cadence::CadenceWiring;
+use paladin_llm::pricing::PRICING_LOG_TARGET;
 use paladin_ports::input::allowance_admission_port::AllowanceAdmissionPort;
 use paladin_ports::input::assistant_admin_port::AssistantAdminPort;
 use paladin_ports::input::run_event_stream_port::RunEventStreamPort;
@@ -767,6 +769,150 @@ fn report_unattributed_schedules(outcome: &ScanOutcome) {
     }
 }
 
+/// FIXES-06, D-07: the models a metered principal can reach that have no `treasurer.pricing` row,
+/// sorted and de-duplicated.
+///
+/// "No row" is exactly the lookup dispatch uses (`PriceTable::row`, exact and case-sensitive), so
+/// the boot warning and the admission/dispatch refusal can never disagree about which models are
+/// unpriced. Returns nothing unless a Treasurer is configured AND a ceiling applies: without
+/// either, no call is metered and a missing row is harmless. Pure, so the whole table is tested
+/// without building a server.
+fn unpriced_reachable_models<'a>(
+    treasurer_configured: bool,
+    has_ceiling: bool,
+    prices: &PriceTable,
+    reachable: impl IntoIterator<Item = &'a str>,
+) -> Vec<String> {
+    if !(treasurer_configured && has_ceiling) {
+        return Vec::new();
+    }
+    reachable
+        .into_iter()
+        .filter(|model| prices.row(model).is_none())
+        .map(str::to_owned)
+        .collect::<BTreeSet<String>>()
+        .into_iter()
+        .collect()
+}
+
+/// The one-sentence boot warning for an unpriced reachable `model`.
+///
+/// Built from the model name alone -- never a tenant, an API key name or a key value -- and the
+/// model is escaped with [`str::escape_debug`], because a stored assistant's model is
+/// caller-supplied text and a newline in it must not forge a second log line (T-55-21,
+/// T-55-24). The sentence also names what the boot check cannot see, so an operator does not
+/// read silence as full coverage. Pure, so the content is tested without a process-wide logger.
+fn unpriced_model_warning_line(model: &str) -> String {
+    format!(
+        "model `{}` is reachable by a metered principal but has no treasurer.pricing row: \
+         agent-kind calls on it are refused at admission (422 model_unpriced) or halted at \
+         dispatch (model_unpriced); workflow assistants are not refused; workflow graph-node \
+         models, runtime-provisioned agents and agent-kind assistants created after boot are \
+         not checked here -- add a treasurer.pricing row for it",
+        model.escape_debug()
+    )
+}
+
+/// How many assistants each page of the boot-time stored-model scan asks for (D-07).
+const ASSISTANT_SCAN_PAGE: u32 = 100;
+
+/// What the boot-time stored-model scan found: the model of every stored, non-deleted agent-kind
+/// assistant at its latest version, and where the walk stopped if something could not be read.
+#[derive(Debug, Default)]
+struct StoredAgentModelScan {
+    /// One entry per agent-kind assistant read, in page order (not de-duplicated).
+    models: Vec<String>,
+    /// `Some` when a page or a version could not be read: the id of the last assistant read
+    /// completely before the stop (`None` inside means the very first page). Carries no error
+    /// text and no row content (P2 of D-14).
+    stopped_after: Option<Option<AssistantId>>,
+}
+
+/// FIXES-06, D-07: walk every stored, non-deleted assistant once, read-only, and collect the
+/// `model` of each agent-kind assistant's latest version -- the models a stored assistant can send
+/// a metered run to.
+///
+/// Pages with `list(ASSISTANT_SCAN_PAGE, cursor, false)` to exhaustion and reads one
+/// `get_version(id, latest)` per item; only those two read methods are ever called. An unreadable
+/// page or version ends the walk and is recorded without its error text; the function never
+/// returns an error, so the boot that called it is never blocked.
+async fn scan_stored_agent_models(repo: &dyn AssistantRepositoryPort) -> StoredAgentModelScan {
+    scan_stored_agent_models_paged(repo, ASSISTANT_SCAN_PAGE).await
+}
+
+/// [`scan_stored_agent_models`] with the page size supplied, so a test can force several pages
+/// over a handful of rows.
+async fn scan_stored_agent_models_paged(
+    repo: &dyn AssistantRepositoryPort,
+    page_size: u32,
+) -> StoredAgentModelScan {
+    let mut scan = StoredAgentModelScan::default();
+    let mut cursor: Option<AssistantId> = None;
+    // The last assistant fully read: the position reported if the next read fails.
+    let mut last_read: Option<AssistantId> = None;
+    loop {
+        let page = match repo.list(page_size, cursor.clone(), false).await {
+            Ok(page) => page,
+            Err(_) => {
+                // The error text can carry row detail; the position is all the operator gets.
+                scan.stopped_after = Some(last_read);
+                return scan;
+            }
+        };
+        for item in &page.items {
+            match repo.get_version(&item.assistant_id, item.latest).await {
+                Ok(Some(version)) if version.definition.kind == AssistantKind::Agent => {
+                    if let Some(model) = version
+                        .definition
+                        .body
+                        .get("model")
+                        .and_then(serde_json::Value::as_str)
+                    {
+                        scan.models.push(model.to_owned());
+                    }
+                }
+                Ok(_) => {}
+                Err(_) => {
+                    scan.stopped_after = Some(last_read);
+                    return scan;
+                }
+            }
+            last_read = Some(item.assistant_id.clone());
+        }
+        match page.next_cursor {
+            Some(next) => cursor = Some(next),
+            None => return scan,
+        }
+    }
+}
+
+/// The position-only sentence for a scan that stopped early, or `None` when the walk completed.
+/// Never carries an error text or row content (P2 of D-14).
+fn stored_scan_stop_line(scan: &StoredAgentModelScan) -> Option<String> {
+    let stopped_after = scan.stopped_after.as_ref()?;
+    let position = match stopped_after {
+        Some(id) => format!("after assistant id {id}"),
+        None => "at start".to_string(),
+    };
+    Some(format!(
+        "stored agent-kind assistant scan for unpriced models stopped at an unreadable page or \
+         version ({position}); assistants from there on were not checked -- inspect the \
+         assistants store directly"
+    ))
+}
+
+/// Log one warning per unpriced reachable model, and the scan's stop line if any, under
+/// [`PRICING_LOG_TARGET`] (`paladin::pricing`). Infallible and advisory: boot continues whatever
+/// was logged (B4). The settle-time warn-once set in `paladin-llm` is separate and untouched.
+fn report_unpriced_reachable_models(models: &[String], scan_stop: Option<String>) {
+    for model in models {
+        log::warn!(target: PRICING_LOG_TARGET, "{}", unpriced_model_warning_line(model));
+    }
+    if let Some(line) = scan_stop {
+        log::warn!(target: PRICING_LOG_TARGET, "{line}");
+    }
+}
+
 /// [`build_run_api`] with the run engine's `PaladinPort` paced through the supplied `cadence`
 /// wiring (PACE-02, D-08).
 ///
@@ -1026,6 +1172,25 @@ pub(crate) async fn build_run_api_with_engine_port(
         let price_table = treasurer_config
             .price_table()
             .map_err(|e| format!("invalid treasurer configuration: {e}"))?;
+        // FIXES-06, D-07, B4: warn once per model a metered principal can reach that has no price
+        // row. Advisory, never refuses boot; paladin-llm's settle-time warn-once set is separate.
+        let mut reachable: Vec<String> = code_registry
+            .list()
+            .into_iter()
+            .map(|(_, paladin)| paladin.data.model.clone())
+            .collect();
+        let stored = scan_stored_agent_models(assistant_repository.as_ref()).await;
+        let scan_stop = stored_scan_stop_line(&stored);
+        reachable.extend(stored.models);
+        report_unpriced_reachable_models(
+            &unpriced_reachable_models(
+                true,
+                true,
+                &price_table,
+                reachable.iter().map(String::as_str),
+            ),
+            scan_stop,
+        );
         let mut treasurer = Treasurer::new(policy, Arc::clone(ledger))
             .with_notices(Arc::clone(notices))
             .with_pricing(Arc::new(price_table));
@@ -1742,6 +1907,364 @@ mod tests {
 
         unsafe {
             std::env::remove_var("OPENAI_API_KEY");
+        }
+    }
+
+    // ---- Phase 55 (55-09, FIXES-06, D-07): boot warning for unpriced reachable models ----
+
+    /// A price table that prices `gpt-4` and nothing else.
+    fn gpt4_only_prices() -> PriceTable {
+        use paladin_core::platform::container::cost::{CurrencyCode, PriceRow};
+        PriceTable::new(CurrencyCode::new("USD").expect("usd")).with_row(
+            "gpt-4",
+            PriceRow::new(10_000_000_000, 10_000_000_000).expect("a non-negative row"),
+        )
+    }
+
+    /// FIXES-06, D-07: the warning set is exactly the models with no `PriceTable::row`, sorted and
+    /// de-duplicated, and it is empty unless a Treasurer is configured AND a ceiling applies.
+    #[test]
+    fn unpriced_reachable_models_table() {
+        let prices = gpt4_only_prices();
+        let table: [(bool, bool, Vec<&str>, Vec<&str>); 9] = [
+            // No Treasurer: nothing is metered, so nothing is warned.
+            (false, true, vec!["x"], vec![]),
+            // No ceiling: same.
+            (true, false, vec!["x"], vec![]),
+            (false, false, vec!["x"], vec![]),
+            // Every model priced.
+            (true, true, vec!["gpt-4"], vec![]),
+            // One unpriced.
+            (true, true, vec!["gpt-4", "claude-x"], vec!["claude-x"]),
+            // Duplicates collapse.
+            (true, true, vec!["zeta", "zeta"], vec!["zeta"]),
+            // Unsorted input comes back sorted.
+            (
+                true,
+                true,
+                vec!["zeta", "gpt-4", "alpha", "zeta"],
+                vec!["alpha", "zeta"],
+            ),
+            // The lookup is exact and case-sensitive, like dispatch's.
+            (true, true, vec!["GPT-4"], vec!["GPT-4"]),
+            // An empty reachable set.
+            (true, true, vec![], vec![]),
+        ];
+        for (treasurer_configured, has_ceiling, reachable, expected) in table {
+            assert_eq!(
+                unpriced_reachable_models(
+                    treasurer_configured,
+                    has_ceiling,
+                    &prices,
+                    reachable.iter().copied()
+                ),
+                expected,
+                "treasurer={treasurer_configured} ceiling={has_ceiling} reachable={reachable:?}"
+            );
+        }
+    }
+
+    /// FIXES-06, D-07, T-55-21, T-55-24: the line names the model and every gap the warning
+    /// cannot see, names no tenant or key, and a model string with a newline cannot forge a
+    /// second log line.
+    #[test]
+    fn unpriced_model_warning_line_names_the_model_and_the_gaps() {
+        let line = unpriced_model_warning_line("claude-x");
+        for needle in [
+            "claude-x",
+            "treasurer.pricing",
+            "422 model_unpriced",
+            "model_unpriced",
+            "workflow assistants are not refused",
+            "graph-node",
+            "runtime-provisioned",
+            "created after boot",
+        ] {
+            assert!(line.contains(needle), "missing {needle:?} in {line}");
+        }
+        for forbidden in ["tenant", "api_key", "sk-"] {
+            assert!(
+                !line.contains(forbidden),
+                "the line must not mention {forbidden:?}: {line}"
+            );
+        }
+
+        let forged = unpriced_model_warning_line("evil\nERROR fake line\r\u{1b}[31m");
+        assert!(
+            !forged.contains('\n') && !forged.contains('\r') && !forged.contains('\u{1b}'),
+            "control characters are escaped: {forged:?}"
+        );
+        assert!(forged.contains("evil\\nERROR fake line"), "{forged}");
+    }
+
+    /// Seeds one assistant version in `repo`.
+    async fn seed_assistant_version(
+        repo: &paladin_storage::assistant::in_memory::InMemoryAssistantRepository,
+        id: &str,
+        kind: AssistantKind,
+        body: serde_json::Value,
+    ) {
+        use paladin_core::platform::container::assistant::{
+            AssistantDefinition, NewAssistantVersion,
+        };
+        let assistant_id = AssistantId::new(id).expect("a valid assistant id");
+        let new = NewAssistantVersion {
+            definition: AssistantDefinition { kind, body },
+            created_by: None,
+            note: None,
+        };
+        let existing = repo.get(&assistant_id).await.expect("read");
+        if existing.is_some() {
+            repo.append_version(&assistant_id, new)
+                .await
+                .expect("append a version");
+        } else {
+            repo.create(&assistant_id, new).await.expect("create");
+        }
+    }
+
+    /// FIXES-06, D-07: the stored scan reads agent-kind assistants only, at their latest version,
+    /// skips workflow and soft-deleted ones, pages to exhaustion, and reports no stop.
+    #[tokio::test]
+    async fn stored_agent_model_scan_reads_agent_kind_models_only() {
+        use paladin_storage::assistant::in_memory::InMemoryAssistantRepository;
+        let repo = InMemoryAssistantRepository::new();
+        // `stored-a` is republished: only the LATEST version's model counts.
+        seed_assistant_version(
+            &repo,
+            "stored-a",
+            AssistantKind::Agent,
+            serde_json::json!({"model": "stored-old", "system_prompt": "p"}),
+        )
+        .await;
+        seed_assistant_version(
+            &repo,
+            "stored-a",
+            AssistantKind::Agent,
+            serde_json::json!({"model": "stored-a", "system_prompt": "p"}),
+        )
+        .await;
+        seed_assistant_version(
+            &repo,
+            "stored-flow",
+            AssistantKind::Workflow,
+            serde_json::json!({"model": "workflow-model-never-read"}),
+        )
+        .await;
+        seed_assistant_version(
+            &repo,
+            "stored-gone",
+            AssistantKind::Agent,
+            serde_json::json!({"model": "stored-gone", "system_prompt": "p"}),
+        )
+        .await;
+        repo.soft_delete(&AssistantId::new("stored-gone").expect("id"))
+            .await
+            .expect("soft delete");
+
+        let scan = scan_stored_agent_models_paged(&repo, 1).await;
+        assert_eq!(scan.models, vec!["stored-a".to_string()]);
+        assert!(scan.stopped_after.is_none(), "{:?}", scan.stopped_after);
+        assert!(stored_scan_stop_line(&scan).is_none());
+
+        // The default page size reads the same set.
+        let default_scan = scan_stored_agent_models(&repo).await;
+        assert_eq!(default_scan.models, scan.models);
+    }
+
+    /// An `AssistantRepositoryPort` that delegates to an in-memory store except that its SECOND
+    /// `list` call fails with an error text that must never reach a log line.
+    struct FailsSecondListAssistants {
+        inner: paladin_storage::assistant::in_memory::InMemoryAssistantRepository,
+        list_calls: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait]
+    impl AssistantRepositoryPort for FailsSecondListAssistants {
+        async fn create(
+            &self,
+            assistant_id: &AssistantId,
+            new: paladin_core::platform::container::assistant::NewAssistantVersion,
+        ) -> Result<
+            paladin_core::platform::container::assistant::AssistantVersion,
+            paladin_ports::output::assistant_repository_port::AssistantRepositoryError,
+        > {
+            self.inner.create(assistant_id, new).await
+        }
+        async fn append_version(
+            &self,
+            assistant_id: &AssistantId,
+            new: paladin_core::platform::container::assistant::NewAssistantVersion,
+        ) -> Result<
+            paladin_core::platform::container::assistant::AssistantVersion,
+            paladin_ports::output::assistant_repository_port::AssistantRepositoryError,
+        > {
+            self.inner.append_version(assistant_id, new).await
+        }
+        async fn get(
+            &self,
+            assistant_id: &AssistantId,
+        ) -> Result<
+            Option<paladin_core::platform::container::assistant::Assistant>,
+            paladin_ports::output::assistant_repository_port::AssistantRepositoryError,
+        > {
+            self.inner.get(assistant_id).await
+        }
+        async fn get_version(
+            &self,
+            assistant_id: &AssistantId,
+            version: u32,
+        ) -> Result<
+            Option<paladin_core::platform::container::assistant::AssistantVersion>,
+            paladin_ports::output::assistant_repository_port::AssistantRepositoryError,
+        > {
+            self.inner.get_version(assistant_id, version).await
+        }
+        async fn list(
+            &self,
+            limit: u32,
+            cursor: Option<AssistantId>,
+            include_deleted: bool,
+        ) -> Result<
+            paladin_ports::output::assistant_repository_port::AssistantPage,
+            paladin_ports::output::assistant_repository_port::AssistantRepositoryError,
+        > {
+            let call = self
+                .list_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if call == 1 {
+                return Err(
+                    paladin_ports::output::assistant_repository_port::AssistantRepositoryError::Serialization {
+                        message: "row 2 is corrupt: secret-row-detail".to_string(),
+                    },
+                );
+            }
+            self.inner.list(limit, cursor, include_deleted).await
+        }
+        async fn list_versions(
+            &self,
+            assistant_id: &AssistantId,
+            limit: u32,
+            cursor: Option<u32>,
+        ) -> Result<
+            paladin_ports::output::assistant_repository_port::AssistantVersionPage,
+            paladin_ports::output::assistant_repository_port::AssistantRepositoryError,
+        > {
+            self.inner.list_versions(assistant_id, limit, cursor).await
+        }
+        async fn soft_delete(
+            &self,
+            assistant_id: &AssistantId,
+        ) -> Result<(), paladin_ports::output::assistant_repository_port::AssistantRepositoryError>
+        {
+            self.inner.soft_delete(assistant_id).await
+        }
+    }
+
+    /// FIXES-06, D-07, P2 of D-14: an unreadable page stops the walk. The first page's models
+    /// survive, the stop records the position, and the rendered line carries no error text.
+    /// The scan returns a value, never an error, so boot is never blocked.
+    #[tokio::test]
+    async fn stored_agent_model_scan_stops_at_an_unreadable_page() {
+        let repo = FailsSecondListAssistants {
+            inner: paladin_storage::assistant::in_memory::InMemoryAssistantRepository::new(),
+            list_calls: std::sync::atomic::AtomicUsize::new(0),
+        };
+        for (id, model) in [("a-1", "model-1"), ("a-2", "model-2"), ("a-3", "model-3")] {
+            seed_assistant_version(
+                &repo.inner,
+                id,
+                AssistantKind::Agent,
+                serde_json::json!({"model": model, "system_prompt": "p"}),
+            )
+            .await;
+        }
+
+        let scan = scan_stored_agent_models_paged(&repo, 1).await;
+        assert_eq!(scan.models, vec!["model-1".to_string()]);
+        assert_eq!(
+            scan.stopped_after,
+            Some(Some(AssistantId::new("a-1").expect("id"))),
+            "the stop records the last assistant read before the unreadable page"
+        );
+        let line = stored_scan_stop_line(&scan).expect("a stop renders one line");
+        assert!(line.contains("a-1"), "{line}");
+        assert!(
+            !line.contains("secret-row-detail") && !line.contains("corrupt"),
+            "no error text in the line: {line}"
+        );
+
+        // A failure on the very first page names the start of the walk.
+        let first_page_stop = StoredAgentModelScan {
+            models: Vec::new(),
+            stopped_after: Some(None),
+        };
+        let line = stored_scan_stop_line(&first_page_stop).expect("a stop renders one line");
+        assert!(line.contains("start"), "{line}");
+
+        // The reporter is infallible and logs through the pricing target.
+        report_unpriced_reachable_models(&["model-1".to_string()], Some(line));
+    }
+
+    /// B4, D-07: a metered principal that can reach an unpriced code-registered model still
+    /// boots; the warning is advisory and never refuses anything.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn boot_with_an_unpriced_reachable_model_under_an_allowance_still_succeeds() {
+        use paladin_core::platform::container::paladin::PaladinData;
+        let (run_path, run_url) = temp_sqlite_url("unpriced_reachable");
+        let (wp_path, wp_url) = temp_sqlite_url("unpriced_reachable_wp");
+        let registry = Arc::new(AgentRegistry::new());
+        let paladin = Arc::new(paladin_core::base::entity::Entity::new(
+            PaladinData {
+                system_prompt: "hi".to_string(),
+                name: "Unpriced".to_string(),
+                model: "no-price-row-model".to_string(),
+                ..Default::default()
+            },
+            Some("Unpriced".to_string()),
+        ));
+        registry.insert(
+            "unpriced-agent",
+            paladin,
+            Arc::new(UnconsultedExecutorForBoot),
+        );
+        let coordinator = ShutdownCoordinator::new();
+        let handles = build_run_api_with_engine_port(
+            sqlite_configs(&run_url),
+            &allowance_settings(&[("svc-a", "1d", "2.50")], &[("acme", "7d", "25.00")]),
+            coordinator.clone(),
+            Some(sqlite_waypoints(&wp_url).await),
+            principal_auth(&[("secret-a", "svc-a", "acme")]),
+            registry,
+            EnginePortSource {
+                cadence: None,
+                paladin_port_override: Some(Arc::new(CannedAnswerPaladinPort)),
+            },
+        )
+        .await
+        .expect("an unpriced reachable model must not refuse boot");
+        assert!(handles.treasurer.is_some(), "the Treasurer is present");
+        coordinator.cancel_and_wait(Duration::from_secs(1)).await;
+        cleanup(&run_path);
+        cleanup(&wp_path);
+    }
+
+    /// An executor the boot test registers only because `AgentRegistry::insert` requires one;
+    /// no run is submitted, so it is never called.
+    struct UnconsultedExecutorForBoot;
+
+    #[async_trait]
+    impl paladin_ports::output::paladin_executor_port::PaladinExecutorPort
+        for UnconsultedExecutorForBoot
+    {
+        async fn execute(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+        ) -> Result<PaladinResult, PaladinError> {
+            Err(PaladinError::ExecutionError(
+                "the boot test submits no run".to_string(),
+            ))
         }
     }
 

@@ -231,6 +231,57 @@ plant crates/x/src/lib.rs 'pub fn f() { todo!() }'
 assert_fire "${FX}" "an exempt #[cfg(test)] fn ends at its own closing brace" \
     "crates/x/src/lib.rs:${PLANT_LINE}: todo! outside #[cfg(test)]"
 
+# A match arm whose pattern is a macro looks like a macro-invocation head. A
+# `<` in its body or guard must not swallow the neighbouring arm's stub.
+fresh cfg-test-macro-pattern-arm
+plant crates/x/src/lib.rs 'pub fn f(x: u8) -> bool {'
+plant crates/x/src/lib.rs '    match x {'
+plant crates/x/src/lib.rs '        #[cfg(test)]'
+plant crates/x/src/lib.rs '        m!() => x < 3,'
+plant crates/x/src/lib.rs '        _ => todo!(),'
+STUB_LINE="${PLANT_LINE}"
+plant crates/x/src/lib.rs '    }'
+plant crates/x/src/lib.rs '}'
+assert_fire "${FX}" "#[cfg(test)] on a macro-pattern match arm with a < in its body exempts nothing" \
+    "crates/x/src/lib.rs:${STUB_LINE}: todo! outside #[cfg(test)]"
+
+fresh cfg-test-macro-pattern-guard
+plant crates/x/src/lib.rs 'pub fn f(x: u8) -> u8 {'
+plant crates/x/src/lib.rs '    match x {'
+plant crates/x/src/lib.rs '        #[cfg(test)]'
+plant crates/x/src/lib.rs '        m!() if x < 3 => 0,'
+plant crates/x/src/lib.rs '        _ => todo!(),'
+STUB_LINE="${PLANT_LINE}"
+plant crates/x/src/lib.rs '    }'
+plant crates/x/src/lib.rs '}'
+assert_fire "${FX}" "#[cfg(test)] on a macro-pattern match arm with a < in its guard exempts nothing" \
+    "crates/x/src/lib.rs:${STUB_LINE}: todo! outside #[cfg(test)]"
+
+# An inline `const { ... }` block statement has no trailing `;`: it exempts its
+# own block only, never the rest of the enclosing fn.
+fresh cfg-test-const-block
+plant crates/x/src/lib.rs 'pub fn f() {'
+plant crates/x/src/lib.rs '    #[cfg(test)] const { () }'
+plant crates/x/src/lib.rs '    todo!()'
+STUB_LINE="${PLANT_LINE}"
+plant crates/x/src/lib.rs '}'
+assert_fire "${FX}" "#[cfg(test)] on an inline const block exempts only that block" \
+    "crates/x/src/lib.rs:${STUB_LINE}: todo! outside #[cfg(test)]"
+
+# A `const` generic parameter is not followed by a `;`: it exempts nothing.
+fresh cfg-test-const-generic
+plant crates/x/src/lib.rs 'pub fn g<#[cfg(test)] const N: usize>() { todo!() }'
+assert_fire "${FX}" "#[cfg(test)] on a const generic parameter does not exempt the fn body" \
+    "crates/x/src/lib.rs:${PLANT_LINE}: todo! outside #[cfg(test)]"
+
+# Deliberate, strict side: an expression statement is not an item, so it
+# exempts nothing even though rustc compiles it out of a non-test build. Wrap
+# it in a block (`#[cfg(test)] { ... }`, a PASS case below) instead.
+fresh cfg-test-expression-statement
+plant crates/x/src/lib.rs 'pub fn f() { #[cfg(test)] self_check(|| todo!()); }'
+assert_fire "${FX}" "#[cfg(test)] on an expression statement is reported (strict by design)" \
+    "crates/x/src/lib.rs:${PLANT_LINE}: todo! outside #[cfg(test)]"
+
 fresh root-package
 printf '[package]\nname = "rootpkg"\nversion = "0.1.0"\n' >"${FX}/Cargo.toml"
 mkdir -p "${FX}/src"
@@ -372,6 +423,29 @@ plant crates/x/src/lib.rs '    A: Clone,'
 plant crates/x/src/lib.rs '    B: Copy + '"'"'static,'
 plant crates/x/src/lib.rs '{ todo!() }'
 assert_silent "${FX}" "#[cfg(test)] on a real item head (visibility, qualifiers, macro, let) is exempt" "OK"
+
+# A closure parameter list `|a, b|` in a statement initialiser has its commas
+# at depth 0; they must not end the exempt statement early.
+fresh closure-let
+plant crates/x/src/lib.rs 'pub fn h() { #[cfg(test)] let g = |a: u8, b: u8| -> u8 { todo!() }; }'
+assert_silent "${FX}" "a #[cfg(test)] let whose closure takes two parameters stays exempt" "OK"
+
+fresh closure-const
+plant crates/x/src/lib.rs '#[cfg(test)] const G: fn(u8, u8) -> u8 = |a, b| todo!();'
+assert_silent "${FX}" "a #[cfg(test)] const whose closure takes two parameters stays exempt" "OK"
+
+fresh closure-move-let
+plant crates/x/src/lib.rs 'pub fn h() { #[cfg(test)] let g = move |a: (u8, u8), b: Vec<u8>| unimplemented!(); }'
+assert_silent "${FX}" "a #[cfg(test)] let whose move closure takes two parameters stays exempt" "OK"
+
+# A block statement (plain, unsafe, async or const) exempts exactly its block.
+fresh block-statement
+plant crates/x/src/lib.rs 'pub fn b() {'
+plant crates/x/src/lib.rs '    #[cfg(test)] { todo!() }'
+plant crates/x/src/lib.rs '    #[cfg(test)] unsafe { todo!() }'
+plant crates/x/src/lib.rs '    #[cfg(test)] const { todo!() }'
+plant crates/x/src/lib.rs '}'
+assert_silent "${FX}" "a #[cfg(test)] block statement exempts its own block" "OK"
 
 fresh out-of-line-test-mod
 plant crates/x/src/lib.rs '#[cfg(test)]'

@@ -25,10 +25,21 @@
 # optional visibility, optional `async`/`unsafe`/`const`/`default`/`extern
 # "abi"`, then `fn`, `mod`, `impl`, `struct`, `enum`, `union`, `trait`, `type`,
 # `const`, `static`, `use`, `extern`, `let`, `macro_rules!` or a macro
-# invocation such as `thread_local!`. On a struct field, an enum variant, a
-# match arm, a function parameter, a struct-literal field or an expression it
-# exempts nothing, and the item scan stops at a top-level `,` or an unmatched
-# closer, so it never runs past the enclosing block.
+# invocation such as `thread_local!`, or a block statement (`{`, `unsafe {`,
+# `async {`, inline `const {`). A block statement exempts exactly its block; a
+# macro invocation exactly its delimiter group (and a `;` right after it); a
+# `let`/`const`/`static`/`use`/`type` up to its top-level `;` (a closure
+# parameter list `|a, b|` inside it is read whole), and one with no `;` before
+# the enclosing block or the file ends exempts nothing. On a struct field, an
+# enum variant, a match arm (also one whose pattern is a macro), a function or
+# generic parameter, a struct-literal field or an expression it exempts
+# nothing, and the item scan stops at a top-level `=>`, a top-level `,` or an
+# unmatched closer, so it never runs past the enclosing block.
+#
+# Strict by design: `#[cfg(test)]` on an expression statement such as
+# `self_check(|| todo!());` is not an item, so a stub inside it is reported
+# even though rustc compiles it out of a non-test build. Wrap it in a block,
+# `#[cfg(test)] { self_check(|| todo!()); }`, which is exempt.
 #
 # Out-of-line test modules: `#[cfg(test)] mod name;` resolves to `name.rs` or
 # `name/mod.rs` beside the declaring file (the file's own directory for
@@ -118,6 +129,12 @@ ITEM_HEAD = re.compile(
 )
 # Items that end at their own top-level `;`, with any braces nested inside.
 STATEMENT_KINDS = {"let", "const", "static", "use", "type"}
+# A block expression statement: `{`, `unsafe {`, `async {`, `async move {` or
+# an inline `const {`. It is read before ITEM_HEAD so `const {` is not taken for
+# a `const` item.
+BLOCK_HEAD = re.compile(r'\s*(?:(?:unsafe|const|async(?:\s+move)?)\s*)?\{')
+# A closure may open its `|params|` list after one of these keywords.
+CLOSURE_KEYWORDS = {"move", "async", "return", "break"}
 WHERE_KW = re.compile(r'where\b')
 RAW_OPEN = re.compile(r'(?:br|r)(#*)"')
 CHAR_LIT = re.compile(r"'(?:\\.[^']*|[^\\'])'")
@@ -211,27 +228,105 @@ def skip_attrs(b, j):
         j = k + 1
 
 
+def match_group(b, k):
+    """Index of the closer matching the opener `(`, `[` or `{` at k, or None."""
+    depth = 0
+    for i in range(k, len(b)):
+        if b[i] in "([{":
+            depth += 1
+        elif b[i] in ")]}":
+            depth -= 1
+            if depth == 0:
+                return i
+    return None
+
+
+def closure_end(b, k):
+    """Index of the `|` closing a closure parameter list opened at k, or None.
+
+    The `|` at k opens a closure only in expression position: after an
+    operator or opening punctuation, or after `move`/`async`/`return`/`break`.
+    After an operand (an identifier, `)`, `]`, `}` or `?`) it is a bitwise or
+    logical `|`, and None is returned. The list ends at the next `|` at bracket
+    depth 0; a `;` or an unmatched closer first means it was not a list (None).
+    """
+    p = k - 1
+    while p >= 0 and b[p].isspace():
+        p -= 1
+    if p >= 0 and (b[p].isalnum() or b[p] == "_"):
+        q = p
+        while q >= 0 and (b[q].isalnum() or b[q] == "_"):
+            q -= 1
+        if b[q + 1 : p + 1] not in CLOSURE_KEYWORDS:
+            return None
+    elif p >= 0 and b[p] in ")]}?":
+        return None
+    depth = 0
+    for i in range(k + 1, len(b)):
+        c = b[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            if depth == 0:
+                return None
+            depth -= 1
+        elif c == ";" and depth == 0:
+            return None
+        elif c == "|" and depth == 0:
+            return i
+    return None
+
+
 def item_end(b, j):
     """End index of the item an exempt attribute ending at j attaches to, or None.
 
     None means the attribute (after any further attributes) is not followed by
-    a real item head (ITEM_HEAD): it sits on a struct field, an enum variant, a
-    match arm, a function parameter, a struct-literal field or an expression,
-    and exempts nothing.
+    a real item head (ITEM_HEAD) or a block statement (BLOCK_HEAD): it sits on
+    a struct field, an enum variant, a match arm, a function parameter, a
+    generic parameter, a struct-literal field or an expression, and exempts
+    nothing.
 
-    A statement-shaped item (`let`, `const`, `static`, `use`, `type`) ends at
-    its top-level `;`, with braces nested inside it. Any other item ends at its
-    first top-level `;`, or at the `}` matching its first top-level `{`. The
-    header scan also stops at a top-level `,` (outside a `where` clause, whose
-    predicates are comma-separated) and at an unmatched `)`, `]` or `}`, so it
-    can never run past the block that encloses the attribute.
+    - A block statement (`{`, `unsafe {`, `async {`, `const {`) ends at the `}`
+      matching its `{`.
+    - A macro invocation (`thread_local! { ... }`, `m!(...);`) ends at the
+      closer of its own delimiter group, or at the `;` right after it. Anything
+      else after the `!` (a match-arm pattern `m!() =>`, an operand `m!() < x`)
+      only ever exempts the group itself.
+    - A statement-shaped item (`let`, `const`, `static`, `use`, `type`) ends at
+      its top-level `;`, with braces nested inside it. One that reaches an
+      unmatched closer or the end of the file before any `;` (a `const`
+      generic parameter, say) is not a statement and exempts nothing.
+    - Any other item ends at its first top-level `;`, or at the `}` matching
+      its first top-level `{`.
+
+    The header scan skips a closure parameter list `|a, b|` whole, stops at a
+    top-level `=>` (a match arm: exempts nothing), at a top-level `,` (outside
+    a `where` clause, whose predicates are comma-separated) and at an
+    unmatched `)`, `]` or `}`, so it can never run past the block that
+    encloses the attribute.
     """
     k = skip_attrs(b, j)
+    block = BLOCK_HEAD.match(b, k)
+    if block:
+        return match_group(b, block.end() - 1)
     head = ITEM_HEAD.match(b, k)
     if not head:
         return None
-    statement = head.group("kind") in STATEMENT_KINDS
+    kind = head.group("kind")
     k, n = head.end(), len(b)
+    if kind.endswith("!") and not kind.startswith("macro_rules"):
+        while k < n and b[k].isspace():
+            k += 1
+        if k >= n or b[k] not in "([{":
+            return None
+        end = match_group(b, k)
+        if end is None:
+            return None
+        k = end + 1
+        while k < n and b[k].isspace():
+            k += 1
+        return k if k < n and b[k] == ";" else end
+    statement = kind in STATEMENT_KINDS
     paren = angle = brace = 0
     in_where = False  # a `where` clause separates its predicates with top-level `,`
     while k < n:
@@ -244,23 +339,33 @@ def item_end(b, j):
             and not (b[k - 1].isalnum() or b[k - 1] == "_")
         ):
             in_where = True
+        elif c == "|":
+            close = closure_end(b, k)
+            if close is not None:
+                k = close
+            elif b.startswith("||", k):
+                k += 1  # a logical `||`: never read its second `|` as an opener
         elif c in "([":
             paren += 1
         elif c in ")]":
             if paren == 0:
-                return k - 1  # an unmatched closer: the enclosing list ends here
+                # an unmatched closer: the enclosing list ends here
+                return None if statement else k - 1
             paren -= 1
         elif c == "<":
             angle += 1
         elif c == ">" and b[k - 1] not in "-=":
             angle = max(0, angle - 1)
+        elif c == "=" and b.startswith("=>", k) and paren == 0 and brace == 0:
+            return None  # a match arm, not an item
         elif c == "{":
             if paren == 0 and brace == 0 and not statement:
                 break  # the item's own body
             brace += 1
         elif c == "}":
             if brace == 0:
-                return k - 1  # an unmatched `}`: the enclosing block ends here
+                # an unmatched `}`: the enclosing block ends here
+                return None if statement else k - 1
             brace -= 1
         elif c == ";" and paren == 0 and brace == 0:
             return k
@@ -268,7 +373,7 @@ def item_end(b, j):
             return k - 1  # a top-level `,`: the enclosing list continues
         k += 1
     if k >= n:
-        return k
+        return None if statement else k
     depth = 0
     while k < n:
         depth += (b[k] == "{") - (b[k] == "}")

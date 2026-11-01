@@ -68,7 +68,7 @@ make_tree() {
         >"${d}/docs/src/api-reference/migration-guide.md"
     printf 'apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  labels:\n    version: v1.2.3\nspec:\n  containers:\n    - name: s\n      image: paladin-server:1.2.3\n' \
         >"${d}/k8s/server/deployment.yaml"
-    printf '{"openapi": "3.1.0", "info": {"title": "x", "version": "1.2.3"}}\n' \
+    printf '{\n  "openapi": "3.1.0",\n  "info": {\n    "title": "x",\n    "version": "1.2.3"\n  }\n}\n' \
         >"${d}/crates/paladin-web/openapi.json"
 }
 
@@ -83,6 +83,25 @@ fresh() {
 plant() {
     printf '%s\n' "$2" >>"${FX}/$1"
     PLANT_LINE="$(wc -l <"${FX}/$1" | tr -d ' ')"
+}
+
+# replace_in FILE OLD NEW -> replaces every literal OLD with NEW in FILE
+# (relative to $FX).
+replace_in() {
+    local content
+    content="$(<"${FX}/$1")"
+    printf '%s\n' "${content//"$2"/"$3"}" >"${FX}/$1"
+}
+
+# line_of FILE TEXT -> 1-based number of the first line of FILE (relative to
+# $FX) containing the literal TEXT.
+line_of() {
+    grep -nF -- "$2" "${FX}/$1" | head -n1 | cut -d: -f1
+}
+
+# tree_sums DIR -> checksums of every file under DIR, for the no-mutation case.
+tree_sums() {
+    (cd "$1" && find . -type f | LC_ALL=C sort | xargs cksum)
 }
 
 # run_guard ROOT -> sets $LAST_OUTPUT and $LAST_STATUS
@@ -190,6 +209,129 @@ printf '[package]\nname = "paladin-ai"\nversion = "1.2.3"\n' >"${SCRATCH}/zero-f
 assert_fire "${SCRATCH}/zero-files" "a tree with zero scannable files fails ZERO_FILES" \
     "ZERO_FILES"
 
+# --- Failing cases (classes 2-4, named failures, edges) ---------------------
+
+fresh stale-current-version
+replace_in README.md 'Current version: **1.2.3**.' 'Current version: **1.2.2**.'
+assert_fire "${FX}" "class 2: a stale Current version line in README.md" \
+    "README.md:$(line_of README.md 'Current version:'): found '1.2.2', want '1.2.3'"
+
+fresh stale-k8s-label
+replace_in k8s/server/deployment.yaml 'version: v1.2.3' 'version: v1.2.2'
+assert_fire "${FX}" "class 3: a stale k8s version label" \
+    "k8s/server/deployment.yaml:$(line_of k8s/server/deployment.yaml 'version: v1.2.2'): found '1.2.2', want '1.2.3'"
+
+fresh stale-k8s-image
+replace_in k8s/server/deployment.yaml 'image: paladin-server:1.2.3' 'image: paladin-server:1.2.2'
+assert_fire "${FX}" "class 3: a stale paladin-server image tag" \
+    "k8s/server/deployment.yaml:$(line_of k8s/server/deployment.yaml 'image: paladin-server'): found '1.2.2', want '1.2.3'"
+
+fresh stale-k8s-registry-image
+plant k8s/server/deployment.yaml '    - image: example.com/team/paladin:1.2.2'
+assert_fire "${FX}" "class 3: a stale paladin tag behind a registry path" \
+    "k8s/server/deployment.yaml:${PLANT_LINE}: found '1.2.2', want '1.2.3'"
+
+fresh stale-openapi
+replace_in crates/paladin-web/openapi.json '"version": "1.2.3"' '"version": "1.2.2"'
+assert_fire "${FX}" "class 4: a stale openapi.json info.version" \
+    "crates/paladin-web/openapi.json:$(line_of crates/paladin-web/openapi.json '"version"'): found '1.2.2', want '1.2.3'"
+
+fresh stale-crate-readme
+plant crates/paladin-llm/README.md 'paladin-llm = "1.2.2"'
+assert_fire "${FX}" "a stale pin in a crates/*/README.md" \
+    "crates/paladin-llm/README.md:${PLANT_LINE}: found '1.2.2', want '1.2.3'"
+
+fresh image-v-prefixed
+replace_in k8s/server/deployment.yaml 'image: paladin-server:1.2.3' 'image: paladin-server:v1.2.3'
+assert_fire "${FX}" "an image tag must equal the version exactly (v1.2.3 fails)" \
+    "found 'v1.2.3', want '1.2.3'"
+
+fresh label-longer
+replace_in k8s/server/deployment.yaml 'version: v1.2.3' 'version: v1.2.30'
+assert_fire "${FX}" "a label v1.2.30 differs from 1.2.3 (no semver normalisation)" \
+    "found '1.2.30', want '1.2.3'"
+
+fresh label-prerelease
+replace_in k8s/server/deployment.yaml 'version: v1.2.3' 'version: v1.2.3-rc.1'
+assert_fire "${FX}" "a label v1.2.3-rc.1 differs from 1.2.3" \
+    "found '1.2.3-rc.1', want '1.2.3'"
+
+# Named, never-vacuous failures.
+fresh no-current-version
+printf '# paladin-ai\n\n```toml\npaladin-ai = "1.2.3"\n```\n' >"${FX}/README.md"
+assert_fire "${FX}" "no Current version line anywhere gives CLASS_UNMATCHED for class 2" \
+    "CLASS_UNMATCHED" "class 2"
+
+fresh no-k8s-strings
+printf 'apiVersion: apps/v1\nkind: Deployment\n' >"${FX}/k8s/server/deployment.yaml"
+assert_fire "${FX}" "no k8s label or first-party tag gives CLASS_UNMATCHED for class 3" \
+    "CLASS_UNMATCHED" "class 3"
+
+fresh no-openapi
+rm "${FX}/crates/paladin-web/openapi.json"
+assert_fire "${FX}" "a missing openapi.json gives CLASS_UNMATCHED for class 4" \
+    "CLASS_UNMATCHED" "class 4"
+
+fresh no-pins
+printf '# paladin-ai\n\nCurrent version: **1.2.3**.\n' >"${FX}/README.md"
+printf '# Guide\n' >"${FX}/docs/src/guide.md"
+printf '# paladin-llm\n' >"${FX}/crates/paladin-llm/README.md"
+assert_fire "${FX}" "no Cargo pin anywhere gives CLASS_UNMATCHED for class 1" \
+    "CLASS_UNMATCHED" "class 1"
+
+fresh stale-exemption
+rm "${FX}/docs/src/api-reference/migration-guide.md"
+assert_fire "${FX}" "deleting the exempt file gives STALE_EXEMPTION" \
+    "STALE_EXEMPTION" "docs/src/api-reference/migration-guide.md"
+
+fresh no-version
+printf '[package]\nname = "paladin-ai"\n' >"${FX}/Cargo.toml"
+assert_fire "${FX}" "a root Cargo.toml with no [package].version gives NO_VERSION" \
+    "NO_VERSION"
+
+# Ordering and determinism: three stale strings in two files, all reported,
+# sorted by path then line.
+fresh ordering
+plant docs/src/guide.md 'paladin-ai = "1.2.0"'
+GUIDE_LINE_1="${PLANT_LINE}"
+plant docs/src/guide.md 'paladin-llm = "1.2.1"'
+GUIDE_LINE_2="${PLANT_LINE}"
+plant README.md 'paladin-ai = "1.2.2"'
+README_LINE="${PLANT_LINE}"
+ASSERTIONS=$((ASSERTIONS + 1))
+run_guard "${FX}"
+first_output="${LAST_OUTPUT}"
+n_readme="$(grep -nF "README.md:${README_LINE}: found '1.2.2'" <<<"${LAST_OUTPUT}" | head -n1 | cut -d: -f1)"
+n_guide_1="$(grep -nF "docs/src/guide.md:${GUIDE_LINE_1}: found '1.2.0'" <<<"${LAST_OUTPUT}" | head -n1 | cut -d: -f1)"
+n_guide_2="$(grep -nF "docs/src/guide.md:${GUIDE_LINE_2}: found '1.2.1'" <<<"${LAST_OUTPUT}" | head -n1 | cut -d: -f1)"
+# Byte order: README.md sorts before docs/src/guide.md ('R' < 'd'), and guide lines ascend.
+if [ "${LAST_STATUS}" -ne 0 ] && [ -n "${n_readme}" ] && [ -n "${n_guide_1}" ] && [ -n "${n_guide_2}" ] \
+    && [ "${n_readme}" -lt "${n_guide_1}" ] && [ "${n_guide_1}" -lt "${n_guide_2}" ]; then
+    echo "PASS (fire): all three findings are printed, sorted by path then line"
+else
+    echo "FAIL: expected all three findings sorted by path then line (status ${LAST_STATUS}, lines '${n_readme}' '${n_guide_1}' '${n_guide_2}')"
+    echo "${LAST_OUTPUT}" | sed 's/^/  | /'
+    FAILED=$((FAILED + 1))
+fi
+
+ASSERTIONS=$((ASSERTIONS + 1))
+BEFORE_FX_SUMS="$(tree_sums "${FX}")"
+run_guard "${FX}"
+if cmp -s <(printf '%s' "${first_output}") <(printf '%s' "${LAST_OUTPUT}"); then
+    echo "PASS (fire): two runs over the same tree print byte-identical output"
+else
+    echo "FAIL: two runs over the same tree printed different output"
+    FAILED=$((FAILED + 1))
+fi
+
+ASSERTIONS=$((ASSERTIONS + 1))
+if [ "$(tree_sums "${FX}")" = "${BEFORE_FX_SUMS}" ] && [ "${LAST_STATUS}" -ne 0 ]; then
+    echo "PASS (no mutation): the fixture tree is byte-identical after a failing run"
+else
+    echo "FAIL: the fixture tree changed across a failing run (or the run did not fail)"
+    FAILED=$((FAILED + 1))
+fi
+
 # --- Passing cases ----------------------------------------------------------
 
 fresh current
@@ -202,6 +344,41 @@ plant docs/src/guide.md 'paladin-ai = { path = "../x" }'
 plant docs/src/guide.md 'package = "paladin-ai-core"'
 assert_silent "${FX}" "non-workspace keys, version-less tables and prose produce no finding" "OK:"
 
+fresh label-forms
+plant k8s/server/deployment.yaml '    version: "v1.2.3"'
+plant k8s/server/deployment.yaml '    version: 1.2.3'
+plant k8s/server/deployment.yaml '    version: v1.2.3 # trailing comment'
+plant k8s/server/deployment.yaml 'apiVersion: v1'
+assert_silent "${FX}" "label forms v1.2.3, \"v1.2.3\" and 1.2.3 pass; apiVersion is never a label" "OK:"
+
+fresh other-images
+plant k8s/server/deployment.yaml '          image: paladin:test'
+plant k8s/server/deployment.yaml '          image: paladin-server:latest'
+plant k8s/server/deployment.yaml '          image: redis:7-alpine'
+plant k8s/server/deployment.yaml '          image: rustfs/rustfs:1.0.0'
+plant k8s/server/deployment.yaml '          image: example/my-paladin:1.0.0'
+assert_silent "${FX}" "non-candidate images (test, latest, redis, rustfs, my-paladin) are not matched" "OK:"
+
+fresh version-outside-k8s
+plant docs/src/guide.md 'version: 9.9.9'
+assert_silent "${FX}" "a version: line in markdown outside k8s/ is not a class 3 label" "OK:"
+
+fresh not-utf8
+printf '\377\376\000paladin-ai = "0.0.1"\377\n' >"${FX}/docs/src/binary.dat"
+assert_silent "${FX}" "a file that is not valid UTF-8 under docs/src is skipped, never a crash" "OK:"
+
+# Documented limits (PD-07-3): two shapes are deliberately not matched.
+fresh limit-table-header
+plant docs/src/guide.md '[dependencies.paladin-ai]'
+plant docs/src/guide.md 'version = "0.5"'
+assert_silent "${FX}" "a [dependencies.<name>] table with version = on the next line is not matched" "OK:"
+
+fresh limit-late-version
+plant docs/src/guide.md 'paladin-ai = { features = ['
+plant docs/src/guide.md '    "llm-anthropic",'
+plant docs/src/guide.md '], version = "0.5" }'
+assert_silent "${FX}" "an inline table whose version = follows a multi-line array is not matched" "OK:"
+
 # --- The real tree ----------------------------------------------------------
 
 ASSERTIONS=$((ASSERTIONS + 1))
@@ -213,6 +390,10 @@ if [ "${LAST_STATUS}" -ne 0 ]; then
     FAILED=$((FAILED + 1))
 elif ! grep -qF 'OK:' <<<"${LAST_OUTPUT}"; then
     echo "FAIL: the real-tree output carries no OK: line"
+    echo "${LAST_OUTPUT}" | sed 's/^/  | /'
+    FAILED=$((FAILED + 1))
+elif grep -qE 'class [1-4][^;)]*: 0[;)]' <<<"${LAST_OUTPUT}"; then
+    echo "FAIL: the real-tree OK line reports a zero count for one of the four classes"
     echo "${LAST_OUTPUT}" | sed 's/^/  | /'
     FAILED=$((FAILED + 1))
 else

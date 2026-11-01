@@ -1,12 +1,12 @@
 //! `DocGraphRegistry` — resolves a suspended thread's runnable graph from the run row's
-//! frozen `(assistant_id, version)`, replacing [`super::super::parley::registry::GraphRegistry`]'s
-//! fingerprint-only lookup behind the SAME [`GraphResolver`] seam (D-33).
+//! frozen `(assistant_id, version)`, replacing [`GraphRegistry`](crate::application::services::parley::GraphRegistry)'s
+//! fingerprint-only lookup behind the SAME [`GraphResolver`](crate::application::services::parley::adapter::GraphResolver) seam (D-33).
 //!
 //! A `WarGraphDoc`-defined workflow assistant is never registered by fingerprint anywhere:
-//! [`DocGraphRegistry::resolve`] instead reads the thread's currently active
+//! [`DocGraphRegistry::resolve`](crate::application::services::parley::adapter::GraphResolver::resolve) instead reads the thread's currently active
 //! [`Run`](paladin_core::platform::container::run::Run) row (`RunRepositoryPort::active_run_for_thread`),
 //! takes its frozen `assistant` reference, and resolves THAT through an
-//! [`AssistantResolver`] -- the same resolver `RunSubmissionService` and
+//! [`AssistantResolver`](crate::application::services::run::resolver::AssistantResolver) -- the same resolver `RunSubmissionService` and
 //! `RunWorkerPool` already use, so a resume sees exactly the version the run itself is
 //! pinned to, never a re-resolved `latest` (D-30's freeze-at-submit guarantee extends to
 //! resume).

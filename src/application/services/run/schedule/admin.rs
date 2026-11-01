@@ -1,6 +1,6 @@
 //! `ScheduleAdminPort` implementation for `ScheduleService` (PLAT-05, D-42, D-46).
 //!
-//! Validate-then-persist: [`ScheduleService::create`]/[`ScheduleService::patch`] validate
+//! Validate-then-persist: [`ScheduleService::create`](paladin_ports::input::schedule_admin_port::ScheduleAdminPort::create)/[`ScheduleService::patch`](paladin_ports::input::schedule_admin_port::ScheduleAdminPort::patch) validate
 //! the cron (5/6 field via `paladin_storage::cron::parse_run_cron`), the IANA timezone
 //! (same call), the assistant reference (`AssistantResolver::resolve`, if a resolver is
 //! wired via [`ScheduleService::with_resolver`]) and the webhook URL (the shared write-time
@@ -11,7 +11,7 @@
 //! 27-14 (this module's own plan) built an independent, standalone `SsrfGuard` copy here
 //! because 27-13's real guard (`src/application/services/run/webhook/ssrf.rs`) was not in
 //! that plan's parallel-wave worktree base. Both waves have since landed, so this module now
-//! routes through [`super::super::webhook::SsrfGuard`] directly — ONE guard applied at both
+//! routes through [`super::super::webhook::SsrfGuard`](crate::application::services::run::webhook::SsrfGuard) directly — ONE guard applied at both
 //! write time (here, on schedule create/patch) and send time (27-13's webhook client, on
 //! every delivery attempt), never two independently-maintained copies of the same
 //! security-relevant classification table (D-42 wave_context, 27-15).

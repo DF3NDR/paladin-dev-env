@@ -1,12 +1,12 @@
 //! Assistant validation, publishing and resolution facade (PLAT-04, D-28..D-33).
 //!
-//! Assistants become usable end-to-end here: [`AssistantValidator`] makes compile the
-//! validation gate (D-31); [`AssistantService`] implements the
+//! Assistants become usable end-to-end here: [`AssistantValidator`](crate::application::services::assistant::AssistantValidator) makes compile the
+//! validation gate (D-31); [`AssistantService`](crate::application::services::assistant::AssistantService) implements the
 //! [`paladin_ports::input::assistant_admin_port::AssistantAdminPort`] every
-//! `POST/GET/DELETE /assistants*` route drives; [`StoredAssistantResolver`] and
-//! [`ChainedResolver`] extend `services::run::resolver::AssistantResolver` so
+//! `POST/GET/DELETE /assistants*` route drives; [`StoredAssistantResolver`](crate::application::services::assistant::StoredAssistantResolver) and
+//! [`ChainedResolver`](crate::application::services::assistant::ChainedResolver) extend `services::run::resolver::AssistantResolver` so
 //! `POST /runs` can run a stored definition with `latest` frozen at submit (D-30); and
-//! [`DocGraphRegistry`] lets a resume find a suspended run's graph through that same
+//! [`DocGraphRegistry`](crate::application::services::assistant::DocGraphRegistry) lets a resume find a suspended run's graph through that same
 //! frozen version (D-33).
 
 /// Resolves a suspended thread's graph from the run row's frozen

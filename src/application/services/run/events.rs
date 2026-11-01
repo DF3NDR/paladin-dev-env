@@ -9,7 +9,7 @@
 //!
 //! # One producer (D-14)
 //!
-//! [`RunEventBusSink`] (a [`TraceSink`] implementation) is this bus's ONLY
+//! [`RunEventBusSink`] (a [`TraceSink`](paladin_ports::output::trace_sink_port::TraceSink) implementation) is this bus's ONLY
 //! producer: every one of the seven wire events -- `superstep`,
 //! `node_started`, `node_finished`, `state_delta`, `parley`, `done` and
 //! `error` -- is bridged live from the engine's twelve-variant `TraceEvent`
@@ -30,10 +30,10 @@
 //! `tokio::sync::broadcast::Sender::send` is synchronous and returns
 //! immediately regardless of how many subscribers are attached or how full
 //! any one of their individual queues is. A subscriber that falls behind the
-//! bounded channel capacity ([`RUN_EVENT_CHANNEL_CAPACITY`]) has its oldest
+//! bounded channel capacity ([`RUN_EVENT_CHANNEL_CAPACITY`](crate::application::services::run::events::RUN_EVENT_CHANNEL_CAPACITY)) has its oldest
 //! unread events dropped and counted by `tokio::sync::broadcast` itself; this
 //! module folds that count into the `dropped` field of the next event the
-//! lagging subscriber DOES receive (see [`RunEventStreamPort::stream`]'s live
+//! lagging subscriber DOES receive (see [`RunEventStreamPort::stream`](paladin_ports::input::run_event_stream_port::RunEventStreamPort::stream)'s live
 //! path, `receiver_to_stream`).
 //!
 //! # Replay mode (D-16)
@@ -49,7 +49,7 @@
 //! (T-28-11-03). When no rows exist yet but the run is not terminal (still
 //! executing elsewhere), the replay stream polls for more exactly like the
 //! degraded path does, and falls back to synthesizing a terminal event from
-//! [`Run::status`] if the run reaches a terminal status through a path that
+//! [`Run::status`](paladin_core::platform::container::run::Run::status) if the run reaches a terminal status through a path that
 //! never produced a `TraceEvent::RunFinished` record (mirrors
 //! `record_engine_failure`'s own documented exception, `worker.rs`) --
 //! never an unbounded hang. With NO rows at all (persistence off, or a run
@@ -59,7 +59,7 @@
 //! # Degraded mode (D-26)
 //!
 //! When a run is not bound on THIS instance (executing elsewhere, or already
-//! terminal) AND replay is unavailable or empty, [`RunEventStreamService::stream`]
+//! terminal) AND replay is unavailable or empty, [`RunEventStreamService::stream`](paladin_ports::input::run_event_stream_port::RunEventStreamPort::stream)
 //! falls back to polling `RunRepositoryPort::get` + `WaypointPort::latest` at
 //! `poll_interval`, synthesizing `superstep`/`parley`/`done`/`error` events
 //! from what it observes. This path gives NO ordering guarantee relative to

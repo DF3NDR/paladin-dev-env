@@ -1,4 +1,4 @@
-//! `RunSubmissionService` — the facade [`RunSubmissionPort`] implementation
+//! `RunSubmissionService` — the facade [`RunSubmissionPort`](paladin_ports::input::run_submission_port::RunSubmissionPort) implementation
 //! (D-12).
 //!
 //! Resolves the assistant reference, builds a `Run`, inserts it, enqueues a

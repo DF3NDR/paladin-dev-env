@@ -1,9 +1,9 @@
 //! Presets: one-liner compositions over the pieces Phase 26 built and
 //! tested in isolation (Doc 05 RT-07, RT-FR-23/24, D-35, D-36).
 //!
-//! [`reasoning_agent`] is the phase's "the value here is that a caller does
-//! not have to know that" moment: it composes [`PaladinBuilder`]-shaped
-//! construction, [`PaladinExecutionService`]'s tool-loop middleware set, and
+//! [`reasoning_agent`](crate::presets::reasoning_agent) is the phase's "the value here is that a caller does
+//! not have to know that" moment: it composes [`PaladinBuilder`](crate::application::services::paladin::paladin_builder::PaladinBuilder)-shaped
+//! construction, [`PaladinExecutionService`](crate::application::services::paladin::paladin_execution_service::PaladinExecutionService)'s tool-loop middleware set, and
 //! [`StructuredExecutorExt`] into one call that returns a runnable,
 //! tool-using agent with documented defaults.
 

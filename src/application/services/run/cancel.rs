@@ -1,7 +1,7 @@
 //! Cross-instance cancellation (D-14, D-15, D-16, PLAT-FR-04): the
-//! debounced [`CancellationProbe`] adapter reading the durable cancel flag
-//! through [`RunRepositoryPort`], and the per-instance local-token registry
-//! [`RunSubmissionService::cancel`] consults to decide `was_local`.
+//! debounced [`CancellationProbe`](paladin_ports::output::cancellation_probe::CancellationProbe) adapter reading the durable cancel flag
+//! through [`RunRepositoryPort`](paladin_ports::output::run_repository_port::RunRepositoryPort), and the per-instance local-token registry
+//! [`RunSubmissionService::cancel`](paladin_ports::input::run_submission_port::RunSubmissionPort::cancel) consults to decide `was_local`.
 //!
 //! ## Two signals, two purposes
 //!
@@ -169,7 +169,7 @@ impl CancellationProbe for PerRunCancelProbe {
 
 /// The registry a [`RunWorkerPool`](super::worker::RunWorkerPool) shares
 /// with [`RunSubmissionService`](super::submission::RunSubmissionService)
-/// (via [`RunSubmissionService::with_local_tokens`]) so `cancel` can decide
+/// (via [`RunSubmissionService::with_local_tokens`](crate::application::services::run::submission::RunSubmissionService::with_local_tokens)) so `cancel` can decide
 /// `CancelOutcome::was_local` (D-16): whether THIS process instance is
 /// dispatching the target run right now.
 ///

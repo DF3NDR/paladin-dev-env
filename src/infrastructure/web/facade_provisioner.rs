@@ -2,8 +2,8 @@
 //!
 //! The HTTP API's `POST /agents` route (in `paladin-web`) delegates to an injected
 //! [`AgentProvisioner`] to turn a request [`AgentSpec`] into a `(Paladin, executor)`
-//! pair. [`FacadeProvisioner`] is that implementation: it reuses the same
-//! [`build_agent`](super::agent_host::build_agent) path as config load, so
+//! pair. [`FacadeProvisioner`](crate::infrastructure::web::facade_provisioner::FacadeProvisioner) is that implementation: it reuses the same
+//! `build_agent` path as config load, so
 //! config-defined and runtime-registered agents are built identically.
 
 use std::sync::Arc;

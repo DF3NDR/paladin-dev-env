@@ -19,13 +19,13 @@
 //! Instead, [`ToolCallProtocolMiddleware::before_model`] renders the
 //! arsenal's [`paladin_ports::output::arsenal_port::ArsenalPort::list_armaments`]
 //! catalogue directly into the prompt text as a `## Tools`
-//! [`super::PromptSection`], with a documented JSON envelope the model is
+//! [`PromptSection`](crate::application::services::paladin::middleware::PromptSection), with a documented JSON envelope the model is
 //! asked to reply with. [`ToolCallProtocolMiddleware::after_model`] --
 //! ONLY when a real `function_call` is absent -- extracts that envelope
 //! from the model's plain-text response via the SAME
 //! [`paladin_core::platform::container::structured::extract_json`] the
 //! structured-output machinery already uses (never a second envelope
-//! parser), and synthesizes [`super::LlmResponseView::function_call`] so
+//! parser), and synthesizes [`LlmResponseView::function_call`](crate::application::services::paladin::middleware::LlmResponseView::function_call) so
 //! the EXISTING tool branch in `execute_internal` (the `if let
 //! Some(function_call) = response_view.function_call.clone()` check) fires
 //! completely unchanged. Anything that is not the documented envelope --

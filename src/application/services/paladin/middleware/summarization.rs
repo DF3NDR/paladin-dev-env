@@ -6,7 +6,7 @@
 //!
 //! `GarrisonPort` has no delete-by-id (`garrison_port.rs:380-491`), so a
 //! summary this middleware writes is never removed from the store. That is
-//! why [`super::super::paladin_execution_service::effective_history`]
+//! why `effective_history`
 //! exists: every reader of a recalled Garrison window -- the trimmer, this
 //! middleware, and the service's own prompt renderer -- finds the NEWEST
 //! `is_summary` entry and treats it plus every raw entry newer than it as
@@ -35,7 +35,7 @@
 //! summarizer error -- transient or permanent, D-31's classification is
 //! irrelevant here -- it logs a warning, sets
 //! `scratch["summarization.degraded"] = true`, and runs an EMBEDDED
-//! [`super::history::HistoryTrimmer`] (built from the same
+//! [`HistoryTrimmer`](crate::application::services::paladin::middleware::HistoryTrimmer) (built from the same
 //! [`crate::config::agent_runtime::HistoryTrimmerConfig`] this middleware
 //! was constructed with) directly against `cx`. `HistoryTrimmer::before_model`
 //! never returns `MiddlewareFlow::Fail`, so neither does this path -- this
@@ -46,7 +46,7 @@
 //! # The summarizer's call is invisible to the chain (D-08, D-16)
 //!
 //! The summarizer port is called directly with `.generate(request).await`,
-//! never through [`super::run_before`]/[`super::run_after`] -- so no
+//! never through [`run_before`](crate::application::services::paladin::middleware::run_before)/[`run_after`](crate::application::services::paladin::middleware::run_after) -- so no
 //! `before_model`/`after_model` hook fires for it, and a `ModelCallLimit`
 //! sharing the same run never counts it.
 

@@ -3,7 +3,7 @@
 //! registered), the event bus, and the routers -- all off by default (D-50), all registered
 //! with the shutdown coordinator (D-13), all fail-closed on a feature/config mismatch.
 //!
-//! [`build_run_api`] is the single entry point, mirroring
+//! [`build_run_api`](crate::infrastructure::web::run_api_wiring::build_run_api) is the single entry point, mirroring
 //! `src/bin/paladin-server.rs`'s `build_thread_state`/`thread_state_over_store` precedent
 //! from Phase 24 (HITL-05, D-24..D-26): every new subsystem defaults to
 //! [`crate::config::run_store::RunStoreBackend::Disabled`], in which case every new route
@@ -19,9 +19,9 @@
 //! constructor can apply. `WarEngine<W: WaypointPort>` and `RunWorkerPool<W: WaypointPort>`
 //! are both generic over a *concrete, `Sized`* store type, but the waypoint store this
 //! module receives has already been erased to `Arc<dyn WaypointPort>` (the same shape
-//! `ThreadApiState::waypoints` carries) by the time it reaches here. [`ErasedWaypointStore`]
+//! `ThreadApiState::waypoints` carries) by the time it reaches here. [`ErasedWaypointStore`](crate::infrastructure::web::run_api_wiring::ErasedWaypointStore)
 //! is a minimal newtype wrapping that trait object and re-implementing
-//! [`WaypointPort`] by delegation -- `Arc<ErasedWaypointStore>` is `Sized`, so it satisfies
+//! [`WaypointPort`](paladin_ports::output::waypoint_port::WaypointPort) by delegation -- `Arc<ErasedWaypointStore>` is `Sized`, so it satisfies
 //! `WarEngine`/`RunWorkerPool`'s generic bound without this module (or its caller) ever
 //! needing to know or care whether the underlying backend is SQLite or Postgres.
 
@@ -386,7 +386,7 @@ async fn build_postgres_quartet(url_env: &str) -> Result<RepoQuartet, Box<dyn st
 /// `Disabled` -> `Ok(None)` (D-08: no ledger installed when no backend is configured);
 /// `Sqlite { path }` -> a [`SqliteTreasuryLedger`](paladin_storage::treasury::sqlite::SqliteTreasuryLedger)
 /// sharing that exact database file; `Postgres { url_env }` -> a
-/// [`PostgresTreasuryLedger`](paladin_storage::treasury::postgres::PostgresTreasuryLedger)
+/// `PostgresTreasuryLedger`
 /// sharing that exact database, on a build with `storage-postgres` (a named-feature error
 /// otherwise, mirroring `build_postgres_quartet`'s own precedent).
 ///
@@ -445,7 +445,7 @@ async fn build_postgres_treasury_ledger(
 /// [`SqliteTreasuryLedger`](paladin_storage::treasury::sqlite::SqliteTreasuryLedger) on that
 /// exact database file (it implements [`TreasuryNoticePort`] beside the ledger port, and its
 /// construction applies the `treasury_notices` migration); `Postgres { url_env }` -> a
-/// [`PostgresTreasuryLedger`](paladin_storage::treasury::postgres::PostgresTreasuryLedger) on
+/// `PostgresTreasuryLedger` on
 /// that exact database, on a build with `storage-postgres` (a named-feature error otherwise).
 ///
 /// # Errors

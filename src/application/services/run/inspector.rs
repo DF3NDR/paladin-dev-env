@@ -1,5 +1,5 @@
-//! `RunInspectorService` -- the facade [`RunInspectorPort`] implementation
-//! (D-24, OBS-03 / OBS-FR-10): builds an [`InspectorView`] on top of the
+//! `RunInspectorService` -- the facade [`RunInspectorPort`](paladin_ports::input::run_inspector_port::RunInspectorPort) implementation
+//! (D-24, OBS-03 / OBS-FR-10): builds an [`InspectorView`](paladin_ports::input::run_inspector_port::InspectorView) on top of the
 //! 28-10 execution overlay, Waypoint history, and (when persisted) exact
 //! trace records.
 //!
@@ -7,29 +7,29 @@
 //! `events.rs`/`worker.rs` do: resolving a `WarGraph` and rendering a
 //! `GraphShape`/`ExecutionOverlay` needs `paladin-battalion` (ADR-0031).
 //! `paladin-web` sees only [`RunInspectorService`] through the
-//! [`RunInspectorPort`] trait object -- it never names `WarGraph`,
+//! [`RunInspectorPort`](paladin_ports::input::run_inspector_port::RunInspectorPort) trait object -- it never names `WarGraph`,
 //! `GraphShape`, `ExecutionOverlay`, or `TraceEvent`.
 //!
 //! # Graph resolution (D-22, restricted to this plan's scope)
 //!
 //! Unlike `paladin-cli graph export`'s `--graph <FILE>` flag (28-13,
 //! out of scope here), this service has exactly two buckets: the thread's
-//! latest [`Run`]'s assistant version, resolved through
-//! [`AssistantResolver`] to a [`WarGraph`] and rendered via
-//! [`GraphShape::from_graph`]; or, when no run exists, resolution fails, or
+//! latest [`Run`](paladin_core::platform::container::run::Run)'s assistant version, resolved through
+//! [`AssistantResolver`] to a [`WarGraph`](paladin_battalion::engine::WarGraph) and rendered via
+//! [`GraphShape::from_graph`](paladin_battalion::engine::GraphShape::from_graph); or, when no run exists, resolution fails, or
 //! the assistant is `Agent`-kind (no `WarGraph` at all),
-//! [`GraphShape::observed`] -- the same D-22 fallback 28-10 established,
-//! with `observed_only: true` carried through to [`InspectorView`].
+//! [`GraphShape::observed`](paladin_battalion::engine::GraphShape::observed) -- the same D-22 fallback 28-10 established,
+//! with `observed_only: true` carried through to [`InspectorView`](paladin_ports::input::run_inspector_port::InspectorView).
 //!
 //! # Edge source (D-21)
 //!
-//! When a [`RunTracePort`] is wired AND the thread has persisted rows, the
+//! When a [`RunTracePort`](paladin_ports::output::run_trace_port::RunTracePort) is wired AND the thread has persisted rows, the
 //! overlay is built from those records
-//! ([`ExecutionOverlay::from_trace_records`]) -- `fired_edges` and
+//! ([`ExecutionOverlay::from_trace_records`](paladin_battalion::engine::ExecutionOverlay::from_trace_records)) -- `fired_edges` and
 //! `evaluated_edges` are exact. Otherwise the overlay is derived from
-//! Waypoint history ([`ExecutionOverlay::from_waypoints`]) -- `fired_edges`
+//! Waypoint history ([`ExecutionOverlay::from_waypoints`](paladin_battalion::engine::ExecutionOverlay::from_waypoints)) -- `fired_edges`
 //! is derived and `evaluated_edges` stays empty. Either way,
-//! [`InspectorView::supersteps`] is always built from the thread's
+//! [`InspectorView::supersteps`](paladin_ports::input::run_inspector_port::InspectorView::supersteps) is always built from the thread's
 //! Waypoint history: a Waypoint is the durability truth (28-04), and a
 //! trace is a replay convenience layered on top of it, never a
 //! replacement for it.

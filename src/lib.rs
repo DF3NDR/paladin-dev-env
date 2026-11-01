@@ -114,9 +114,6 @@
 //! See [STABLE_API.md](https://github.com/DF3NDR/paladin-dev-env/blob/main/STABLE_API.md) for details.
 
 #![warn(missing_docs)]
-#![allow(rustdoc::broken_intra_doc_links)]
-#![allow(rustdoc::redundant_explicit_links)]
-#![allow(rustdoc::invalid_html_tags)]
 #![doc(html_root_url = "https://docs.rs/paladin/0.1.0")]
 
 // ============================================================================

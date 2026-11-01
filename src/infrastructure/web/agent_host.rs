@@ -2,14 +2,14 @@
 //! for the HTTP service host (Milestone 12, Epic 2).
 //!
 //! This is composition-root glue: it lives in the facade crate because it wires the
-//! application-layer [`PaladinBuilder`] / [`PaladinExecutionService`] and the
+//! application-layer [`PaladinBuilder`](crate::application::services::paladin::paladin_builder::PaladinBuilder) / [`PaladinExecutionService`](crate::application::services::paladin::paladin_execution_service::PaladinExecutionService) and the
 //! `paladin-llm` provider factory into the `paladin-web` registry. `paladin-web` itself
 //! depends on neither.
 //!
 //! Agents are **LLM + prompt only** in this epic — no garrison (memory) or arsenal
-//! (tools). [`build_agent`] is the single build path shared by config-load
-//! ([`build_agent_registry`]) and runtime registration (the
-//! [`FacadeProvisioner`](super::facade_provisioner::FacadeProvisioner)).
+//! (tools). `build_agent` is the single build path shared by config-load
+//! ([`build_agent_registry`](crate::infrastructure::web::agent_host::build_agent_registry)) and runtime registration (the
+//! [`FacadeProvisioner`](crate::infrastructure::web::facade_provisioner::FacadeProvisioner)).
 
 use std::sync::Arc;
 use std::time::Duration;

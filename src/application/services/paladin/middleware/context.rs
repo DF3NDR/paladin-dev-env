@@ -278,7 +278,7 @@ pub struct ModelCallContext<'p> {
     /// site (`ModelRetryMiddleware`, plan 26-10).
     pub retry_policy: Option<RetryPolicy>,
     /// A structured-output hint set once by
-    /// [`crate::application::services::paladin::paladin_execution_service::PaladinExecutionService::execute_json_schema`]
+    /// `PaladinExecutionService::execute_json_schema`
     /// (Doc 05 RT-05, D-27, D-28) and read at the same single model-call
     /// site as `llm_override`/`retry_policy`. `None` for every ordinary
     /// run -- only a structured run ever sets this field.

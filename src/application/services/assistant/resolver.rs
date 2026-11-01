@@ -1,5 +1,5 @@
-//! Stored-assistant resolution behind the SAME [`AssistantResolver`] seam 27-01's
-//! [`CodeWorkflowResolver`] already implements (D-28, D-32).
+//! Stored-assistant resolution behind the SAME [`AssistantResolver`](crate::application::services::run::resolver::AssistantResolver) seam 27-01's
+//! [`CodeWorkflowResolver`](crate::application::services::run::resolver::CodeWorkflowResolver) already implements (D-28, D-32).
 //!
 //! [`StoredAssistantResolver`] resolves a stored `(assistant_id, version)` by loading the
 //! version's `AssistantDefinition` and re-validating it through [`AssistantValidator`]

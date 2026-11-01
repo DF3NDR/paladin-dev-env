@@ -31,7 +31,7 @@
 //! `.github/instructions/rust.instructions.md`), so a panicking handler is
 //! a bug in the handler to fix, not a condition this port should convert
 //! into a value. A handler that legitimately fails should return `Err`,
-//! which [`invoke`](Self::invoke) turns into a failed [`ArmamentResult`]
+//! which [`invoke`](paladin_ports::output::arsenal_port::ArsenalPort::invoke) turns into a failed [`ArmamentResult`]
 //! (never a panic) — see `a_closure_error_becomes_an_armament_result_error_not_a_panic`
 //! below.
 

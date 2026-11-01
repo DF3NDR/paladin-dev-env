@@ -1,9 +1,9 @@
 //! Rate-pacing composition -- `build_cadence` and `compose_llm` (PACE-02, D-07, D-08; Phase 43)
 //!
-//! The composition root's half of the Cadence: [`build_cadence`] turns the operator's
-//! `treasurer.cadence` section into one [`CadenceWiring`] (a shared
+//! The composition root's half of the Cadence: [`build_cadence`](crate::infrastructure::cadence::build_cadence) turns the operator's
+//! `treasurer.cadence` section into one [`CadenceWiring`](paladin_llm::cadence::CadenceWiring) (a shared
 //! [`CadencePort`](paladin_ports::output::cadence_port::CadencePort) plus its settings), and
-//! [`compose_llm`] layers every resolved provider as `Pricing(Cadence(provider))`:
+//! [`compose_llm`](crate::infrastructure::cadence::compose_llm) layers every resolved provider as `Pricing(Cadence(provider))`:
 //!
 //! ```text
 //! with_pricing( with_cadence( provider ) )
@@ -15,7 +15,7 @@
 //! ## One wiring per process
 //!
 //! The in-process backend keeps its gate state inside the port instance, so ONE
-//! [`CadenceWiring`] must be shared by every composition root in a process for pacing to be
+//! [`CadenceWiring`](paladin_llm::cadence::CadenceWiring) must be shared by every composition root in a process for pacing to be
 //! process-wide. Building a wiring per call site would pace each site independently.
 //! `paladin-server` builds one at boot and hands clones to the agent host, the facade
 //! provisioner and the run engine's wiring.
@@ -23,15 +23,15 @@
 //! ## On by default
 //!
 //! A default `treasurer.cadence` section yields `Some(wiring)` over the in-process adapter (D-08);
-//! only `enabled: false` yields `None`, and then [`compose_llm`] installs no pacing layer at all.
+//! only `enabled: false` yields `None`, and then [`compose_llm`](crate::infrastructure::cadence::compose_llm) installs no pacing layer at all.
 //!
 //! ## Pacing only
 //!
 //! A consumer that builds adapters directly (from a `*Config`, not through the server) gets no
 //! pacing at all, because no adapter retries a 429 inside its own loop since Phase 43. To pace
-//! without any pricing, build ONE wiring with [`build_cadence`] and wrap each adapter with
-//! [`with_cadence`]; [`compose_llm`] stays for a consumer that also prices. With
-//! `treasurer.cadence.enabled: false` the wiring is `None` and [`with_cadence`] hands the adapter
+//! without any pricing, build ONE wiring with [`build_cadence`](crate::infrastructure::cadence::build_cadence) and wrap each adapter with
+//! [`with_cadence`](paladin_llm::cadence::with_cadence); [`compose_llm`](crate::infrastructure::cadence::compose_llm) stays for a consumer that also prices. With
+//! `treasurer.cadence.enabled: false` the wiring is `None` and [`with_cadence`](paladin_llm::cadence::with_cadence) hands the adapter
 //! back unchanged.
 //!
 //! ```

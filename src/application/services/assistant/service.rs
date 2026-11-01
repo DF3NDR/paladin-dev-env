@@ -1,10 +1,10 @@
-//! `AssistantService` — the facade [`AssistantAdminPort`] implementation (D-31).
+//! `AssistantService` — the facade [`AssistantAdminPort`](paladin_ports::input::assistant_admin_port::AssistantAdminPort) implementation (D-31).
 //!
 //! Validates a definition through [`AssistantValidator`] BEFORE any
-//! [`AssistantRepositoryPort`] call: an invalid definition never reaches the repository,
+//! [`AssistantRepositoryPort`](paladin_ports::output::assistant_repository_port::AssistantRepositoryPort) call: an invalid definition never reaches the repository,
 //! so "compile is validation" (D-31) holds all the way down to storage. Version-publish
 //! retry-on-conflict is already handled by
-//! [`AssistantRepositoryPort::append_version`]'s own implementation (27-09) -- this
+//! [`AssistantRepositoryPort::append_version`](paladin_ports::output::assistant_repository_port::AssistantRepositoryPort::append_version)'s own implementation (27-09) -- this
 //! service surfaces an exhausted retry budget typed, it does not retry a second time
 //! itself.
 

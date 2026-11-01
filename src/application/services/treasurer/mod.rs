@@ -1,6 +1,6 @@
 //! The Treasurer's admission slice (ALLOW-01, ALLOW-02, Phase 41).
 //!
-//! [`Treasurer`] is the facade service that answers [`AllowanceAdmissionPort`]: before a run (or
+//! [`Treasurer`](crate::application::services::treasurer::Treasurer) is the facade service that answers [`AllowanceAdmissionPort`](paladin_ports::input::allowance_admission_port::AllowanceAdmissionPort): before a run (or
 //! an agent call) is accepted it reads the ledger's balance for each allowance ceiling that
 //! applies to the caller and refuses when a balance has reached its ceiling.
 //!
@@ -10,33 +10,33 @@
 //!   process's own clock.
 //! - **Fail closed** (D-10): a principal with a configured ceiling whose balance cannot be read
 //!   is not admitted. A principal with no configured allowance never reaches the ledger.
-//! - **Identity only** (D-09): the Treasurer takes a [`RunAttribution`] -- tenant and API key
+//! - **Identity only** (D-09): the Treasurer takes a [`RunAttribution`](paladin_core::platform::container::principal::RunAttribution) -- tenant and API key
 //!   name, never a role -- so no role bypasses an allowance.
 //! - **A notice observes, never gates** (ALLOW-04, D-15, D-16): on the admitted path, every
 //!   ceiling whose pre-admission balance has reached its `warn_at` percent claims one durable
-//!   once-per-window notice from the [`TreasuryNoticePort`] (when one is attached with
-//!   [`Treasurer::with_notices`]). The claim is store-enforced across replicas; a notice-store
+//!   once-per-window notice from the [`TreasuryNoticePort`](paladin_ports::output::treasury_notice_port::TreasuryNoticePort) (when one is attached with
+//!   [`Treasurer::with_notices`](crate::application::services::treasurer::Treasurer::with_notices)). The claim is store-enforced across replicas; a notice-store
 //!   failure is logged and the run is still admitted. A claim is made BEFORE the run row is
 //!   inserted, so `abandon` gives an admitted-but-never-persisted run's notices back (a crash in
 //!   between can lose a window's notice but never duplicate it).
 //! - **The operator webhook rides the durable queue** (ALLOW-04, D-17): when an
-//!   [`OperatorNoticeTarget`] is attached ([`Treasurer::with_operator_webhook`]), `confirm`
+//!   [`OperatorNoticeTarget`](crate::application::services::treasurer::OperatorNoticeTarget) is attached ([`Treasurer::with_operator_webhook`](crate::application::services::treasurer::Treasurer::with_operator_webhook)), `confirm`
 //!   enqueues one `webhook_deliveries` row (event `allowance_warning`) per notice the
 //!   admission won, delivered later by the existing signed, SSRF-guarded, no-redirect
 //!   `WebhookDeliveryService`. This module never builds an HTTP client and never holds the
 //!   signing secret -- the delivery service does (C3).
 //!
 //! - **One evaluation, two callers** (ALLOW-03, Phase 42 D-17): admission and the per-boundary
-//!   [`TreasurerSpendGuard`] share one ceiling evaluation (`Treasurer::evaluate`): the same
+//!   [`TreasurerSpendGuard`](crate::application::services::treasurer::TreasurerSpendGuard) share one ceiling evaluation (`Treasurer::evaluate`): the same
 //!   ceiling order, the same single truncated store-clock read, the same `balance >= ceiling`
 //!   predicate, and the same stop at the first exhausted ceiling. The guard is how an allowance
 //!   exhausted mid-run halts the run at its next superstep boundary.
 //!
 //! - **A derived budget for the agent loop** (ALLOW-05, Phase 42 D-09, D-10): with a price table
-//!   attached ([`Treasurer::with_pricing`]), [`Treasurer::derive_budget`] and the model-aware
-//!   admission ([`AllowanceAdmissionPort::admit_for_model`]) turn the remaining allowance into a
+//!   attached ([`Treasurer::with_pricing`](crate::application::services::treasurer::Treasurer::with_pricing)), [`Treasurer::derive_budget`](crate::application::services::treasurer::Treasurer::derive_budget) and the model-aware
+//!   admission ([`AllowanceAdmissionPort::admit_for_model`](paladin_ports::input::allowance_admission_port::AllowanceAdmissionPort::admit_for_model)) turn the remaining allowance into a
 //!   per-run token budget at the model's dearest price, refuse an unpriced model
-//!   ([`AdmissionError::ModelUnpriced`]) and a zero budget, and read through the same shared
+//!   ([`AdmissionError::ModelUnpriced`](paladin_ports::input::allowance_admission_port::AdmissionError::ModelUnpriced)) and a zero budget, and read through the same shared
 //!   evaluation. See `derive.rs`.
 //!
 //! This module imports `paladin_core` and `paladin_ports` only, never a storage adapter

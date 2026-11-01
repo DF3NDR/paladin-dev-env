@@ -9,9 +9,9 @@
 //! ## Dispatch (D-09)
 //!
 //! The worker has ONE entry point that branches on the thread's latest
-//! Waypoint: absent -> [`WarEngine::start`]; present with pending responses
-//! parked on the `Run` -> [`WarEngine::resume_with`]; present otherwise ->
-//! [`WarEngine::resume`]. [`WorkerDispatch::decide`] is the pure decision
+//! Waypoint: absent -> [`WarEngine::start`](paladin_battalion::engine::WarEngine::start); present with pending responses
+//! parked on the `Run` -> [`WarEngine::resume_with`](paladin_battalion::engine::WarEngine::resume_with); present otherwise ->
+//! [`WarEngine::resume`](paladin_battalion::engine::WarEngine::resume). [`WorkerDispatch::decide`] is the pure decision
 //! function; `run_once` is the only caller.
 //!
 //! ## Heartbeat (D-10)
@@ -23,7 +23,7 @@
 //!
 //! ## Outcome mapping (D-16, D-22, D-13)
 //!
-//! `map_outcome` is the one place a [`RunOutcome`] becomes a status
+//! `map_outcome` is the one place a [`RunOutcome`](paladin_battalion::engine::RunOutcome) becomes a status
 //! transition (or, for a shutdown-halted run, a requeue instead). The
 //! `Halted`/`Cancelled` vocabulary split is deliberate: the *waypoint*
 //! halted, but the *run* is recorded `Cancelled` only when a caller asked
@@ -807,7 +807,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// to every in-flight per-run engine, exactly as the shared-engine path
     /// already does) -- registered in [`RunWorkerPool::local_tokens`] for
     /// the duration of dispatch, so
-    /// [`RunSubmissionService::cancel`](super::submission::RunSubmissionService::cancel)
+    /// [`RunSubmissionService::cancel`](paladin_ports::input::run_submission_port::RunSubmissionPort::cancel)
     /// can fire it directly when this same instance holds the run.
     ///
     /// The caller's closure is responsible for wiring whatever

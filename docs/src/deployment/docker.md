@@ -88,7 +88,7 @@ Paladin images are available from GitHub Container Registry:
 ghcr.io/your-org/paladin:latest
 
 # Specific version
-ghcr.io/your-org/paladin:v0.8.0
+ghcr.io/your-org/paladin:X.Y.Z
 
 # Latest commit on main branch
 ghcr.io/your-org/paladin:main
@@ -102,7 +102,7 @@ ghcr.io/your-org/paladin:dev-<branch-name>
 | Tag Pattern | Description | Use Case |
 |-------------|-------------|----------|
 | `latest` | Most recent stable release | Production |
-| `v<semver>` | Specific version (e.g., `v0.8.0`) | Production (pinned) |
+| `<semver>` | Specific version (`X.Y.Z`, as `release.yml` tags it) | Production (pinned) |
 | `main` | Latest commit on main branch | Staging |
 | `<branch>` | Feature branch builds | Development |
 | `slim` | Minimal image without examples | Production (space-constrained) |
@@ -512,7 +512,7 @@ docker buildx inspect --bootstrap
 # Build for multiple platforms
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
-  -t ghcr.io/your-org/paladin:v0.8.0 \
+  -t ghcr.io/your-org/paladin:X.Y.Z \
   --push \
   .
 ```
@@ -546,11 +546,11 @@ release tag lands:
 Paladin follows semantic versioning with Docker tags:
 
 ```bash
-# Release v0.8.0
+# Release vX.Y.Z (git tag; release.yml pushes the image tags without the leading v)
 ghcr.io/your-org/paladin:latest       # Always points to latest release
-ghcr.io/your-org/paladin:v0.8.0       # Immutable version tag
-ghcr.io/your-org/paladin:v0.8         # Minor version (updates with patches)
-ghcr.io/your-org/paladin:v0           # Major version
+ghcr.io/your-org/paladin:X.Y.Z        # Immutable version tag
+ghcr.io/your-org/paladin:X.Y          # Minor version (updates with patches)
+ghcr.io/your-org/paladin:X            # Major version
 
 # Development
 ghcr.io/your-org/paladin:main         # Latest main branch
@@ -563,7 +563,7 @@ ghcr.io/your-org/paladin:dev-feature  # Feature branch
 
 ```bash
 # ✅ Good: Immutable version
-docker run ghcr.io/your-org/paladin:v0.8.0
+docker run ghcr.io/your-org/paladin:X.Y.Z
 
 # ❌ Avoid: Latest can change
 docker run ghcr.io/your-org/paladin:latest
@@ -661,7 +661,7 @@ version: '3.8'
 
 services:
   paladin:
-    image: ghcr.io/your-org/paladin:v0.8.0  # Pinned version
+    image: ghcr.io/your-org/paladin:X.Y.Z  # Pinned version
     restart: unless-stopped
     environment:
       - RUST_LOG=warn  # Reduce log verbosity

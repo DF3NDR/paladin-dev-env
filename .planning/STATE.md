@@ -5,15 +5,15 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 54
 current_phase_name: First-Run Usability
 status: executing
-stopped_at: Completed 54-07-PLAN.md
-last_updated: "2026-11-01T01:09:48.883Z"
+stopped_at: Completed 54-08-PLAN.md
+last_updated: "2026-11-01T01:12:59.483Z"
 last_activity: 2026-11-01
 last_activity_desc: Phase 54 execution started
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 25
-  completed_plans: 23
+  completed_plans: 24
 ---
 
 # Project State
@@ -51,11 +51,11 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 ## Current Position
 
 Phase: 54 (First-Run Usability) — EXECUTING
-Plan: 8 of 9
+Plan: 9 of 9
 Status: Ready to execute
 Last activity: 2026-11-01 — Phase 54 execution started
 
-Progress: [██████░░░░░░░░░░░░░░] 2/7 phases ([█████████░] 92%) — Phase 53 plans [████████████████████] 8/8 (100%)
+Progress: [██████░░░░░░░░░░░░░░] 2/7 phases ([██████████] 96%) — Phase 53 plans [████████████████████] 8/8 (100%)
 
 ## Performance Metrics
 
@@ -379,6 +379,7 @@ Progress: [██████░░░░░░░░░░░░░░] 2/7 pha
 | Phase 54 P05 | 15min | 3 tasks | 6 files |
 | Phase 54 P06 | 20min | 3 tasks | 9 files |
 | Phase 54 P07 | 25min | 3 tasks | 4 files |
+| Phase 54 P08 | 10min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -712,6 +713,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 54-05: crate corrections under [Unreleased] ### Fixed; ADR-0056 amended in place citing ADR-0057; node-cache key/rotation text lives in fault-tolerance.md and is linked elsewhere
 - [Phase ?]: 54-06: k8s server config delivered as the config.yml key of paladin-server-secrets (items projection, defaultMode 0440); configmap.yaml retired; WORKSPACE_VERSION tags docker-build-server
 - [Phase ?]: [Phase 54-07]: check-version-strings status order NO_VERSION, STALE_EXEMPTION, ZERO_FILES, CLASS_UNMATCHED, MISMATCH, OK with every named failure and finding listed; image candidates are v?digits.digits tags compared exactly
+- [Phase ?]: 54-08: footer [Unreleased] compare link deleted, not retargeted; release comments made count-free; release.toml records cargo-release 1.1.7 (D-15, D-16, D-17)
 
 ### Pending Todos
 
@@ -1073,8 +1075,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-11-01T01:09:48.862Z
-Stopped at: Completed 54-07-PLAN.md
+Last session: 2026-11-01T01:12:59.463Z
+Stopped at: Completed 54-08-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

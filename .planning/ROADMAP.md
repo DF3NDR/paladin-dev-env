@@ -422,7 +422,7 @@ Plans:
 **Wave 3** *(blocked on Wave 2 completion)*
 
 - [x] 54-07-PLAN.md — `check-version-strings` gate (four classes, one exemption, named vacuity failures) in `make check-gates` and CI, with its harness; count-free gate comments (FIRST-03, FIRST-02, FIRST-04, FIRST-07)
-- [ ] 54-08-PLAN.md — Dangling `[Unreleased]` footer link deleted; count-free release comments; `release.toml` records `cargo-release 1.1.7` (FIRST-07)
+- [x] 54-08-PLAN.md — Dangling `[Unreleased]` footer link deleted; count-free release comments; `release.toml` records `cargo-release 1.1.7` (FIRST-07)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

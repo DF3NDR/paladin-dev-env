@@ -129,7 +129,7 @@ fails is rebuilt.*
       `release.toml:49` (`cargo-release 1.1.2` → the version actually used), and the dangling
       `[Unreleased]: …/compare/v0.2.0...HEAD` link at `CHANGELOG.md:3396` — C7, C8, 47-REVIEW WR-02
 
-- [ ] **FIRST-08**: `.project/current-exports.txt` is regenerated with `make api-surface` on the
+- [x] **FIRST-08**: `.project/current-exports.txt` is regenerated with `make api-surface` on the
       pinned nightly and committed, carrying the `UnsupportedParameter` / `check_reasoning` rows — C10
       *(Reconciled 2026-11-01, Phase 54, D-18: the snapshot is current -- make api-surface reports it
       unchanged on nightly-2026-09-20. LlmError::UnsupportedParameter and LlmPort::check_reasoning live
@@ -334,7 +334,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | FIRST-05 | Phase 54 | Complete |
 | FIRST-06 | Phase 54 | Complete |
 | FIRST-07 | Phase 54 | Complete |
-| FIRST-08 | Phase 54 | Pending |
+| FIRST-08 | Phase 54 | Complete |
 | FIRST-09 | Phase 54 | Complete |
 | FIXES-01 | Phase 55 | Pending |
 | FIXES-02 | Phase 55 | Pending |

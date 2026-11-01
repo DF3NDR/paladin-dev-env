@@ -426,7 +426,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 54-09-PLAN.md — `54-FIRST-EVIDENCE.md` (prove-then-lock, process-level boot refusal, gate red run, API surface), FIRST-08 wording reconciled, WINDOWS row 62 closed, Phase 58 carry-forward, phase-head gates and credential review (FIRST-08, all FIRST)
+- [x] 54-09-PLAN.md — `54-FIRST-EVIDENCE.md` (prove-then-lock, process-level boot refusal, gate red run, API surface), FIRST-08 wording reconciled, WINDOWS row 62 closed, Phase 58 carry-forward, phase-head gates and credential review (FIRST-08, all FIRST)
 
 **Scope notes**:
 

@@ -32,7 +32,9 @@
 # nothing. Then the head: at an item position the attribute exempts something
 # only when (after any further attributes) a real item head follows: optional
 # visibility, optional `async`/`unsafe`/`const`/`default`/`extern "abi"`, then
-# `fn`, `mod`, `impl`, `struct`, `enum`, `union`, `trait`, `type`, `const`,
+# `fn`, `mod`, `impl`, `struct`, `enum`, `union` (only as `union Name` followed
+# by `<`, `{` or `where`: it is a contextual keyword, so a field `union: x` or a
+# path `union::A` is no head), `trait`, `type`, `const`,
 # `static`, `use`, `extern`, `let`, `macro_rules!` or a macro invocation such
 # as `thread_local!`, or a block statement (`{`, `unsafe {`, `async {`, inline
 # `const {`). A block statement exempts exactly its block; a macro invocation
@@ -132,10 +134,14 @@ MOD_DECL = re.compile(r'\bmod\s+(\w+)\s*;')
 # already blanked), then an item keyword, `macro_rules!`, or a macro invocation
 # `path::ident!`. Anything else (a field, a variant, a match arm, a parameter,
 # a struct-literal field, an expression) is not an item, so exempts nothing.
+# `union` is only a contextual keyword: it heads an item only when a name and
+# then `<`, `{` or `where` follow (`union U {`), never as a field name
+# (`union: x`) or a path segment (`union::A`).
 ITEM_HEAD = re.compile(
     r'\s*(?:pub(?:\s*\([^)]*\)\s*|\s+))?'
     r'(?:(?:async|unsafe|const|default|extern)\s+)*'
-    r'(?P<kind>(?:fn|mod|impl|struct|enum|union|trait|type|const|static|use|extern|let)\b'
+    r'(?P<kind>(?:fn|mod|impl|struct|enum|trait|type|const|static|use|extern|let)\b'
+    r'|union(?=\s+(?:r#)?[A-Za-z_]\w*\s*(?:<|\{|where\b))'
     r'|macro_rules\s*!|[A-Za-z_]\w*(?:\s*::\s*[A-Za-z_]\w*)*\s*!)'
 )
 # Items that end at their own top-level `;`, with any braces nested inside.

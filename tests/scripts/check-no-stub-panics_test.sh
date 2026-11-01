@@ -331,6 +331,35 @@ printf '%s\n' \
 assert_fire "${FX}" "the raw identifier r#where opens no where clause" \
     "crates/x/src/lib.rs:6: todo! outside #[cfg(test)]"
 
+# `union` is only a contextual keyword: as a struct-literal field name or a
+# path segment it heads no item, so it exempts nothing (WR-03, round 4).
+fresh cfg-test-union-field
+printf '%s\n' \
+    'pub struct S { #[cfg(test)] pub union: bool, pub other: u8 }' \
+    'pub fn make(a: u8, b: u8) -> S {' \
+    '    S {' \
+    '        #[cfg(test)]' \
+    '        union: a < b,' \
+    '        other: todo!(),' \
+    '    }' \
+    '}' >"${FX}/crates/x/src/lib.rs"
+assert_fire "${FX}" "#[cfg(test)] on a struct-literal field named union exempts nothing" \
+    "crates/x/src/lib.rs:6: todo! outside #[cfg(test)]"
+
+fresh cfg-test-union-path-arm
+printf '%s\n' \
+    "pub mod union { pub const A: char = 'a'; }" \
+    'pub fn classify(c: char) -> u8 {' \
+    '    match c {' \
+    '        #[cfg(test)]' \
+    "        union::A | 'b' | 'c' => 0," \
+    "        'd' => todo!()," \
+    '        _ => 1 | 2,' \
+    '    }' \
+    '}' >"${FX}/crates/x/src/lib.rs"
+assert_fire "${FX}" "#[cfg(test)] on a match arm whose pattern is the path union::A exempts nothing" \
+    "crates/x/src/lib.rs:6: todo! outside #[cfg(test)]"
+
 fresh root-package
 printf '[package]\nname = "rootpkg"\nversion = "0.1.0"\n' >"${FX}/Cargo.toml"
 mkdir -p "${FX}/src"
@@ -470,6 +499,7 @@ plant crates/x/src/lib.rs '#[cfg(test)] thread_local! { static T: u8 = todo!(); 
 plant crates/x/src/lib.rs '#[cfg(test)] std::thread_local! { static U: u8 = todo!(); }'
 plant crates/x/src/lib.rs '#[cfg(test)] macro_rules! m { () => { todo!() }; }'
 plant crates/x/src/lib.rs '#[cfg(test)] const Q: u8 = todo!();'
+plant crates/x/src/lib.rs '#[cfg(test)] union U { a: [u8; todo!()] }'
 plant crates/x/src/lib.rs 'pub fn body() { #[cfg(test)] let _v: u8 = if true { 1 } else { todo!() }; }'
 plant crates/x/src/lib.rs '#[cfg(test)]'
 plant crates/x/src/lib.rs 'fn bounded<A, B>(a: A, b: B) -> u8'
@@ -477,7 +507,7 @@ plant crates/x/src/lib.rs 'where'
 plant crates/x/src/lib.rs '    A: Clone,'
 plant crates/x/src/lib.rs '    B: Copy + '"'"'static,'
 plant crates/x/src/lib.rs '{ todo!() }'
-assert_silent "${FX}" "#[cfg(test)] on a real item head (visibility, qualifiers, macro, let) is exempt" "OK"
+assert_silent "${FX}" "#[cfg(test)] on a real item head (visibility, qualifiers, macro, let, union) is exempt" "OK"
 
 # A closure parameter list `|a, b|` in a statement initialiser has its commas
 # at depth 0; they must not end the exempt statement early.

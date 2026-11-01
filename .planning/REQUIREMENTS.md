@@ -131,6 +131,11 @@ fails is rebuilt.*
 
 - [ ] **FIRST-08**: `.project/current-exports.txt` is regenerated with `make api-surface` on the
       pinned nightly and committed, carrying the `UnsupportedParameter` / `check_reasoning` rows — C10
+      *(Reconciled 2026-11-01, Phase 54, D-18: the snapshot is current -- make api-surface reports it
+      unchanged on nightly-2026-09-20. LlmError::UnsupportedParameter and LlmPort::check_reasoning live
+      in paladin-ports, which this facade-only snapshot does not re-export, so no regeneration can list
+      them; that crate's surface is guarded by make check-semver. Precedent: WINDOWS row 59. Evidence:
+      54-FIRST-EVIDENCE.md "API surface (FIRST-08)".)*
 
 - [x] **FIRST-09**: The node-cache guide states that the server attaches no node cache (the PACE-04
       stampede lock is a library builder only) and documents the cache-key version and the

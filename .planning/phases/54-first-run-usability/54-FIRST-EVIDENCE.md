@@ -134,3 +134,111 @@ Green, after the restore:
 
 Script exit `0`; `make check-version-strings` exit `0`. `git status --porcelain README.md` was empty after both
 runs, so nothing stale is committed. The orchestrator's own run after 54-07 produced the same two outputs.
+
+## API surface (FIRST-08)
+
+Re-run for this file on the phase head, toolchain `nightly-2026-09-20` (`rustup toolchain list` shows it;
+`cargo +nightly-2026-09-20 public-api --version` prints `cargo-public-api 0.52.0`).
+
+`make api-surface` (runs `scripts/check-api-surface.sh .project/current-exports.txt`), output with colour codes
+removed:
+
+```
+Checking public API surface (toolchain: nightly-2026-09-20)...
+🔍 Checking API surface for changes...
+Extracting public API surface using cargo-public-api (toolchain: nightly-2026-09-20)...
+✅ API surface extracted to /tmp/tmp.38fpSVSuhi (4325 items)
+✅ API surface unchanged
+exit=0
+```
+
+The committed snapshot is current, so no regeneration was needed and the PD-09-2 contingency did not fire. The
+check only compares a fresh extraction against `.project/current-exports.txt`; it writes nothing, and only
+`make api-surface-update` writes the file. `sha256sum` of `.project/current-exports.txt` and `src/lib.rs` taken
+before the run and re-checked after it both read `OK`, and `git diff --stat 027891467 -- src/lib.rs
+.project/current-exports.txt` is empty: the snapshot was not hand-edited and no `pub use` was added.
+
+The requirement text asks for the snapshot to carry `UnsupportedParameter` and `check_reasoning` rows. It
+cannot, for a structural reason:
+
+| Command | Output |
+|---------|--------|
+| `grep -c 'UnsupportedParameter\|check_reasoning' .project/current-exports.txt` | `0` |
+| `grep -n 'paladin_ports' src/lib.rs` | `175:// (e.g. \`paladin_ports::\`, \`paladin_memory::\`, \`paladin_battalion::\`, etc.).` (the facade states that other crates are reached by their full paths; it has no `pub use paladin_ports`) |
+| `grep -n 'UnsupportedParameter\|fn check_reasoning' crates/paladin-ports/src/output/llm_port.rs` | `LlmError::UnsupportedParameter` at l.609 (the variant) and `fn check_reasoning(` at l.2587 (the `LlmPort` method); further hits are rustdoc and tests |
+
+Both items live in `paladin-ports`. The snapshot is extracted from the `paladin-ai` facade only, and the facade
+does not re-export that crate, so no regeneration on any toolchain can list them. This is the same tool-design
+limitation WINDOWS row 59 waived for `RunReadScope` and `TenantId` in Phase 40 (the facade lists a re-exported
+module as one `pub use` line and never its items). The `paladin-ports` surface is guarded by `make check-semver`
+(`cargo-semver-checks` for every publishable crate against the published 0.11.0 baseline; it builds and needs
+crates.io, so it is not run here). The wording in REQUIREMENTS.md FIRST-08, ROADMAP.md Phase 54 success
+criterion 5 and the carried-gaps inventory row C10 was reconciled with a dated note citing row 59 and
+`make check-semver`; each keeps its ID, checkbox and original text.
+
+## WINDOWS row 62 closing evidence
+
+Row 62 (phase 41, `config.example.yml`) said the config loader expands no `${VAR}` in
+`http.auth.api_keys[].key` and that the shipped examples loaded the placeholder as the key. Closing tests,
+re-run on the phase head before the row was marked fixed (T-54-27):
+
+| Command | Result line |
+|---------|-------------|
+| `cargo test --lib config::agents::tests::validate_refuses_an_unexpanded_placeholder_key` | `test config::agents::tests::validate_refuses_an_unexpanded_placeholder_key ... ok`; `test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1377 filtered out; finished in 0.00s` |
+| `cargo test --lib config::agents::tests::shipped_example` | `shipped_example_http_auth_validates_and_configures_no_key ... ok`, `shipped_example_api_key_entries_uncommented_are_refused_as_empty ... ok`; `test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1376 filtered out; finished in 0.00s` |
+| `cargo test --features web-server --bin paladin-server build_auth_config_refuses_an_unexpanded_placeholder_key` | `test tests::build_auth_config_refuses_an_unexpanded_placeholder_key ... ok`; `test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 20 filtered out; finished in 0.00s` |
+
+Together with the SC1 section (the real binary refusing both a placeholder key and the unfilled Secret template),
+the `config.example.yml` change (`api_keys: []`), the k8s Secret move (`configmap.yaml` retired) and the
+Docker and compose change (a mounted literal-key config), every clause of the row's closing condition is met. No
+expansion path was added (D-00e). Ledger counters before this change: `open_count: 16`, `waived_count: 39`,
+`fixed_count: 32`, `total_count: 87`.
+
+Ledger counters after `node .claude/gsd-core/bin/gsd-tools.cjs windows fixed 62` and the hand-edit of the reason
+cell (table row and JSON mirror, no `|` inside; the 53-07 precedent): `open_count: 15` (was 16, minus 1),
+`waived_count: 39` (unchanged), `fixed_count: 33` (was 32, plus 1), `total_count: 87` (unchanged).
+`gsd-tools windows status` loads the ledger with no count mismatch, and `git diff` of `.planning/WINDOWS.md`
+touches only the frontmatter counters, `last_updated`, and row 62 (table row and its JSON entry). The row's
+reason cell cites `validate_refuses_an_unexpanded_placeholder_key`,
+`build_auth_config_refuses_an_unexpanded_placeholder_key`, the `shipped_example_*` tests, the
+`config.example.yml` change, the k8s Secret move and the Docker and compose change.
+
+## Carry-forward to Phase 58
+
+Measured on the head with
+`for f in crates/*/CHANGELOG.md; do grep -qE '^## \[(Unreleased|0\.11\.1)\]' "$f" || echo "$f"; done`:
+
+```
+crates/paladin-battalion/CHANGELOG.md
+crates/paladin-eval/CHANGELOG.md
+crates/paladin-herald/CHANGELOG.md
+crates/paladin-llm/CHANGELOG.md
+crates/paladin-notifications/CHANGELOG.md
+crates/paladin-ports/CHANGELOG.md
+crates/paladin-storage/CHANGELOG.md
+```
+
+Seven of the eleven `crates/*/CHANGELOG.md` files, the set RESEARCH F6 expected. The root `CHANGELOG.md`,
+`paladin-memory` and `paladin-content` carry `## [Unreleased]` (the last two since 54-05); the other crates
+not listed carry one too.
+
+What Phase 58 inherits:
+
+1. **Finalize rule 3.** `scripts/finalize-crate-changelogs.sh` leaves a file with no anchor and no section for
+   the target version untouched and records it as a named failure (it never guesses an insertion point).
+   Each of the seven needs a `## [Unreleased]` anchor or a `## [0.11.1]` section before the 0.11.1 finalize.
+   `check-release-consistency.sh` independently requires a `## [X.Y.Z]` heading in all twelve publishable
+   changelogs (the root plus eleven crates).
+2. **The version gate goes red at the bump, on purpose.** `scripts/check-version-strings.sh` holds the
+   copyable strings to the root manifest version, so once the lockstep bump moves `Cargo.toml` to `0.11.1`
+   the gate lists every string still reading `0.11.0`: today 52 of them, namely 42 class-1 Cargo pins, 1
+   `Current version:` line (README), 8 class-3 k8s labels and image tags (six `version: v0.11.0` labels and
+   two `paladin-server:0.11.0` images), and 1 `info.version` in `crates/paladin-web/openapi.json`. The bump
+   commit must carry those edits, so that the gate is green on the release commit.
+3. **Unverified: a dirty tree under `cargo release version --execute`** (RESEARCH A3). Whether the tool
+   refuses or accepts a working tree that already holds the string edits was not tested. If it refuses, the
+   plan's fallback is to run the bump first and edit the strings after it, in the same commit.
+4. `make check-semver` (the guard for the `paladin-ports` surface named in the API-surface section) builds
+   and needs crates.io, so Phase 58's pre-tag audit is where it is run.
+
+STATE.md carries one blocker line pointing at this section.

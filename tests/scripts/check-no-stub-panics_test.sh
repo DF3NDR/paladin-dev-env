@@ -434,6 +434,12 @@ plant crates/x/src/lib.rs '#[cfg(test)]'
 plant crates/x/src/lib.rs 'mod tests { fn t() { todo!() } }'
 assert_silent "${FX}" "a todo!() inside #[cfg(test)] mod tests { } passes" "OK"
 
+# rustc skips a leading UTF-8 byte-order mark, so the attribute right after it
+# is still at the start of the file, an item position (WR-03, round 4).
+fresh bom-test-mod
+printf '\xef\xbb\xbf#[cfg(test)]\nmod tests { fn t() { todo!() } }\n' >"${FX}/crates/x/src/lib.rs"
+assert_silent "${FX}" "a #[cfg(test)] mod right after a leading byte-order mark is exempt" "OK"
+
 fresh all-test-mod
 plant crates/x/src/lib.rs '#[cfg(all(test, feature = "mock"))]'
 plant crates/x/src/lib.rs 'mod x { fn t() { unimplemented!() } }'

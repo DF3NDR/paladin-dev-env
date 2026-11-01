@@ -25,7 +25,7 @@
 # Position first: the attribute exempts something only at an item position,
 # that is, when the previous significant character before it (looking back over
 # whitespace, comments and any preceding `#[...]`/`#![...]` attributes) is the
-# start of the file, `;`, `{` or `}`. After `<`, `(`, `,`, `|`, `=` or anything
+# start of the file (after a leading byte-order mark, if any), `;`, `{` or `}`. After `<`, `(`, `,`, `|`, `=` or anything
 # else it sits inside a generic parameter list (`fn g<#[cfg(test)] const N:
 # usize>`, a type or lifetime parameter, an impl header), a parameter list, a
 # field, variant or arm list, closure parameters or an initialiser, and exempts
@@ -167,7 +167,9 @@ def blank(src):
     """Replace comments and string/char literals with spaces, keeping newlines.
 
     Handles nested block comments, raw strings (`r#"..."#`, `br"..."`), byte
-    strings, and tells a char literal from a lifetime.
+    strings, and tells a char literal from a lifetime. A leading UTF-8
+    byte-order mark, which rustc skips, is blanked too, so the start of the
+    file stays an item position.
     """
     out, n, i = list(src), len(src), 0
 
@@ -175,6 +177,10 @@ def blank(src):
         for k in range(a, min(b, n)):
             if out[k] != "\n":
                 out[k] = " "
+
+    if src.startswith("﻿"):
+        wipe(0, 1)
+        i = 1
 
     while i < n:
         c = src[i]

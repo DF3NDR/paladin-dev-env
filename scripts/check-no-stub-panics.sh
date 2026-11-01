@@ -85,10 +85,10 @@
 #
 # Matching runs on the macro token after line comments, doc comments (so a
 # `///` doc example never fires), nested block comments, string, byte-string,
-# raw-string and char literals are blanked to spaces with newlines kept (the
-# technique of tests/entity_rename_guard.rs). `todo ! (`, `todo![` and
-# `unimplemented!{` all match; a lifetime such as `'a` is not read as a char
-# literal.
+# C-string, raw-string (including raw byte and raw C strings) and char literals
+# are blanked to spaces with newlines kept (the technique of
+# tests/entity_rename_guard.rs). `todo ! (`, `todo![` and `unimplemented!{` all
+# match; a lifetime such as `'a` is not read as a char literal.
 #
 # Never vacuous: besides FOUND and OK there are three named failures, in
 # precedence order. NO_PACKAGES (no publishable package under the root),
@@ -189,7 +189,7 @@ NOT_MACRO = {
     "as", "break", "else", "if", "in", "let", "match", "move", "mut",
     "return", "while", "yield",
 }
-RAW_OPEN = re.compile(r'(?:br|r)(#*)"')
+RAW_OPEN = re.compile(r'(?:br|cr|r)(#*)"')
 CHAR_LIT = re.compile(r"'(?:\\.[^']*|[^\\'])'")
 
 
@@ -208,8 +208,9 @@ def load_manifest(path):
 def blank(src):
     """Replace comments and string/char literals with spaces, keeping newlines.
 
-    Handles nested block comments, raw strings (`r#"..."#`, `br"..."`), byte
-    strings, and tells a char literal from a lifetime. A leading UTF-8
+    Handles nested block comments, raw strings (`r#"..."#`, `br"..."`, raw C
+    strings `cr"..."`), byte and C strings, and tells a char literal from a
+    lifetime. A leading UTF-8
     byte-order mark, which rustc skips, is blanked too, so the start of the
     file stays an item position.
     """
@@ -245,7 +246,7 @@ def blank(src):
             wipe(i, j)
             i = j
         elif (
-            c in "rb"
+            c in "rbc"
             and (i == 0 or not (src[i - 1].isalnum() or src[i - 1] == "_"))
             and RAW_OPEN.match(src, i)
         ):

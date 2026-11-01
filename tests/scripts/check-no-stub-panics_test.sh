@@ -456,6 +456,16 @@ assert_fire "${FX}" "a production #[path] target outside src/, and its child, ar
     "crates/x/tests/helpers/fx.rs:2: todo! outside #[cfg(test)]" \
     "crates/x/tests/helpers/sub.rs:1: unimplemented! outside #[cfg(test)]"
 
+# A raw C string `cr"..."` has no escapes: its `\"` must not run the literal on
+# to a later quote and hide the code in between (WR-03, round 4).
+fresh raw-c-string
+printf '%s\n' \
+    'pub fn f() -> &'"'"'static core::ffi::CStr { cr"C:\" }' \
+    'pub fn g() -> u8 { todo!() }' \
+    'pub fn h() -> &'"'"'static str { "x" }' >"${FX}/crates/x/src/lib.rs"
+assert_fire "${FX}" "a raw C string ending in a backslash does not swallow the next line" \
+    "crates/x/src/lib.rs:2: todo! outside #[cfg(test)]"
+
 fresh root-package
 printf '[package]\nname = "rootpkg"\nversion = "0.1.0"\n' >"${FX}/Cargo.toml"
 mkdir -p "${FX}/src"
@@ -548,6 +558,11 @@ assert_silent "${FX}" "a string literal holding todo!() passes" "OK"
 fresh raw-string
 plant crates/x/src/lib.rs 'pub const B: &str = r#"todo!()"#;'
 assert_silent "${FX}" "a raw string holding todo!() passes" "OK"
+
+fresh c-strings
+plant crates/x/src/lib.rs 'pub const D: &core::ffi::CStr = c"todo!()";'
+plant crates/x/src/lib.rs 'pub const E: &core::ffi::CStr = cr#"unimplemented!()"#;'
+assert_silent "${FX}" "C strings and raw C strings holding the macros pass" "OK"
 
 fresh byte-string
 plant crates/x/src/lib.rs 'pub const C: &[u8] = b"todo!()";'

@@ -24,6 +24,20 @@ reads this file when it writes the carry-forward.
   `UPDATE_EVAL_SCHEMA=1 cargo test -p paladin-eval --test schema_golden`. Closes B5 and 42-06 by pointer
   (the archived 42 deferred-items file is untouched).
 
+## From plan 55-08 (paladin-ports rustdoc, 2026-11-01)
+
+### `EmbeddingPort` rustdoc is one physical line with literal `\n///` text
+
+- Where: `crates/paladin-ports/src/output/embedding_port.rs`, the doc comment above
+  `pub trait EmbeddingPort` (one `///` line, about 7 KB, with the two characters backslash and `n`
+  followed by `///` standing where line breaks were meant).
+- Effect: the trait's examples, headings and lists render as a single paragraph, and the code blocks
+  inside it are never compiled as doctests. 55-08 only gave its one unresolved link
+  (`LongTermGarrisonPort`) an explicit path; it did not re-flow the text.
+- Why not fixed here: re-flowing turns about a dozen fenced blocks (`no_run`, `ignore` and one plain
+  `rust` block) into live doctests that have never run, which is a test-hygiene change, not a link fix.
+- Proposed owner: a doc-hygiene follow-up; re-flow, then run `cargo test -p paladin-ports --doc`.
+
 ## Deferred by CONTEXT (not this phase's requirements)
 
 Every item of `55-CONTEXT.md` `<deferred>`, with its proposed home.

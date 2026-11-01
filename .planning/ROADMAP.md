@@ -452,7 +452,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 55-01-PLAN.md — offline zero-exemption stub-panic guard (`scripts/check-no-stub-panics.sh` + harness, red run 26 lines) in `make check-gates` and CI; the twenty `ContentListRepository` stubs return a typed `QueryError`; the uncompiled `content_filtering_service.rs` deleted (FIXES-01)
+- [x] 55-01-PLAN.md — offline zero-exemption stub-panic guard (`scripts/check-no-stub-panics.sh` + harness, red run 26 lines) in `make check-gates` and CI; the twenty `ContentListRepository` stubs return a typed `QueryError`; the uncompiled `content_filtering_service.rs` deleted (FIXES-01)
 - [ ] 55-02-PLAN.md — `HaltReason::ModelUnpriced { model }`; an unpriced model at dispatch halts the run (row, SSE, webhook) instead of failing it; OpenAPI description, Platform API, Treasurer guide and an ADR-0057 dated note (FIXES-03)
 - [ ] 55-03-PLAN.md — `local_cancel_signals_token` waits on a `#[cfg(test)]` `LocalRunTokens::is_registered` inspector (20 full-binary runs); the four `commander.rs` to-do stubs point at their relocated error-path tests (TESTS-02, TESTS-06)
 - [ ] 55-04-PLAN.md — `paladin-llm` single-feature clippy clean over all 13 feature combinations with cfg gates, no suppression; TESTS-04's closed sites proven; one `SELF_HOSTED_PROVIDERS`; the `claude-opus-4-8` seed comment cites its probes and stays `reasoning: false` (TESTS-03, TESTS-04, TESTS-05, FIXES-05)

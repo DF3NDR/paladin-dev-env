@@ -143,7 +143,7 @@ fails is rebuilt.*
 
 ### Correctness Fixes (FIXES)
 
-- [ ] **FIXES-01**: No `todo!()` / `unimplemented!()` is reachable outside `#[cfg(test)]` in any
+- [x] **FIXES-01**: No `todo!()` / `unimplemented!()` is reachable outside `#[cfg(test)]` in any
       published crate, held by a grep guard in `make check-gates`. Measured at roadmap time: the
       twenty reachable sites are the `impl ContentListRepository` bodies for `SqliteStore` and
       `MySqlContentRepository` in `paladin-storage` (`sqlite_content_repository.rs`,
@@ -336,7 +336,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | FIRST-07 | Phase 54 | Complete |
 | FIRST-08 | Phase 54 | Complete |
 | FIRST-09 | Phase 54 | Complete |
-| FIXES-01 | Phase 55 | Pending |
+| FIXES-01 | Phase 55 | Complete |
 | FIXES-02 | Phase 55 | Pending |
 | FIXES-03 | Phase 55 | Pending |
 | FIXES-04 | Phase 55 | Pending |

@@ -5,15 +5,15 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 55
 current_phase_name: Correctness Fixes, Test Hygiene & Lint Bar
 status: executing
-stopped_at: Phase 55 context gathered
-last_updated: "2026-11-01T14:36:47.254Z"
+stopped_at: Completed 55-01-PLAN.md
+last_updated: "2026-11-01T14:49:39.989Z"
 last_activity: 2026-11-01
 last_activity_desc: Phase 55 execution started
 progress:
   total_phases: 4
   completed_phases: 3
   total_plans: 38
-  completed_plans: 25
+  completed_plans: 26
 ---
 
 # Project State
@@ -51,11 +51,11 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 ## Current Position
 
 Phase: 55 (Correctness Fixes, Test Hygiene & Lint Bar) — EXECUTING
-Plan: 1 of 13
-Status: Executing Phase 55
+Plan: 2 of 13
+Status: Ready to execute
 Last activity: 2026-11-01 — Phase 55 execution started
 
-Progress: [█████████░░░░░░░░░░░] 3/7 phases ([██████████] 100%) — Phase 54 plans [████████████████████] 9/9 (100%)
+Progress: [█████████░░░░░░░░░░░] 3/7 phases ([███████░░░] 68%) — Phase 54 plans [████████████████████] 9/9 (100%)
 
 ## Performance Metrics
 
@@ -382,6 +382,7 @@ Progress: [█████████░░░░░░░░░░░] 3/7 pha
 | Phase 54 P07 | 25min | 3 tasks | 4 files |
 | Phase 54 P08 | 10min | 2 tasks | 5 files |
 | Phase 54 P09 | 20min | 3 tasks | 6 files |
+| Phase 55 P01 | 12min | 3 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -718,6 +719,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: [Phase 54-07]: check-version-strings status order NO_VERSION, STALE_EXEMPTION, ZERO_FILES, CLASS_UNMATCHED, MISMATCH, OK with every named failure and finding listed; image candidates are v?digits.digits tags compared exactly
 - [Phase ?]: 54-08: footer [Unreleased] compare link deleted, not retargeted; release comments made count-free; release.toml records cargo-release 1.1.7 (D-15, D-16, D-17)
 - [Phase ?]: Phase 54-09: FIRST-08 reconciled by dated note, not by padding the facade snapshot; UnsupportedParameter and check_reasoning live in paladin-ports, guarded by make check-semver (WINDOWS row 59 precedent)
+- [Phase ?]: 55-01: check-no-stub-panics gate has no exemption list; out-of-line #[cfg(test)] mod files are exempt by transitive resolution only; refusal text for ContentListRepository is one helper per adapter file
 
 ### Pending Todos
 
@@ -1089,9 +1091,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-11-01T03:27:42.302Z
-Stopped at: Phase 55 context gathered
-Resume file: .planning/phases/55-correctness-fixes-test-hygiene-lint-bar/55-CONTEXT.md
+Last session: 2026-11-01T14:49:39.967Z
+Stopped at: Completed 55-01-PLAN.md
+Resume file: None
 
 ## Operator Next Steps
 

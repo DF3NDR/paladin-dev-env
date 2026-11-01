@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v0.11.1
 milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
-current_phase: 54
-current_phase_name: First-Run Usability
-status: verifying
+current_phase: 55
+current_phase_name: Correctness Fixes, Test Hygiene & Lint Bar
+status: planning
 stopped_at: Completed 54-09-PLAN.md
-last_updated: "2026-11-01T01:30:59.941Z"
+last_updated: "2026-11-01T02:51:39.847Z"
 last_activity: 2026-11-01
-last_activity_desc: Phase 54 execution started
+last_activity_desc: Phase 54 complete, transitioned to Phase 55
 progress:
   total_phases: 3
   completed_phases: 3
@@ -20,15 +20,15 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-10-31 after Phase 53)
+See: .planning/PROJECT.md (updated 2026-11-01 after Phase 54)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 54 — First-Run Usability
+**Current focus:** Phase 55 — Correctness Fixes, Test Hygiene & Lint Bar
 52-UAT 3/3 passed; PR #61 merged to `main` as `84686acfb` on 2026-10-30)
 (carried-gaps inventory, dogfood findings log, scoping notes): 7 phases (52-58), 53/53 requirements
-mapped. Phase 52 (CI & Release Pipeline Repair) completed 2026-10-30; Phase 53 (Tenant Isolation Closure) completed 2026-10-31; next: Phase 54. Decisions at open: OpenAI Responses API out,
+mapped. Phase 52 (CI & Release Pipeline Repair) completed 2026-10-30; Phase 53 (Tenant Isolation Closure) completed 2026-10-31; Phase 54 (First-Run Usability) completed 2026-11-01; next: Phase 55. Decisions at open: OpenAI Responses API out,
 `${VAR}` auth keys refused at boot, research skipped.
 
 **Previous milestone:** v0.11.0 "Treasurer Spend Governance" closed 2026-10-27 — 15 phases
@@ -50,18 +50,18 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 
 ## Current Position
 
-Phase: 54 (First-Run Usability) — EXECUTING
-Plan: 9 of 9
-Status: Phase complete — ready for verification
-Last activity: 2026-11-01 — Phase 54 execution started
+Phase: 55 — Correctness Fixes, Test Hygiene & Lint Bar
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-11-01 — Phase 54 complete, transitioned to Phase 55
 
-Progress: [██████░░░░░░░░░░░░░░] 2/7 phases ([██████████] 100%) — Phase 53 plans [████████████████████] 8/8 (100%)
+Progress: [█████████░░░░░░░░░░░] 3/7 phases ([██████████] 100%) — Phase 54 plans [████████████████████] 9/9 (100%)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 605
+- Total plans completed: 614
 - Average duration: —
 - Total execution time: —
 
@@ -124,6 +124,7 @@ Progress: [██████░░░░░░░░░░░░░░] 2/7 pha
 | 47 | 10 | - | - |
 | 52 | 8 | - | - |
 | 53 | 8 | - | - |
+| 54 | 9 | - | - |
 
 *Updated after each plan completion*
 
@@ -708,6 +709,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: ADR-0063 (Phase 53-07): threads belong to the tenant of their latest run, jobs to their enqueuing agent id and tenant; amends ADR-0054; get_job #[deprecated] deferred to next minor
 - [Phase ?]: Phase 53-08 (2026-10-31): v0.11.1 patch decided, every change additive. Evidence: local reproduction of Semver Checks (vs v0.11.0) with scripts/check-semver.sh at --release-type patch on head 4ef9ddd2a, 223 checks: 223 pass, 31 skip for all twelve packages, 0 failure(s); MIGRATION.md 11.2 has no row, allowlist has no entry. Recorded in .planning/phases/53-tenant-isolation-closure/53-VERSION-DECISION.md
 - [Phase 53]: UAT (2026-10-31): AC-N5 passed on an owner read of the shipped wiring (the no-op-factory blind spot stays a code-review control); review warnings WR-01, WR-02, WR-03 carried as open WINDOWS rows 85-87 (proposed owner Phase 55), WR-04 and WR-05 recorded as ADR-0063 residuals
+- [Phase 54]: UAT (2026-11-01): 3/3 passed — WR-02 (`openai-api-key: "REPLACE_ME"` in `k8s/server/secret.yaml.example`) accepted as residual AR-54-03 (SC1/FIRST-01 cover `http.auth.api_keys[].key` only); the kind cluster apply (Secret-mounted config, `defaultMode 0440`, `fsGroup 65532`) and the compose step-2-before-step-1 path (WR-03) verified by the maintainer with real Docker/kind. CR-01 (`make release` runs no version-string gate before the tag) carried to Phase 58 as a pre-tag step.
 - [Phase ?]: Phase 54-01: HTTP API keys containing '${' are refused at config load (substring check, any auth state, before tenant/duplicate checks); message names the entry, never the value or variable (FIRST-01)
 - [Phase ?]: 54-03: prose banners naming the current release made version-free (PD-03-1) so only gated pattern classes carry a literal workspace version
 - [Phase ?]: 54-04: present-tense version claims and deployment image tags made version-free (X.Y.Z placeholders matching release.yml), not bumped; architecture-decisions.md swept not exempted
@@ -739,6 +741,13 @@ Four pending todos were acknowledged as deferred at the v0.11.0 close (see *Defe
   support so `gpt-5.5-pro` and siblings are usable (Phase 50.1 seed probe finding).
 
 ### Blockers/Concerns
+
+**Phase 54 close (2026-11-01, 54-VERIFICATION `passed` 5/5, 54-UAT 3/3, 54-SECURITY 0 open):**
+
+- **Pre-existing, environment-specific test failure** — `run_api_wiring::tests::build_run_api_persists_no_run_traces_by_default` and `..._persists_run_traces_when_trace_persist_is_set` fail in the sandbox (`the run never reached a terminal status`, 10 s deadline) on base `8b23cb4c5` too; CI was green at the PR #62 merge. No Phase 54 change touches that file. Phase 55 TESTS-01 (hermetic scripted port) is the owner.
+- **CR-01: `make release` commits and tags without running `check-version-strings.sh`** (CONTEXT D-12 chose check-only). Phase 58's bump PR must carry the string edits and run the gate before the tag; recorded in 54-VERIFICATION `deferred` and 54-FIRST-EVIDENCE "Carry-forward to Phase 58".
+- **Review follow-ups (advisory, not WINDOWS rows):** WR-01 copy-paste Cargo snippets name non-existent features (`storage-sqlite`, `llm-openai`); WR-04 the Treasurer webhook `secret` placeholder is not refused; WR-05 Python < 3.11 traceback from the gate; IN-02 worker pods mount admin API keys they never use. Cheap fixes for the next doc pass or Phase 57.
+- **Phase 54 work is on `claude/laughing-dirac-e0h2ax`, not yet merged to `main`** — a PR is the maintainer's step before Phase 55 builds on it.
 
 **Phase 53 close (2026-10-31, 53-VERIFICATION `passed` 5/5, 53-UAT 2/2, 53-SECURITY 0 open):**
 
@@ -1080,11 +1089,16 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-11-01T01:30:51.436Z
-Stopped at: Completed 54-09-PLAN.md
+Last session: 2026-11-01T02:55:00Z
+Stopped at: Phase 54 complete, ready to plan Phase 55
 Resume file: None
 
 ## Operator Next Steps
+
+- **Phase 54 is complete (2026-11-01):** verification `passed` 5/5, UAT 3/3, security 0 open (32 threats, 3 accepted
+  risks), no new ADR. The work is on `claude/laughing-dirac-e0h2ax`; open a PR to `main` before Phase 55 builds on
+  it. Next: `/clear` then `/gsd-discuss-phase 55` (Correctness Fixes, Test Hygiene & Lint Bar — settle the
+  `RunStatusValue::Cancelled` semver question and the WINDOWS rows 85-87 owner there).
 
 - **Phase 53 is complete (2026-10-31):** verification `passed`, UAT 2/2, security 0 open, ADR-0063 minted,
   `v0.11.1` stays a patch. Review warnings WR-01…03 are open WINDOWS rows 85-87 for a later phase. The work

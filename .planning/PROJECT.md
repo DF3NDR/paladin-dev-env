@@ -922,6 +922,20 @@ unless a phase adopts them):
   (TENANT-03 … TENANT-10; A1–A5, A8) — Phase 53, verified 2026-10-31, ADR-0063; WINDOWS row 58
   closed. Review warnings WR-01…03 (thread-list 500 on a newer-schema row, owner lockout from a
   corrupt older row or a latest-run ownership transfer) carried as WINDOWS rows 85-87.
+- ✓ First-run usability — any `http.auth.api_keys[].key` containing `${` is refused at config
+  load with a message naming the entry (never the value), in every auth state and before the
+  listener binds; `config.example.yml` ships zero loadable keys; the k8s server config is the
+  `config.yml` key of `paladin-server-secrets` (`items` projection, `defaultMode 0440`,
+  `fsGroup 65532`), `configmap.yaml` retired; every README/docs/`k8s/` install pin, `Current
+  version` line, label and image tag reads the workspace version, held by `check-version-strings.sh`
+  in `make check-gates` and CI (four pattern classes, one exempt file, fails on an empty scan or
+  an unmatched class, observed red on a planted stale pin); memory/content changelog corrections
+  under `[Unreleased]`, ADR-0056 citing ADR-0057, count-free release comments, dangling
+  `[Unreleased]` link deleted, node-cache guide stating the server attaches no cache; FIRST-08
+  reconciled under D-18 (the two symbols live in `paladin-ports`, guarded by `make check-semver`)
+  (FIRST-01 … FIRST-09; B1, C1–C8, C10) — Phase 54, verified 2026-11-01, no new ADR. Residuals: the
+  provider-key `REPLACE_ME` placeholder accepted (AR-54-03); `make release` runs no version gate
+  before the tag (CR-01, carried to Phase 58).
 
 **Treasurer Spend Governance — shipped v0.11.0, closed 2026-10-27; crates at `0.11.0`**
 (Phases 38-51, 174 plans, 63/66 requirements verified, ADOPT-01…03 superseded). Archive:
@@ -1382,8 +1396,6 @@ while the code ships):
 **Milestone v0.11.1 "Dogfood Cleanup" (opened 2026-10-27).** Requirement IDs are minted in
 `.planning/REQUIREMENTS.md`; the themes below are the scope (inventory rows in parentheses):
 
-- [ ] First-run usability — unexpanded `${VAR}` auth keys refused at boot, version strings fixed and
-      gated, changelog/doc/k8s corrections, API-surface snapshot refreshed (B1, C1–C8, C10)
 - [ ] Correctness small fixes — `todo!()` fenced, Failed-vs-Halted mapping, `Cancelled` eval
       status, opus-4-8 seed row, hermetic and non-flaky tests, lint leftovers (B2–B6, E1–E5, E7)
 - [ ] Dogfood findings — every `DF-nn` in `02-dogfood-findings-log.md` dispositioned; the
@@ -2327,7 +2339,16 @@ checks at patch for all twelve packages — ✓ Good); the Treasurer boot guard'
 spot is accepted as a code-review control after an owner read of the shipped wiring (AC-N5, UAT
 2026-10-31 — ✓ Good); review warnings WR-01…03 carried as follow-ups (WINDOWS rows 85-87, proposed
 owner Phase 55) and WR-04/05 accepted as ADR-0063 residuals (UAT 2026-10-31 — ⚠️ Revisit, the three
-rows must close or be waived before the `v0.11.1` tag).
+rows must close or be waived before the `v0.11.1` tag). Phase 54's owner decisions (no ADR; 54-CONTEXT
+D-01…D-18): any `${` in an HTTP API key is refused at config load regardless of `enabled` (D-01/D-02 —
+✓ Good, boot refusal proven at process level); the k8s server config is delivered as a Secret, not a
+ConfigMap (D-05 — ✓ Good, cluster apply confirmed by the maintainer at UAT 2026-11-01); the version gate
+matches four copyable pattern classes with a one-entry per-file exemption list and only checks, never
+rewrites (D-07/D-08/D-12 — ✓ Good; ⚠️ Revisit at Phase 58: `make release` does not run it before the
+tag, review CR-01); the crate changelog corrections ride a new `[Unreleased]` entry and ADR-0056 is
+amended in place (D-13/D-14 — ✓ Good); FIRST-08 reconciled by a dated note rather than padding the
+facade snapshot (D-18 — ✓ Good); the provider-key `REPLACE_ME` placeholder in the Secret template
+accepted as residual AR-54-03 (UAT 2026-11-01 — ✓ Good, SC1 scope is `http.auth.api_keys[].key`).
 
 ## Evolution
 
@@ -2347,6 +2368,15 @@ This document evolves at phase transitions and milestone boundaries.
 2. Core Value check — still the right priority?
 3. Audit Out of Scope — reasons still valid?
 4. Update Context with current state
+
+---
+*Last updated: 2026-11-01 after **Phase 54: First-Run Usability** completed and verified — 9 plans,
+FIRST-01…09 (FIRST-08 reconciled under D-18); verification `passed` 5/5, UAT 3/3 (WR-02 accepted, kind
+apply and compose first-run checked by the maintainer), security 0 open (32 threats, 3 accepted). A
+copied example can no longer load a placeholder as a credential, every install snippet and version line
+reads 0.11.0 and `check-version-strings.sh` keeps it so in `make check-gates` and CI. "First-run
+usability" moved from Active to Validated; no ADR minted. CR-01 (pre-tag gate run) carried to Phase 58.
+Next: Phase 55.*
 
 ---
 *Last updated: 2026-10-31 after **Phase 53: Tenant Isolation Closure** completed and verified — the

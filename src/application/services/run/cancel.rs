@@ -213,6 +213,15 @@ impl LocalRunTokens {
             None => false,
         }
     }
+
+    /// Read-only test hook: whether `run_id` is currently registered, so a
+    /// test can wait on dispatch registration instead of sleeping for a
+    /// fixed duration (TESTS-02, D-09). Test-only, so it adds nothing to
+    /// the public surface.
+    #[cfg(test)]
+    pub(crate) async fn is_registered(&self, run_id: &RunId) -> bool {
+        self.tokens.read().await.contains_key(run_id)
+    }
 }
 
 #[cfg(test)]
@@ -465,5 +474,30 @@ mod tests {
 
         let quiet = PerRunCancelProbe::new(Some(Arc::new(FixedProbe(false))), local, shutdown);
         assert!(!quiet.is_cancelled(&thread()).await);
+    }
+
+    #[tokio::test]
+    async fn is_registered_tracks_register_and_remove() {
+        let tokens = LocalRunTokens::new();
+        let run_id = RunId::new_v7();
+        assert!(
+            !tokens.is_registered(&run_id).await,
+            "a fresh registry holds no run"
+        );
+
+        tokens
+            .register(run_id.clone(), CancellationToken::new())
+            .await;
+        assert!(tokens.is_registered(&run_id).await, "registered -> true");
+        assert!(
+            tokens.clone().is_registered(&run_id).await,
+            "a clone shares the map, so it observes the registration"
+        );
+
+        tokens.remove(&run_id).await;
+        assert!(
+            !tokens.is_registered(&run_id).await,
+            "removed -> false again"
+        );
     }
 }

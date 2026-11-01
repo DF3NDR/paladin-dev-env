@@ -352,14 +352,15 @@ async fn local_cancel_signals_token() {
 
         let (run_id, thread_id) = submit(&repository, &queue, "slow-chain").await;
 
+        let tokens = pool.local_tokens();
         let pool_run = Arc::clone(&pool);
         let run_task = tokio::spawn(async move { pool_run.run_once().await });
 
-        // Wait for the run to actually be dispatched (registered in
-        // `local_tokens`) before cancelling -- a fixed short sleep is
-        // enough since dispatch registration happens before the first
-        // (200ms) node even starts.
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        // Wait on the registration signal, not a fixed sleep; the 30 s
+        // outer timeout bounds this wait.
+        while !tokens.is_registered(&run_id).await {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
 
         let cancel_outcome = service.cancel(&run_id, None).await.unwrap();
         assert!(

@@ -4,15 +4,15 @@ milestone: v0.11.1
 milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 54
 current_phase_name: First-Run Usability
-status: planning
+status: executing
 stopped_at: Phase 54 context gathered
-last_updated: "2026-10-31T22:32:25.083Z"
+last_updated: "2026-11-01T00:12:52.180Z"
 last_activity: 2026-10-31
 last_activity_desc: Phase 53 complete, transitioned to Phase 54
 progress:
   total_phases: 3
   completed_phases: 2
-  total_plans: 16
+  total_plans: 25
   completed_plans: 16
 ---
 
@@ -52,7 +52,7 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 
 Phase: 54 — First-Run Usability
 Plan: Not started
-Status: Ready to plan
+Status: Ready to execute
 Last activity: 2026-10-31 — Phase 53 complete, transitioned to Phase 54
 
 Progress: [██████░░░░░░░░░░░░░░] 2/7 phases ([██████████] 100%) — Phase 53 plans [████████████████████] 8/8 (100%)
@@ -731,6 +731,7 @@ Four pending todos were acknowledged as deferred at the v0.11.0 close (see *Defe
   transfers to whoever submitted the latest run, including an Admin fork or an unattributed schedule run
   (row 87). Proposed owner Phase 55 (correctness fixes); `open_count` is now 16, and the `v0.11.1` exit
   criterion needs 0, so Phase 55 or Phase 57 must fix or waive them.
+
 - ~~**Phase 53 work is on `claude/laughing-dirac-e0h2ax`, not yet merged to `main`.**~~ — **merged by the
   maintainer** (PR #62, merge commit `8b23cb4c5` on `main`, 2026-10-31); the branch was restarted from that
   merge for Phase 54.

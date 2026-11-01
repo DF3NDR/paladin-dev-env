@@ -6,7 +6,7 @@ current_phase: 54
 current_phase_name: First-Run Usability
 status: executing
 stopped_at: Completed 54-08-PLAN.md
-last_updated: "2026-11-01T01:20:27.720Z"
+last_updated: "2026-11-01T01:29:54.431Z"
 last_activity: 2026-11-01
 last_activity_desc: Phase 54 execution started
 progress:
@@ -902,6 +902,7 @@ close notes this section carried for Phases 38-51 are archived with their phases
   is a required context in ruleset 20868126. Original text: cargo-semver-checks 0.50.0's CI-pinned --baseline-version 0.9.0 job is currently a no-op for every one of the 11 checked packages -- confirmed 2026-09-26 during Phase 38 plan 38-09's closeout measurement. The in-tree workspace version (0.10.1, the last real release) already differs from that two-milestones-old baseline by a pre-1.0 "major-equivalent" bump, so the tool skips all lint evaluation (0 checks, 254 skip) unconditionally. This will remain true for every plan in every phase of the v0.11.0 milestone until the version is bumped at the eventual release commit. Not fixed in 38-09 (ci.yml is not in that plan's files_modified) -- flag for whichever phase next touches ci.yml's semver job or performs the v0.11.0 version bump. **Still a no-op at v0.11.0** (Phase 47 re-seal row 57, 2026-10-25: `0 checks, 254 skip` for 10 of 11 packages against 0.9.0; `paladin-web` attributed to its CI twin); now that `0.11.0` is published the baseline can move to it -- a v0.12 hygiene item.
 
 - Phase 58: 7 crate changelogs lack an [Unreleased] anchor or [0.11.1] section before finalize; the check-version-strings gate must go green in the bump commit -- see 54-FIRST-EVIDENCE.md Carry-forward to Phase 58
+- Pre-existing, environment-specific: infrastructure::web::run_api_wiring::tests::build_run_api_persists_no_run_traces_by_default and build_run_api_persists_run_traces_when_trace_persist_is_set fail in this container (run never reached a terminal status, run_api_wiring.rs:3036; make test reports 1479 passed, 2 failed), identically on base 8b23cb4c5; cause undiagnosed, a later phase should diagnose -- see 54-FIRST-EVIDENCE.md Known residuals
 
 ### Quick Tasks Completed
 

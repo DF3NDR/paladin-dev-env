@@ -242,3 +242,116 @@ What Phase 58 inherits:
    and needs crates.io, so Phase 58's pre-tag audit is where it is run.
 
 STATE.md carries one blocker line pointing at this section.
+
+## Phase-head gates
+
+Head SHA the gates ran on: `4cfeb724bee98603d400929a307e978a57e5821b` (the 54-09 Task 2 commit, working tree
+clean; the only Rust files this phase changed are `src/config/agents.rs` and `src/bin/paladin-server.rs`,
+shown by `git diff --stat 8b23cb4c5 HEAD -- '*.rs'`). Each line is the command's own result line, with colour
+codes removed.
+
+| Command | Exit | Result line |
+|---------|------|-------------|
+| `cargo test` | 0 | 35 `test result:` lines, every one `ok`: 3132 passed, 0 failed, 43 ignored in total. The largest: `test result: ok. 1378 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.45s` (lib), `test result: ok. 734 passed; 0 failed; 14 ignored; ...`, `test result: ok. 436 passed; 0 failed; 11 ignored; ...`. A first attempt of this command aborted with `rustc-LLVM ERROR: IO failure on output stream: No space left on device` (disk, not a test); `target/debug/incremental` was deleted as the build cache the orchestrator named, and the command re-run with `CARGO_INCREMENTAL=0` finished `exit=0` |
+| `cargo test --features web-server --bin paladin-server` | 0 | `test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s` (includes `build_auth_config_refuses_an_unexpanded_placeholder_key`) |
+| `cargo fmt --check` | 0 | no output |
+| `cargo clippy -- -D warnings` | 0 | `Finished \`dev\` profile [unoptimized + debuginfo] target(s) in 25.61s` |
+| `make clean-code` | 0 | fmt, clippy, `✅ shellcheck clean`, check, `✅ doc-check passed (ADR-0033)`, `All 105 D-05 public API entry points carry a plural '# Examples' heading.` |
+| `make check-gates` | 0 | ends `✅ OK: 128 file(s) scanned, every copyable version string equals '0.11.0' (class 1 Cargo pins: 42; class 2 Current version lines: 1; class 3 k8s labels and image tags: 8; class 4 openapi.json info.version: 1; exempt files: 1)`; the other guards each print `✅` (`11 publishable crate(s) checked, all have a CHANGELOG.md`, `12 publishable crate(s) checked, all match the allow-list exactly`, `37 governed dismissal(s) checked`, `12 crate(s) checked in publish order`, and the rest) |
+| `make test-shell-guards` | 0 | `✅ 85 assertion(s) passed.` (the final harness; the workflows tree was clean, see the 54-07 note) |
+| `make api-surface` | 0 | `✅ API surface extracted to /tmp/tmp.UfoY2u6w34 (4325 items)`, `✅ API surface unchanged` |
+| `make security` | 0 | cargo-audit: `Loaded 1395 security advisories`, `Scanning Cargo.lock for vulnerabilities (691 crate dependencies)`, `warning: 9 allowed warnings found` (cargo-audit's wording for advisories it was told to allow; the register behind them is the one `make check-advisory-register` verifies inside `make check-gates`: `15 register row(s) checked against 15 deny.toml and 8 .cargo/audit.toml ignore entries`); cargo-deny: `advisories ok, bans ok, licenses ok, sources ok` |
+| `make check-migration-allowlist` | 0 | `Allowlist is set-equal to the MIGRATION.md §11.2 deliberate-breaking register (crate\|type pairs).` and `Every crate-wide cargo-semver-checks allow is mirrored by an allowlist entry (crate\|lint pairs).` |
+| `make check-doc-config` | 0 | `Results: 161 YAML block(s) checked, 0 failed` |
+
+CI-only gates, not run here and not claimed as run:
+
+- **82 % workspace line coverage floor** (ADR-0006): CI's `Coverage` job (`cargo llvm-cov --fail-under-lines`).
+  `cargo-llvm-cov` is not installed here and the Docker-backed services it needs are unavailable (no Docker
+  daemon). It is handed to CI and the maintainer, not recorded as a pass. The phase's `COVERAGE.md` carries the
+  no-external-API declaration.
+- **`actionlint`**: CI's `actionlint` job (not installed here). 54-07 added one `ci.yml` step; its YAML parses,
+  and `make check-workflow-suppressions` and `check-workflow-triggers` (inside `make check-gates`) pass.
+- **`make check-semver`** builds against crates.io and is also left to CI and to Phase 58's pre-tag audit.
+
+## Manual credential-handling review
+
+No tool performs merge-gating taint analysis of first-party Rust. `codeql.yml` runs Rust static analysis
+advisory-only: CodeQL was evaluated and disqualified as a required-check-grade Rust SAST (CodeQL 2.26.3,
+2026-08-25), it does not gate a merge, and it is not pinned in any ruleset. This hand review, per
+`.github/instructions/security.instructions.md`, is the control for credential-handling code; the rows below
+are read-throughs of the text, not tool output.
+
+Checks applied to every row:
+
+- (C1) no key value or variable name is interpolated into a message or log;
+- (C2) no key-carrying config type is newly `Debug`-formatted or serialized outward;
+- (C3) a literal key lives only in a Secret volume (`items`, `defaultMode: 0440`) or a read-only mounted file;
+- (C4) no redirect-following client and no response-body handling was added (not applicable: this phase adds
+  none, since it changes config validation, manifests and prose only).
+
+| File:line | Text | C1 | C2 | C3 | C4 |
+|-----------|------|----|----|----|----|
+| `src/config/agents.rs:218-227` | the `entry.key.contains("${")` branch and its message `http.auth.api_keys[{name}]: 'key' is an unexpanded '${{…}}' placeholder -- the server does not expand environment variables in http.auth.api_keys; set the literal key value` | Only `name` is interpolated, a validated identifier, never `entry.key`. The message does not name the variable, and the SC1 run shows `PALADIN_API_KEY_CI` absent from stderr. The new tests assert both absences | The branch adds no logging and no formatting of `ApiKeyConfig` | The text tells the operator to set a literal value | n/a |
+| `src/config/agents.rs:80-92` | rustdoc on `ApiKeyConfig` and its `key` field ("The `key` is the literal secret ... keep a config that holds it out of version control (a Kubernetes Secret or a mounted file)") | Prose only | `ApiKeyConfig` still derives `Debug, Clone, Serialize, Deserialize`. That derive is pre-existing (identical at `75f1606650de`, line 87) and was not touched; it is carried as a residual below. The only `Debug` derive 54-01 added is on a test-module wrapper struct (`src/config/agents.rs:1084`) that parses the example's `http` section, which holds no key, and is never logged | Names a Secret or mounted file | n/a |
+| `src/config/agents.rs:158-168` | rustdoc on `AuthConfig::validate` ("never a key value") | Prose only; it states the no-value rule | none | n/a | n/a |
+| `config.example.yml:7-8, 11, 187-199` | header and `api_keys:` comments: the literal-key rule, "a key containing `${` is refused at boot", "keep the config that holds a real key out of version control"; commented `key: ""` entries | No key text anywhere; every `key` is empty and `api_keys: []` is the only live value, so a verbatim copy fails closed | none | `key: ""` plus a comment to keep the file out of version control (`config.yml` is gitignored, `.gitignore:4`) | n/a |
+| `k8s/server/secret.yaml.example:1-19, 56-58, 64-70` | header ("NEVER commit it", "A ConfigMap ... cannot hold them", "fails closed") and the `http.auth` comments | The only credential-shaped strings are `REPLACE_ME`, empty `key: ""` entries and `llm.openai.api_key: "${OPENAI_API_KEY}"` (the working exact-name mechanism that names a variable and carries no value) | none | The whole `config.yml` is a Secret `stringData` key; `k8s/**/secret.yaml` is gitignored (`.gitignore:25`); both Deployments project it with `items: config.yml`, `defaultMode: 0440` (`k8s/server/deployment.yaml:96-101`, `k8s/server/worker-deployment.yaml:149-154`) mounted `readOnly: true` (`:70-71`, `:123-124`) | n/a |
+| `docker/docker-compose.server.yml:1-10, 17-28` | first-run header and the `environment` / `volumes` comments | The only environment secret is `OPENAI_API_KEY=${OPENAI_API_KEY:-}` (the provider key, from the host, never baked); no HTTP key is passed through the environment | none | The literal-key config is bind-mounted `../config.yml:/etc/paladin/config.yml:ro` | n/a |
+| `Dockerfile.server:6-13, 56` | header run snippet, the sentence on the baked `config.example.yml`, and the pre-existing line-56 comment "secrets are supplied at runtime via env vars" (see residual 10) | Placeholders are `sk-...`; nothing real | none | `-v "$PWD/config.yml:/etc/paladin/config.yml:ro"`; the baked example carries `api_keys: []`, so the image holds no key and refuses to boot unmounted | n/a |
+| `docs/src/deployment-topologies/http-service-host.md:82, 106-110, 145-156, 164-169` | the `key: ""` sample, the "API key values are literal" paragraph, the binary, Docker and Kubernetes snippets | Samples use `key: ""` and `sk-...`; the paragraph states the refusal names the entry, never the value | none | Mounted file, and on Kubernetes a Secret (`cp k8s/server/secret.yaml.example k8s/server/secret.yaml`, gitignored) | n/a |
+
+Result: every row passes C1 to C3, and C4 is not applicable. No redirect-following client, response-body
+redaction path or logging of a credential was added by this phase, so the `redaction.rs` and `Policy::none()`
+review items have nothing to cover here. A key value appears in no committed file of this phase; the
+process-level runs used only the placeholder text and `sk-dummy-not-a-real-key`.
+
+## Known residuals
+
+Each is a known gap with a pointer, listed for Phase 57's review sweep.
+
+1. **Deployment guides keep an illustrative registry owner.** `docs/src/deployment/docker.md` and
+   `kubernetes.md`: 54-04 Task 3 made their concrete image tags version-free (`X.Y.Z` placeholders), but they
+   keep the illustrative `ghcr.io/your-org` registry owner (for example `docker.md:58`, `:88`, `:91`), so a
+   copied `docker run` still needs the reader's own owner. The pages stay outside D-07's class 3, which is
+   `k8s/` only and was not widened, so no gate would catch a literal tag reintroduced there (T-54-31).
+2. **`paladin:latest` in two other pages.** `docs/src/operations/monitoring.md:170` and
+   `docs/src/appendix/sanctum-deployment.md:333` use `paladin:latest`: version-free already (no release named,
+   so nothing to go stale), outside the gate, and not swept.
+3. **Frozen v0.9.0 fixture.** `tests/fixtures/config/v0.9.0-config.example.yml:158` still carries
+   `key: "${PALADIN_API_KEY_CI}"`. It is a documentation-only record that no test loads (the integration test
+   uses `v0.9.0-config.test.yml`); `grep` finds no reference to the example file from any `.rs`, `.sh` or
+   Makefile.
+4. **Treasurer webhook `secret` placeholder is not refused.** The same trap class as the HTTP key, left out of
+   scope (54-CONTEXT, Deferred Ideas); `config.example.yml` says to set it with
+   `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET`.
+5. **`ApiKeyConfig` still derives `Debug`** (pre-existing at `75f1606650de`, carried). Nothing logs it, but a
+   future `{:?}` of an `AuthConfig` would print the keys. A redacting `Debug` impl is a Phase 55/57 candidate.
+6. **`defaultMode: 0440` with `fsGroup: 65532` is untested on a cluster (RESEARCH A1).** No `kubectl`, `kind`
+   or Docker daemon is available here, and the PyYAML checks prove manifest shape only, not that the non-root
+   container can read `/etc/paladin/config.yml`. Fallback, recorded in `54-06-SUMMARY.md` under "Untested
+   assumption: Secret file mode (RESEARCH A1)": if a pod cannot read the file, set `defaultMode: 0444` on the
+   `config` volume of both `k8s/server/deployment.yaml` and `k8s/server/worker-deployment.yaml` (`items` still
+   projects only `config.yml`, so the provider key is not exposed as a file).
+7. **No boot warning for `node_cache.enabled: true` on the server.** The shipped server attaches no node cache
+   (documented in 54-05); a warning at boot is deferred to PACE-07.
+8. **Pre-existing, environment-specific test failure, not caused by this phase.** `make test`
+   (`cargo test --workspace --lib --bins`) reports `1479 passed; 2 failed` per the orchestrator. Re-run in
+   isolation here:
+   `cargo test --lib --features web-server infrastructure::web::run_api_wiring::tests::build_run_api_persists`
+   gives `test result: FAILED. 0 passed; 2 failed; ... 1479 filtered out; finished in 20.79s`, the two tests being
+   `build_run_api_persists_no_run_traces_by_default` and
+   `build_run_api_persists_run_traces_when_trace_persist_is_set`, both panicking at
+   `src/infrastructure/web/run_api_wiring.rs:3036:13` with `the run never reached a terminal status` (a 10 s
+   worker deadline). `git diff --stat 8b23cb4c5 HEAD -- src/infrastructure/web/run_api_wiring.rs` is empty and
+   the phase's only Rust changes are in `src/config/agents.rs` and `src/bin/paladin-server.rs`. The orchestrator
+   reports the same two failures on the pre-phase base `8b23cb4c5` in a scratch worktree in this container and
+   green CI when PR #62 merged, so the cause is something in this container, not yet diagnosed. This plan did
+   not try to fix it; it is carried as a STATE.md Blockers/Concerns line for a later phase.
+9. **No cluster, no Docker daemon, no coverage run here.** The k8s quick start was read against the tree, not
+   applied; the 82 % coverage floor and `actionlint` are CI's jobs (see Phase-head gates).
+10. **A pre-existing `Dockerfile.server` comment is now imprecise.** Line 56, `# Binary + a baked default config
+    (secrets are supplied at runtime via env vars).`, is true of the provider key but not of the HTTP API keys,
+    which now arrive in a mounted `config.yml`. It predates this phase, no behavior depends on it, and it was
+    left alone because 54-02 scoped its `Dockerfile.server` edit to the header. A one-line comment fix for
+    Phase 57.

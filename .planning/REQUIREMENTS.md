@@ -98,7 +98,7 @@ fails is rebuilt.*
 
 ### First-Run Usability (FIRST)
 
-- [ ] **FIRST-01**: An `http.auth.api_keys[].key` whose value is an unexpanded `${…}` placeholder is
+- [x] **FIRST-01**: An `http.auth.api_keys[].key` whose value is an unexpanded `${…}` placeholder is
       refused at config load with an error naming the key; `config.example.yml` and
       `k8s/server/configmap.yaml` (including its "expanded by the server at load time" header) no
       longer imply expansion — B1, C3, WINDOWS row 62, DF-01
@@ -322,7 +322,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TENANT-08 | Phase 53 | Complete |
 | TENANT-09 | Phase 53 | Complete |
 | TENANT-10 | Phase 53 | Complete |
-| FIRST-01 | Phase 54 | Pending |
+| FIRST-01 | Phase 54 | Complete |
 | FIRST-02 | Phase 54 | Pending |
 | FIRST-03 | Phase 54 | Pending |
 | FIRST-04 | Phase 54 | Pending |

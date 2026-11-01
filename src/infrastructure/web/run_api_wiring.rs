@@ -49,6 +49,7 @@ use paladin_ports::input::run_event_stream_port::RunEventStreamPort;
 use paladin_ports::input::run_submission_port::RunSubmissionPort;
 use paladin_ports::input::schedule_admin_port::ScheduleAdminPort;
 use paladin_ports::output::assistant_repository_port::AssistantRepositoryPort;
+use paladin_ports::output::paladin_port::PaladinPort;
 use paladin_ports::output::run_queue_port::RunQueuePort;
 use paladin_ports::output::run_repository_port::RunRepositoryPort;
 use paladin_ports::output::run_schedule_repository_port::RunScheduleRepositoryPort;
@@ -793,6 +794,51 @@ pub async fn build_run_api_with_cadence(
     code_registry: Arc<AgentRegistry>,
     cadence: Option<CadenceWiring>,
 ) -> Result<RunApiHandles, Box<dyn std::error::Error>> {
+    build_run_api_with_engine_port(
+        configs,
+        settings,
+        coordinator,
+        waypoint_store,
+        auth,
+        code_registry,
+        EnginePortSource {
+            cadence,
+            paladin_port_override: None,
+        },
+    )
+    .await
+}
+
+/// Which [`PaladinPort`] the run engine uses, and how it is paced (TESTS-01, D-08).
+///
+/// `paladin_port_override: None` builds the real port from `settings` through
+/// `paladin_port_from_settings_with_cadence`, paced by `cadence` -- this is the only value
+/// shipped wiring ever passes, because the public [`build_run_api`] and
+/// [`build_run_api_with_cadence`] both delegate with `None`. `Some` replaces that port and is for
+/// in-crate tests only, so a test can drive a run through the production router and worker pool
+/// with a scripted port and no network. Crate-private on purpose: no public surface can inject an
+/// engine port.
+pub(crate) struct EnginePortSource {
+    /// The pacing wiring handed to the real port (`None` installs no pacing). Unused when
+    /// `paladin_port_override` is `Some`.
+    pub(crate) cadence: Option<CadenceWiring>,
+    /// A port used in place of the one built from `settings`. Only this file's `#[cfg(test)]`
+    /// module constructs `Some`.
+    pub(crate) paladin_port_override: Option<Arc<dyn PaladinPort>>,
+}
+
+/// The body of [`build_run_api_with_cadence`], with the run engine's port source supplied
+/// (TESTS-01, D-08). Every contract, error and rustdoc promise of [`build_run_api`] and
+/// [`build_run_api_with_cadence`] holds here; the only difference is `engine_port`.
+pub(crate) async fn build_run_api_with_engine_port(
+    configs: RunApiConfigs,
+    settings: &Settings,
+    coordinator: ShutdownCoordinator,
+    waypoint_store: Option<Arc<dyn WaypointPort>>,
+    auth: AgentAuthConfig,
+    code_registry: Arc<AgentRegistry>,
+    engine_port: EnginePortSource,
+) -> Result<RunApiHandles, Box<dyn std::error::Error>> {
     // D-11: an allowance that would silently enforce nothing is a boot error, checked BEFORE
     // the disabled-store early return so a disabled store cannot hide a configured allowance.
     let treasurer_config = settings.get_treasurer_config();
@@ -887,9 +933,15 @@ pub async fn build_run_api_with_cadence(
     // `treasury_ledger` under `AgentLoopSettlement::PlatformRunsOnly` when `Some`, so an
     // agent-kind run's own dispatch (never the shared engine's own superstep settlements)
     // settles through this port.
-    let paladin_port =
-        paladin_port_from_settings_with_cadence(settings, treasury_ledger.clone(), cadence)
-            .map_err(|e| format!("failed to build the run engine's LLM port: {e}"))?;
+    let paladin_port = match engine_port.paladin_port_override {
+        Some(port) => port,
+        None => paladin_port_from_settings_with_cadence(
+            settings,
+            treasury_ledger.clone(),
+            engine_port.cadence,
+        )
+        .map_err(|e| format!("failed to build the run engine's LLM port: {e}"))?,
+    };
 
     let mut engine_config = EngineConfig::default();
     engine_config.apply_env_overrides();
@@ -1157,6 +1209,11 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
+    use paladin_core::platform::container::execution_result::PaladinResult;
+    use paladin_core::platform::container::paladin::Paladin;
+    use paladin_core::platform::container::paladin_error::PaladinError;
+    use paladin_core::platform::container::token_usage::TokenUsage;
+    use paladin_ports::output::paladin_port::PaladinStream;
     use tower::ServiceExt;
 
     fn default_configs() -> RunApiConfigs {
@@ -2943,17 +3000,59 @@ mod tests {
         cleanup(&wp_path);
     }
 
-    /// Submits one agent-kind run through the real run router of a `build_run_api` wired with
-    /// `trace`, waits for it to end, and returns how many records `run_traces` holds for its
-    /// thread -- counted straight from the SQLite file, exactly as an operator's `sqlite3`
-    /// would.
+    /// A [`PaladinPort`] that answers every `execute` with one canned [`PaladinResult`] and never
+    /// leaves the process (TESTS-01, D-08): the stand-in for the real LLM port the run engine
+    /// would otherwise build from `settings`, so the run-API trace tests need no key and no
+    /// network.
+    struct CannedAnswerPaladinPort;
+
+    #[async_trait]
+    impl PaladinPort for CannedAnswerPaladinPort {
+        async fn execute(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+        ) -> Result<PaladinResult, PaladinError> {
+            Ok(PaladinResult {
+                output: "canned answer".to_string(),
+                usage: TokenUsage::new(11, 7),
+                ..Default::default()
+            })
+        }
+
+        async fn execute_stream(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+        ) -> Result<PaladinStream, PaladinError> {
+            Err(PaladinError::ExecutionError(
+                "streaming is not scripted".to_string(),
+            ))
+        }
+
+        fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+            Ok(())
+        }
+    }
+
+    /// Submits one agent-kind run through the real run router of a `build_run_api`-shaped wiring
+    /// built with `trace`, waits for it to end, and returns how many records `run_traces` holds
+    /// for its thread -- counted straight from the SQLite file, exactly as an operator's
+    /// `sqlite3` would.
+    ///
+    /// Hermetic: the run engine's port is the scripted [`CannedAnswerPaladinPort`], injected
+    /// through the crate-private [`EnginePortSource`] seam, so no API key and no network are
+    /// needed and no process environment variable is touched.
     async fn persisted_trace_records(label: &str, trace: crate::config::trace::TraceConfig) -> i64 {
         use paladin_core::platform::container::paladin::PaladinData;
         use paladin_core::platform::container::run::RunId;
 
-        struct FailingExecutor;
+        /// `AgentRegistry::insert` requires an executor. The agent-kind run path never consults
+        /// the registry's executor (the run engine's port answers), so this one fails loudly if
+        /// that ever changes.
+        struct UnconsultedExecutor;
         #[async_trait]
-        impl paladin_ports::output::paladin_executor_port::PaladinExecutorPort for FailingExecutor {
+        impl paladin_ports::output::paladin_executor_port::PaladinExecutorPort for UnconsultedExecutor {
             async fn execute(
                 &self,
                 _paladin: &paladin_core::platform::container::paladin::Paladin,
@@ -2970,9 +3069,6 @@ mod tests {
             }
         }
 
-        unsafe {
-            std::env::set_var("OPENAI_API_KEY", "sk-test-run-api-wiring-hermetic");
-        }
         let (run_path, run_url) = temp_sqlite_url(label);
         let (wp_path, wp_url) = temp_sqlite_url(&format!("{label}_wp"));
 
@@ -2985,20 +3081,24 @@ mod tests {
             },
             Some("TracedAgent".to_string()),
         ));
-        registry.insert("traced-agent", paladin, Arc::new(FailingExecutor));
+        registry.insert("traced-agent", paladin, Arc::new(UnconsultedExecutor));
 
         let settings = Settings {
             trace,
             ..Settings::default()
         };
         let coordinator = ShutdownCoordinator::new();
-        let handles = build_run_api(
+        let handles = build_run_api_with_engine_port(
             sqlite_configs(&run_url),
             &settings,
             coordinator.clone(),
             Some(sqlite_waypoints(&wp_url).await),
             AgentAuthConfig::default(),
             registry,
+            EnginePortSource {
+                cadence: None,
+                paladin_port_override: Some(Arc::new(CannedAnswerPaladinPort)),
+            },
         )
         .await
         .expect("sqlite run store wires");
@@ -3041,9 +3141,6 @@ mod tests {
         }
         // Stopping the pool lets every per-run trace dispatcher drain before the read-back.
         coordinator.cancel_and_wait(Duration::from_secs(1)).await;
-        unsafe {
-            std::env::remove_var("OPENAI_API_KEY");
-        }
 
         let pool = sqlx::SqlitePool::connect(&run_url)
             .await
@@ -3063,7 +3160,6 @@ mod tests {
     /// `trace.persist: true` in the operator's config reaches the production worker pool: a run
     /// dispatched by a `build_run_api`-built server leaves its trace records in `run_traces`.
     #[tokio::test(flavor = "multi_thread")]
-    #[serial_test::serial(paladin_run_api_wiring_openai_api_key)]
     async fn build_run_api_persists_run_traces_when_trace_persist_is_set() {
         let records = persisted_trace_records(
             "trace_persist_on",
@@ -3081,7 +3177,6 @@ mod tests {
 
     /// The default (`trace.persist: false`) stays off: the same run persists no trace record.
     #[tokio::test(flavor = "multi_thread")]
-    #[serial_test::serial(paladin_run_api_wiring_openai_api_key)]
     async fn build_run_api_persists_no_run_traces_by_default() {
         let records = persisted_trace_records(
             "trace_persist_off",

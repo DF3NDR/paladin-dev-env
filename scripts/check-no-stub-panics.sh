@@ -14,7 +14,12 @@
 # manifest `[package] publish` is not `false`: the root Cargo.toml plus every
 # crates/*/Cargo.toml, read with tomllib (a `publish.workspace = true` package
 # inherits `[workspace.package] publish`). `crates/doc-examples` (publish =
-# false) and every tests/, benches/ and examples/ tree are out of scope. A
+# false) and every tests/, benches/ and examples/ tree are out of scope, except
+# a file that a scanned production module loads from outside src/ through
+# `#[path = "..."]` (or as a child module of such a file): rustc compiles it
+# into the published crate, so it is scanned too (src/application/cli/
+# commands/eval.rs loads tests/helpers/e2e_fixtures.rs this way). A
+# `#[cfg(test)]` one, or one declared inside an exempt span, is not followed. A
 # crates/<dir> with no readable Cargo.toml is skipped silently.
 #
 # Exactly two cfg forms exempt code, and only the item or module block they
@@ -29,32 +34,32 @@
 # items, so a `#[cfg(test)]` there exempts nothing and records no out-of-line
 # test module (the macro decides what it expands to).
 #
-# Position next: the attribute exempts something only at an item position,
-# that is, when the previous significant character before it (looking back over
+# Position next: the attribute exempts something only at an item position, that
+# is, when the previous significant character before it (looking back over
 # whitespace, comments and any preceding `#[...]`/`#![...]` attributes) is the
-# start of the file (after a leading byte-order mark, if any), `;`, `{` or
-# `}`. After `<`, `(`, `,`, `|`, `=` or anything else it sits inside a
-# generic parameter list (`fn g<#[cfg(test)] const N: usize>`, a type or
-# lifetime parameter, an impl header), a parameter list, a field, variant or
-# arm list, closure parameters or an initialiser, and exempts nothing. Then the head: at an item position the attribute exempts something
-# only when (after any further attributes) a real item head follows: optional
-# visibility, optional `async`/`unsafe`/`const`/`default`/`extern "abi"`, then
-# `fn`, `mod`, `impl`, `struct`, `enum`, `union` (only as `union Name` followed
-# by `<`, `{` or `where`: it is a contextual keyword, so a field `union: x` or a
-# path `union::A` is no head), `trait`, `type`, `const`,
-# `static`, `use`, `extern`, `let`, `macro_rules!` or a macro invocation such
-# as `thread_local!`, or a block statement (`{`, `unsafe {`, `async {`, inline
-# `const {`). A block statement exempts exactly its block; a macro invocation
-# exactly its delimiter group (and a `;` right after it); a
-# `let`/`const`/`static`/`use`/`type` up to its top-level `;` (a closure
-# parameter list `|a, b|` inside it is read whole), and one with no `;` before
-# the enclosing block or the file ends exempts nothing. A struct field, enum
-# variant or match arm that passes the position rule (the first of its list
-# after `{`, or an arm after a `}`-bodied arm) is no item head, so it exempts
-# nothing; an arm whose pattern is a macro exempts only that macro's group. An
-# expression exempts nothing. The item scan stops at a top-level `=>`, a
-# top-level `,` or an unmatched closer, so it never runs past the enclosing
-# block.
+# start of the file (after a leading byte-order mark, if any), `;`, `{` or `}`.
+# After `<`, `(`, `,`, `|`, `=` or anything else it sits inside a generic
+# parameter list (`fn g<#[cfg(test)] const N: usize>`, a type or lifetime
+# parameter, an impl header), a parameter list, a field, variant or arm list,
+# closure parameters or an initialiser, and exempts nothing. Then the head: at
+# an item position the attribute exempts something only when (after any further
+# attributes) a real item head follows: optional visibility, optional
+# `async`/`unsafe`/`const`/`default`/`extern "abi"`, then `fn`, `mod`, `impl`,
+# `struct`, `enum`, `union` (only as `union Name` followed by `<`, `{` or
+# `where`: it is a contextual keyword, so a field `union: x` or a path
+# `union::A` is no head), `trait`, `type`, `const`, `static`, `use`, `extern`,
+# `let`, `macro_rules!` or a macro invocation such as `thread_local!`, or a
+# block statement (`{`, `unsafe {`, `async {`, inline `const {`). A block
+# statement exempts exactly its block; a macro invocation exactly its delimiter
+# group (and a `;` right after it); a `let`/`const`/`static`/`use`/`type` up to
+# its top-level `;` (a closure parameter list `|a, b|` inside it is read whole),
+# and one with no `;` before the enclosing block or the file ends exempts
+# nothing. A struct field, enum variant or match arm that passes the position
+# rule (the first of its list after `{`, or an arm after a `}`-bodied arm) is no
+# item head, so it exempts nothing; an arm whose pattern is a macro exempts only
+# that macro's group. An expression exempts nothing. The item scan stops at a
+# top-level `=>`, a top-level `,` or an unmatched closer, so it never runs past
+# the enclosing block.
 #
 # Strict by design: `#[cfg(test)]` on an expression statement such as
 # `self_check(|| todo!());` is not an item, so a stub inside it is reported
@@ -556,7 +561,8 @@ def mod_decls(raw, b, groups):
     `#[cfg(test)]` or `#[cfg(all(test, ...))]`; `path`, the literal of a
     `#[path = "..."]` in that run (read from the raw source), else None;
     `nesting`, the names of the inline `mod name { ... }` blocks around it,
-    outermost first.
+    outermost first; `at`, the index of its `mod` keyword. analyse() adds
+    `exempt`: the decl is `test` or sits inside an exempt span.
     """
     inline = []
     for m in INLINE_MOD.finditer(b):
@@ -586,6 +592,7 @@ def mod_decls(raw, b, groups):
             "test": any(CFG_TEST_ATTR.match(b, a) for a, _z in attrs),
             "path": path,
             "nesting": [name for a, z, name in inline if a < m.start() < z],
+            "at": m.start(),
         })
     return decls
 
@@ -599,6 +606,8 @@ def analyse(raw, blanked):
     groups = macro_groups(blanked)
     decls = mod_decls(raw, blanked, groups)
     if leading_inner_cfg_test(blanked):
+        for d in decls:
+            d["exempt"] = True
         return None, decls  # the file's own #![cfg(test)]: the whole file is test-only
     spans = []
     for m in CFG_TEST_ATTR.finditer(blanked):
@@ -609,6 +618,8 @@ def analyse(raw, blanked):
         end = item_end(blanked, m.end())
         if end is not None:
             spans.append((m.start(), end))
+    for d in decls:
+        d["exempt"] = d["test"] or any(a <= d["at"] <= z for a, z in spans)
     hits = [
         (blanked.count("\n", 0, m.start()) + 1, m.group(1))
         for m in STUB.finditer(blanked)
@@ -683,27 +694,63 @@ files = sorted({
 
 parsed = {}
 unreadable = []
-for path in files:
+
+
+def load(path):
     try:
         with open(path, "r", encoding="utf-8") as fh:
             raw = fh.read()
     except (UnicodeDecodeError, OSError):
         unreadable.append(path)
-        continue
+        return
     parsed[path] = analyse(raw, blank(raw))
+
+
+def grow_path_loaded():
+    """Add every `#[path]` target to path_loaded, to a fixed point.
+
+    A nested `#[path]` decl resolves through module_dir(), which itself
+    depends on path_loaded; the set only ever grows, so this terminates.
+    """
+    grown = True
+    while grown:
+        grown = False
+        for path, (_hits, decls) in parsed.items():
+            for decl in decls:
+                if decl["path"] is not None:
+                    for target in decl_files(path, decl):
+                        if target not in path_loaded:
+                            path_loaded.add(target)
+                            grown = True
+
+
+for path in files:
+    load(path)
+grow_path_loaded()
+
+# A production module (not `#[cfg(test)]`, not inside an exempt span, not in a
+# test-only file) that loads a file outside the scan set, through `#[path]` or
+# as a child of such a file, compiles that file into the published crate: scan
+# it too (eval.rs pulls in tests/helpers/e2e_fixtures.rs this way).
+scan = set(files)
+pending = list(files)
+while pending:
+    path = pending.pop()
+    if path not in parsed or parsed[path][0] is None:
+        continue
+    for decl in parsed[path][1]:
+        if decl["exempt"]:
+            continue
+        for target in decl_files(path, decl):
+            if target not in scan and os.path.isfile(target):
+                scan.add(target)
+                if decl["path"] is not None:
+                    path_loaded.add(target)
+                load(target)
+                pending.append(target)
+grow_path_loaded()
+files = sorted(scan)
 test_only = {path for path, (hits, _decls) in parsed.items() if hits is None}
-# A nested `#[path]` decl resolves through module_dir(), which itself depends
-# on path_loaded, so grow the set to a fixed point (it only ever grows).
-grown = True
-while grown:
-    grown = False
-    for path, (_hits, decls) in parsed.items():
-        for decl in decls:
-            if decl["path"] is not None:
-                for target in decl_files(path, decl):
-                    if target not in path_loaded:
-                        path_loaded.add(target)
-                        grown = True
 
 
 def resolve_children(path, decls):

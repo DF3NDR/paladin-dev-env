@@ -443,6 +443,19 @@ printf 'fn t() {}\n' >"${FX}/crates/x/src/outer/helper.rs"
 assert_fire "${FX}" "#[cfg(test)] mod helper; inside inline mod outer does not make src/helper.rs test-only" \
     "crates/x/src/helper.rs:1: todo! outside #[cfg(test)]"
 
+# A production `#[path]` module compiles its target into the published crate
+# even when the file sits outside src/ (eval.rs pulls in
+# tests/helpers/e2e_fixtures.rs this way), so the target and its own children
+# are scanned (WR-03, round 4).
+fresh path-mod-outside-src
+printf '#[path = "../tests/helpers/fx.rs"]\npub mod fx;\n' >"${FX}/crates/x/src/lib.rs"
+mkdir -p "${FX}/crates/x/tests/helpers"
+printf 'pub mod sub;\npub fn f() -> u8 { todo!() }\n' >"${FX}/crates/x/tests/helpers/fx.rs"
+printf 'pub fn s() { unimplemented!() }\n' >"${FX}/crates/x/tests/helpers/sub.rs"
+assert_fire "${FX}" "a production #[path] target outside src/, and its child, are scanned" \
+    "crates/x/tests/helpers/fx.rs:2: todo! outside #[cfg(test)]" \
+    "crates/x/tests/helpers/sub.rs:1: unimplemented! outside #[cfg(test)]"
+
 fresh root-package
 printf '[package]\nname = "rootpkg"\nversion = "0.1.0"\n' >"${FX}/Cargo.toml"
 mkdir -p "${FX}/src"
@@ -671,6 +684,21 @@ printf 'fn t() { todo!() }\n' >"${FX}/crates/x/tests/t.rs"
 printf 'fn b() { todo!() }\n' >"${FX}/crates/x/benches/b.rs"
 printf 'fn e() { todo!() }\n' >"${FX}/crates/x/examples/e.rs"
 assert_silent "${FX}" "tests/, benches/ and examples/ trees are out of scope" "OK"
+
+fresh test-path-mod-outside-src
+printf '%s\n' \
+    '#[cfg(test)]' \
+    '#[path = "../tests/helpers/fx.rs"]' \
+    'mod fx;' \
+    '#[cfg(test)]' \
+    'mod tests {' \
+    '    #[path = "../tests/helpers/gx.rs"]' \
+    '    mod gx;' \
+    '}' >"${FX}/crates/x/src/lib.rs"
+mkdir -p "${FX}/crates/x/tests/helpers"
+printf 'pub fn f() -> u8 { todo!() }\n' >"${FX}/crates/x/tests/helpers/fx.rs"
+printf 'pub fn g() -> u8 { todo!() }\n' >"${FX}/crates/x/tests/helpers/gx.rs"
+assert_silent "${FX}" "a test-only #[path] target outside src/ is not pulled into the scan" "OK" "scanned 1 file(s)"
 
 fresh crate-without-manifest
 mkdir -p "${FX}/crates/stray/src"

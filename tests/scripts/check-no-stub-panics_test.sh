@@ -370,6 +370,36 @@ printf '%s\n' \
 assert_fire "${FX}" "#![cfg(test)] inside macro tokens after an item does not make the file test-only" \
     "crates/x/src/lib.rs:1: todo! outside #[cfg(test)]"
 
+# Inside a macro invocation's delimiter group or a macro_rules! body the tokens
+# are macro input, not items: a #[cfg(test)] there exempts nothing and records
+# no out-of-line test module, because the macro decides what (if anything) it
+# expands to (WR-03, round 4).
+fresh cfg-test-mod-in-macro-tokens
+printf '%s\n' \
+    'pub mod prod;' \
+    'pub const NOTE: &str = stringify!{ #[cfg(test)] mod prod; };' >"${FX}/crates/x/src/lib.rs"
+printf 'pub fn p() -> u8 { todo!() }\n' >"${FX}/crates/x/src/prod.rs"
+assert_fire "${FX}" "#[cfg(test)] mod x; inside macro tokens does not make x.rs test-only" \
+    "crates/x/src/prod.rs:1: todo! outside #[cfg(test)]"
+
+fresh cfg-test-mod-in-macro-rules-body
+printf '%s\n' \
+    'pub mod prod;' \
+    'macro_rules! never { () => { #[cfg(test)] mod prod; }; }' >"${FX}/crates/x/src/lib.rs"
+printf 'pub fn p() -> u8 { todo!() }\n' >"${FX}/crates/x/src/prod.rs"
+assert_fire "${FX}" "#[cfg(test)] mod x; inside a macro_rules! body does not make x.rs test-only" \
+    "crates/x/src/prod.rs:1: todo! outside #[cfg(test)]"
+
+fresh cfg-test-in-macro-input
+printf '%s\n' \
+    'macro_rules! strip { (#[cfg(test)] $i:item) => { $i }; }' \
+    'strip! {' \
+    '    #[cfg(test)]' \
+    '    pub fn f() -> u8 { todo!() }' \
+    '}' >"${FX}/crates/x/src/lib.rs"
+assert_fire "${FX}" "#[cfg(test)] inside a macro invocation's input exempts nothing" \
+    "crates/x/src/lib.rs:4: todo! outside #[cfg(test)]"
+
 fresh root-package
 printf '[package]\nname = "rootpkg"\nversion = "0.1.0"\n' >"${FX}/Cargo.toml"
 mkdir -p "${FX}/src"

@@ -24,7 +24,12 @@
 # `#![cfg(test)]` is wholly test-only; the same tokens anywhere else, such as
 # inside a macro invocation's tokens, are not the file's attribute.
 #
-# Position first: the attribute exempts something only at an item position,
+# Macro input first: inside a macro invocation's delimiter group (`m!( )`,
+# `m![ ]`, `m!{ }`) or a `macro_rules!` body the tokens are macro input, not
+# items, so a `#[cfg(test)]` there exempts nothing and records no out-of-line
+# test module (the macro decides what it expands to).
+#
+# Position next: the attribute exempts something only at an item position,
 # that is, when the previous significant character before it (looking back over
 # whitespace, comments and any preceding `#[...]`/`#![...]` attributes) is the
 # start of the file (after a leading byte-order mark, if any), `;`, `{` or `}`. After `<`, `(`, `,`, `|`, `=` or anything
@@ -156,6 +161,16 @@ BLOCK_HEAD = re.compile(r'\s*(?:(?:unsafe|const|async(?:\s+move)?)\s*)?\{')
 # A closure may open its `|params|` list after one of these keywords.
 CLOSURE_KEYWORDS = {"move", "async", "return", "break"}
 WHERE_KW = re.compile(r'where\b')
+# A macro invocation `name!(`, `name![`, `name!{` (also the last segment of a
+# path such as `std::thread_local!`), and a `macro_rules! name {` definition.
+# The keywords below can precede a prefix `!` (`if !(x)`, `return !(y)`), so
+# they never name a macro.
+MACRO_CALL = re.compile(r'(?<![\w$])([A-Za-z_]\w*)\s*!\s*[\(\[{]')
+MACRO_RULES = re.compile(r'(?<![\w$])macro_rules\s*!\s*(?:r#)?[A-Za-z_]\w*\s*[\(\[{]')
+NOT_MACRO = {
+    "as", "break", "else", "if", "in", "let", "match", "move", "mut",
+    "return", "while", "yield",
+}
 RAW_OPEN = re.compile(r'(?:br|r)(#*)"')
 CHAR_LIT = re.compile(r"'(?:\\.[^']*|[^\\'])'")
 
@@ -485,6 +500,30 @@ def leading_inner_cfg_test(b):
         k = end + 1
 
 
+def macro_groups(b):
+    """(open, close) of every macro invocation group and macro_rules! body.
+
+    The tokens inside are macro input, not items: rustc expands them only as
+    the macro decides, so a `#[cfg(test)]` there is never at an item position.
+    """
+    groups = []
+    for m in MACRO_CALL.finditer(b):
+        if m.group(1) in NOT_MACRO or m.group(1) == "macro_rules":
+            continue
+        close = match_group(b, m.end() - 1)
+        if close is not None:
+            groups.append((m.end() - 1, close))
+    for m in MACRO_RULES.finditer(b):
+        close = match_group(b, m.end() - 1)
+        if close is not None:
+            groups.append((m.end() - 1, close))
+    return groups
+
+
+def in_groups(groups, i):
+    return any(a < i < z for a, z in groups)
+
+
 def analyse(blanked):
     """Return (hits, test_mods); hits is None when the whole file is test-only.
 
@@ -494,7 +533,10 @@ def analyse(blanked):
     if leading_inner_cfg_test(blanked):
         return None, []  # the file's own #![cfg(test)]: the whole file is test-only
     spans, test_mods = [], []
+    groups = macro_groups(blanked)
     for m in CFG_TEST_ATTR.finditer(blanked):
+        if in_groups(groups, m.start()):
+            continue  # macro input, not an item
         if not at_item_position(blanked, m.start()):
             continue  # in a generic, parameter, field or arm list: not on an item
         end = item_end(blanked, m.end())

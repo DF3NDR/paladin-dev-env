@@ -19,8 +19,10 @@
 #
 # Exactly two cfg forms exempt code, and only the item or module block they
 # attach to: `#[cfg(test)]` and `#[cfg(all(test, ...))]`. `#[cfg(not(test))]`
-# is NOT exempt: it is production code. A file whose own top-level inner
-# attribute is `#![cfg(test)]` is wholly test-only.
+# is NOT exempt: it is production code. A file whose leading run of inner
+# attributes (only whitespace, comments and other `#![...]` before it) holds
+# `#![cfg(test)]` is wholly test-only; the same tokens anywhere else, such as
+# inside a macro invocation's tokens, are not the file's attribute.
 #
 # Position first: the attribute exempts something only at an item position,
 # that is, when the previous significant character before it (looking back over
@@ -123,7 +125,8 @@ STUB = re.compile(r'\b(todo|unimplemented)\s*!\s*[\(\[{]')
 CFG_TEST_ATTR = re.compile(
     r'#\s*\[\s*cfg\s*\(\s*(?:test|all\s*\(\s*test\s*,[^\]]*\))\s*\)\s*\]'
 )
-INNER_CFG_TEST = re.compile(r'#!\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]')
+INNER_CFG_TEST = re.compile(r'#\s*!\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]')
+INNER_ATTR_OPEN = re.compile(r'#\s*!\s*\[')
 ATTR_START = re.compile(r'\s*#\s*\[')
 # A module declaration header: optional visibility, `mod name ;`.
 MOD_ITEM = re.compile(r'\s*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+(\w+)\s*;')
@@ -459,16 +462,37 @@ def item_end(b, j):
     return k
 
 
+def leading_inner_cfg_test(b):
+    """True when `#![cfg(test)]` is in the file's leading run of inner attributes.
+
+    Only whitespace, comments (already blanked) and other `#![...]` attributes
+    may come before it. The same tokens anywhere else (inside a macro
+    invocation's tokens, after the first item) are not the file's own
+    attribute, so they never make the file test-only.
+    """
+    k, n = 0, len(b)
+    while True:
+        while k < n and b[k].isspace():
+            k += 1
+        if INNER_CFG_TEST.match(b, k):
+            return True
+        m = INNER_ATTR_OPEN.match(b, k)
+        if not m:
+            return False
+        end = match_group(b, m.end() - 1)
+        if end is None:
+            return False
+        k = end + 1
+
+
 def analyse(blanked):
     """Return (hits, test_mods); hits is None when the whole file is test-only.
 
     hits: (line, macro) of each stub macro outside an exempt item.
     test_mods: names of out-of-line `#[cfg(test)] mod name;` declarations.
     """
-    for m in INNER_CFG_TEST.finditer(blanked):
-        before = blanked[: m.start()]
-        if before.count("{") == before.count("}"):
-            return None, []  # a top-level #![cfg(test)]: the whole file is test-only
+    if leading_inner_cfg_test(blanked):
+        return None, []  # the file's own #![cfg(test)]: the whole file is test-only
     spans, test_mods = [], []
     for m in CFG_TEST_ATTR.finditer(blanked):
         if not at_item_position(blanked, m.start()):

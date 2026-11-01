@@ -360,6 +360,16 @@ printf '%s\n' \
 assert_fire "${FX}" "#[cfg(test)] on a match arm whose pattern is the path union::A exempts nothing" \
     "crates/x/src/lib.rs:6: todo! outside #[cfg(test)]"
 
+# `#![cfg(test)]` makes a file test-only only in its leading run of inner
+# attributes. Inside macro tokens, or anywhere after the first item, it is not
+# the file's own attribute (WR-03, round 4).
+fresh inner-cfg-test-in-macro-tokens
+printf '%s\n' \
+    'pub fn f() -> u8 { todo!() }' \
+    'pub const NOTE: &str = stringify!(#![cfg(test)]);' >"${FX}/crates/x/src/lib.rs"
+assert_fire "${FX}" "#![cfg(test)] inside macro tokens after an item does not make the file test-only" \
+    "crates/x/src/lib.rs:1: todo! outside #[cfg(test)]"
+
 fresh root-package
 printf '[package]\nname = "rootpkg"\nversion = "0.1.0"\n' >"${FX}/Cargo.toml"
 mkdir -p "${FX}/src"
@@ -550,6 +560,10 @@ assert_silent "${FX}" "an out-of-line test module resolved to name/mod.rs is tes
 fresh inner-cfg-test
 printf '#![cfg(test)]\nfn t() { todo!() }\n' >"${FX}/crates/x/src/lib.rs"
 assert_silent "${FX}" "a file whose first item is #![cfg(test)] is wholly test-only" "OK"
+
+fresh inner-cfg-test-after-inner-attrs
+printf '//! Test-only crate.\n#![forbid(unsafe_code)]\n#![cfg(test)]\nfn t() { todo!() }\n' >"${FX}/crates/x/src/lib.rs"
+assert_silent "${FX}" "#![cfg(test)] after a doc comment and another inner attribute is still leading" "OK"
 
 fresh unpublished-crate
 mkdir -p "${FX}/crates/y/src"

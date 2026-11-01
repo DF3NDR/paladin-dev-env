@@ -8,7 +8,7 @@
 //! [`Waypoint`](paladin_core::platform::container::waypoint::Waypoint),
 //! written through `WaypointPort` on every superstep regardless of whether
 //! this sink is attached at all (mirrors
-//! [`RunTracePort`](paladin_ports::output::run_trace_port::RunTracePort)'s
+//! [`RunTracePort`]'s
 //! own module docs). A crash between two flushes loses at most the
 //! un-flushed tail of one superstep's records; it never loses the ability
 //! to resume the thread, and a `RunTracePort::append` failure is logged and

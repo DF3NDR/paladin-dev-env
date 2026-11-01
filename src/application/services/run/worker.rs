@@ -812,7 +812,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     ///
     /// The caller's closure is responsible for wiring whatever
     /// `CancellationProbe` (typically a shared
-    /// [`DbCancellationProbe`](super::cancel::DbCancellationProbe)), node
+    /// [`DbCancellationProbe`]), node
     /// cache, vault, etc. the production engine needs -- this pool has no
     /// visibility into `WarEngine`'s private construction fields beyond
     /// what the closure itself captures.

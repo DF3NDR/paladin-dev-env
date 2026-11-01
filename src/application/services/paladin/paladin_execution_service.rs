@@ -3693,7 +3693,7 @@ impl StreamingExecutorPort for PaladinExecutionService {
 /// The bounded repair loop itself is **not** re-implemented here --
 /// [`execute_json_schema`](StructuredExecutorPort::execute_json_schema)
 /// supplies only the `execute_fn` closure
-/// [`run_structured`](paladin_ports::output::structured_executor_port::run_structured)
+/// [`run_structured`]
 /// (plan 26-12) drives; `execute_json_schema_observed` is left to the
 /// trait's own defaulted body (the same D-19 pattern `PaladinPort::
 /// execute_observed`/`execute_scoped` already use elsewhere in this

@@ -591,7 +591,7 @@ pub async fn build_agent_registry(settings: &Settings) -> Result<AgentRegistry, 
 /// Identical to [`build_agent_registry`] otherwise -- same validation, same
 /// `treasurer.pricing` table build, same per-agent construction via `build_agent` -- except
 /// every agent's [`PaladinExecutionService`] settles under
-/// [`AgentLoopSettlement::EveryCall`](crate::application::services::paladin::paladin_execution_service::AgentLoopSettlement::EveryCall)
+/// [`AgentLoopSettlement::EveryCall`]
 /// when `treasury_ledger` is `Some`. The ledger is observational (D-08, LEDGR-03): a settle
 /// failure never fails an agent's execution. Every priced call of every configured agent
 /// settles under its own execution id and, for a call made through the HTTP agent routes
@@ -634,7 +634,7 @@ pub async fn build_agent_registry_with_ledger(
 ///
 /// Identical to [`build_agent_registry_with_ledger`] otherwise. The caller owns the
 /// [`CadenceWiring`]: pass clones of ONE wiring (from
-/// [`build_cadence`](crate::infrastructure::cadence::build_cadence)) to every composition root
+/// [`build_cadence`]) to every composition root
 /// in the process so in-process gate state is process-wide, or `None` to install no pacing
 /// (`treasurer.cadence.enabled: false`). The wiring is not re-derived from `settings`, so this
 /// function does not validate `treasurer.cadence`; building the wiring does.

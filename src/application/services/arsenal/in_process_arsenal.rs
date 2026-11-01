@@ -17,7 +17,7 @@
 //!
 //! [`InProcessArsenal::validate_call`] validates a call's arguments against
 //! the registered [`Armament::parameters`] JSON Schema using
-//! [`shape_check`](paladin_core::platform::container::structured::shape_check)
+//! [`shape_check`]
 //! (plan 26-12) rather than a second hand-rolled validator — one JSON-Schema
 //! subset implementation in the workspace, not two.
 //!

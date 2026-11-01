@@ -7,24 +7,24 @@ This directory contains Kubernetes manifests for deploying Paladin in a producti
 The [`server/`](server/) subdirectory holds a standalone deployment of the **`paladin-server`**
 HTTP API (Milestone 12) — no Redis or object store required (agents are LLM + prompt only):
 
-- [`server/configmap.yaml`](server/configmap.yaml) — the `config.yml` (`/v1` agent API, auth, docs).
 - [`server/deployment.yaml`](server/deployment.yaml) — Deployment with **liveness `/health`** +
-  **readiness `/ready`** probes, read-only root FS, non-root, config mounted from the ConfigMap.
+  **readiness `/ready`** probes, read-only root FS, non-root, config mounted from the Secret.
 - [`server/service.yaml`](server/service.yaml) — ClusterIP Service on port 80 → container `8080`.
-- [`server/secret.yaml.example`](server/secret.yaml.example) — provider + API-key secrets template.
+- [`server/secret.yaml.example`](server/secret.yaml.example) — the Secret template carrying the whole
+  `config.yml` (agent API, auth with literal API keys, docs) and the provider key.
 
 ```bash
 # Build & load the image (or push to your registry and update the Deployment image:)
-make docker-build-server
+make docker-build-server   # tags paladin-server:latest and paladin-server:<workspace version>, the tag the manifests pull
 kubectl apply -f k8s/namespace.yaml
-cp k8s/server/secret.yaml.example k8s/server/secret.yaml   # fill in real values (gitignored)
-kubectl apply -f k8s/server/secret.yaml -f k8s/server/
+cp k8s/server/secret.yaml.example k8s/server/secret.yaml   # paste literal API keys into its config.yml and the provider key (gitignored)
+kubectl apply -f k8s/server/secret.yaml -f k8s/server/deployment.yaml -f k8s/server/service.yaml
 # Probe:  kubectl -n paladin port-forward svc/paladin-server 8080:80  &&  curl localhost:8080/health
 ```
 
-> **Scaling note:** the shipped `configmap.yaml` authenticates with static API keys sourced
-> from a Secret, byte-identical in every pod, so horizontal scaling is safe with the shipped
-> configuration. If you flip `http.auth.bearer_token.enabled: true`, do not scale past a
+> **Scaling note:** the shipped server config (the `config.yml` key of `server/secret.yaml.example`)
+> authenticates with static API keys, byte-identical in every pod, so horizontal scaling is safe
+> with the shipped configuration. If you flip `http.auth.bearer_token.enabled: true`, do not scale past a
 > single replica — that store is in-process and per-pod, so a token issued by one replica
 > does not verify on another. See ADR-0041.
 
@@ -38,7 +38,7 @@ kubectl apply -f k8s/server/secret.yaml -f k8s/server/
 
 ```bash
 # The worker Deployment needs a run-db-url and redis-url key on a `paladin-secrets` Secret,
-# in addition to the paladin-server-secrets the API replicas already use for provider keys:
+# in addition to the paladin-server-secrets, which carries the shared config.yml and the provider key:
 kubectl -n paladin create secret generic paladin-secrets \
   --from-literal=run-db-url=postgres://paladin:CHANGE_ME@postgres:5432/paladin_runs \
   --from-literal=redis-url=redis://redis:6379
@@ -161,8 +161,8 @@ kubectl edit deployment paladin -n paladin
 #### Horizontal Scaling
 
 Safe with the `paladin-server` shipped configuration — authentication is by static API keys
-from a Secret, byte-identical in every pod. **Not** safe while
-`http.auth.bearer_token.enabled: true` in [`server/configmap.yaml`](server/configmap.yaml):
+in the `config.yml` Secret, byte-identical in every pod. **Not** safe while
+`http.auth.bearer_token.enabled: true` in the `config.yml` key of [`server/secret.yaml.example`](server/secret.yaml.example):
 that store is in-process and per-pod, so a token issued by one replica does not verify on
 another. Pin to a single replica if you enable it, until the shared-store implementation
 exists (ADR-0041).

@@ -43,6 +43,8 @@ No persistence or schema change is recorded since `v0.11.0`. A later v0.11.1 cha
 
 - **`config.example.yml` ships no loadable API key** (FIRST-01, Phase 54 plan 54-01, `M-B-29`). It now carries `http.auth.api_keys: []` with commented example entries whose `key` is `""`. A verbatim copy fails closed with the existing "authentication is enabled but no credentials are configured" error until a literal key is pasted, and uncommenting an entry without editing it is refused as an empty key. Only `llm.<provider>.api_key` resolves an exact `"${NAME}"`; `http.auth.api_keys` and the treasurer webhook `secret` (set through `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET`) do not.
 
+- **`k8s/server` delivers the server config as a Secret** (FIRST-01, FIRST-04, Phase 54 plan 54-06, D-05/D-10). The ConfigMap is retired; the whole `config.yml` is the `config.yml` key of `paladin-server-secrets` (`k8s/server/secret.yaml.example`), mounted at `/etc/paladin/config.yml` by `deployment.yaml` and `worker-deployment.yaml`. The per-caller key env injections and Secret keys are gone. Images are `paladin-server:<workspace version>`, which `make docker-build-server` now tags alongside `:latest`. A cluster still running the old manifests keeps its `${…}` keys, which now refuse to boot (`M-B-29`).
+
 A later v0.11.1 change of this kind adds its entry here in the same commit.
 
 ## 11.6 HTTP API
@@ -109,6 +111,7 @@ No item is marked `#[deprecated]` since `v0.11.0`. A later v0.11.1 deprecation a
 2. For each listed schedule, re-create it through `POST /v1/schedules` with the API key of the tenant that should own it (the creator is stamped from that key), then delete the old schedule. There is no backfill and no `PATCH` that assigns a creator (TENANT-11 is deferred), and the scan itself never changes a row.
 3. If boot instead logs the `error!` line saying the schedule scan stopped at an unreadable page, a schedule row is damaged (for example half-attributed); the line names the cursor position and nothing else. Inspect the `run_schedules` table directly from that position on.
 4. Before upgrading, search your config for `${` inside `http.auth.api_keys`. Every such key is refused at boot (`M-B-29`, FIRST-01), so replace it with the literal secret, and rotate it, because the placeholder text itself was a working key until now.
+5. On Kubernetes, copy `k8s/server/secret.yaml.example` to `secret.yaml`, paste the literal keys and the provider key, apply `secret.yaml`, `deployment.yaml` and `service.yaml` (and `worker-deployment.yaml` if you run workers), build or push `paladin-server:<workspace version>`, then delete the old ConfigMap with `kubectl -n paladin delete configmap paladin-server-config`.
 
 A deployment that attaches a Treasurer through its own `RunWorkerPool` wiring must now also install the engine factory, or boot refuses (`M-B-27`, TENANT-08); `paladin-server` as shipped is unaffected.
 

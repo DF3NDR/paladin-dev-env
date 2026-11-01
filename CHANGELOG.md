@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `RunWorkerPool::has_engine_factory` reports whether `with_engine_factory` was applied to the pool. It is the boot-time inspector behind the Treasurer wiring refusal below (TENANT-08).
 
+### Changed
+
+- `k8s/server` now delivers the server config as the `config.yml` key of the `paladin-server-secrets` Secret, mounted by both Deployments. `k8s/server/configmap.yaml` and the per-caller API-key env injections and Secret keys are removed. The manifests' labels and image tags read the workspace version, which `make docker-build-server` now also tags (FIRST-01, FIRST-04; `MIGRATION.md` section 11.5).
+
 ### Security
 
 - Boot refuses a configured Treasurer whose run worker pool has no engine factory, naming the misconfiguration before any worker spawns or listener binds. The shipped `build_run_api` wiring always installs the factory and is unaffected; only an embedder building its own pool wiring can hit the refusal (TENANT-08).

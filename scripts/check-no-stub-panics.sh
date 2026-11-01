@@ -32,11 +32,11 @@
 # Position next: the attribute exempts something only at an item position,
 # that is, when the previous significant character before it (looking back over
 # whitespace, comments and any preceding `#[...]`/`#![...]` attributes) is the
-# start of the file (after a leading byte-order mark, if any), `;`, `{` or `}`. After `<`, `(`, `,`, `|`, `=` or anything
-# else it sits inside a generic parameter list (`fn g<#[cfg(test)] const N:
-# usize>`, a type or lifetime parameter, an impl header), a parameter list, a
-# field, variant or arm list, closure parameters or an initialiser, and exempts
-# nothing. Then the head: at an item position the attribute exempts something
+# start of the file (after a leading byte-order mark, if any), `;`, `{` or
+# `}`. After `<`, `(`, `,`, `|`, `=` or anything else it sits inside a
+# generic parameter list (`fn g<#[cfg(test)] const N: usize>`, a type or
+# lifetime parameter, an impl header), a parameter list, a field, variant or
+# arm list, closure parameters or an initialiser, and exempts nothing. Then the head: at an item position the attribute exempts something
 # only when (after any further attributes) a real item head follows: optional
 # visibility, optional `async`/`unsafe`/`const`/`default`/`extern "abi"`, then
 # `fn`, `mod`, `impl`, `struct`, `enum`, `union` (only as `union Name` followed
@@ -61,19 +61,22 @@
 # even though rustc compiles it out of a non-test build. Wrap it in a block,
 # `#[cfg(test)] { self_check(|| todo!()); }`, which is exempt.
 #
-# Out-of-line test modules: `#[cfg(test)] mod name;` resolves to `name.rs` or
-# `name/mod.rs` beside the declaring file (the file's own directory for
-# lib.rs, main.rs and mod.rs, otherwise the path without `.rs`). With a
+# Out-of-line test modules: `#[cfg(test)] mod name;` resolves as rustc reads
+# it, to `name.rs` or `name/mod.rs` in the declaring file's module directory
+# (its own directory for lib.rs, main.rs and mod.rs, otherwise the path
+# without `.rs`) plus the inline `mod outer { ... }` nesting around the
+# declaration: `mod outer { #[cfg(test)] mod helper; }` in lib.rs is
+# outer/helper.rs, never a production helper.rs beside lib.rs. With a
 # `#[path = "..."]` attribute in its attribute run (before or after the cfg) it
 # resolves to that literal path only, relative to the declaring file's
-# directory, never to `name.rs`: `#[cfg(test)] #[path = "imp_mock.rs"] mod imp;`
-# makes imp_mock.rs test-only and leaves a production imp.rs scanned. A file
-# loaded through `#[path]` resolves its own children beside it, as rustc reads
-# it like a mod.rs. Those files are test-only, transitively: a test-only file's
-# own `mod child;` children are test-only too. So crates/paladin-battalion/src/engine/test_support.rs reports
-# nothing. The resolution is by file, not by the inline module nesting, which
-# is an over-approximation that can only exempt a file that exists at that
-# exact path.
+# directory (or the nested directory inside an inline module), never to
+# `name.rs`: `#[cfg(test)] #[path = "imp_mock.rs"] mod imp;` makes imp_mock.rs
+# test-only and leaves a production imp.rs scanned. A file loaded through
+# `#[path]` resolves its own children beside it, as rustc reads it like a
+# mod.rs. A `#[path]` on an inline module itself is not followed. Those files
+# are test-only, transitively: a test-only file's own `mod child;` children
+# are test-only too. So crates/paladin-battalion/src/engine/test_support.rs
+# reports nothing.
 #
 # Matching runs on the macro token after line comments, doc comments (so a
 # `///` doc example never fires), nested block comments, string, byte-string,
@@ -143,6 +146,7 @@ ATTR_START = re.compile(r'\s*#\s*\[')
 # before it, and a `#[path = "..."]` attribute (read from the raw source, since
 # literals are blanked).
 MOD_DECL = re.compile(r'(?<![\w$])mod\s+(?:r#)?([A-Za-z_]\w*)\s*;')
+INLINE_MOD = re.compile(r'(?<![\w$])mod\s+(?:r#)?([A-Za-z_]\w*)\s*\{')
 VIS_BEFORE = re.compile(r'(?<![\w$])pub\s*(?:\([^()]*\)\s*)?$')
 PATH_ATTR = re.compile(r'#\s*\[\s*path\s*=\s*"([^"\\]*)"\s*\]')
 # A real item head, read after any run of attributes: optional visibility
@@ -550,8 +554,17 @@ def mod_decls(raw, b, groups):
 
     Each is a dict: `name`; `test`, true when its attribute run holds
     `#[cfg(test)]` or `#[cfg(all(test, ...))]`; `path`, the literal of a
-    `#[path = "..."]` in that run (read from the raw source), else None.
+    `#[path = "..."]` in that run (read from the raw source), else None;
+    `nesting`, the names of the inline `mod name { ... }` blocks around it,
+    outermost first.
     """
+    inline = []
+    for m in INLINE_MOD.finditer(b):
+        if in_groups(groups, m.start()):
+            continue
+        close = match_group(b, m.end() - 1)
+        if close is not None:
+            inline.append((m.end() - 1, close, m.group(1)))
     decls = []
     for m in MOD_DECL.finditer(b):
         if in_groups(groups, m.start()):
@@ -572,6 +585,7 @@ def mod_decls(raw, b, groups):
             "name": m.group(1),
             "test": any(CFG_TEST_ATTR.match(b, a) for a, _z in attrs),
             "path": path,
+            "nesting": [name for a, z, name in inline if a < m.start() < z],
         })
     return decls
 
@@ -618,13 +632,17 @@ def module_dir(path):
 def decl_files(path, decl):
     """The files rustc may load for the out-of-line module decl in path.
 
-    A `#[path = "..."]` names exactly one file, relative to the declaring
-    file's directory; the module name is then never used. Otherwise
-    `name.rs` or `name/mod.rs` under module_dir(path).
+    The directory is module_dir(path) plus the inline module nesting around
+    the decl (`mod outer { mod helper; }` in lib.rs is outer/helper.rs). A
+    `#[path = "..."]` names exactly one file, relative to that directory when
+    the decl is nested in an inline module and to the declaring file's own
+    directory otherwise; the module name is then never used. Otherwise it is
+    `name.rs` or `name/mod.rs` in that directory.
     """
+    d = os.path.join(module_dir(path), *decl["nesting"])
     if decl["path"] is not None:
-        return [os.path.normpath(os.path.join(os.path.dirname(path), decl["path"]))]
-    d = module_dir(path)
+        base = d if decl["nesting"] else os.path.dirname(path)
+        return [os.path.normpath(os.path.join(base, decl["path"]))]
     return [os.path.join(d, decl["name"] + ".rs"), os.path.join(d, decl["name"], "mod.rs")]
 
 
@@ -674,10 +692,18 @@ for path in files:
         continue
     parsed[path] = analyse(raw, blank(raw))
 test_only = {path for path, (hits, _decls) in parsed.items() if hits is None}
-for path, (_hits, decls) in parsed.items():
-    for decl in decls:
-        if decl["path"] is not None:
-            path_loaded.update(decl_files(path, decl))
+# A nested `#[path]` decl resolves through module_dir(), which itself depends
+# on path_loaded, so grow the set to a fixed point (it only ever grows).
+grown = True
+while grown:
+    grown = False
+    for path, (_hits, decls) in parsed.items():
+        for decl in decls:
+            if decl["path"] is not None:
+                for target in decl_files(path, decl):
+                    if target not in path_loaded:
+                        path_loaded.add(target)
+                        grown = True
 
 
 def resolve_children(path, decls):

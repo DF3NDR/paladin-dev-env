@@ -427,6 +427,22 @@ printf 'pub fn run() -> u8 { 0 }\n' >"${FX}/crates/x/src/imp_mock.rs"
 assert_fire "${FX}" "#[path] before #[cfg(test)] on mod imp; does not make imp.rs test-only either" \
     "crates/x/src/imp.rs:1: todo! outside #[cfg(test)]"
 
+# An out-of-line module declared inside an inline `mod outer { ... }` resolves
+# under outer/, as rustc reads it: it never exempts the same-named production
+# file beside the declaring file (WR-03, round 4).
+fresh cfg-test-mod-in-inline-mod
+printf '%s\n' \
+    'pub mod outer {' \
+    '    #[cfg(test)]' \
+    '    mod helper;' \
+    '}' \
+    'pub mod helper;' >"${FX}/crates/x/src/lib.rs"
+printf 'pub fn h() -> u8 { todo!() }\n' >"${FX}/crates/x/src/helper.rs"
+mkdir -p "${FX}/crates/x/src/outer"
+printf 'fn t() {}\n' >"${FX}/crates/x/src/outer/helper.rs"
+assert_fire "${FX}" "#[cfg(test)] mod helper; inside inline mod outer does not make src/helper.rs test-only" \
+    "crates/x/src/helper.rs:1: todo! outside #[cfg(test)]"
+
 fresh root-package
 printf '[package]\nname = "rootpkg"\nversion = "0.1.0"\n' >"${FX}/Cargo.toml"
 mkdir -p "${FX}/src"
@@ -626,6 +642,14 @@ mkdir -p "${FX}/crates/x/src/mocks"
 printf 'mod helper;\npub fn run() -> u8 { todo!() }\n' >"${FX}/crates/x/src/mocks/imp_mock.rs"
 printf 'pub fn h() { unimplemented!() }\n' >"${FX}/crates/x/src/mocks/helper.rs"
 assert_silent "${FX}" "a #[cfg(test)] #[path] module and its own children (beside it, as rustc reads a #[path] file) are test-only" "OK"
+
+fresh out-of-line-test-mod-in-inline-mod
+printf 'pub mod outer {\n    #[cfg(test)]\n    mod helper;\n}\npub mod a;\n' >"${FX}/crates/x/src/lib.rs"
+mkdir -p "${FX}/crates/x/src/outer" "${FX}/crates/x/src/a/inner"
+printf 'pub fn h() { todo!() }\n' >"${FX}/crates/x/src/outer/helper.rs"
+printf 'pub mod inner {\n    #[cfg(test)]\n    mod t;\n}\n' >"${FX}/crates/x/src/a.rs"
+printf 'fn t() { unimplemented!() }\n' >"${FX}/crates/x/src/a/inner/t.rs"
+assert_silent "${FX}" "an out-of-line test module inside an inline module resolves under its directory (lib.rs and a non-mod-rs file)" "OK"
 
 fresh inner-cfg-test
 printf '#![cfg(test)]\nfn t() { todo!() }\n' >"${FX}/crates/x/src/lib.rs"

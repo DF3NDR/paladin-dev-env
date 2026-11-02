@@ -3,16 +3,16 @@ status: testing
 phase: 55-correctness-fixes-test-hygiene-lint-bar
 source: [55-01-SUMMARY.md, 55-02-SUMMARY.md, 55-03-SUMMARY.md, 55-04-SUMMARY.md, 55-05-SUMMARY.md, 55-06-SUMMARY.md, 55-07-SUMMARY.md, 55-08-SUMMARY.md, 55-09-SUMMARY.md, 55-10-SUMMARY.md, 55-11-SUMMARY.md, 55-12-SUMMARY.md, 55-13-SUMMARY.md]
 started: 2026-11-02T01:40:47Z
-updated: 2026-11-02T02:07:09Z
+updated: 2026-11-02T02:11:37Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 8
-name: Base-layer rustdoc says each retained item is unfinished
+number: 9
+name: FIXES-04 re-home is visible to an eval author
 expected: |
-  The rustdoc on `Field`, `CollectionType`/`Item`, `element`, `base/mod.rs`, `FieldVersionService` and `CollectionVersionService` reads accurately and sufficiently to a reader: each says it is unfinished scaffolding and names `55-BASE-LAYER-REVIEW.md`. (55-05 D3 — human judgment; the vocabulary freeze, `cargo doc` 0 warnings and doctests already pass.)
+  An author trying `run_status: cancelled` finds why it is not supported until the next minor in three places: the `RunStatusValue` rustdoc, the JSON schema description and the `docs/src/user-guides/eval-harness.md` table row. No public eval enum changed.
 awaiting: user response
 
 ## Tests
@@ -47,7 +47,7 @@ result: pass
 
 ### 8. Base-layer rustdoc says each retained item is unfinished
 expected: The rustdoc on `Field`, `CollectionType`/`Item`, `element`, `base/mod.rs`, `FieldVersionService` and `CollectionVersionService` reads accurately and sufficiently to a reader: each says it is unfinished scaffolding and names `55-BASE-LAYER-REVIEW.md`. (55-05 D3 — human judgment; the vocabulary freeze, `cargo doc` 0 warnings and doctests already pass.)
-result: [pending]
+result: pass
 
 ### 9. FIXES-04 re-home is visible to an eval author
 expected: An author trying `run_status: cancelled` finds why it is not supported until the next minor in three places: the `RunStatusValue` rustdoc, the JSON schema description and the `docs/src/user-guides/eval-harness.md` table row. No public eval enum changed.
@@ -88,9 +88,9 @@ coverage_id: 55-11/D2
 ## Summary
 
 total: 15
-passed: 11
+passed: 12
 issues: 0
-pending: 4
+pending: 3
 skipped: 0
 blocked: 0
 

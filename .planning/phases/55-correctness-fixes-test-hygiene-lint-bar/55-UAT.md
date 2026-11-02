@@ -3,23 +3,23 @@ status: testing
 phase: 55-correctness-fixes-test-hygiene-lint-bar
 source: [55-01-SUMMARY.md, 55-02-SUMMARY.md, 55-03-SUMMARY.md, 55-04-SUMMARY.md, 55-05-SUMMARY.md, 55-06-SUMMARY.md, 55-07-SUMMARY.md, 55-08-SUMMARY.md, 55-09-SUMMARY.md, 55-10-SUMMARY.md, 55-11-SUMMARY.md, 55-12-SUMMARY.md, 55-13-SUMMARY.md]
 started: 2026-11-02T01:40:47Z
-updated: 2026-11-02T01:40:47Z
+updated: 2026-11-02T01:42:26Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 1
-name: Stub-panic gate holds on the real tree and fires on a planted stub
+number: 2
+name: An unpriced model at dispatch halts the run instead of failing it
 expected: |
-  `scripts/check-no-stub-panics.sh` on the tree prints `OK: scanned ... file(s) (... test-only), 0 finding(s)` and exits 0; `make check-gates` runs it. Planting `pub fn planted() -> u8 { todo!() }` in a published crate's non-test code (or a scratch copy via `STUB_PANICS_ROOT`) makes it exit 1 and name the file:line.
+  With `treasurer.allowance` configured, an agent-kind run whose model has no `treasurer.pricing` row at dispatch ends `halted` (not `failed`), with `halt_reason` `{"reason":"model_unpriced","model":"<name>"}`, no error, SSE `done` with `status: halted`, a `halted` webhook, and no LLM call. Admission-time `422 model_unpriced` is unchanged. Docs (Platform API, Treasurer guide, MIGRATION M-B-31) say to add the pricing row and resubmit.
 awaiting: user response
 
 ## Tests
 
 ### 1. Stub-panic gate holds on the real tree and fires on a planted stub
 expected: `scripts/check-no-stub-panics.sh` on the tree prints `OK: scanned ... file(s) (... test-only), 0 finding(s)` and exits 0; `make check-gates` runs it. Planting `pub fn planted() -> u8 { todo!() }` in a published crate's non-test code (or a scratch copy via `STUB_PANICS_ROOT`) makes it exit 1 and name the file:line.
-result: [pending]
+result: pass
 
 ### 2. An unpriced model at dispatch halts the run instead of failing it
 expected: With `treasurer.allowance` configured, an agent-kind run whose model has no `treasurer.pricing` row at dispatch ends `halted` (not `failed`), with `halt_reason` `{"reason":"model_unpriced","model":"<name>"}`, no error, SSE `done` with `status: halted`, a `halted` webhook, and no LLM call. Admission-time `422 model_unpriced` is unchanged. Docs (Platform API, Treasurer guide, MIGRATION M-B-31) say to add the pricing row and resubmit.
@@ -88,9 +88,9 @@ coverage_id: 55-11/D2
 ## Summary
 
 total: 15
-passed: 4
+passed: 5
 issues: 0
-pending: 11
+pending: 10
 skipped: 0
 blocked: 0
 

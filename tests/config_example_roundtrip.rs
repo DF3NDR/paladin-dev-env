@@ -35,10 +35,11 @@
 //! ```
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use paladin::config::Settings;
 use serde_json::Value;
+use serial_test::serial;
 
 /// One key path: map keys are one segment each, a sequence element is the segment `[i]`.
 type KeyPath = Vec<String>;
@@ -296,4 +297,182 @@ fn exempt_and_known_gap_rows_go_stale_loudly() {
         ]
     );
     assert!(stale_rows(&missing, &rows[..1]).is_empty());
+}
+
+// ── the full fixture, the Redis-cadence fixture and the Settings::new path ───
+
+fn full_fixture() -> PathBuf {
+    repo_path("tests/fixtures/config/config.example.full.yml")
+}
+
+fn path_of(segments: &[&str]) -> KeyPath {
+    segments.iter().map(|s| (*s).to_string()).collect()
+}
+
+/// Asserts the D-10 properties for one fixture: nothing unexplained, and every `EXEMPT` and
+/// `KNOWN_GAPS` row still matches a missing path (a row that matches nothing is stale).
+fn assert_full_round_trip(label: &str, input: &BTreeSet<KeyPath>, output: &BTreeSet<KeyPath>) {
+    let missing = missing_paths(input, output);
+    assert_no_unexplained(label, &unexplained_paths(&missing, &[EXEMPT, KNOWN_GAPS]));
+    let stale_exempt = stale_rows(&missing, EXEMPT);
+    assert!(
+        stale_exempt.is_empty(),
+        "{label}: EXEMPT rows that match no missing path (stale):\n  {}",
+        stale_exempt.join("\n  ")
+    );
+    let stale_gaps = stale_rows(&missing, KNOWN_GAPS);
+    assert!(
+        stale_gaps.is_empty(),
+        "{label}: KNOWN_GAPS rows that match no missing path (stale, the gap may be fixed):\n  {}",
+        stale_gaps.join("\n  ")
+    );
+}
+
+#[test]
+fn full_fixture_round_trips_through_load_from_file() {
+    let fixture = full_fixture();
+    assert_full_round_trip(
+        "config.example.full.yml via Settings::load_from_file",
+        &input_key_paths(&fixture),
+        &loaded_key_paths(&fixture),
+    );
+}
+
+/// Restores the process working directory on every exit path, a panic included.
+struct CwdGuard(PathBuf);
+
+impl Drop for CwdGuard {
+    fn drop(&mut self) {
+        // Best effort in a destructor: nothing useful can be done with a failure here.
+        let _ = std::env::set_current_dir(&self.0);
+    }
+}
+
+#[test]
+#[serial]
+fn full_fixture_round_trips_through_settings_new() {
+    let fixture = full_fixture();
+    let input = input_key_paths(&fixture);
+
+    // `Settings::new()` (the `paladin-cli arsenal` path) reads `config.yml` from the current
+    // directory, so give it a temporary directory holding the fixture under that name.
+    let dir = tempfile::tempdir().expect("temp dir");
+    std::fs::copy(&fixture, dir.path().join("config.yml")).expect("copy fixture");
+    let _restore = CwdGuard(std::env::current_dir().expect("current dir"));
+    std::env::set_current_dir(dir.path()).expect("enter temp dir");
+
+    let settings = Settings::new()
+        .unwrap_or_else(|e| panic!("Settings::new rejected config.example.full.yml: {e}"));
+    let output = key_paths(&serde_json::to_value(&settings).expect("Settings serialises"));
+    assert_full_round_trip("config.example.full.yml via Settings::new", &input, &output);
+}
+
+#[test]
+fn redis_cadence_fixture_round_trips_through_load_from_file() {
+    let fixture = repo_path("tests/fixtures/config/config.example.redis-cadence.yml");
+    let input = input_key_paths(&fixture);
+    let output = loaded_key_paths(&fixture);
+    let url_env = path_of(&["treasurer", "cadence", "backend", "redis", "url_env"]);
+    assert!(
+        output.contains(&url_env),
+        "{} did not survive the loader",
+        render_path(&url_env)
+    );
+    let missing = missing_paths(&input, &output);
+    assert_no_unexplained(
+        "config.example.redis-cadence.yml",
+        &unexplained_paths(&missing, &[EXEMPT, KNOWN_GAPS]),
+    );
+}
+
+#[test]
+fn serialised_settings_carry_no_llm_api_key_and_no_webhook_secret() {
+    let output = loaded_key_paths(&full_fixture());
+    let api_keys: BTreeSet<&KeyPath> = output
+        .iter()
+        .filter(|p| p.first().map(String::as_str) == Some("llm"))
+        .filter(|p| p.last().map(String::as_str) == Some("api_key"))
+        .collect();
+    assert!(
+        api_keys.is_empty(),
+        "serialised Settings carries llm api_key paths (WR-04):\n  {}",
+        render_sorted(api_keys)
+    );
+    let secret = path_of(&["treasurer", "allowance", "webhook", "secret"]);
+    assert!(
+        !output.contains(&secret),
+        "serialised Settings carries {}",
+        render_path(&secret)
+    );
+}
+
+/// The string at `path` inside `value`, if every segment resolves and the leaf is a string.
+fn string_at<'a>(value: &'a Value, path: &[&str]) -> Option<&'a str> {
+    path.iter()
+        .try_fold(value, |node, key| node.get(*key))
+        .and_then(Value::as_str)
+}
+
+fn load_to_json(path: &Path) -> Value {
+    let name = path.to_str().expect("fixture path is UTF-8");
+    let settings = Settings::load_from_file(name)
+        .unwrap_or_else(|e| panic!("Settings::load_from_file rejected {}: {e}", path.display()));
+    serde_json::to_value(&settings).expect("Settings serialises")
+}
+
+#[test]
+fn quoted_money_strings_arrive_byte_identical() {
+    let fixture = full_fixture();
+    let text = std::fs::read_to_string(&fixture).expect("fixture is readable");
+    let input: Value = serde_yaml::from_str(&text).expect("fixture is valid YAML");
+    let loaded = load_to_json(&fixture);
+
+    let mut checked = 0_usize;
+    let mut differing: Vec<String> = Vec::new();
+    let mut check = |path: Vec<&str>| {
+        // Resolve the input side with the same walk, so the two sides cannot disagree on shape.
+        let Some(want) = string_at(&input, &path) else {
+            return;
+        };
+        checked += 1;
+        if string_at(&loaded, &path) != Some(want) {
+            differing.push(path.join("."));
+        }
+    };
+
+    let axes = [
+        "prompt",
+        "completion",
+        "cache_read",
+        "cache_write",
+        "reasoning",
+    ];
+    if let Some(rows) = input["treasurer"]["pricing"].as_object() {
+        for (model, _) in rows {
+            for axis in axes {
+                check(vec!["treasurer", "pricing", model.as_str(), axis]);
+            }
+        }
+    }
+    for scope in ["tenants", "api_keys"] {
+        if let Some(entries) = input["treasurer"]["allowance"][scope].as_object() {
+            for (name, _) in entries {
+                for field in ["amount", "lifetime"] {
+                    check(vec!["treasurer", "allowance", scope, name.as_str(), field]);
+                }
+            }
+        }
+    }
+
+    differing.sort();
+    assert!(
+        differing.is_empty(),
+        "quoted money strings that did not load byte-for-byte:\n  {}",
+        differing.join("\n  ")
+    );
+    // 4 pricing rows with 2..=5 axes and 3 allowance entries carrying 2..=3 money fields.
+    assert!(
+        checked >= 16,
+        "the fixture carries too few quoted money values ({checked}) for this check to mean anything"
+    );
 }

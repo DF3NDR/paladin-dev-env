@@ -1,0 +1,25 @@
+# FIXTURE (DOGF-03, Phase 56 plan 56-02): the second `treasurer.cadence.backend` shape.
+# `config.example.yml` documents the Redis form as a commented line under the in-process block
+# (a backend is one or the other), so it needs a file of its own. The required top-level keys
+# are copied from `config.example.yml`. The URL is read ONLY from the environment variable
+# named by `url_env`; it never appears in this file. No credential appears here at all.
+llm_type: "openai"
+llm_url: "https://api.openai.com/v1"
+llm_api_key: ""
+max_file_size: 10485760
+sources: []
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+treasurer:
+  currency: "USD"
+  cadence:
+    enabled: true
+    backend: { redis: { url_env: PALADIN_CADENCE_REDIS_URL } }
+    base_backoff_ms: 500
+    max_backoff_ms: 30000
+    max_wait_secs: 300
+    degraded_multiplier: 2.0
+    fallback_pace_budget_secs: 60
+    lock_ttl_secs: 120

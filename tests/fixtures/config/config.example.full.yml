@@ -1,0 +1,504 @@
+# FIXTURE (DOGF-03, Phase 56 plan 56-02): `config.example.yml` with every commented-out optional
+# block enabled, plus probe rows for the config-loader round-trip test
+# (tests/config_example_roundtrip.rs). See tests/fixtures/config/README.md,
+# "Derived fixtures". Every credential below is an obviously fake `test-key-not-a-secret`
+# literal; no placeholder syntax is used anywhere in this file.
+#
+# Example Paladin configuration for the HTTP service host (`paladin-server`).
+#
+# Copy to `config.yml` and edit. LLM provider keys come from the ENVIRONMENT
+# (e.g. OPENAI_API_KEY / ANTHROPIC_API_KEY / DEEPSEEK_API_KEY): each `llm.<provider>.api_key`
+# below is an exact "<placeholder>" read from the variable NAME (or is empty, which falls back to
+# the provider's own variable). Nothing else in this file is expanded. In particular
+# `http.auth.api_keys[].key` holds the LITERAL secret, so keep `config.yml` out of version
+# control; the treasurer webhook `secret` is set with APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET.
+#
+#   cp config.example.yml config.yml
+#   # paste a literal key into `http.auth.api_keys`, or set `http.auth.enabled: false` for
+#   # local development, then:
+#   OPENAI_API_KEY=sk-... cargo run --bin paladin-server --features web-server
+
+# Top-level LLM fields (legacy; unused by the agent host but required by the schema).
+llm_type: "openai"
+llm_url: "https://api.openai.com/v1"
+llm_api_key: "" # unused — keys come from environment variables
+
+# Structured, per-provider LLM configuration (optional — omit entirely and every field
+# below defaults to `None`/absent, matching pre-Phase-17 config.yml files byte-for-byte).
+# Every `llm.<provider>.api_key` below uses <placeholder> indirection naming the real variable; NEVER put a
+# literal key in this file. Only the providers you actually compiled in (via the matching
+# `llm-<provider>` Cargo feature) are usable at runtime — an unused block here is inert.
+#
+# A block drives every agent that uses its provider. Precedence, field by field: the agent's own
+# `model` (or `provider`), then the block, then the provider's own environment variables
+# (OPENAI_API_KEY, ...), then the adapter's built-in default. An exact `"<placeholder>"` in `api_key` is
+# read from the variable `VAR` (an unset variable is an error naming it, never sent as the key);
+# an empty or omitted `api_key` falls back to the provider's own variable. A block's
+# `default_temperature` is passed to its agents as an explicit value, so a model that does not
+# accept it refuses the agent at startup: leave it out for models with a fixed temperature.
+llm:
+  default_provider: "openai"
+
+  openai:
+    api_key: "test-key-not-a-secret-openai"
+    base_url: "https://api.openai.com/v1"
+    default_model: "gpt-4o-mini"
+    default_temperature: 0.7
+    timeout_seconds: 300
+    max_retries: 3
+
+  anthropic:
+    api_key: "test-key-not-a-secret-anthropic"
+    base_url: "https://api.anthropic.com/v1"
+    default_model: "claude-haiku-5-5"
+    # No `default_temperature`: claude-haiku-5-5 accepts only temperature 1.0, so a block-level
+    # 0.7 would refuse every agent that uses this provider.
+    timeout_seconds: 300
+    max_retries: 3
+
+  deepseek:
+    api_key: "test-key-not-a-secret-deepseek"
+    base_url: "https://api.deepseek.com/v1"
+    default_model: "deepseek-flash"
+    default_temperature: 0.7
+    timeout_seconds: 300
+    max_retries: 3
+
+  # Kimi (Moonshot AI). Live-verified 2026-08-22 (plan 17-19, closing G-17-4b): a live
+  # GET /models call and a generate() round trip both succeeded against api.moonshot.ai
+  # using kimi-k3. Since Phase 50 the block's default_model is the adapter's own current
+  # default, kimi-k2.6 (2026-10-15 probe); kimi-k3 stays available per agent.
+  kimi:
+    api_key: "test-key-not-a-secret-kimi"
+    base_url: "https://api.moonshot.ai/v1"
+    default_model: "kimi-k2.6"
+    timeout_seconds: 60
+    # Optional limits, enabled in this fixture (the example keeps them commented out).
+    max_tokens: 4096
+    context_window: 262144
+    reasoning_effort: high
+    reasoning_fallback: nearest_lower
+    models:
+      kimi-k3:
+        context_window: 262144
+        temperature: {fixed: 1.0}
+      Moonshot/Kimi-K3.1-preview:
+        context_window: 262144
+        temperature: {range: [0.0, 1.0]}
+      kimi-k3.5:
+        temperature: not_sent
+
+  # Qwen (Alibaba DashScope). Live-verified 2026-08-23 (plan 17-21 gap closure): a live
+  # GET /models call against the endpoint below returned a 162-model catalog, including
+  # the default model, and a generate() round trip succeeded. (Confirmed: model list +
+  # a completion round trip.)
+  #
+  # DashScope API keys are scoped to the Model Studio region that issued them and are
+  # REJECTED by every other region's endpoint. The base_url below is Singapore, the
+  # shipped default. If your workspace is in the US or on the mainland, you MUST set
+  # DASHSCOPE_BASE_URL to your own region's endpoint — the three known compatible-mode
+  # regional endpoints:
+  #   Singapore        (shipped default) : https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+  #   US (Virginia)                      : https://dashscope-us.aliyuncs.com/compatible-mode/v1
+  #   China (mainland)                   : https://dashscope.aliyuncs.com/compatible-mode/v1
+  qwen:
+    api_key: "test-key-not-a-secret-qwen"
+    base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+    default_model: "qwen3.8-flash"
+    timeout_seconds: 60
+
+  # Grok (xAI). Live-verified 2026-08-22 (plan 17-18, closing G-17-4a): a live GET
+  # /models call and a generate() round trip both succeeded against api.x.ai using the
+  # default model below. (Confirmed: model list + a completion round trip.)
+  grok:
+    api_key: "test-key-not-a-secret-grok"
+    base_url: "https://api.x.ai/v1"
+    default_model: "grok-4.3"
+    timeout_seconds: 60
+
+  # Ollama (self-hosted). Deliberately carries NO api_key field: Ollama requires no
+  # credential at all (D-12) — the adapter substitutes an internal placeholder value that is
+  # never read from config, so there is nothing to set here even with <placeholder> indirection.
+  # Not applicable to the live-verification status below: self-hosted, no vendor endpoint
+  # to verify. Its live exercise is the Docker Tier 2 suite (UAT test 3), which passed on
+  # a GitHub Actions runner on 2026-08-19.
+  ollama:
+    api_key: "test-key-not-a-secret-ollama"
+    reasoning_wire: top_level_effort
+    base_url: "http://localhost:11434/v1"
+    default_model: "llama3"
+    timeout_seconds: 60
+
+  # Gemini (Google). Bespoke `generateContent` protocol, not OpenAI-compatible.
+  # Live-verified: a live GET /models call and a generate() round trip both succeeded
+  # against generativelanguage.googleapis.com. default_model was refreshed from
+  # gemini-2.5-flash (retired for new users) to gemini-3.6-flash on 2026-08-22, per
+  # the live catalog. (Confirmed: model list + a completion round trip.) Since Phase 50 the
+  # block's default_model is the adapter's own current default (2026-10-15 probe).
+  gemini:
+    api_key: "test-key-not-a-secret-gemini"
+    base_url: "https://generativelanguage.googleapis.com/v1beta"
+    default_model: "gemini-3.5-flash-lite"
+    timeout_seconds: 60
+
+  # Generic operator-configured OpenAI-compatible provider — points Paladin at ANY
+  # OpenAI-compatible endpoint not already named above (self-hosted vLLM/LiteLLM, Groq,
+  # Together, Mistral, Fireworks, Bedrock's OpenAI-compat mode, ...). Unlike every other
+  # block, base_url and default_model are REQUIRED here — there is no vendor default to
+  # fall back to (D-03). Capability flags (streaming/tool-calling/vision/...) are NOT part
+  # of this YAML schema today — LlmProviderConfig carries no capabilities field, so declare
+  # them via OPENAI_COMPATIBLE_SUPPORTS_* environment variables instead (see
+  # crates/paladin-llm README / OpenAiCompatibleAdapter module docs); every unset
+  # capability defaults conservatively to false.
+  openai-compatible:
+    api_key: "test-key-not-a-secret-openai-compatible"
+    base_url: "https://your-endpoint.example.com/v1" # required, no default
+    default_model: "your-model-name" # required, no default
+    timeout_seconds: 60
+
+max_file_size: 10485760 # 10 MiB
+sources: []
+
+# Address the HTTP server binds to.
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+# Execution timeout policy (seconds). Applied to /execute, /execute/stream, and /jobs.
+# Resolution order: per-request timeout_seconds -> per-agent timeout_seconds -> default,
+# clamped to `max`.
+timeouts:
+  default_seconds: 300
+  max_seconds: 600
+
+# Cross-cutting HTTP layers (Epic 4). All optional with safe defaults.
+http:
+  # Allowed CORS origins; omit or leave empty for permissive (dev only).
+  cors_allow_origins: ["https://app.example.com"]
+  # Reject request bodies larger than this many bytes (413).
+  body_limit_bytes: 1048576 # 1 MiB
+  # Coarse outer timeout (seconds) for non-streaming routes; 0 disables it.
+  # (Streaming is bounded by `timeouts` above, never by this.)
+  global_timeout_seconds: 0
+  # Per-client (IP) rate limiting; off by default.
+  rate_limit:
+    enabled: true
+    per_second: 10
+    burst: 20
+  # Authentication for the agent routes. Enabled by default: the server FAILS TO START
+  # if `enabled` is true and no credentials (api_keys / bearer_token) are configured. Set
+  # `enabled: false` for trusted/dev environments (logged as a warning). Health/readiness
+  # probes are always open.
+  auth:
+    enabled: true
+    # Static API keys (header `X-API-Key`).
+    # `role` is `admin` or `user`; admins may register/deregister agents at runtime.
+    # `tenant` is REQUIRED on every key (Phase 40, TENANT-01): runs and spend are
+    # attributed to it, and a key reads only its own tenant's runs unless its role is
+    # admin. There is no implicit default tenant -- an empty/missing value fails boot.
+    api_keys:
+      - key: "test-key-not-a-secret-ci"
+        name: "ci-runner"
+        role: "admin"
+        tenant: "Acme-Prod"
+      - key: "test-key-not-a-secret-web"
+        name: "frontend"
+        role: "user"
+        tenant: "web-app"
+    # Accept opaque server-issued bearer tokens via the wired AuthPort (in-process token
+    # store). A random string checked against the store's own hashed records — not a
+    # signed or self-describing token.
+    bearer_token:
+      enabled: true
+      tenant: "bearer-callers"
+  # Interactive API docs: serve GET /openapi.json + Swagger UI at /docs (unversioned,
+  # unauthenticated — the contract is public). Set false to omit them in production.
+  docs:
+    enabled: true
+
+# Agent runtime execution middleware configuration (X-09, D-10). Every field below
+# is written out explicitly and is IDENTICAL to what AgentRuntimeConfig::default()
+# produces — the whole `agent_runtime:` section may be OMITTED ENTIRELY with no
+# behavior change: a v0.9 config.yml with no `agent_runtime:` key boots v0.10
+# identically. None of the twelve built-in middlewares below is wired unless you
+# flip its own `enabled: true` (or, for `tool_errors`, change its `mode`).
+agent_runtime:
+  model_call_limit:
+    enabled: false
+    max_calls: 10
+  token_budget:
+    enabled: false
+    max_tokens: 100000
+  tool_call_limit:
+    enabled: false
+    max_calls: 20
+    per_tool:
+      web_search: 5
+  guardrail:
+    enabled: false
+    rules:
+      - name: "redact-fake-keys"
+        target: response
+        pattern: "test-key-not-a-secret"
+        on_match: {action: redact, replacement: "[x]"}
+    pattern_size_limit_bytes: 65536
+  history_trimmer:
+    enabled: false
+    reserve_for_response: 1024
+    default_context_tokens: 8192
+    model_context_limits:
+      gpt-4o-mini: 128000
+    recall_limit: 20
+  summarization:
+    enabled: false
+    threshold_tokens: 6000
+    threshold_messages: 30
+    keep_recent: 10
+    summarizer_model: "gpt-4o-mini"
+  vault_recall:
+    enabled: false
+    top_k: 5
+    score_floor: 0.0
+  model_retry:
+    enabled: false
+    max_attempts: 3
+    initial_interval_ms: 500
+    backoff_factor: 2.0
+    max_interval_ms: 60000
+    jitter: true
+    retry_on: transient_only
+  model_fallback:
+    enabled: false
+    providers: ["anthropic"]
+    # `providers` and `steps` are mutually exclusive under `validate()`; this fixture is only
+    # LOADED, never validated, so both are present to exercise both field shapes.
+    steps:
+      - {provider: anthropic, model: claude-haiku-5-5}
+  tool_errors:
+    mode: feed_to_model
+    per_tool:
+      web_search: fail_run
+  structured:
+    max_repair_attempts: 1
+  vault_tools:
+    enabled: false
+
+# Operator-configured per-model price table (PRICE-01, D-07). Every field below is IDENTICAL
+# to what TreasurerConfig::default() produces -- the whole `treasurer:` section may be OMITTED
+# ENTIRELY with no behavior change: a config file with no `treasurer:` key resolves to an empty
+# pricing table in "USD" and no LLM call is priced. No price ships with Paladin -- every price
+# in effect comes from the operator's own `pricing` entries below.
+#
+# Each price is a DECIMAL STRING in nano-units (1e-9) per 1,000,000 tokens -- copy a provider's
+# published price-sheet figure verbatim, e.g. "2.50" for $2.50 per 1M tokens. No scientific
+# notation, no thousands separator, no sign, at most 9 digits after the decimal point.
+#
+# `prompt` and `completion` are REQUIRED for every model row; a row missing either fails to
+# load rather than silently billing at a fallback price. `cache_read`, `cache_write` and
+# `reasoning` are OPTIONAL -- when omitted, those tokens bill at the `prompt` (cache axes) or
+# `completion` (reasoning) price, because TokenUsage already counts cache tokens inside
+# prompt_tokens and reasoning tokens inside completion_tokens. An unrecognized axis name (e.g.
+# a `cache_reads` typo) is a load error, never a silently-ignored key.
+#
+# `currency` is an ISO 4217 three-letter code, exactly three ASCII uppercase letters (e.g.
+# "USD", "EUR") -- overridable via APP_TREASURER_CURRENCY; `pricing` is config-file only, no
+# environment-variable form.
+treasurer:
+  currency: "USD"
+  pricing:
+    gpt-4:
+      prompt: "2.50"
+      completion: "10.00"
+      cache_read: "0.25"
+    claude-3-5-sonnet-20241022:
+      prompt: "3.00"
+      completion: "15.00"
+    Qwen/qwen3.7-plus:
+      prompt: "0.40"
+      completion: "1.20"
+    gpt-5.5.1:
+      prompt: "2.50"
+      completion: "10.00"
+      cache_read: "0.25"
+      cache_write: "3.125"
+      reasoning: "10.00"
+
+  # Spend allowances (ALLOW-01, Phase 41) -- OMIT `allowance:` to disable; the section is inert
+  # when absent. A request is refused with `429 allowance_exhausted` BEFORE it starts when its
+  # API key's or tenant's spend in the current window (or lifetime) has reached the ceiling.
+  #
+  # - `period` is `<integer><m|h|d>` between 1m and 366d; `amount` and `lifetime` are decimal
+  #   strings in WHOLE units of `treasurer.currency` (never a token count). `period` and `amount`
+  #   are required on every entry; `lifetime` and `warn_at` are optional.
+  # - Windows are tumbling and aligned to the UTC epoch, computed from the store clock, so spend
+  #   resets on the boundary and a scope can spend up to twice an allowance across one boundary.
+  # - `warn_at` is an integer percent 0..=100 (0 disables warnings); the global value applies to
+  #   every entry that does not set its own.
+  # - Every `api_keys.<name>` must name a key in `http.auth.api_keys` and every `tenants.<id>` a
+  #   tenant one of those keys (or `http.auth.bearer_token.tenant`) maps to, and the section
+  #   needs `run_store.backend` set -- otherwise the server REFUSES TO BOOT. A typo anywhere
+  #   under `treasurer:` is a load error. With `http.auth.enabled: false` use `api_keys.anonymous`
+  #   and `tenants.open-access`.
+  # - Admin keys are bound like any other key.
+  # - The webhook `secret` is NOT read from a `<placeholder>` placeholder (this loader does not expand
+  #   them, like `http.auth.api_keys`): set it with APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET. A private-address `url` also
+  #   needs `webhooks.allow_private: true`.
+  allowance:
+    warn_at: 80
+    webhook:
+      url: "https://ops.example.com/paladin-allowance"
+      secret: "test-key-not-a-secret-webhook"
+    tenants:
+      acme:
+        period: "24h"
+        amount: "25.00"
+        lifetime: "500.00"
+        warn_at: 75
+      Acme-Prod:
+        period: "1h"
+        amount: "2.50"
+    api_keys:
+      ci-runner:
+        period: "1h"
+        amount: "2.50"
+        warn_at: 90
+
+  # Rate pacing (Cadence, PACE-01..04, Phase 43) is ON by default when this section is omitted;
+  # these are the defaults. `enabled: false` turns it off.
+  cadence:
+    enabled: true
+    backend: in_process
+    base_backoff_ms: 500
+    max_backoff_ms: 30000
+    max_wait_secs: 300
+    degraded_multiplier: 2.0
+    fallback_pace_budget_secs: 60
+    lock_ttl_secs: 120
+  # The Redis form of `backend` lives in config.example.redis-cadence.yml (a backend is one
+  # or the other, so it cannot share this file).
+
+# Runtime trace pipeline configuration (X-09, D-36). Every field below is
+# written out explicitly and is IDENTICAL to what TraceConfig::default()
+# produces -- the whole `trace:` section may be OMITTED ENTIRELY with no
+# behavior change: a v0.9 config.yml with no `trace:` key boots v0.10
+# identically. Env var overrides use the PALADIN_TRACE_* prefix (a
+# deliberate divergence from this file's other APP_* variables, D-36).
+trace:
+  # Whether the built-in log-sink TraceSink is wired by default. Traces
+  # reach the process log out of the box.
+  log_sink: true
+  # The bounded channel capacity between the engine's trace emitter and its
+  # sinks.
+  channel_capacity: 1024
+  # Whether trace records are persisted to `run_traces`. A new subsystem
+  # stays off by default.
+  persist: false
+  # Whether state-diff records carry actual field values (redacted then
+  # capped) rather than only field names. Unless explicitly opted in, no
+  # state value ever reaches a trace record, the SSE wire, or a persisted
+  # row.
+  state_values: false
+  # The maximum byte length of a captured state value before truncation.
+  value_cap_bytes: 256
+  # How often, in seconds, a running node's heartbeat may emit a trace
+  # record.
+  heartbeat_interval_secs: 5
+  # OTLP export configuration. Off by default; requires the `otel` Cargo
+  # feature to be compiled in when enabled (never a silent no-op).
+  otel:
+    enabled: false
+    endpoint: "http://localhost:4318/v1/traces"
+    headers:
+      x-fixture-token: "test-key-not-a-secret-otel"
+    service_name: "paladin"
+
+# Web-server-scoped configuration outside core HTTP bind/port settings
+# (see `server:` above for those) -- currently just the developer inspector
+# UI. Omitting `web_server:` entirely boots identically to a v0.9
+# configuration.
+web_server:
+  dev_ui:
+    # The Mermaid ESM bundle URL the inspector page's module script
+    # imports. Defaults to the jsDelivr `mermaid@11` CDN bundle; point this
+    # at a local mirror for an air-gapped deployment.
+    mermaid_url: "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs"
+
+# Agents served behind the HTTP API. Each becomes resident at /v1/agents/<id>:
+#   POST /v1/agents/<id>/execute          — buffered run
+#   POST /v1/agents/<id>/execute/stream   — token streaming (SSE)
+#   POST /v1/agents/<id>/jobs          — async run (poll GET /v1/agents/<id>/jobs/<job_id>)
+agents:
+  - id: "researcher"
+    provider: "openai" # optional; defaults to llm.default_provider
+    model: "gpt-4o-mini" # built with the `llm.<provider>` block above, this model
+    system_prompt: "You research topics thoroughly."
+    temperature: 0.7 # optional
+    timeout_seconds: 120 # optional per-agent override (clamped to timeouts.max_seconds)
+    max_loops: 5
+    stop_words: ["DONE"]
+    reasoning_effort: {budget: 2048}
+    reasoning_fallback: nearest_lower
+    # Roles permitted to invoke this agent; omit/empty ⇒ any authenticated caller.
+    allowed_roles: ["admin", "user"]
+  - id: "summarizer"
+    model: "gpt-4o-mini"
+    system_prompt: "You write concise summaries."
+    allowed_roles: ["admin"] # restricted to admins
+
+# ─────────────────────────────────────────────────────────────────────────
+# Platform API (Phase 27, PLAT-01..06) — run store, queue, worker, stream,
+# assistants, schedules, webhooks
+# ─────────────────────────────────────────────────────────────────────────
+# These seven subsystems are NOT part of this YAML file's own schema (X-09):
+# `Settings` never carries them, so there is no `run_store:` (etc.) key to
+# uncomment below — each is its own `Default` + `apply_env_overrides()` +
+# `validate()` config struct, read directly from environment variables at
+# startup, mirroring `waypoint_store` (Phase 24)'s identical env-only
+# precedent. Every one defaults to OFF or today's behaviour (D-50): this
+# file, completely unmodified, boots a v0.10 `paladin-server` with the run
+# server fully disabled and every new route (`/v1/runs*`, `/v1/assistants*`,
+# `/v1/schedules*`) answering `501 not_implemented`.
+#
+# run_store: which durable Run backend (if any) is wired.
+#   APP_RUN_STORE_BACKEND=disabled|sqlite|postgres    (default: disabled)
+#   APP_RUN_STORE_PATH=sqlite://./data/runs.db        (sqlite backend)
+#   APP_RUN_STORE_URL_ENV=RUN_DATABASE_URL            (postgres backend — names
+#                                                      the env var holding the
+#                                                      connection url, never
+#                                                      the url itself)
+#
+# run_queue: which Run dispatch queue backend is wired.
+#   APP_RUN_QUEUE_BACKEND=in_memory|redis             (default: in_memory)
+#   APP_RUN_QUEUE_URL_ENV=RUN_QUEUE_REDIS_URL         (redis backend)
+#   APP_RUN_QUEUE_KEY_PREFIX=paladin:run_queue        (default shown)
+#
+# run_worker: the worker pool's concurrency/lease/probe tuning.
+#   APP_RUN_WORKER_CONCURRENCY=4                      (default shown)
+#   APP_RUN_WORKER_LEASE_SECONDS=60                   (default shown; heartbeat
+#                                                      is derived as lease/4)
+#   APP_RUN_WORKER_MIN_PROBE_INTERVAL_MS=1000         (default shown)
+#
+# run_stream: the degraded-mode SSE polling interval (GET /runs/{id}/stream).
+#   APP_RUN_STREAM_POLL_INTERVAL_MS=1000              (default shown)
+#
+# assistants: whether GET /assistants merges in synthetic code-registry
+# entries — the ONE subsystem here that defaults ON (D-32): the data is
+# already discoverable through the pre-existing `agents:` registry above.
+#   APP_ASSISTANTS_EXPOSE_CODE_REGISTRY=true          (default shown)
+#
+# schedules: whether the ScheduleService cron tick loop runs at all. The
+# persisted schema is unaffected by this flag; only the periodic
+# claim-and-fire loop is gated.
+#   APP_SCHEDULES_ENABLED=false                       (default shown)
+#   APP_SCHEDULES_TICK_INTERVAL_MS=1000               (default shown)
+#
+# webhooks: the webhook delivery SSRF guard and retry-schedule tuning.
+#   APP_WEBHOOKS_ALLOW_PRIVATE=false                  (default shown — the
+#                                                      ONLY override of the
+#                                                      SSRF guard; flipping it
+#                                                      on is a deliberate,
+#                                                      documented widening of
+#                                                      the deployment's SSRF
+#                                                      surface)
+#   APP_WEBHOOKS_MAX_ATTEMPTS=5                       (default shown)
+#   APP_WEBHOOKS_TIMEOUT_SECS=10                      (default shown)

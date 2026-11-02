@@ -257,7 +257,7 @@ Phase artifacts: `milestones/v0.11.0-phases/`
 - [x] **Phase 52: CI & Release Pipeline Repair** - Re-pin the semver gate to the published `0.11.0` baseline so it checks something, drop the crate-wide allows, run the migration-allowlist, end-to-end and publish-dry-run gates before merge, fix the release-body argv cap, and clear the CodeQL, issue #41 and publish-order carry-overs (completed 2026-10-30)
 - [x] **Phase 53: Tenant Isolation Closure** - One visibility gate for every `/v1/threads/*` route, run submission and fork refusing a foreign tenant's thread, tenant-checked job reads and cancel, redacted run-row errors, and a boot-time refusal when a configured Treasurer is not attached to the worker pool (the only S1 cluster; records the patch-versus-`v0.12.0` decision) (completed 2026-10-31)
 - [x] **Phase 54: First-Run Usability** - Refuse unexpanded `${VAR}` HTTP auth keys at boot and make the examples honest, bring every install snippet, version line and `k8s/` label to the current release behind a `check-version-strings` gate, and fix the changelog, ADR, count and API-surface-snapshot nits a new user trips on (completed 2026-11-01)
-- [ ] **Phase 55: Correctness Fixes, Test Hygiene & Lint Bar** - No `todo!()` reachable in a published crate (held by a grep guard), the unfinished content/base-layer items each given a keep/fence/remove decision, the Failed-vs-Halted, `Cancelled`, `claude-opus-4-8` seed and unpriced-model-warning fixes, hermetic and non-flaky tests, and a warning-free lint and rustdoc bar with the eight crate-level rustdoc allows removed
+- [x] **Phase 55: Correctness Fixes, Test Hygiene & Lint Bar** - No `todo!()` reachable in a published crate (held by a grep guard), the unfinished content/base-layer items each given a keep/fence/remove decision, the Failed-vs-Halted, `Cancelled`, `claude-opus-4-8` seed and unpriced-model-warning fixes, hermetic and non-flaky tests, and a warning-free lint and rustdoc bar with the eight crate-level rustdoc allows removed (completed 2026-11-02)
 - [ ] **Phase 56: Dogfood Findings** - Triage the maintainer's runs, the web3sec return and two deliberate walk-throughs into the findings log, disposition every `DF-nn`, and fix every promoted S1/S2 finding before the tag (detailed scope is unknown today and is filled from `.project/v0.11.1/02-dogfood-findings-log.md`)
 - [ ] **Phase 57: Register Hygiene Close-Out** - `WINDOWS.md` at `open_count: 0`, zero undispositioned review warnings across Phases 38-51, SUMMARY frontmatter and debug sessions reconciled, the Phase 40 judgment-tier read recorded, and the three `zip` RustSec exceptions re-checked, so the audit can read `passed`
 - [ ] **Phase 58: Crate Release** - Lockstep version bump held by the gate, `MIGRATION.md` consumer statement, a pre-tag milestone audit that reads `passed`, and the `v0.11.1` tag through `release.yml` with no manual step and all twelve crates on crates.io
@@ -566,7 +566,7 @@ Plans:
 | 52. CI & Release Pipeline Repair | v0.11.1 | 8/8 | Complete    | 2026-10-30 |
 | 53. Tenant Isolation Closure | v0.11.1 | 8/8 | Complete    | 2026-10-31 |
 | 54. First-Run Usability | v0.11.1 | 9/9 | Complete    | 2026-11-01 |
-| 55. Correctness Fixes, Test Hygiene & Lint Bar | v0.11.1 | 0/13 | Planned | - |
+| 55. Correctness Fixes, Test Hygiene & Lint Bar | v0.11.1 | 13/13 | Complete    | 2026-11-02 |
 | 56. Dogfood Findings | v0.11.1 | 0/TBD | Not started | - |
 | 57. Register Hygiene Close-Out | v0.11.1 | 0/TBD | Not started | - |
 | 58. Crate Release | v0.11.1 | 0/TBD | Not started | - |

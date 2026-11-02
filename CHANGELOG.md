@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Boot logs one `warn!` listing schedules with no recorded creator (`NULL created_by`), read-only, with the re-create action; an unreadable schedule row is one fixed `error!` line and never blocks boot (TENANT-10).
 - An `http.auth.api_keys[].key` containing `${` is refused at config load, naming the entry and never the value; the text was previously accepted as the key itself, so a key copied from the example config authenticated any caller who sent that text. `config.example.yml` now ships no loadable key, so the `Dockerfile.server` image needs a mounted config with a literal key (FIRST-01; `MIGRATION.md` `M-B-29`).
 
+### Documentation
+
+- First-run docs corrections found by walking the published `0.11.0` crates. `installation.md` names the `paladin-llm` feature `openai`, not the non-existent `llm-openai` (DF-14). The install docs carry `cargo install paladin-ai --features cli --locked --bin paladin-cli`, the line that installs the `paladin-cli` binary from crates.io (DF-15). The CLI appendix pages invoke `paladin-cli onboarding` and `paladin-cli setup-check`, the binary that has those subcommands, where they said `paladin` (DF-17). The README and crate-map `# default features:` comments list all three defaults, `llm-openai`, `llm-anthropic` and `llm-deepseek` (DF-11). The Quickstart says `cargo run --example` needs a checkout and how a crates.io user runs `basic_paladin`, which needs `paladin-ports` (DF-12).
+
 ## [0.11.0] - 2026-10-26
 
 This root entry is condensed to fit the GitHub Release body limit (Phase 47, B-1). Full per-change detail is in each crate's `CHANGELOG.md` `[0.11.0]` section, in `MIGRATION.md` section 10, and in the uncondensed text at commit `700a92d86f3d6b2e24bbd2c163daec7c307297e0` (`git show 700a92d86f3d6b2e24bbd2c163daec7c307297e0:CHANGELOG.md`).

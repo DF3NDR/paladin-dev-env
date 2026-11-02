@@ -4,7 +4,7 @@ Interactive setup wizard to configure your Paladin environment quickly and corre
 
 ## Overview
 
-The `paladin onboarding` command provides a step-by-step wizard that:
+The `paladin-cli onboarding` command provides a step-by-step wizard that:
 - Guides you through provider selection (OpenAI, Anthropic, DeepSeek)
 - Securely collects and validates API keys
 - Creates/updates your `.env` file with proper configuration
@@ -26,7 +26,7 @@ The `cli` feature is required, and `--locked` builds against the lockfile publis
 
 ```bash
 # Run the wizard
-paladin onboarding
+paladin-cli onboarding
 
 # Follow the interactive prompts
 # ✓ Provider selection
@@ -201,7 +201,7 @@ Sample configs created: examples/
 
 Next Steps:
   1. Verify your setup:
-     $ paladin setup-check
+     $ paladin-cli setup-check
 
   2. Try a sample agent:
      $ paladin agent run -c examples/basic_paladin.yaml -i "Hello!"
@@ -229,7 +229,7 @@ Saving wizard state...
 Progress saved to: .paladin/onboarding.state
 
 # Resume later
-paladin onboarding
+paladin-cli onboarding
 ? Previous onboarding session found. Resume? (Y/n)
 ```
 
@@ -279,7 +279,7 @@ paladin onboarding
 2. **Run with explicit output:**
    ```bash
    # Check for error messages
-   paladin onboarding 2>&1 | tee onboarding.log
+   paladin-cli onboarding 2>&1 | tee onboarding.log
    ```
 
 3. **Create manually:**
@@ -324,7 +324,7 @@ export OPENAI_API_KEY="sk-..."
 export ANTHROPIC_API_KEY="sk-ant-..."
 
 # Run wizard with pre-set keys
-paladin onboarding
+paladin-cli onboarding
 # Will skip key input, validate, and proceed
 ```
 
@@ -332,7 +332,7 @@ The wizard takes no arguments and reads no dedicated environment variable of its
 
 ## Related Commands
 
-- **[`paladin setup-check`](cli-setup-check.md)** - Validate configuration after onboarding
+- **[`paladin-cli setup-check`](cli-setup-check.md)** - Validate configuration after onboarding
 - **[`paladin features`](cli-usage.md)** - Discover available capabilities
 - **[`paladin agent`](cli-usage.md)** - Run your first agent
 

@@ -8,8 +8,8 @@ Complete guide to using the Paladin command-line interface for running AI agents
 - [Installation](#installation)
 - [Environment Setup](#environment-setup)
 - [Getting Started](#getting-started)
-  - [paladin onboarding](#paladin-onboarding)
-  - [paladin setup-check](#paladin-setup-check)
+  - [paladin-cli onboarding](#paladin-cli-onboarding)
+  - [paladin-cli setup-check](#paladin-cli-setup-check)
   - [paladin features](#paladin-features)
 - [Commands Reference](#commands-reference)
   - [paladin agent](#paladin-agent)
@@ -28,10 +28,10 @@ Complete guide to using the Paladin command-line interface for running AI agents
 
 ```bash
 # 1. Run the interactive onboarding wizard
-paladin onboarding
+paladin-cli onboarding
 
 # 2. Verify your setup
-paladin setup-check
+paladin-cli setup-check
 
 # 3. Discover available features
 paladin features
@@ -141,13 +141,13 @@ npx -y @modelcontextprotocol/server-filesystem /path/to/dir
 
 New to Paladin? Start here with these helpful commands.
 
-### paladin onboarding
+### paladin-cli onboarding
 
 Interactive wizard to set up your Paladin environment.
 
 **Syntax:**
 ```bash
-paladin onboarding
+paladin-cli onboarding
 ```
 
 **What it does:**
@@ -161,7 +161,7 @@ paladin onboarding
 **Examples:**
 ```bash
 # Run the interactive onboarding wizard
-paladin onboarding
+paladin-cli onboarding
 
 # The wizard will guide you through:
 # ✓ Provider selection
@@ -182,13 +182,13 @@ paladin onboarding
 
 ---
 
-### paladin setup-check
+### paladin-cli setup-check
 
 Validate your Paladin installation and environment configuration.
 
 **Syntax:**
 ```bash
-paladin setup-check [OPTIONS]
+paladin-cli setup-check [OPTIONS]
 ```
 
 **Options:**
@@ -204,13 +204,13 @@ paladin setup-check [OPTIONS]
 **Examples:**
 ```bash
 # Basic check with summary
-paladin setup-check
+paladin-cli setup-check
 
 # Detailed check with timing information
-paladin setup-check --verbose
+paladin-cli setup-check --verbose
 
 # Quiet mode (CI-friendly)
-paladin setup-check --quiet
+paladin-cli setup-check --quiet
 ```
 
 **Exit codes:**

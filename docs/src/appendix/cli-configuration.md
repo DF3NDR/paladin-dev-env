@@ -538,7 +538,7 @@ Still having issues? Check:
    paladin agent run -c config.yaml -i "test" -v
    ```
 
-2. **Test Configuration**: Use `paladin setup-check` to verify environment
+2. **Test Configuration**: Use `paladin-cli setup-check` to verify environment
 
 3. **GitHub Issues**: [github.com/DF3NDR/paladin-dev-env/issues](https://github.com/DF3NDR/paladin-dev-env/issues)
 

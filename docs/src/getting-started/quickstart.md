@@ -107,6 +107,18 @@ cargo run --example formation_sequential
 cargo run --example phalanx_parallel
 ```
 
+`cargo run --example` needs a checkout of the workspace, so the commands above do not work from a
+crate that only depends on `paladin-ai` from crates.io. To run an example from the published
+package instead:
+
+- Copy the example's source from the downloaded package, for instance
+  `~/.cargo/registry/src/*/paladin-ai-<version>/examples/basic_paladin.rs`, into your own crate's
+  `examples/` directory.
+- Add the crates the example imports to your `[dependencies]`. `basic_paladin` imports
+  `paladin_ports`, so run `cargo add paladin-ports` as well as depending on `paladin-ai` and
+  `tokio`.
+- Run it with `cargo run --example basic_paladin` from your crate.
+
 ## Understanding the Output
 
 `PaladinExecutionService::execute` returns a `PaladinResult` with these fields:

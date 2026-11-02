@@ -292,6 +292,7 @@ promoted.
 - **Severity:** S4 (hygiene, D-04: the documented clone route works; only a reader who tries the published source meets it)
 - **Related:** step 4 of `56-FIRST-RUN-WALK.md`; the README Quick Example avoids the import through `paladin::prelude::*`
 - **Disposition:** open → **in v0.11.1** (contained docs fix: plan 56-07)
+- **Disposition (2026-11-02):** in v0.11.1 — fixed in plan 56-07: Quickstart says cargo run --example needs a checkout and how a crates.io user copies and runs basic_paladin with paladin-ports; proof: 56-06 step 4 ran exactly those steps, exit 101 then 0 (56-FIRST-RUN-WALK.md, Contained fixes)
 
 ### DF-13 — The Quickstart and Installation pages at the `v0.11.0` tag pin `0.10.0`, which resolves to `0.10.1`
 - **Found:** 2026-11-02 · **By:** Claude (Phase 56, plan 56-06) · **Surface:** docs
@@ -415,3 +416,4 @@ promoted.
 - **Related:** step 11 of `56-FIRST-RUN-WALK.md`; keyed runbook K9 anticipates it. Plan 56-07 fixes the docs lines;
   the strings inside the binary are a code change (P10) and are re-homed with DF-16's todo.
 - **Disposition:** open → **in v0.11.1** (contained docs fix: plan 56-07)
+- **Disposition (2026-11-02):** in v0.11.1 — fixed in plan 56-07: the six CLI appendix pages invoke paladin-cli onboarding and paladin-cli setup-check; the binary strings stay re-homed with DF-16 (.planning/todos/pending/2026-11-02-setup-check-first-run-output.md, P10); proof: anchored grep finds 0 bare-paladin invocations and 38 paladin-cli ones (56-FIRST-RUN-WALK.md, Contained fixes)

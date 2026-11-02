@@ -243,6 +243,15 @@ check-release-consistency: ## Verify a release tag's version matches every publi
 	fi
 	@./scripts/check-release-consistency.sh --tag "$(RELEASE_TAG)"
 
+.PHONY: check-findings-log
+# Deliberately NOT part of check-gates: the v0.11.1 findings log legitimately
+# holds `open` entries for as long as a finding is being worked, so folding this
+# check into the no-argument composite (and so into CI) would turn every new
+# finding into a red build for unrelated PRs. It runs at phase verification and
+# at Phase 58 SHIP-10, where "none reads open" is the actual question (D-03).
+check-findings-log: ## Verify every DF-nn entry in the v0.11.1 findings log carries a final disposition (DOGF-01; phase verification and SHIP-10, not check-gates)
+	@./scripts/check-findings-log.sh
+
 .PHONY: check-consumer-surface
 # Deliberately NOT part of check-gates: the members of check-gates are
 # offline script guards that finish in about a second, while this target

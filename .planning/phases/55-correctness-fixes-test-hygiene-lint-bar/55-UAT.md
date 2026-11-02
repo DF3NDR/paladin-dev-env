@@ -3,16 +3,16 @@ status: testing
 phase: 55-correctness-fixes-test-hygiene-lint-bar
 source: [55-01-SUMMARY.md, 55-02-SUMMARY.md, 55-03-SUMMARY.md, 55-04-SUMMARY.md, 55-05-SUMMARY.md, 55-06-SUMMARY.md, 55-07-SUMMARY.md, 55-08-SUMMARY.md, 55-09-SUMMARY.md, 55-10-SUMMARY.md, 55-11-SUMMARY.md, 55-12-SUMMARY.md, 55-13-SUMMARY.md]
 started: 2026-11-02T01:40:47Z
-updated: 2026-11-02T02:11:37Z
+updated: 2026-11-02T02:13:30Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 9
-name: FIXES-04 re-home is visible to an eval author
+number: 10
+name: `doc-coverage-report.md` reads as an adequate release-review record
 expected: |
-  An author trying `run_status: cancelled` finds why it is not supported until the next minor in three places: the `RunStatusValue` rustdoc, the JSON schema description and the `docs/src/user-guides/eval-harness.md` table row. No public eval enum changed.
+  The regenerated page reads as a dated measurement record at `14ee125e7`: the two bars and their commands, the twelve `missing_docs` roots and the eight removed suppressions, with no >= 90% figure. (55-11 D3 — reader judgment; `make check-doc-config` and `make check-version-strings` pass.)
 awaiting: user response
 
 ## Tests
@@ -51,7 +51,7 @@ result: pass
 
 ### 9. FIXES-04 re-home is visible to an eval author
 expected: An author trying `run_status: cancelled` finds why it is not supported until the next minor in three places: the `RunStatusValue` rustdoc, the JSON schema description and the `docs/src/user-guides/eval-harness.md` table row. No public eval enum changed.
-result: [pending]
+result: pass
 
 ### 10. `doc-coverage-report.md` reads as an adequate release-review record
 expected: The regenerated page reads as a dated measurement record at `14ee125e7`: the two bars and their commands, the twelve `missing_docs` roots and the eight removed suppressions, with no >= 90% figure. (55-11 D3 — reader judgment; `make check-doc-config` and `make check-version-strings` pass.)
@@ -88,9 +88,9 @@ coverage_id: 55-11/D2
 ## Summary
 
 total: 15
-passed: 12
+passed: 13
 issues: 0
-pending: 3
+pending: 2
 skipped: 0
 blocked: 0
 

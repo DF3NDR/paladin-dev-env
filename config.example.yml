@@ -387,7 +387,12 @@ trace:
 
 # Web-server-scoped configuration outside core HTTP bind/port settings
 # (see `server:` above for those) -- currently just the developer inspector
-# UI. Omitting `web_server:` entirely boots identically to a v0.9
+# UI settings. This section is parsed into `Settings` and checked by
+# `Settings::validate()`, but neither `paladin-server` nor `paladin` mounts
+# the developer inspector in this release, so changing it has no effect on
+# either binary. An application mounts the inspector only by calling
+# `paladin_web::app::create_dev_ui_router` (Cargo feature `dev-ui`) with a
+# `DevUiState`. Omitting `web_server:` entirely boots identically to a v0.9
 # configuration.
 web_server:
   dev_ui:

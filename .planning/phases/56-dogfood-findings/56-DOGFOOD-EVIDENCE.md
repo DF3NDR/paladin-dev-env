@@ -152,3 +152,125 @@ No other non-test site formats a `Settings` or a whole `*Config`. `paladin-serve
 
 Reproduced. Logged as one finding (one root cause: the `Settings` `Debug` chain is derived over credential-bearing
 types, and `src/main.rs:35` renders it). See the findings log entry cited in the plan 56-05 SUMMARY.
+
+## Lead L6
+
+Plan 56-05 (DOGF-01, DOGF-06, D-00e). Lead L6: `paladin-server` never calls `Settings::validate()`, so a `trace`
+value its own type rejects boots. HEAD `4ee454557`, probed 2026-11-02. Fake provider key only.
+
+### Source-level evidence
+
+`git grep -nE 'Settings::validate|settings\.validate\(\)' -- src crates` (non-test hits only):
+
+```
+src/config/agent_runtime.rs:1785:    /// `AgentRuntimeConfig::default()` and `Settings::validate()`
+src/config/trace.rs:102:    /// uses (X-03 -- `Settings::validate()`'s own signature must not
+src/config/trace.rs:107:    /// `Settings::validate()`) don't have to match on
+src/config/trace.rs:343:    /// Behavior 3: `Settings::validate()` rejects `trace.channel_capacity ==
+```
+
+Every other hit is a `#[test]` (`agent_runtime.rs:1800`, `treasurer.rs:935`). The definition is
+`src/config/settings.rs:109`; it validates `agent_runtime`, `trace`, `web_server` and the treasurer.
+`src/bin/paladin-server.rs` `run()` validates the treasurer, `RunStoreConfig`, `RunWorkerConfig` and the other
+Platform API env configs one by one, and `agent_runtime` inside the registry build, but not `trace` or
+`web_server`. The same holds at tag `v0.11.0` (`git grep -nE 'settings\.validate\(\)|Settings::validate' v0.11.0
+-- src crates` shows only doc comments and tests). `settings.trace` is consumed at boot:
+`src/infrastructure/web/run_api_wiring.rs:1277` (`.with_trace_config(settings.trace.clone())`), then
+`src/application/services/run/worker.rs:1336` (`with_trace_capacity(self.trace_config.channel_capacity)`).
+
+### Build and probe
+
+Build: `cargo build -p paladin-ai --bin paladin-server --features web-server` (free space 4899M before, 4068M
+after; no cleanup needed).
+
+`l6.yml` is `config.example.yml` with four edits (`diff` against the example): `server.host` `127.0.0.1`,
+`server.port` a free port from python3 `socket`, `http.auth.enabled: false`, `trace.channel_capacity: 0`.
+`TraceConfig::validate_typed` rejects the last (`TraceConfigError::ZeroChannelCapacity`, "trace.channel_capacity
+must be greater than 0").
+
+Attempt 1 (as the plan's command, run store only):
+
+```
+$ env -u RUST_LOG OPENAI_API_KEY=<fake-key> APP_RUN_STORE_BACKEND=sqlite APP_RUN_STORE_PATH="sqlite://$S/runs.db" PALADIN_CONFIG=./l6.yml timeout 20 target/debug/paladin-server
+exit=1
+ERROR paladin_server: paladin-server failed to start: run_store.backend is configured but no waypoint store is wired: set waypoint_store.backend
+```
+
+That refusal is unrelated to `trace` (it names `waypoint_store.backend`). Per the plan, ONE retry changing only keys
+unrelated to `trace`: add `APP_WAYPOINT_STORE_BACKEND=sqlite` and
+`APP_WAYPOINT_STORE_SQLITE_PATH=sqlite://$S/wp.db`.
+
+Attempt 2:
+
+```
+$ env -u RUST_LOG OPENAI_API_KEY=<fake-key> APP_RUN_STORE_BACKEND=sqlite APP_RUN_STORE_PATH="sqlite://$S/runs.db" APP_WAYPOINT_STORE_BACKEND=sqlite APP_WAYPOINT_STORE_SQLITE_PATH="sqlite://$S/wp.db" PALADIN_CONFIG=./l6.yml timeout 20 target/debug/paladin-server
+exit=124   (killed by `timeout` after 20s: the server was up and serving; it then logged a clean SIGTERM shutdown)
+INFO paladin_server: paladin-server listening on http://127.0.0.1:44907 — serving 2 agent(s): ["researcher", "summarizer"]
+$ curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:44907/health
+200
+```
+
+`grep -c 'panicked at'` on the log: 0.
+
+### Consequence of the unvalidated value
+
+- `channel_capacity: 0`: `TraceDispatcher::with_capacity` clamps (`capacity.max(1)`,
+  `crates/paladin-battalion/src/engine/hooks.rs:224`), so the first run does not panic or hang; it silently runs
+  with a queue of 1 and drops trace events at the first overflow. Harmless to correctness, but the config says 0
+  and the system does something else without telling the operator.
+- A stronger instance of the same root cause, probed once more (`l6c.yml`: example with `trace.otel.enabled:
+  true`, `channel_capacity` back at 1024, same env): `Settings::validate()` returns
+  `TraceConfigError::FeatureNotCompiled { feature: "otel" }` for this build ("never silently no-ops"), yet the
+  server booted (`listening on` count 1, `exit=124` from `timeout`) with no OTLP line in the log and no
+  refusal. An operator who enables OTLP export on a build without the `otel` feature gets no export and no error.
+- `trace.value_cap_bytes: 0` and the `web_server` section are covered by the same unused `validate()`.
+
+### Classification
+
+Reproduced (listens): an invalid value is accepted at boot. Not a crash. Logged as one finding, S2.
+
+## Lead L4
+
+Plan 56-05 (DOGF-01, DOGF-06, D-00e). Lead L4: `web_server.dev_ui.mermaid_url` is documented as live config but no
+shipped binary mounts the inspector.
+
+### Every `create_dev_ui_router` hit
+
+`git grep -n 'create_dev_ui_router' -- src crates examples tests`:
+
+| hit | class |
+|-----|-------|
+| `crates/paladin-web/src/app.rs:87` | definition |
+| `crates/paladin-web/src/dev_ui_controller.rs:21,129` | doc comments |
+| `crates/paladin-web/src/dev_ui_controller.rs:197,359,504,523,541` | tests (`#[cfg(test)]`) |
+| `examples/platform_api_client.rs:58,320` | example (builds `DevUiState::new("https://cdn.jsdelivr.net/...")` with a hard-coded URL; does not read `Settings`) |
+
+No hit in `src/bin/`, `src/infrastructure/` or `src/application/`: neither `paladin-server` nor `paladin` mounts it.
+
+### Every `dev_ui` / `mermaid_url` reader outside `src/config/`
+
+`git grep -nE 'dev_ui|mermaid_url' -- src/bin src/infrastructure src/application examples crates/paladin-web/src`:
+no hit in `src/bin`, `src/infrastructure` or `src/application`. Hits in `crates/paladin-web/src` are the
+definition (`DevUiState`, `dev_ui_inspector_page`), the template doc comment (`dev_ui/inspector.html:13`), doc
+comments and tests. `git grep -nE 'web_server|get_web_server|WebServerConfig' -- src ':!src/config' crates
+examples` finds no reader of `Settings.web_server` anywhere: the parsed value is never passed to `DevUiState`.
+
+### Boot check
+
+Against the L6 binary booted from the example with auth disabled (attempt 2 above, port 44907):
+
+```
+$ curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:44907/v1/dev-ui/threads/probe
+404
+```
+
+`/health` returned 200 on the same server, so the 404 is a missing route, not a down server (a mounted but
+unwired inspector answers 501 per `dev_ui_without_a_wired_port_is_501`).
+
+### Classification
+
+Reproduced: no shipped binary mounts the inspector and nothing reads `web_server.dev_ui`. The example's comment
+described the section as "currently just the developer inspector UI" with no note that it is inert. Logged S3;
+the contained fix is a comment correction in `config.example.yml` (comment lines only, D-05). Wiring a route is
+`out` (D-00d). Tests after the edit: `cargo test -p paladin-ai --test config_example_roundtrip` 14 passed, 0
+failed; `cargo test -p paladin-ai --lib --features web-server -- example` 6 passed, 0 failed.

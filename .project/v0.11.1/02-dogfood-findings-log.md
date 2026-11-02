@@ -171,3 +171,56 @@ promoted.
   for the unredacted types listed in the audit (`QueueConfig`, `FileStorageConfig`, `Settings.llm_api_key`,
   `EmailAdapterConfig`)
 - **Disposition:** open → promote **in v0.11.1** (S1, D-05; fix in Stage C, D-06)
+
+### DF-08 — `paladin-server` never calls `Settings::validate()`: a `trace` value its type rejects boots
+- **Found:** 2026-11-02 · **By:** Claude (Phase 56, plan 56-05) · **Surface:** server
+- **Version:** 0.11.0 (tag v0.11.0; reproduced on HEAD 4ee454557)
+- **What happened:** `Settings::validate()` (`src/config/settings.rs:109`) validates `agent_runtime`, `trace`,
+  `web_server` and the treasurer, and has no non-test caller; `src/bin/paladin-server.rs` validates the treasurer,
+  run store, run worker and the other env configs one by one but never `trace` or `web_server`. The example config
+  with `trace.channel_capacity: 0` (which `TraceConfig::validate_typed` rejects as `ZeroChannelCapacity`), auth
+  disabled and fake provider keys boots and serves:
+  ```
+  INFO paladin_server: paladin-server listening on http://127.0.0.1:44907 — serving 2 agent(s): ["researcher", "summarizer"]
+  ```
+  `/health` answered 200, no `panicked at`. With `channel_capacity: 0` the engine clamps the queue to 1
+  (`TraceDispatcher::with_capacity`, `capacity.max(1)`), so the first run neither panics nor hangs. A second boot
+  with `trace.otel.enabled: true` on a build without the `otel` feature, which `validate()` rejects as
+  `FeatureNotCompiled { feature: "otel" }`, also listens, with no OTLP line and no error: configured telemetry
+  export silently never happens.
+- **Expected:** a config its own validator rejects is refused at boot naming the key, as the treasurer, run-store
+  and auth configs already are. Calling `settings.validate()` after `Settings::load_from_file` changes no public
+  signature (D-00b patch shape); Stage C decides, including whether `agent_runtime` is then validated twice.
+- **Repro:** copy `config.example.yml`, set `server.host: "127.0.0.1"`, a free `server.port`,
+  `http.auth.enabled: false`, `trace.channel_capacity: 0`; then
+  `cargo build -p paladin-ai --bin paladin-server --features web-server` and
+  `env -u RUST_LOG OPENAI_API_KEY=<fake-key> APP_RUN_STORE_BACKEND=sqlite APP_RUN_STORE_PATH=sqlite://$S/runs.db APP_WAYPOINT_STORE_BACKEND=sqlite APP_WAYPOINT_STORE_SQLITE_PATH=sqlite://$S/wp.db PALADIN_CONFIG=./l6.yml timeout 20 target/debug/paladin-server`
+  and look for `paladin-server listening on` (the run store needs the waypoint store variables or boot stops on an
+  unrelated refusal). Evidence: `56-DOGFOOD-EVIDENCE.md` § Lead L6.
+- **Severity:** S2 (D-04: arguable between S2 and S3, logged at the higher one. The `channel_capacity: 0` case is
+  clamped and harmless, but the same gap lets `otel.enabled: true` on a build without the feature silently export
+  nothing, which is a wrong result with no error, and it applies to every field `validate()` covers)
+- **Related:** lead L6 (56-RESEARCH.md); DF-09 (`web_server` is also covered by the unused `validate()`)
+- **Disposition:** open → promote **in v0.11.1** (S2, D-05; fix in Stage C)
+
+### DF-09 — `web_server.dev_ui.mermaid_url` is documented as live config but no shipped binary mounts the inspector
+- **Found:** 2026-11-02 · **By:** Claude (Phase 56, plan 56-05) · **Surface:** docs
+- **Version:** 0.11.0 (tag v0.11.0; reproduced on HEAD 4ee454557)
+- **What happened:** the comment above `web_server:` in `config.example.yml` described the section as "currently
+  just the developer inspector UI" and the key as a setting an operator can point at a local mirror. Nothing reads
+  it: `create_dev_ui_router` has callers only in tests and `examples/platform_api_client.rs` (which hard-codes the
+  URL), no code outside `src/config/` reads `Settings.web_server`, and `paladin-server` booted from the example
+  answers `GET /v1/dev-ui/threads/probe` with 404 while `/health` answers 200:
+  ```
+  $ curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:44907/v1/dev-ui/threads/probe
+  404
+  ```
+- **Expected:** the example says what the section does in this release: parsed, mounted by no shipped binary, and
+  reachable only by an application calling `paladin_web::app::create_dev_ui_router` with feature `dev-ui`.
+- **Repro:** `git grep -n 'create_dev_ui_router' -- src crates examples tests` and
+  `git grep -nE 'web_server|get_web_server|WebServerConfig' -- src ':!src/config' crates examples`, then boot
+  `paladin-server` from the example (auth disabled, free port) and `curl` the route above. Evidence:
+  `56-DOGFOOD-EVIDENCE.md` § Lead L4.
+- **Severity:** S3 (misleading config, D-04)
+- **Related:** lead L4 (56-RESEARCH.md); DOGF-03
+- **Disposition:** in v0.11.1 — fixed in plan 56-05: the example's web_server comment says no shipped binary mounts the inspector; wiring it would be a new route (out, D-00d)

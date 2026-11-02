@@ -246,3 +246,14 @@ $ make check-changelogs
 
 `CHANGELOG.md` `[Unreleased]` gained one `### Documentation` bullet citing DF-11, DF-12, DF-14, DF-15 and DF-17;
 nothing under `[0.11.0]` and nothing in `MIGRATION.md` changed.
+
+## Keyed half (maintainer)
+
+Status: awaiting maintainer run (56-RUNBOOK-KEYED-WALK.md)
+
+The maintainer walks `56-RUNBOOK-KEYED-WALK.md` with one real OpenAI key (D-14) and pastes redacted output into
+slots K1..K9. Plan 56-08 Task 3 scans every slot for credentials before anything is committed, copies the redacted
+output here, and fills the table. One row per slot; 'no stumble' and 'not run' are valid last-column values.
+
+| step | command | exit | excerpt | stumble → DF |
+|------|---------|------|---------|--------------|

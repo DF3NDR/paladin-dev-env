@@ -59,6 +59,7 @@ promoted.
 - **Severity:** S2 (and S1 if someone ships it)
 - **Related:** WINDOWS row 62; inventory B1, C3
 - **Disposition:** open → recommend **in v0.11.1**
+- **Disposition (2026-11-02):** in v0.11.1 — fixed by FIRST-01 (Phase 54): the boot refuses an unexpanded ${…} auth key and the example and k8s manifest no longer ship one; proof: validate_refuses_an_unexpanded_placeholder_key, validate_refuses_a_placeholder_key_while_auth_is_disabled, validate_names_a_later_entry_whose_key_is_a_placeholder, validate_reports_a_placeholder_key_before_tenant_and_duplicate_checks, build_auth_config_refuses_an_unexpanded_placeholder_key and yaml_env_placeholder_is_not_expanded, re-run green on 6212e3ecf (56-DOGFOOD-EVIDENCE.md)
 
 ### DF-02 — README advertises version 0.8.0 and a `0.5` install line
 - **Found:** 2026-10-27 (by reading) · **By:** Claude · **Surface:** docs
@@ -71,6 +72,7 @@ promoted.
 - **Severity:** S3
 - **Related:** inventory C1, C2; Phase 46 (docs currency) did not catch it, so a gate is the real fix
 - **Disposition:** open → recommend **in v0.11.1** with a `check-version-strings` gate
+- **Disposition (2026-11-02):** in v0.11.1 — fixed by FIRST-02/FIRST-03 (Phase 54): README and docs pin 0.11.0 and make check-version-strings gates it; proof: make check-version-strings (every copyable version string equals '0.11.0') and tests/scripts/check-version-strings_test.sh, re-run green on 6212e3ecf (56-DOGFOOD-EVIDENCE.md)
 
 ### DF-03 — `ContentFilter::filter_content_list` panics on first call (`todo!()` in library code)
 - **Found:** 2026-10-27 (by reading) · **By:** Claude · **Surface:** library (`paladin-content`)
@@ -92,6 +94,7 @@ promoted.
 - **Severity:** S1
 - **Related:** WINDOWS row 58; 40-REVIEW WR-01, WR-02, IN-04
 - **Disposition:** open → recommend **in v0.11.1**, first code phase
+- **Disposition (2026-11-02):** in v0.11.1 — fixed by TENANT-03, TENANT-04, TENANT-05, TENANT-07 (Phase 53): every thread, run-submit, fork and cancel path scopes to the caller's tenant; proof: every_thread_id_route_hides_foreign_threads_behind_the_missing_thread_404, cross_tenant_submit_on_a_thread_is_the_unknown_thread_404, cross_tenant_fork_is_the_unknown_thread_404, cross_tenant_cancel_is_a_404_and_writes_no_cancel_flag, cancel_of_another_tenants_run_is_not_found_and_writes_nothing, job_poll_matrix_scopes_by_agent_and_tenant_with_an_admin_bypass and permits_thread_admits_all_and_only_the_latest_runs_tenant, re-run green on 6212e3ecf (56-DOGFOOD-EVIDENCE.md)
 
 <!-- append new findings below this line -->
 

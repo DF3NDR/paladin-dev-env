@@ -514,7 +514,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 56-06-PLAN.md — keyless first-run walk on crates.io `0.11.0` (Quick Example → `cargo add` → `basic_paladin` → Quickstart missing-key → CLI install → `setup-check` / `onboarding`), every stumble logged (DOGF-04)
+- [x] 56-06-PLAN.md — keyless first-run walk on crates.io `0.11.0` (Quick Example → `cargo add` → `basic_paladin` → Quickstart missing-key → CLI install → `setup-check` / `onboarding`), every stumble logged (DOGF-04)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 

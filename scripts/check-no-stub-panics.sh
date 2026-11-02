@@ -112,8 +112,10 @@
 # are residual limits, not proofs: a matcher that takes such tokens apart
 # (`($p:ident :: $f:ident) => { $p!() }` on `call!(todo::f)`) builds the call
 # and is not reported. Strict by design: a local variable named `todo` handed
-# to a macro (`println!("{}", todo)`) is reported too; rename it. A call built
-# some other way (a proc macro, `concat_idents!`) is beyond a lexical gate.
+# to a macro (`println!("{}", todo)`) is reported too, and so is a `use` that
+# renames a module named `todo` (`use crate::todo as t;`), which the gate cannot
+# tell from a rename of the macro; rename either. A call built some other way
+# (a proc macro, `concat_idents!`) is beyond a lexical gate.
 #
 # There is NO exemption list, no inline allow marker, no environment switch and
 # no path filter (D-01). To clear a finding, replace the stub with a typed `Err`

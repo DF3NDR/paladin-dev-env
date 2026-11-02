@@ -520,6 +520,16 @@ assert_fire "${FX}" "a path ending in todo or unimplemented handed to a macro is
     "crates/x/src/lib.rs:2: todo! (passed to a macro as an identifier) outside #[cfg(test)]" \
     "crates/x/src/lib.rs:3: unimplemented! (passed to a macro as an identifier) outside #[cfg(test)]"
 
+# Strict by design, as the header says: a `use` that renames a module named
+# `todo` cannot be told from a rename of the macro, so it is reported too.
+fresh renamed-todo-module
+printf '%s\n' \
+    'pub mod todo { pub fn f() {} }' \
+    'use crate::todo as t;' \
+    'pub fn g() { t::f() }' >"${FX}/crates/x/src/lib.rs"
+assert_fire "${FX}" "a use that renames a module named todo is reported (strict by design)" \
+    "crates/x/src/lib.rs:2: todo! (renamed by use ... as) outside #[cfg(test)]"
+
 fresh root-package
 printf '[package]\nname = "rootpkg"\nversion = "0.1.0"\n' >"${FX}/Cargo.toml"
 mkdir -p "${FX}/src"

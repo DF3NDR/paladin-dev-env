@@ -501,7 +501,7 @@ Plans:
 **Wave 1**
 
 - [x] 56-01-PLAN.md — offline findings-log checker `scripts/check-findings-log.sh` + fixture harness (in `make test-shell-guards`) and `make check-findings-log`, deliberately outside `check-gates`; red run names DF-01…DF-04 OPEN (DOGF-01)
-- [ ] 56-02-PLAN.md — `config.example.yml` round-trip through `Settings::load_from_file` and `Settings::new` by key-path diff, full fixture + Redis-cadence fixture, drift guard, claimed-complete sections (lead L5), price precision probe (DOGF-03)
+- [x] 56-02-PLAN.md — `config.example.yml` round-trip through `Settings::load_from_file` and `Settings::new` by key-path diff, full fixture + Redis-cadence fixture, drift guard, claimed-complete sections (lead L5), price precision probe (DOGF-03)
 - [ ] 56-03-PLAN.md — Stage B runbooks: coverage walk (proven LF/LH snippet), keyed first-run walk, web3sec relay and triage (DOGF-02, DOGF-04, DOGF-05)
 
 **Wave 2** *(blocked on Wave 1 completion)*

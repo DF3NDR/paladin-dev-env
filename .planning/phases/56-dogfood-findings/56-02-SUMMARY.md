@@ -43,8 +43,7 @@ key-decisions:
 patterns-established:
   - "Fixtures derived from a documented example live beside frozen blobs with a README section that says which is which and names the drift guard"
 
-requirements-completed: []
-requirements-advanced: [DOGF-03]
+requirements-completed: [DOGF-03]
 
 metrics:
   duration: "~15 min"

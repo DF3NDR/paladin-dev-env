@@ -208,7 +208,7 @@ fails is rebuilt.*
       commit SHA, D-2 choice, gate totals, divergences) is triaged into the findings log, one entry
       per divergence — G1, todo 2026-10-14
 
-- [ ] **DOGF-03**: Each section of `config.example.yml` round-trips through the loader with every
+- [x] **DOGF-03**: Each section of `config.example.yml` round-trips through the loader with every
       optional key present, as a test, and any key the loader rejects or silently ignores is logged as
       a finding — §6 "config loading in general"
 
@@ -364,7 +364,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TESTS-06 | Phase 55 | Complete |
 | DOGF-01 | Phase 56 | Pending |
 | DOGF-02 | Phase 56 | Pending |
-| DOGF-03 | Phase 56 | Pending |
+| DOGF-03 | Phase 56 | Complete |
 | DOGF-04 | Phase 56 | Pending |
 | DOGF-05 | Phase 56 | Pending |
 | DOGF-06 | Phase 56 | Pending |

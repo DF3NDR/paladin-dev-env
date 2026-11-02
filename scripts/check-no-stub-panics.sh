@@ -16,11 +16,12 @@
 # inherits `[workspace.package] publish`). `crates/doc-examples` (publish =
 # false) and every tests/, benches/ and examples/ tree are out of scope, except
 # a file that a scanned production module loads from outside src/ through
-# `#[path = "..."]` (or as a child module of such a file): rustc compiles it
-# into the published crate, so it is scanned too (src/application/cli/
-# commands/eval.rs loads tests/helpers/e2e_fixtures.rs this way). A
-# `#[cfg(test)]` one, or one declared inside an exempt span, is not followed. A
-# crates/<dir> with no readable Cargo.toml is skipped silently.
+# `#[path = "..."]` (or as a child module of such a file) or through
+# `include!("...")`: rustc compiles it into the published crate, so it is
+# scanned too (src/application/cli/commands/eval.rs loads
+# tests/helpers/e2e_fixtures.rs this way). A `#[cfg(test)]` one, or one inside
+# an exempt span, is not followed. A crates/<dir> with no readable Cargo.toml
+# is skipped silently.
 #
 # Exactly two cfg forms exempt code, and only the item or module block they
 # attach to: `#[cfg(test)]` and `#[cfg(all(test, ...))]`. `#[cfg(not(test))]`
@@ -85,11 +86,12 @@
 # (so a test-only file's own `mod child;` children are test-only too). One
 # production declaration anywhere keeps it production: a `#[cfg(not(test))]`
 # twin, the production `mod clock;` beside a test `#[path = "clock.rs"]`
-# alias, or `pub mod util;` beside a test-only file's child that loads the
-# same util.rs. A crate root (src/lib.rs, src/main.rs, src/bin/, a manifest
-# `[lib]`/`[[bin]]` path) is never test-only unless its own `#![cfg(test)]`
-# says so. So crates/paladin-battalion/src/engine/test_support.rs reports
-# nothing.
+# alias, `pub mod util;` beside a test-only file's child that loads the same
+# util.rs, or an `include!("gen.rs")` outside an exempt span (an include!
+# loads its file relative to the including file's directory). A crate root
+# (src/lib.rs, src/main.rs, src/bin/, a manifest `[lib]`/`[[bin]]` path) is
+# never test-only unless its own `#![cfg(test)]` says so. So
+# crates/paladin-battalion/src/engine/test_support.rs reports nothing.
 #
 # Matching runs on the macro token after line comments, doc comments (so a
 # `///` doc example never fires), nested block comments, string, byte-string,
@@ -197,6 +199,10 @@ MOD_DECL = re.compile(r'(?<![\w$])mod\s+(?:r#)?([A-Za-z_]\w*)\s*;')
 INLINE_MOD = re.compile(r'(?<![\w$])mod\s+(?:r#)?([A-Za-z_]\w*)\s*\{')
 VIS_BEFORE = re.compile(r'(?<![\w$])pub\s*(?:\([^()]*\)\s*)?$')
 PATH_ATTR = re.compile(r'#\s*\[\s*path\s*=\s*"([^"\\]*)"\s*\]')
+# `include!("file.rs")` (also `std::include!`): rustc compiles the file's tokens
+# where the invocation stands. The literal is read from the raw source.
+INCLUDE_CALL = re.compile(r'(?<![\w$])include\s*!\s*[\(\[{]')
+INCLUDE_ARG = re.compile(r'\s*"([^"\\]*)"\s*,?\s*[\)\]}]')
 # A real item head, read after any run of attributes: optional visibility
 # (`pub`, `pub(crate)`, `pub(super)`, `pub(in path)`), optional qualifiers
 # (`async`, `unsafe`, `const`, `default`, `extern "abi"`; the ABI string is
@@ -599,14 +605,17 @@ def in_groups(groups, i):
 
 
 def mod_decls(raw, b, groups):
-    """Every out-of-line `mod name;` at an item position outside macro input.
+    """Every out-of-line `mod name;` at an item position outside macro input,
+    and every `include!("...")` with a literal path (anywhere: inside macro
+    input it is still counted, the strict side).
 
     Each is a dict: `name`; `test`, true when its attribute run holds
     `#[cfg(test)]` or `#[cfg(all(test, ...))]`; `path`, the literal of a
     `#[path = "..."]` in that run (read from the raw source), else None;
     `nesting`, the names of the inline `mod name { ... }` blocks around it,
-    outermost first; `at`, the index of its `mod` keyword. analyse() adds
-    `exempt`: the decl is `test` or sits inside an exempt span.
+    outermost first; `at`, the index of its `mod` keyword. An include! is a
+    decl with `include` set, `name` None and its literal in `path`. analyse()
+    adds `exempt`: the decl is `test` or sits inside an exempt span.
     """
     inline = []
     for m in INLINE_MOD.finditer(b):
@@ -638,6 +647,13 @@ def mod_decls(raw, b, groups):
             "nesting": [name for a, z, name in inline if a < m.start() < z],
             "at": m.start(),
         })
+    for m in INCLUDE_CALL.finditer(b):
+        arg = INCLUDE_ARG.match(raw, m.end())
+        if arg:
+            decls.append({
+                "name": None, "test": False, "path": arg.group(1), "nesting": [],
+                "at": m.start(), "include": True,
+            })
     return decls
 
 
@@ -709,8 +725,12 @@ def decl_files(path, decl):
     `#[path = "..."]` names exactly one file, relative to that directory when
     the decl is nested in an inline module and to the declaring file's own
     directory otherwise; the module name is then never used. Otherwise it is
-    `name.rs` or `name/mod.rs` in that directory.
+    `name.rs` or `name/mod.rs` in that directory. An include! names its
+    literal, relative to the directory of the file that holds it.
     """
+    if decl.get("include"):
+        # relative to the directory of the file holding the invocation
+        return [os.path.normpath(os.path.join(os.path.dirname(path), decl["path"]))]
     d = os.path.join(module_dir(path), *decl["nesting"])
     if decl["path"] is not None:
         base = d if decl["nesting"] else os.path.dirname(path)
@@ -790,7 +810,7 @@ def grow_path_loaded():
         grown = False
         for path, (_hits, decls) in parsed.items():
             for decl in decls:
-                if decl["path"] is not None:
+                if decl["path"] is not None and not decl.get("include"):
                     for target in decl_files(path, decl):
                         if target not in path_loaded:
                             path_loaded.add(target)
@@ -802,9 +822,10 @@ for path in files:
 grow_path_loaded()
 
 # A production module (not `#[cfg(test)]`, not inside an exempt span, not in a
-# test-only file) that loads a file outside the scan set, through `#[path]` or
-# as a child of such a file, compiles that file into the published crate: scan
-# it too (eval.rs pulls in tests/helpers/e2e_fixtures.rs this way).
+# test-only file) that loads a file outside the scan set, through `#[path]`, as
+# a child of such a file or through `include!`, compiles that file into the
+# published crate: scan it too (eval.rs pulls in tests/helpers/e2e_fixtures.rs
+# this way).
 scan = set(files)
 pending = list(files)
 while pending:
@@ -817,7 +838,7 @@ while pending:
         for target in decl_files(path, decl):
             if target not in scan and os.path.isfile(target):
                 scan.add(target)
-                if decl["path"] is not None:
+                if decl["path"] is not None and not decl.get("include"):
                     path_loaded.add(target)
                 load(target)
                 pending.append(target)

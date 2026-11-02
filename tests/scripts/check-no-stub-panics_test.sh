@@ -476,6 +476,22 @@ printf 'pub fn f() -> u8 { todo!() }\n' >"${FX}/crates/x/src/util.rs"
 assert_fire "${FX}" "a test-only file's child that production also declares is not test-only" \
     "crates/x/src/util.rs:1: todo! outside #[cfg(test)]"
 
+# `include!("gen.rs")` compiles gen.rs into the crate where it stands, so a
+# production include! is a production loader like a production mod (WR-03,
+# round 5).
+fresh include-of-test-mod-file
+printf '#[cfg(test)]\nmod gen;\ninclude!("gen.rs");\n' >"${FX}/crates/x/src/lib.rs"
+printf 'pub fn g() -> u8 { todo!() }\n' >"${FX}/crates/x/src/gen.rs"
+assert_fire "${FX}" "a file that a test mod declares and production include!s is not test-only" \
+    "crates/x/src/gen.rs:1: todo! outside #[cfg(test)]"
+
+fresh include-outside-src
+printf 'include!("../gen/g.rs");\n' >"${FX}/crates/x/src/lib.rs"
+mkdir -p "${FX}/crates/x/gen"
+printf 'pub fn g() -> u8 { todo!() }\n' >"${FX}/crates/x/gen/g.rs"
+assert_fire "${FX}" "a production include! target outside src/ is scanned" \
+    "crates/x/gen/g.rs:1: todo! outside #[cfg(test)]"
+
 # A crate root is compiled whatever a test module declares, so a test alias of
 # main.rs never makes the binary's root test-only.
 fresh test-alias-of-crate-root
@@ -799,6 +815,21 @@ assert_silent "${FX}" "a file whose first item is #![cfg(test)] is wholly test-o
 fresh inner-cfg-test-after-inner-attrs
 printf '//! Test-only crate.\n#![forbid(unsafe_code)]\n#![cfg(test)]\nfn t() { todo!() }\n' >"${FX}/crates/x/src/lib.rs"
 assert_silent "${FX}" "#![cfg(test)] after a doc comment and another inner attribute is still leading" "OK"
+
+# An include! inside an exempt span loads its file for a test build only.
+fresh include-in-test-mod
+printf '%s\n' \
+    '#[cfg(test)]' \
+    'mod tests {' \
+    '    include!("tests_body.rs");' \
+    '}' \
+    '#[cfg(test)]' \
+    'include!("../gen/g.rs");' >"${FX}/crates/x/src/lib.rs"
+printf 'fn t() { todo!() }\n' >"${FX}/crates/x/src/tests_body.rs"
+mkdir -p "${FX}/crates/x/gen"
+printf 'fn u() { todo!() }\n' >"${FX}/crates/x/gen/g.rs"
+assert_silent "${FX}" "a file include!d only inside #[cfg(test)] is test-only and not pulled in from outside src/" \
+    "OK" "scanned 2 file(s) (1 test-only)"
 
 fresh stub-names-not-macros
 plant crates/x/src/lib.rs '#[cfg(test)] use core::todo as later;'

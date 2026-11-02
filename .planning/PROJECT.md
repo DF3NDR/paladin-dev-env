@@ -936,6 +936,21 @@ unless a phase adopts them):
   (FIRST-01 … FIRST-09; B1, C1–C8, C10) — Phase 54, verified 2026-11-01, no new ADR. Residuals: the
   provider-key `REPLACE_ME` placeholder accepted (AR-54-03); `make release` runs no version gate
   before the tag (CR-01, carried to Phase 58).
+- ✓ Correctness fixes, test hygiene and lint bar — no `todo!()`/`unimplemented!()` reachable
+  outside `#[cfg(test)]` in a published crate, held by `scripts/check-no-stub-panics.sh` in `make
+  check-gates` and CI (624 files scanned, 0 findings; 88-assertion harness; its residual lexical
+  limits named in the script header); the 20 storage stubs return a typed `QueryError` and
+  `content_filtering_service.rs` is deleted; every unfinished content/base-layer item carries a
+  keep/fence/remove decision (`55-BASE-LAYER-REVIEW.md`); an agent-kind run whose model lost its
+  price at dispatch records `halted` with `HaltReason::ModelUnpriced` (M-B-31); boot warns once per
+  unpriced reachable model, stored agent versions included; the `claude-opus-4-8` `reasoning: false`
+  seed verified correct, not changed; hermetic `build_run_api_persists_*` tests through a
+  `pub(crate)` engine-port seam, the cancel test synchronised on `is_registered` instead of a sleep,
+  one `SELF_HOSTED_PROVIDERS` list, a 13-combination `paladin-llm` feature matrix clean, all eight
+  crate-level `#![allow(rustdoc::…)]` removed with both rustdoc bars green and ADR-0033 amended
+  (FIXES-01 … 03, 05, 06, TESTS-01 … 06, CIREL-08) — Phase 55, verified 2026-11-02. FIXES-04
+  (`RunStatusValue::Cancelled`) re-homed to the next minor under D-05, because both eval enums are
+  exhaustive and the variant would be a breaking change; WINDOWS row 73 fixed, row 67 waived.
 
 **Treasurer Spend Governance — shipped v0.11.0, closed 2026-10-27; crates at `0.11.0`**
 (Phases 38-51, 174 plans, 63/66 requirements verified, ADOPT-01…03 superseded). Archive:
@@ -2370,6 +2385,14 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
+*Last updated: 2026-11-02 after **Phase 55: Correctness Fixes, Test Hygiene & Lint Bar** completed and
+verified — 13 plans, 12 of 13 requirements satisfied and FIXES-04 re-homed to the next minor (D-05);
+verification `passed` 5/5; code review 0 critical / 3 warnings, all three fixed over five fix
+iterations (the stub-panic gate hardened against renamed, macro-built, `include!`-loaded and
+`#[path]`-moved stubs). Nothing reachable in a published crate panics from an unfinished stub, and the
+test suite and lint/rustdoc bars are hermetic and warning-free. "Correctness fixes, test hygiene and
+lint bar" moved to Validated; ADR-0033 amended, no new ADR. Next: Phase 56.*
+
 *Last updated: 2026-11-01 after **Phase 54: First-Run Usability** completed and verified — 9 plans,
 FIRST-01…09 (FIRST-08 reconciled under D-18); verification `passed` 5/5, UAT 3/3 (WR-02 accepted, kind
 apply and compose first-run checked by the maintainer), security 0 open (32 threats, 3 accepted). A

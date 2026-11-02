@@ -201,7 +201,7 @@ fails is rebuilt.*
 
 ### Dogfood Findings (DOGF)
 
-- [ ] **DOGF-01**: Every `DF-nn` entry in `02-dogfood-findings-log.md` carries a disposition
+- [x] **DOGF-01**: Every `DF-nn` entry in `02-dogfood-findings-log.md` carries a disposition
       (`in v0.11.1`, `out` with a reason, or `duplicate of`) before the tag; none is `open`
 
 - [ ] **DOGF-02**: The web3sec consumer's return against `v0.11.0` (`47-HANDOFF-web3sec.md` §6:
@@ -362,7 +362,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TESTS-04 | Phase 55 | Complete |
 | TESTS-05 | Phase 55 | Complete |
 | TESTS-06 | Phase 55 | Complete |
-| DOGF-01 | Phase 56 | Pending |
+| DOGF-01 | Phase 56 | Complete |
 | DOGF-02 | Phase 56 | Pending |
 | DOGF-03 | Phase 56 | Complete |
 | DOGF-04 | Phase 56 | Pending |

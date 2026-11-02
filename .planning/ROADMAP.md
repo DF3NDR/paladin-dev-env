@@ -506,7 +506,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 56-04-PLAN.md — DF-01…DF-04 re-checked on HEAD and closed `in v0.11.1` with pointers to FIRST-01, FIRST-02/03, FIXES-01, TENANT-03..05/07 (DOGF-01)
+- [x] 56-04-PLAN.md — DF-01…DF-04 re-checked on HEAD and closed `in v0.11.1` with pointers to FIRST-01, FIRST-02/03, FIXES-01, TENANT-03..05/07 (DOGF-01)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

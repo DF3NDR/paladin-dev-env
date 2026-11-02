@@ -443,6 +443,47 @@ printf 'fn t() {}\n' >"${FX}/crates/x/src/outer/helper.rs"
 assert_fire "${FX}" "#[cfg(test)] mod helper; inside inline mod outer does not make src/helper.rs test-only" \
     "crates/x/src/helper.rs:1: todo! outside #[cfg(test)]"
 
+# A file is test-only only when every module declaration that loads it is
+# test-only. One production declaration anywhere (beside a test one, as the
+# target of a test alias, or beside a test-only file's own child declaration)
+# compiles it into the published crate (WR-03, round 5).
+fresh test-and-prod-decl-same-file
+printf '%s\n' \
+    '#[cfg(test)]' \
+    'mod backend;' \
+    '#[cfg(not(test))]' \
+    'mod backend;' \
+    'pub use backend::f;' >"${FX}/crates/x/src/lib.rs"
+printf 'pub fn f() -> u8 { todo!() }\n' >"${FX}/crates/x/src/backend.rs"
+assert_fire "${FX}" "a file declared by both a test and a production mod is not test-only" \
+    "crates/x/src/backend.rs:1: todo! outside #[cfg(test)]"
+
+fresh test-path-alias-of-prod-file
+printf '%s\n' \
+    'mod clock;' \
+    '#[cfg(test)]' \
+    '#[path = "clock.rs"]' \
+    'mod clock_under_test;' \
+    'pub use clock::now;' >"${FX}/crates/x/src/lib.rs"
+printf 'pub fn now() -> u64 { todo!() }\n' >"${FX}/crates/x/src/clock.rs"
+assert_fire "${FX}" "a test-only #[path] alias of a production file does not make it test-only" \
+    "crates/x/src/clock.rs:1: todo! outside #[cfg(test)]"
+
+fresh test-only-child-shares-prod-file
+printf '#[cfg(test)]\nmod support;\npub mod util;\n' >"${FX}/crates/x/src/lib.rs"
+printf '#[path = "util.rs"]\nmod u;\n' >"${FX}/crates/x/src/support.rs"
+printf 'pub fn f() -> u8 { todo!() }\n' >"${FX}/crates/x/src/util.rs"
+assert_fire "${FX}" "a test-only file's child that production also declares is not test-only" \
+    "crates/x/src/util.rs:1: todo! outside #[cfg(test)]"
+
+# A crate root is compiled whatever a test module declares, so a test alias of
+# main.rs never makes the binary's root test-only.
+fresh test-alias-of-crate-root
+printf '#[cfg(test)]\n#[path = "main.rs"]\nmod bin_under_test;\n' >"${FX}/crates/x/src/lib.rs"
+printf 'fn main() { todo!() }\n' >"${FX}/crates/x/src/main.rs"
+assert_fire "${FX}" "a test-only #[path] alias of src/main.rs does not make the crate root test-only" \
+    "crates/x/src/main.rs:1: todo! outside #[cfg(test)]"
+
 # A production `#[path]` module compiles its target into the published crate
 # even when the file sits outside src/ (eval.rs pulls in
 # tests/helpers/e2e_fixtures.rs this way), so the target and its own children
@@ -742,6 +783,14 @@ printf 'pub fn h() { todo!() }\n' >"${FX}/crates/x/src/outer/helper.rs"
 printf 'pub mod inner {\n    #[cfg(test)]\n    mod t;\n}\n' >"${FX}/crates/x/src/a.rs"
 printf 'fn t() { unimplemented!() }\n' >"${FX}/crates/x/src/a/inner/t.rs"
 assert_silent "${FX}" "an out-of-line test module inside an inline module resolves under its directory (lib.rs and a non-mod-rs file)" "OK"
+
+# A plain `mod x;` declared inside an exempt `#[cfg(test)] mod tests { ... }`
+# is gone from a non-test build with its parent, so x.rs is test-only.
+fresh mod-decl-in-exempt-inline-mod
+printf '#[cfg(test)]\nmod tests {\n    mod x;\n}\n' >"${FX}/crates/x/src/lib.rs"
+mkdir -p "${FX}/crates/x/src/tests"
+printf 'fn t() { todo!() }\n' >"${FX}/crates/x/src/tests/x.rs"
+assert_silent "${FX}" "a mod declared inside an exempt inline test module loads a test-only file" "OK" "(1 test-only)"
 
 fresh inner-cfg-test
 printf '#![cfg(test)]\nfn t() { todo!() }\n' >"${FX}/crates/x/src/lib.rs"

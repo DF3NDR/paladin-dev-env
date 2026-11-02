@@ -78,10 +78,18 @@
 # `name.rs`: `#[cfg(test)] #[path = "imp_mock.rs"] mod imp;` makes imp_mock.rs
 # test-only and leaves a production imp.rs scanned. A file loaded through
 # `#[path]` resolves its own children beside it, as rustc reads it like a
-# mod.rs. A `#[path]` on an inline module itself is not followed. Those files
-# are test-only, transitively: a test-only file's own `mod child;` children
-# are test-only too. So crates/paladin-battalion/src/engine/test_support.rs
-# reports nothing.
+# mod.rs. A `#[path]` on an inline module itself is not followed. A file is
+# test-only only when every module declaration that loads it is test-only: a
+# `#[cfg(test)]` one, one inside an exempt span (`mod x;` inside
+# `#[cfg(test)] mod tests { ... }`), or one in a file that is itself test-only
+# (so a test-only file's own `mod child;` children are test-only too). One
+# production declaration anywhere keeps it production: a `#[cfg(not(test))]`
+# twin, the production `mod clock;` beside a test `#[path = "clock.rs"]`
+# alias, or `pub mod util;` beside a test-only file's child that loads the
+# same util.rs. A crate root (src/lib.rs, src/main.rs, src/bin/, a manifest
+# `[lib]`/`[[bin]]` path) is never test-only unless its own `#![cfg(test)]`
+# says so. So crates/paladin-battalion/src/engine/test_support.rs reports
+# nothing.
 #
 # Matching runs on the macro token after line comments, doc comments (so a
 # `///` doc example never fires), nested block comments, string, byte-string,
@@ -719,6 +727,7 @@ if root_manifest is not None:
 manifests = [os.path.join(root, "Cargo.toml")]
 manifests += sorted(glob.glob(os.path.join(root, "crates", "*", "Cargo.toml")))
 packages = []
+roots = set()
 for manifest_path in manifests:
     manifest = (
         root_manifest if manifest_path == os.path.join(root, "Cargo.toml")
@@ -734,7 +743,18 @@ for manifest_path in manifests:
         publish = True if ws_publish is None else ws_publish
     if publish is False:
         continue
-    packages.append(os.path.dirname(manifest_path))
+    pkg_dir = os.path.dirname(manifest_path)
+    packages.append(pkg_dir)
+    # Crate roots: rustc compiles each one whatever a test module declares.
+    roots.update(os.path.join(pkg_dir, "src", r) for r in ("lib.rs", "main.rs"))
+    roots.update(glob.glob(os.path.join(pkg_dir, "src", "bin", "*.rs")))
+    roots.update(glob.glob(os.path.join(pkg_dir, "src", "bin", "*", "main.rs")))
+    targets = [manifest.get("lib")] + list(manifest.get("bin") or [])
+    roots.update(
+        os.path.normpath(os.path.join(pkg_dir, t["path"]))
+        for t in targets
+        if isinstance(t, dict) and isinstance(t.get("path"), str)
+    )
 
 # --- The scan set: sorted, deterministic. ---
 files = sorted({
@@ -803,33 +823,41 @@ while pending:
                 pending.append(target)
 grow_path_loaded()
 files = sorted(scan)
-test_only = {path for path, (hits, _decls) in parsed.items() if hits is None}
 
 
-def resolve_children(path, decls):
-    """Mark every scanned file that a decl in `decls` (declared in `path`) loads as test-only."""
-    added = []
-    for decl in decls:
-        for cand in decl_files(path, decl):
-            if cand in parsed and cand not in test_only:
-                test_only.add(cand)
-                added.append(cand)
-    return added
+def test_only_files():
+    """The scanned files that no non-test build compiles.
+
+    A file is test-only when its own leading `#![cfg(test)]` says so, or when
+    it is not a crate root, at least one module declaration loads it, and
+    every declaration that loads it is exempt (`#[cfg(test)]`, or inside an
+    exempt span) or sits in a file that is itself test-only. One production
+    declaration anywhere (a `#[cfg(not(test))]` twin, the production side of a
+    test `#[path]` alias, a production file's own `mod util;` beside a
+    test-only file's child that loads the same util.rs) keeps it production.
+    Grown to a least fixed point, so a cycle of declarations stays production:
+    the strict side.
+    """
+    result = {path for path, (hits, _decls) in parsed.items() if hits is None}
+    loaders = {}  # file -> [(declaring file, exempt)]
+    for path, (_hits, decls) in parsed.items():
+        for decl in decls:
+            for cand in decl_files(path, decl):
+                if cand in parsed:
+                    loaders.setdefault(cand, []).append((path, decl["exempt"]))
+    grown = True
+    while grown:
+        grown = False
+        for cand, by in loaders.items():
+            if cand in result or cand in roots:
+                continue
+            if all(exempt or src in result for src, exempt in by):
+                result.add(cand)
+                grown = True
+    return result
 
 
-# `#[cfg(test)] mod x;` in any file makes x test-only; then, transitively, every
-# `mod y;` declared inside a test-only file.
-queue = []
-for path, (_hits, decls) in parsed.items():
-    queue += resolve_children(path, [d for d in decls if d["test"]])
-queue += [p for p in test_only]
-seen = set()
-while queue:
-    path = queue.pop()
-    if path in seen:
-        continue
-    seen.add(path)
-    queue += resolve_children(path, parsed[path][1])
+test_only = test_only_files()
 
 findings = sorted(
     (rel(path), line, macro, how)

@@ -500,6 +500,24 @@ printf 'fn main() { todo!() }\n' >"${FX}/crates/x/src/main.rs"
 assert_fire "${FX}" "a test-only #[path] alias of src/main.rs does not make the crate root test-only" \
     "crates/x/src/main.rs:1: todo! outside #[cfg(test)]"
 
+# A `#[path = "dir"]` on an inline module replaces that module's directory, so
+# a production `pub mod helper;` inside `#[path = "real"] mod outer { ... }`
+# loads real/helper.rs, never outer/helper.rs (WR-03, round 5).
+fresh inline-path-mod-prod-decl
+printf '%s\n' \
+    '#[path = "real"]' \
+    'pub mod outer {' \
+    '    pub mod helper;' \
+    '}' \
+    '#[cfg(test)]' \
+    '#[path = "real/helper.rs"]' \
+    'mod alias;' \
+    'pub use outer::helper::f;' >"${FX}/crates/x/src/lib.rs"
+mkdir -p "${FX}/crates/x/src/real"
+printf 'pub fn f() -> u8 { todo!() }\n' >"${FX}/crates/x/src/real/helper.rs"
+assert_fire "${FX}" "a production mod inside an inline #[path] module resolves under that path" \
+    "crates/x/src/real/helper.rs:1: todo! outside #[cfg(test)]"
+
 # A production `#[path]` module compiles its target into the published crate
 # even when the file sits outside src/ (eval.rs pulls in
 # tests/helpers/e2e_fixtures.rs this way), so the target and its own children
@@ -799,6 +817,34 @@ printf 'pub fn h() { todo!() }\n' >"${FX}/crates/x/src/outer/helper.rs"
 printf 'pub mod inner {\n    #[cfg(test)]\n    mod t;\n}\n' >"${FX}/crates/x/src/a.rs"
 printf 'fn t() { unimplemented!() }\n' >"${FX}/crates/x/src/a/inner/t.rs"
 assert_silent "${FX}" "an out-of-line test module inside an inline module resolves under its directory (lib.rs and a non-mod-rs file)" "OK"
+
+# A test module declared inside an inline `#[path]` module resolves under that
+# path: relative to the declaring file's own directory for the outermost inline
+# module, even in a non-mod-rs file, and with any inline nesting after it
+# (WR-03, round 5).
+fresh test-mod-in-inline-path-mod
+printf '%s\n' \
+    '#[path = "fakes"]' \
+    'mod outer {' \
+    '    #[cfg(test)]' \
+    '    mod helper;' \
+    '}' \
+    'pub mod a;' \
+    '#[path = "x/y"]' \
+    'mod o {' \
+    '    mod i {' \
+    '        #[cfg(test)]' \
+    '        mod t;' \
+    '    }' \
+    '}' >"${FX}/crates/x/src/lib.rs"
+printf '#[path = "afakes"]\nmod outer {\n    #[cfg(test)]\n    mod helper;\n}\n' >"${FX}/crates/x/src/a.rs"
+mkdir -p "${FX}/crates/x/src/fakes" "${FX}/crates/x/src/outer" "${FX}/crates/x/src/afakes" "${FX}/crates/x/src/x/y/i"
+printf 'fn t() -> u8 { todo!() }\n' >"${FX}/crates/x/src/fakes/helper.rs"
+printf 'fn p() -> u8 { 0 }\n' >"${FX}/crates/x/src/outer/helper.rs"
+printf 'fn t() -> u8 { todo!() }\n' >"${FX}/crates/x/src/afakes/helper.rs"
+printf 'fn t() -> u8 { unimplemented!() }\n' >"${FX}/crates/x/src/x/y/i/t.rs"
+assert_silent "${FX}" "a test module inside an inline #[path] module (lib.rs, a non-mod-rs file, nested) is test-only" \
+    "OK" "(3 test-only)"
 
 # A plain `mod x;` declared inside an exempt `#[cfg(test)] mod tests { ... }`
 # is gone from a non-test build with its parent, so x.rs is test-only.

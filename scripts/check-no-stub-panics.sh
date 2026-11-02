@@ -79,7 +79,10 @@
 # `name.rs`: `#[cfg(test)] #[path = "imp_mock.rs"] mod imp;` makes imp_mock.rs
 # test-only and leaves a production imp.rs scanned. A file loaded through
 # `#[path]` resolves its own children beside it, as rustc reads it like a
-# mod.rs. A `#[path]` on an inline module itself is not followed. A file is
+# mod.rs. A `#[path = "dir"]` on an inline module replaces that module's
+# directory: `#[path = "fakes"] mod outer { #[cfg(test)] mod helper; }` is
+# fakes/helper.rs beside the declaring file (in a non-mod-rs file too, without
+# its own-name directory), never outer/helper.rs. A file is
 # test-only only when every module declaration that loads it is test-only: a
 # `#[cfg(test)]` one, one inside an exempt span (`mod x;` inside
 # `#[cfg(test)] mod tests { ... }`), or one in a file that is itself test-only
@@ -612,39 +615,47 @@ def mod_decls(raw, b, groups):
     Each is a dict: `name`; `test`, true when its attribute run holds
     `#[cfg(test)]` or `#[cfg(all(test, ...))]`; `path`, the literal of a
     `#[path = "..."]` in that run (read from the raw source), else None;
-    `nesting`, the names of the inline `mod name { ... }` blocks around it,
-    outermost first; `at`, the index of its `mod` keyword. An include! is a
+    `nesting`, (name, path) of each inline `mod name { ... }` block around it,
+    outermost first, path being the literal of a `#[path]` on that inline
+    module or None; `at`, the index of its `mod` keyword. An include! is a
     decl with `include` set, `name` None and its literal in `path`. analyse()
     adds `exempt`: the decl is `test` or sits inside an exempt span.
     """
+    def path_in(attrs):
+        found = None
+        for a, z in attrs:
+            pm = PATH_ATTR.match(raw, a)
+            if pm and pm.end() <= z:
+                found = pm.group(1)
+        return found
+
+    def attr_run(start):
+        head = start
+        vis = VIS_BEFORE.search(b, max(0, head - 120), head)
+        if vis:
+            head = vis.start()
+        return attrs_before(b, head)
+
     inline = []
     for m in INLINE_MOD.finditer(b):
         if in_groups(groups, m.start()):
             continue
         close = match_group(b, m.end() - 1)
         if close is not None:
-            inline.append((m.end() - 1, close, m.group(1)))
+            attrs, _p = attr_run(m.start())
+            inline.append((m.end() - 1, close, m.group(1), path_in(attrs)))
     decls = []
     for m in MOD_DECL.finditer(b):
         if in_groups(groups, m.start()):
             continue  # macro input, not a declaration
-        head = m.start()
-        vis = VIS_BEFORE.search(b, max(0, head - 120), head)
-        if vis:
-            head = vis.start()
-        attrs, p = attrs_before(b, head)
+        attrs, p = attr_run(m.start())
         if p is None or not (p < 0 or b[p] in ";{}"):
             continue
-        path = None
-        for a, z in attrs:
-            pm = PATH_ATTR.match(raw, a)
-            if pm and pm.end() <= z:
-                path = pm.group(1)
         decls.append({
             "name": m.group(1),
             "test": any(CFG_TEST_ATTR.match(b, a) for a, _z in attrs),
-            "path": path,
-            "nesting": [name for a, z, name in inline if a < m.start() < z],
+            "path": path_in(attrs),
+            "nesting": [(name, ip) for a, z, name, ip in inline if a < m.start() < z],
             "at": m.start(),
         })
     for m in INCLUDE_CALL.finditer(b):
@@ -710,31 +721,49 @@ def analyse(raw, blanked):
 path_loaded = set()
 
 
-def module_dir(path):
+def decl_dir(path, nesting):
+    """(directory, pending) for a decl in path inside the inline nesting.
+
+    Follows rustc: the walk starts at the declaring file's own directory, with
+    `pending` the non-mod-rs file's own name (None for lib.rs, main.rs, mod.rs
+    and a `#[path]`-loaded file, which rustc reads like a mod.rs). Each inline
+    module adds `pending` (once) and then its name, except that a `#[path]` on
+    the inline module replaces both with its literal: `#[path = "fakes"]
+    mod outer { mod helper; }` is fakes/helper.rs beside the declaring file,
+    in a non-mod-rs a.rs too.
+    """
     base = os.path.basename(path)
-    if base in ("lib.rs", "main.rs", "mod.rs") or path in path_loaded:
-        return os.path.dirname(path)
-    return path[: -len(".rs")]
+    mod_rs = base in ("lib.rs", "main.rs", "mod.rs") or path in path_loaded
+    d, pending = os.path.dirname(path), None if mod_rs else base[: -len(".rs")]
+    for name, inline_path in nesting:
+        if inline_path is not None:
+            d = os.path.join(d, inline_path)
+        else:
+            d = os.path.join(d, pending, name) if pending else os.path.join(d, name)
+        pending = None
+    return d, pending
 
 
 def decl_files(path, decl):
     """The files rustc may load for the out-of-line module decl in path.
 
-    The directory is module_dir(path) plus the inline module nesting around
-    the decl (`mod outer { mod helper; }` in lib.rs is outer/helper.rs). A
-    `#[path = "..."]` names exactly one file, relative to that directory when
-    the decl is nested in an inline module and to the declaring file's own
-    directory otherwise; the module name is then never used. Otherwise it is
-    `name.rs` or `name/mod.rs` in that directory. An include! names its
-    literal, relative to the directory of the file that holds it.
+    The directory comes from decl_dir(): the declaring file's module directory
+    plus the inline module nesting around the decl (`mod outer { mod helper; }`
+    in lib.rs is outer/helper.rs), honouring a `#[path]` on an inline module.
+    A `#[path = "..."]` on the decl names exactly one file, relative to that
+    directory (the declaring file's own directory when the decl is not nested);
+    the module name is then never used. Otherwise it is `name.rs` or
+    `name/mod.rs` in the module directory. An include! names its literal,
+    relative to the directory of the file that holds it.
     """
     if decl.get("include"):
         # relative to the directory of the file holding the invocation
         return [os.path.normpath(os.path.join(os.path.dirname(path), decl["path"]))]
-    d = os.path.join(module_dir(path), *decl["nesting"])
+    d, pending = decl_dir(path, decl["nesting"])
     if decl["path"] is not None:
-        base = d if decl["nesting"] else os.path.dirname(path)
-        return [os.path.normpath(os.path.join(base, decl["path"]))]
+        return [os.path.normpath(os.path.join(d, decl["path"]))]
+    if pending:
+        d = os.path.join(d, pending)
     return [os.path.join(d, decl["name"] + ".rs"), os.path.join(d, decl["name"], "mod.rs")]
 
 
@@ -802,7 +831,7 @@ def load(path):
 def grow_path_loaded():
     """Add every `#[path]` target to path_loaded, to a fixed point.
 
-    A nested `#[path]` decl resolves through module_dir(), which itself
+    A nested `#[path]` decl resolves through decl_dir(), which itself
     depends on path_loaded; the set only ever grows, so this terminates.
     """
     grown = True

@@ -27,7 +27,10 @@ $ grep -c 'path = ' dogfood-walk/Cargo.toml
 `tokio = { version = "1", features = ["full"] }` (from `cargo add`). `cargo tree -p paladin-ai --depth 1` shows
 `paladin-ai v0.11.0` with `paladin-ai-core`, `paladin-battalion`, `paladin-herald`, `paladin-llm`, `paladin-memory`,
 `paladin-ports`, `paladin-storage` all `v0.11.0` (registry, no path suffix); `cargo fetch` locked 419 packages.
-Published text walked: `registry/src/index.crates.io-*/paladin-ai-0.11.0/README.md`, byte-identical to
+The other scratch crates (`snippet-as-written`, `quickstart-as-written`, `installation-as-written`) are resolution-only
+(`cargo metadata`, no build) and live beside it under the same scratch root; their `Cargo.toml` files carry no
+`path = ` entry either. `cargo install` used `--root $WALK/cli` and `--locked` for the working form (the published
+lockfile). Published text walked: `registry/src/index.crates.io-*/paladin-ai-0.11.0/README.md`, byte-identical to
 `git show v0.11.0:README.md` (`diff` printed nothing).
 
 ## Published README vs HEAD
@@ -52,16 +55,166 @@ published README nor HEAD's has a `cargo add` or `cargo install` line.
 
 ## Step table
 
+Rows follow the D-13 order. Every row has its command, exit code and an output excerpt; the last column names the
+DF the stumble became, or 'no stumble'. Keys: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY` unset in
+every command (`env -u ...`); scratch builds use `CARGO_TARGET_DIR=$WALK/target CARGO_PROFILE_DEV_DEBUG=0
+CARGO_INCREMENTAL=0` as a command prefix only.
+
 | # | step | command | exit | output excerpt | stumble → DF |
 |---|------|---------|------|----------------|--------------|
-| 1 | scratch crate + `cargo add paladin-ai@0.11.0` | `cargo new dogfood-walk && cargo add paladin-ai@0.11.0 && cargo add tokio@1 --features full && cargo fetch` | 0 / 0 / 0 / 0 | `Locking 419 packages to latest Rust 1.97.0 compatible versions`; `cargo metadata` source line in Provenance (`paladin-ai 0.11.0 registry+https://github.com/rust-lang/crates.io-index`). The README offers a `[dependencies]` snippet, not a `cargo add` line, on tag and on HEAD alike; the snippet is a complete way to add the crate, so its absence is not a stumble (the snippet's own content is row 2) | no stumble |
-| 2 | README `[dependencies]` snippet as published, resolved as written | `cargo new snippet-as-written`; `[dependencies]` replaced verbatim by the published block (`paladin-ai = "0.5"  # default features: ["llm-openai"]`, `tokio = { version = "1", features = ["full"] }`); `cargo metadata --format-version 1` | 0 | resolved `paladin-ai 0.5.1 registry+https://github.com/rust-lang/crates.io-index` (`Adding paladin-ai v0.5.1 (available: v0.11.0)`); published `Current version: **0.8.0**`. HEAD pins `0.11.0` and `0.11.0` (FIRST-02), so this is DF-02 as published. The `default features` comment names one of three defaults (HEAD too) | DF-10 (duplicate of DF-02), DF-11 |
-| 3 | README Quick Example (`MockLlmAdapter`, no key) | `env -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u DEEPSEEK_API_KEY CARGO_TARGET_DIR=$WALK/target CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 cargo run` (block copied verbatim from the published README into `src/main.rs`) | 0 | `Finished dev profile [unoptimized] target(s) in 1m 22s` then `Hello from Paladin!` | no stumble |
+| 1 | scratch crate + `cargo add paladin-ai@0.11.0` | `cargo new dogfood-walk && cargo add paladin-ai@0.11.0 && cargo add tokio@1 --features full && cargo fetch` | 0 / 0 / 0 / 0 | `Locking 419 packages to latest Rust 1.97.0 compatible versions`; `cargo metadata` source line in Provenance (`paladin-ai 0.11.0 registry+https://github.com/rust-lang/crates.io-index`). The README offers a `[dependencies]` snippet, not a `cargo add` line, on the tag and on HEAD alike; the snippet is a complete way to add the crate, so the absence of a `cargo add` line is not a stumble (the snippet's own content is row 2) | no stumble |
+| 2 | README `[dependencies]` snippet as published, resolved as written | `cargo new snippet-as-written`; `[dependencies]` replaced verbatim by the published block (`paladin-ai = "0.5"  # default features: ["llm-openai"]`, `tokio = ...`); `cargo metadata --format-version 1` | 0 | resolved `paladin-ai 0.5.1 registry+https://github.com/rust-lang/crates.io-index` (`Adding paladin-ai v0.5.1 (available: v0.11.0)`); published `Current version: **0.8.0**`. HEAD pins `0.11.0` in both places (FIRST-02), so this is DF-02 as published. The `default features` comment names one of three defaults (HEAD too) | DF-10 (duplicate of DF-02), DF-11 |
+| 3 | README Quick Example (`MockLlmAdapter`, no key) | `cargo run` with the scratch prefix (block copied verbatim from the published README into `src/main.rs`) | 0 | `Finished dev profile [unoptimized] target(s) in 1m 22s`, then `Hello from Paladin!` | no stumble |
+| 4 | `basic_paladin` from the published package source | `cp ~/.cargo/registry/src/*/paladin-ai-0.11.0/examples/basic_paladin.rs dogfood-walk/examples/`; `cargo run --example basic_paladin` (scratch prefix). Then `cargo add paladin-ports@0.11.0` and the same command | 101, then 0 | error[E0433]: cannot find module or crate `paladin_ports` in this scope, at `examples/basic_paladin.rs:22:5`; after adding `paladin-ports`, the example prints the Herald result and `✨ Example completed successfully!`. No doc gives a crates.io user a command for it (the Quickstart's route is `git clone`) | DF-12 |
+| 5 | Quickstart with no key | tag Quickstart `[dependencies]` resolved as written (`cargo metadata`, in `quickstart-as-written`): `paladin-ai 0.10.1`, `paladin-llm 0.10.1`; then `cargo add paladin-ports@0.11.0` and `cargo add paladin-llm@0.11.0 --features openai`, tag `main` in `src/bin/quickstart.rs`, `env -u OPENAI_API_KEY cargo run --bin quickstart` | 0 (resolution), 1 (run) | the tag Quickstart pins `0.10.0` (resolves to 0.10.1); the walk used `0.11.0`. Run: `Error: "OPENAI_API_KEY environment variable not set"`. The error names the variable, so the missing-key message is not a stumble | DF-13 (duplicate of DF-02) for the version pin; the key error is no stumble |
+| 5b | lead L1: installation page's `[dependencies]` block | `cargo metadata` on the block of `docs/src/getting-started/installation.md` (HEAD line 57; versions as HEAD, `0.11.0`) in `installation-as-written`; then the same with `features = ["openai"]` | 101, then 0 | package `installation-as-written` depends on `paladin-llm` with feature `llm-openai` but `paladin-llm` does not have that feature (help: available features: anthropic, deepseek, default, gemini, grok, kimi, mock, ollama, openai, ...); with `openai`: resolves, all seven `paladin-*` at `0.11.0`. The tag's block fails the same way | DF-14 |
+| 6 | free disk: delete the scratch build | `rm -rf $WALK/target`; `df -BM --output=avail /` | 0 | 4327 MB → 5476 MB free | no stumble |
+| 7 | lead L2: `cargo install` of `paladin-cli` | (a) `cargo install paladin-ai --version 0.11.0 --bin paladin-cli --root $WALK/cli`; (b) `CARGO_TARGET_DIR=$WALK/install-target cargo install paladin-ai --version 0.11.0 --features cli --locked --bin paladin-cli --root $WALK/cli`, then `rm -rf $WALK/install-target` | (a) 101, (b) 0 | (a) target `paladin-cli` in package `paladin-ai` requires the features: `cli` (Consider enabling them by passing, e.g., `--features="cli"`). (b) Finished `release` profile [optimized] target(s) in 5m 12s, Installed package `paladin-ai v0.11.0` (executable `paladin-cli`). A1 proven | DF-15 |
+| 8 | `paladin-cli --version` and `--help` | `$WALK/cli/bin/paladin-cli --version`; `... --help` | 0 / 0 | `paladin 0.11.0`; `--help` lists 13 subcommands (agent, battalion, arsenal, maneuver, onboarding, setup-check, features, muster, eval, graph, run, treasury, council). The version string is `paladin`, not `paladin-cli` (the cause of DF-17); the docs show no `--version` sample | DF-17 (cause); no separate stumble |
+| 9 | `setup-check`, keyless | in an empty `$WALK/run`, with the three keys, `REDIS_URL` and `QDRANT_URL` unset: `paladin-cli setup-check`, `... --verbose`, `... --quiet` | 2 / 2 / 2 | see Keyless observations: bare `Service:` and `LLM Provider:` headings with no rows; `Passed: 2`, `Warnings: 1`; section order differs run to run (five runs); exit 2 is the documented warning exit | DF-16 |
+| 10 | `onboarding` with no TTY | `timeout 20 paladin-cli onboarding < /dev/null` in `$WALK/run` | 2 | welcome banner, then `Error: User input error: IO error: not a terminal`. It fails at once with a clear message and does not hang; no file written (`find . -mindepth 1` printed nothing) | no stumble |
+| 11 | the docs' command as printed (`paladin onboarding`, `paladin setup-check`) | `env -i PATH=$WALK/cli/bin /bin/bash -c 'paladin onboarding; paladin setup-check; command -v paladin-cli'` | 127 / 127 | `paladin: command not found` twice; `command -v paladin-cli` finds the installed binary. Six CLI appendix pages and the binary's own messages name `paladin` | DF-17 |
+
+## Keyless observations
+
+Quoted verbatim from the runs above (provider keys unset).
+
+**Quickstart missing-key error** (step 5; tag `main` with `OpenAIAdapter::from_env()?`, no `OPENAI_API_KEY`):
+
+```
+Error: "OPENAI_API_KEY environment variable not set"
+```
+
+It names the variable. The message is Debug-formatted (quoted), which is how `fn main() -> Result<(), Box<dyn Error>>`
+prints a `String` error; not logged.
+
+**`setup-check`, default** (step 9, exit 2; run in an empty directory, the three provider keys, `REDIS_URL` and
+`QDRANT_URL` unset; this run happened to print `Service`, `LLM Provider`, `Environment`, `System`):
+
+```
+┌═══════════════════════┐
+│ Paladin Setup Check │
+└═══════════════════════┘
+
+
+
+Service:
+
+LLM Provider:
+
+Environment:
+  ⚠ .env file 
+⚠   Not found - run 'paladin onboarding' to create
+
+System:
+  ✓ Paladin CLI v0.11.0 
+  ✓ Rust Toolchain (rustc 1.97.0 (2d8144b78 2026-07-07)) 
+
+┌═══════════┐
+│ Summary │
+└═══════════┘
+  Passed: 2
+  Warnings: 1
+
+⚠ Setup check completed with warnings
+
+┌────────────────────────────────────────────────────────────┐
+│ Next Steps:                                                │
+│ 1. Run 'paladin onboarding' to configure missing providers │
+│ 2. Verify environment variables in your .env file          │
+│ 3. Run 'paladin setup-check' again to verify               │
+└────────────────────────────────────────────────────────────┘
+exit=2
+```
+
+**`setup-check --verbose`** (step 9, exit 2; section rows only, banner, summary and Next Steps box as above;
+Summary adds `Skipped: 5`):
+
+```
+LLM Provider:
+  ○ OpenAI 
+ℹ   OPENAI_API_KEY not configured
+  ○ Anthropic 
+ℹ   ANTHROPIC_API_KEY not configured
+  ○ DeepSeek 
+ℹ   DEEPSEEK_API_KEY not configured
+
+Service:
+  ○ Redis 
+ℹ   REDIS_URL not configured
+  ○ Qdrant 
+ℹ   QDRANT_URL not configured
+
+Environment:
+  ⚠ .env file 
+⚠   Not found - run 'paladin onboarding' to create
+
+System:
+  ✓ Paladin CLI v0.11.0 
+ℹ   All checks passed
+  ✓ Rust Toolchain (rustc 1.97.0 (2d8144b78 2026-07-07)) 
+ℹ   All checks passed
+```
+
+`--quiet` printed the same rows as the default, with `System` first and `LLM Provider` last (exit 2). Section order
+across five runs of the same command, headings only: `Service LLM Environment System`; `LLM Service Environment System`
+(`--verbose`); `System Service Environment LLM` (`--quiet`); `System LLM Service Environment`;
+`LLM Environment System Service`. No key was reported present when none was set. The exit code (2) agrees with the
+rows (one warning) and with the documented exit-code table.
+
+**`onboarding`, no TTY** (step 10, `< /dev/null`, `timeout 20`; the box-drawing banner lines elided):
+
+```
+ Welcome 
+ Welcome to Paladin! 🛡️ 
+✓ Let's get you set up with a multi-agent orchestration framework.
+
+This wizard will help you:
+  • Configure LLM provider API keys
+  • Set up your environment file
+  • Validate API connectivity
+  • Generate sample configurations
+
+
+Error: User input error: IO error: not a terminal
+
+exit=2
+```
+
+No `.env` and no YAML was written (the directory was empty afterwards). It neither hangs nor prompts; this replaces
+research assumption A4 ("fails or hangs"): it fails at once and says why.
+
+**Lead outcomes.** L1 reproduced on the published `0.11.0` crates (DF-14). L2 reproduced (DF-15) and the working form
+`cargo install paladin-ai --version 0.11.0 --features cli --locked --bin paladin-cli` is proven (assumption A1).
 
 ## Disk ledger
+
+Plan PD-06-2. The scratch root no longer exists (`test ! -e "$WALK"` printed `scratch removed`). Scratch builds used `CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_INCREMENTAL=0` and a throwaway `CARGO_TARGET_DIR`;
+nothing was exported into a shell that builds the workspace, and no workspace `cargo build` or `cargo test` ran.
 
 | point | free on `/` |
 |-------|-------------|
 | plan start (before any build) | 5513 MB |
 | after freeing `target/debug/examples` and `target/debug/incremental` (both were already empty, 4 KB each, so nothing to free) | 5513 MB |
 | after the step-3 scratch build (`$WALK/target` present) | 4338 MB |
+| after the step-4 and step-5 builds (same `$WALK/target`, incremental) | 4327 MB |
+| step 6: after `rm -rf $WALK/target` | 5476 MB |
+| step 7(a): resolve, download and fail (no build) | 5476 MB |
+| step 7(b): during the release install (`install-target` present) | 4316 MB at the end of the build |
+| after `rm -rf $WALK/install-target` | 5455 MB |
+| end: after `rm -rf $WALK` (scratch root, every scratch crate, `cli/` install root) | 5476 MB |
+
+No step hit `No space left on device`; no step is marked 'not run: disk'.
+
+## Findings-log check
+
+`./scripts/check-findings-log.sh` after the last entry of this plan (exit 1, expected; exit status is not asserted
+because contained docs entries stay `open` until plan 56-07 and DF-07/DF-08 are Stage C):
+
+```
+DF-07: OPEN   DF-08: OPEN   DF-11: OPEN   DF-12: OPEN   DF-14: OPEN   DF-15: OPEN   DF-17: OPEN
+parsed 17 entries from .project/v0.11.1/02-dogfood-findings-log.md
+```
+
+DF-10 and DF-13 parse as `duplicate of DF-02`; DF-16 parses as `out (re-homed: ...)`. `git diff --numstat` for the log
+over this plan shows 0 deleted lines.

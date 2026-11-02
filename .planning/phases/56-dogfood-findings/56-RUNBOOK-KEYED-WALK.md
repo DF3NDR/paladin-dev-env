@@ -189,6 +189,65 @@ line (`cleaned`) into `K9`. If you opened extra shells that exported a key, clos
 
 <!-- filled by plan 56-06 with the commands the agent ran keyless, and any correction to the steps above -->
 
+Filled 2026-11-02 by plan 56-06. Evidence, provenance and the step table are in `56-FIRST-RUN-WALK.md`. Every command
+below ran with `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` and `DEEPSEEK_API_KEY` unset, in a scratch directory outside any
+git repository, against crates.io `0.11.0` (`cargo metadata`: `paladin-ai 0.11.0
+registry+https://github.com/rust-lang/crates.io-index`).
+
+Commands run and their exit codes:
+
+| walk step | command (keys unset) | exit |
+|-----------|----------------------|------|
+| 1 | `cargo new dogfood-walk`, `cargo add paladin-ai@0.11.0`, `cargo add tokio@1 --features full`, `cargo fetch` | 0 |
+| 2 | README `[dependencies]` block as published, `cargo metadata` (resolves `paladin-ai 0.5.1`) | 0 |
+| 3 | README Quick Example, `cargo run` (prints `Hello from Paladin!`) | 0 |
+| 4 | `basic_paladin.rs` copied from the downloaded package, `cargo run --example basic_paladin` | 101 (needs `paladin-ports`), 0 once added |
+| 5 | tag Quickstart block as written, `cargo metadata` (resolves `0.10.1`) | 0 |
+| 5 | `cargo add paladin-ports@0.11.0`, `cargo add paladin-llm@0.11.0 --features openai`, tag `main` as `src/bin/quickstart.rs`, `cargo run --bin quickstart` | 1 (`Error: "OPENAI_API_KEY environment variable not set"`) |
+| 5b | installation page block with `llm-openai`, `cargo metadata` | 101 |
+| 5b | the same block with `openai`, `cargo metadata` | 0 |
+| 7 | `cargo install paladin-ai --version 0.11.0 --bin paladin-cli --root <scratch>/cli` | 101 |
+| 7 | `cargo install paladin-ai --version 0.11.0 --features cli --locked --bin paladin-cli --root <scratch>/cli` | 0 |
+| 8 | `paladin-cli --version` (`paladin 0.11.0`), `paladin-cli --help` | 0, 0 |
+| 9 | `paladin-cli setup-check`, `... --verbose`, `... --quiet`, three provider keys, `REDIS_URL`, `QDRANT_URL` unset, empty directory | 2, 2, 2 |
+| 10 | `timeout 20 paladin-cli onboarding < /dev/null` | 2 (`Error: User input error: IO error: not a terminal`) |
+| 11 | `paladin onboarding` and `paladin setup-check` with only the install's `bin` on `PATH` | 127, 127 |
+
+As a line: step 1 exit=0; 2 exit=0; 3 exit=0; 4 exit=101 then exit=0; 5 exit=1; 5b exit=101 then exit=0; 7 exit=101 then
+exit=0; 8 exit=0; 9 exit=2; 10 exit=2; 11 exit=127.
+
+**The K4 install line is proven.** `cargo install paladin-ai --version 0.11.0 --features cli --locked --bin
+paladin-cli --root "$WALK/cli"` exited 0 in 5m 12s (release profile) and produced a working `paladin-cli`. Assumption
+A1 holds. It used about 1.2 GB of scratch target (free space 5476 MB to 4316 MB).
+
+Not run: nothing was skipped for disk. Not run keylessly, because they need the key: the Quickstart's real provider
+call (K2 with a key), the trace watch-list (K3), `onboarding` through its prompts and the key validation (K6),
+`setup-check` with a configured key (K7) and the Anthropic row (K8).
+
+Corrections to the steps above, as dated notes (the steps themselves are unchanged):
+
+- **2026-11-02, K2.** The tag's Quickstart does not only "may" say `0.10.0`; it does. Its block is `paladin-ai`,
+  `paladin-ports` at `"0.10.0"` and `paladin-llm = { version = "0.10.0", features = ["openai"] }`, which resolves to
+  `0.10.1`. Use `0.11.0` as the step says and name the change in K2/K9. Logged as DF-13 (duplicate of DF-02); do not
+  log it again. With `0.11.0` the program compiled and, with no key, stopped at `OPENAI_API_KEY environment variable
+  not set`, so the keyed run is the first one that reaches the provider.
+- **2026-11-02, K3.** The Quickstart `main.rs` installs no tracing subscriber (`use` list: builder, execution service,
+  circuit breaker, `LlmPort`, `OpenAIAdapter`), so `RUST_LOG` has no effect and `none` proves nothing, as the step
+  already warns. Say so in K3.
+- **2026-11-02, K4.** The step says that if the docs gave a different install command, try it first. No doc gives a
+  `cargo install` line for the CLI (DF-15). The line a reader would try, without `--features cli`, exits 101 with
+  "target paladin-cli in package paladin-ai requires the features: cli". Both are logged; K9 needs no new
+  entry for them.
+- **2026-11-02, K6/K7.** The CLI names itself `paladin`: its Next Steps box and warnings say `paladin onboarding`
+  and `paladin setup-check`, and `paladin-cli --version` prints `paladin 0.11.0`. This is DF-17, already logged. For
+  K7: the section order of `setup-check` changes from run to run (DF-16), so two pastes of the same output can differ
+  in order only. With no `.env` the exit code is 2 (documented: warnings); after a successful onboarding in the same
+  directory the `.env` warning should go and the exit may become 0.
+- **2026-11-02, K6.** Without a TTY `onboarding` prints its welcome banner and exits 2 with `Error: User input error:
+  IO error: not a terminal`, and writes nothing. Run it in a real terminal.
+- **2026-11-02, K9.** Already logged by this walk, no need to log again: DF-10, DF-11, DF-12, DF-13, DF-14, DF-15,
+  DF-16, DF-17. Log only what is new from the keyed steps.
+
 ## Paste slots
 
 Fill these in place, after redaction. Each has an HTML comment marking where to paste, then an

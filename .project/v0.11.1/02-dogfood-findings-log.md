@@ -264,3 +264,151 @@ promoted.
 - **Severity:** S4 (hygiene, D-04: nothing breaks; the reader only compiles more than they thought)
 - **Related:** step 2 of `56-FIRST-RUN-WALK.md`; the same comment in `docs/src/api-reference/crate-map.md`
 - **Disposition:** open → **in v0.11.1** (contained docs fix: plan 56-07)
+
+### DF-12 — `examples/basic_paladin.rs` in the published package cannot be run from a consumer crate, and no doc says how a crates.io user runs it
+- **Found:** 2026-11-02 · **By:** Claude (Phase 56, plan 56-06) · **Surface:** docs
+- **Version:** 0.11.0 (published crate; also HEAD a39a338dd)
+- **What happened:** the package lists `examples/**` in `include`, so `basic_paladin.rs` is in the downloaded
+  `paladin-ai-0.11.0` source. Copied into a crate whose `[dependencies]` are the README's (`paladin-ai`, `tokio`) and
+  run with `cargo run --example basic_paladin`, it does not compile, because it imports `paladin_ports` and the
+  README never asks for that crate:
+  ```
+  error[E0433]: cannot find module or crate `paladin_ports` in this scope
+    --> examples/basic_paladin.rs:22:5
+     |
+  22 | use paladin_ports::output::llm_port::LlmPort;
+     |     ^^^^^^^^^^^^^ use of unresolved module or unlinked crate `paladin_ports`
+     = help: if you wanted to use a crate named `paladin_ports`, use `cargo add paladin_ports` to add it to your `Cargo.toml`
+  ```
+  exit 101. After `cargo add paladin-ports@0.11.0` the same example runs and exits 0 (`✨ Example completed
+  successfully!`). The only documented route to the examples is `git clone` then `cargo run --example basic_paladin`
+  (`docs/src/getting-started/quickstart.md`, same text at the tag and on HEAD), which is a checkout, not the
+  published crate; neither the README nor the Quickstart says that an example copied into your own crate needs
+  `paladin-ports`.
+- **Expected:** the docs say how to run an example (from a clone) and what a copied example needs in `[dependencies]`.
+- **Repro:** scratch crate on crates.io `0.11.0`; copy `examples/basic_paladin.rs` from
+  `~/.cargo/registry/src/*/paladin-ai-0.11.0/examples/` into its `examples/`; `cargo run --example basic_paladin`.
+- **Severity:** S4 (hygiene, D-04: the documented clone route works; only a reader who tries the published source meets it)
+- **Related:** step 4 of `56-FIRST-RUN-WALK.md`; the README Quick Example avoids the import through `paladin::prelude::*`
+- **Disposition:** open → **in v0.11.1** (contained docs fix: plan 56-07)
+
+### DF-13 — The Quickstart and Installation pages at the `v0.11.0` tag pin `0.10.0`, which resolves to `0.10.1`
+- **Found:** 2026-11-02 · **By:** Claude (Phase 56, plan 56-06) · **Surface:** docs
+- **Version:** 0.11.0 (tag v0.11.0, docs site built from it)
+- **What happened:** `git show v0.11.0:docs/src/getting-started/quickstart.md` has `paladin-ai    = "0.10.0"`,
+  `paladin-ports = "0.10.0"` and `paladin-llm   = { version = "0.10.0", features = ["openai"] }`;
+  `installation.md` at the tag pins `0.10.0` for six crates. Resolved as written in a scratch crate, `cargo metadata`
+  picks `paladin-ai 0.10.1` and `paladin-llm 0.10.1` (`registry+https://github.com/rust-lang/crates.io-index`), so a
+  reader following the Quickstart for the `0.11.0` release builds the previous release. HEAD's Quickstart pins `0.11.0`
+  (`diff` of the file against the tag shows only those three lines) and `make check-version-strings` is green on HEAD
+  ("every copyable version string equals '0.11.0'"), so this is DF-02's class of defect on two more pages (D-00e).
+- **Expected:** the pages pin the release being read.
+- **Repro:** `git show v0.11.0:docs/src/getting-started/quickstart.md`; put its `[dependencies]` block into a scratch
+  crate; `cargo metadata --format-version 1` and read the `paladin-*` versions.
+- **Severity:** S3
+- **Related:** DF-02, DF-10; step 5 of `56-FIRST-RUN-WALK.md`. The walk used `0.11.0` for the three `paladin-*` crates
+  from here on (as the keyed runbook K2 allows) and said so.
+- **Disposition:** duplicate of DF-02
+
+### DF-14 — Installation page names a `paladin-llm` feature `llm-openai` that does not exist (lead L1)
+- **Found:** 2026-11-02 · **By:** Claude (Phase 56, plan 56-06) · **Surface:** docs
+- **Version:** 0.11.0 (published crates; same line on HEAD a39a338dd, `installation.md:57`)
+- **What happened:** the `[dependencies]` block of `docs/src/getting-started/installation.md` has
+  `paladin-llm       = { version = "0.11.0", features = ["llm-openai"] }`. `llm-openai` is a feature of the
+  `paladin-ai` umbrella; published `paladin-llm 0.11.0` calls it `openai`. Resolved in a scratch crate with the HEAD
+  block's versions (every `paladin-*` at `0.11.0`):
+  ```
+  error: failed to select a version for `paladin-llm`.
+  versions that meet the requirements `^0.11.0` are: 0.11.0
+
+  package `installation-as-written` depends on `paladin-llm` with feature `llm-openai` but `paladin-llm` does not have that feature.
+  help: available features: anthropic, deepseek, default, gemini, grok, kimi, mock, ollama, openai, openai-compatible, openai-embeddings, qwen, vision
+  ```
+  exit 101. The same block with `features = ["openai"]` resolves (exit 0, all seven `paladin-*` at `0.11.0`); that
+  pair is the proof plan 56-07 will cite. The tag's block fails the same way (it also pins `0.10.0`, see DF-13).
+- **Expected:** a block a reader can paste and resolve.
+- **Repro:** scratch crate; put the block in `[dependencies]`; `cargo metadata --format-version 1`.
+- **Severity:** S3
+- **Related:** lead L1 (56-RESEARCH.md); step 5b of `56-FIRST-RUN-WALK.md`
+- **Disposition:** open → **in v0.11.1** (contained docs fix: plan 56-07)
+
+### DF-15 — No doc names a `cargo install` line for `paladin-cli`, and the line a reader tries first fails (lead L2)
+- **Found:** 2026-11-02 · **By:** Claude (Phase 56, plan 56-06) · **Surface:** docs
+- **Version:** 0.11.0 (published crate; no `cargo install` of the CLI on HEAD a39a338dd either)
+- **What happened:** the CLI appendix pages say to build from a checkout (`cargo build --release --features cli --bin
+  paladin-cli`) and no page gives an install line for a crates.io user. The obvious line fails:
+  ```
+  $ cargo install paladin-ai --version 0.11.0 --bin paladin-cli
+  error: failed to compile `paladin-ai v0.11.0`, ...
+  Caused by:
+    target `paladin-cli` in package `paladin-ai` requires the features: `cli`
+    Consider enabling them by passing, e.g., `--features="cli"`
+  ```
+  exit 101. The form with the feature works: `cargo install paladin-ai --version 0.11.0 --features cli --locked
+  --bin paladin-cli --root <scratch>` exits 0 (`Installed package \`paladin-ai v0.11.0\` (executable \`paladin-cli\`)`),
+  and the installed binary runs (`paladin-cli --version` prints `paladin 0.11.0`). Assumption A1 is proven.
+- **Expected:** the install docs carry a working line for the CLI.
+- **Repro:** the two commands above, `--root` set to a scratch directory.
+- **Severity:** S3
+- **Related:** lead L2 (56-RESEARCH.md); step 7 of `56-FIRST-RUN-WALK.md`
+- **Disposition:** open → **in v0.11.1** (contained docs fix: plan 56-07)
+
+### DF-16 — `paladin-cli setup-check` prints its sections in a different order on each run and bare headings with no rows when no key is set
+- **Found:** 2026-11-02 · **By:** Claude (Phase 56, plan 56-06) · **Surface:** cli
+- **Version:** 0.11.0 (published crate; `setup_check.rs` is unchanged between the tag and HEAD a39a338dd)
+- **What happened:** with no provider key, `REDIS_URL` or `QDRANT_URL` and no `.env`, the section order of the same
+  command differed from run to run (four of the runs, headings only):
+  ```
+  Service: LLM Provider: Environment: System:
+  System: Service: Environment: LLM Provider:
+  System: LLM Provider: Service: Environment:
+  LLM Provider: Environment: System: Service:
+  ```
+  The cause is in the source: `setup_check.rs` groups results in a `HashMap<String, Vec<_>>` and prints it in
+  iteration order. Without `--verbose` the `Skip` rows are not printed, so `Service:` and `LLM Provider:` appear as
+  bare headings with nothing under them, and the only sign that no provider is configured is the `.env` warning:
+  ```
+  Service:
+
+  LLM Provider:
+
+  Environment:
+    ⚠ .env file 
+  ⚠   Not found - run 'paladin onboarding' to create
+  ```
+  Exit code 2, as the page documents for warnings. `--verbose` lists `○ OpenAI`, `○ Anthropic`, `○ DeepSeek`,
+  `○ Redis`, `○ Qdrant` (each `... not configured`) and `Skipped: 5`. The sample output on `cli-setup-check.md` is a
+  different layout (`✓ Paladin CLI: v0.1.0`, `Providers:`, `Services (Optional):`); the real line is `✓ Paladin CLI v0.11.0`.
+- **Expected:** a stable section order, no empty headings, and a keyless first run that says which keys are missing.
+- **Repro:** from an empty directory, `env -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u DEEPSEEK_API_KEY -u REDIS_URL
+  -u QDRANT_URL paladin-cli setup-check`, three or four times.
+- **Severity:** S3 (misleading output, D-04: nothing breaks, but the command meant to reassure a new user is unstable
+  and silent about the missing key)
+- **Related:** step 9 of `56-FIRST-RUN-WALK.md`; DF-17 (the same file's `paladin` strings)
+- **Disposition:** out (re-homed: .planning/todos/pending/2026-11-02-setup-check-first-run-output.md)
+
+### DF-17 — Docs and the CLI's own messages tell the reader to run `paladin onboarding` / `paladin setup-check`, but the installed binary is `paladin-cli`
+- **Found:** 2026-11-02 · **By:** Claude (Phase 56, plan 56-06) · **Surface:** docs
+- **Version:** 0.11.0 (published crate; the six pages are byte-identical at the tag and on HEAD a39a338dd)
+- **What happened:** with only the install's `bin` directory on `PATH`, the command as the docs print it fails:
+  ```
+  $ paladin onboarding
+  /bin/bash: line 1: paladin: command not found
+  exit=127
+  $ paladin setup-check
+  /bin/bash: line 1: paladin: command not found
+  exit=127
+  ```
+  `command -v paladin-cli` finds the binary. The wrong name is on `cli-onboarding.md`, `cli-setup-check.md`,
+  `cli-usage.md`, `cli-configuration.md`, `cli-muster.md` and `cli-council.md`, and in the CLI's own output: the
+  `setup-check` warning (`Not found - run 'paladin onboarding' to create`), its Next Steps box, and the onboarding
+  messages and generated `.env` header (`src/application/cli/commands/{setup_check,onboarding}.rs`,
+  `src/application/cli/templates/env.rs`). The `paladin` binary in the same package takes only `--config`
+  (`src/main.rs`), so a reader who installs it too gets no `onboarding` subcommand. One root cause: the tool is
+  `paladin-cli` while its clap name is `paladin` (`paladin-cli --version` prints `paladin 0.11.0`).
+- **Expected:** every command line a reader copies names the binary that has the subcommand.
+- **Repro:** install per DF-15 into a scratch root; `PATH=<root>/bin paladin onboarding`.
+- **Severity:** S3
+- **Related:** step 11 of `56-FIRST-RUN-WALK.md`; keyed runbook K9 anticipates it. Plan 56-07 fixes the docs lines;
+  the strings inside the binary are a code change (P10) and are re-homed with DF-16's todo.
+- **Disposition:** open → **in v0.11.1** (contained docs fix: plan 56-07)

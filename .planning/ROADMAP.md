@@ -510,7 +510,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 56-05-PLAN.md — leads L3 (`paladin` binary logs `Settings` with plaintext API keys), L6 (`Settings::validate()` uncalled at boot) and L4 (dev-UI key unread) reproduced on HEAD and logged; S1/S2 promoted to Stage C (DOGF-01, DOGF-06)
+- [x] 56-05-PLAN.md — leads L3 (`paladin` binary logs `Settings` with plaintext API keys), L6 (`Settings::validate()` uncalled at boot) and L4 (dev-UI key unread) reproduced on HEAD and logged; S1/S2 promoted to Stage C (DOGF-01, DOGF-06)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

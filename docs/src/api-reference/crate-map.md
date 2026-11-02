@@ -187,7 +187,7 @@ the in-memory/SQLite garrison — enough to build and run a single Paladin.
 
 ```toml
 [dependencies]
-paladin-ai = "0.11.0"   # default features: ["llm-openai"]
+paladin-ai = "0.11.0"   # default features: ["llm-openai", "llm-anthropic", "llm-deepseek"]
 tokio = { version = "1", features = ["full"] }
 ```
 

@@ -134,6 +134,13 @@ The `paladin-cli` binary carries `required-features = ["cli"]` in `Cargo.toml`, 
 built by a default `cargo build` -- pass `--features cli` (or `--bin paladin-cli --features cli`)
 to build it.
 
+To install the CLI from crates.io, enable the `cli` feature; `--locked` builds against the lockfile
+published with the crate:
+
+```bash
+cargo install paladin-ai --features cli --locked --bin paladin-cli
+```
+
 ### Verification
 
 ```bash

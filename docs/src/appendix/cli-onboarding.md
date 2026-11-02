@@ -16,6 +16,14 @@ The `paladin onboarding` command provides a step-by-step wizard that:
 The `paladin-cli` binary carries `required-features = ["cli"]` and is not produced by a default
 `cargo build`; build it once with `cargo build --release --features cli --bin paladin-cli`.
 
+From crates.io, install it instead:
+
+```bash
+cargo install paladin-ai --features cli --locked --bin paladin-cli
+```
+
+The `cli` feature is required, and `--locked` builds against the lockfile published with the crate.
+
 ```bash
 # Run the wizard
 paladin onboarding

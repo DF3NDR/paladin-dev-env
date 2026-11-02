@@ -264,6 +264,7 @@ promoted.
 - **Severity:** S4 (hygiene, D-04: nothing breaks; the reader only compiles more than they thought)
 - **Related:** step 2 of `56-FIRST-RUN-WALK.md`; the same comment in `docs/src/api-reference/crate-map.md`
 - **Disposition:** open → **in v0.11.1** (contained docs fix: plan 56-07)
+- **Disposition (2026-11-02):** in v0.11.1 — fixed in plan 56-07: README.md and crate-map.md list all three default features; proof: tomllib prints the root manifest default = [llm-openai, llm-anthropic, llm-deepseek], matching the comments (56-FIRST-RUN-WALK.md, Contained fixes)
 
 ### DF-12 — `examples/basic_paladin.rs` in the published package cannot be run from a consumer crate, and no doc says how a crates.io user runs it
 - **Found:** 2026-11-02 · **By:** Claude (Phase 56, plan 56-06) · **Surface:** docs
@@ -353,6 +354,7 @@ promoted.
 - **Severity:** S3
 - **Related:** lead L2 (56-RESEARCH.md); step 7 of `56-FIRST-RUN-WALK.md`
 - **Disposition:** open → **in v0.11.1** (contained docs fix: plan 56-07)
+- **Disposition (2026-11-02):** in v0.11.1 — fixed in plan 56-07: installation.md and cli-onboarding.md carry cargo install paladin-ai --features cli --locked --bin paladin-cli; proof: 56-06 step 7(b) ran it with --version 0.11.0, exit 0 (56-FIRST-RUN-WALK.md, Contained fixes)
 
 ### DF-16 — `paladin-cli setup-check` prints its sections in a different order on each run and bare headings with no rows when no key is set
 - **Found:** 2026-11-02 · **By:** Claude (Phase 56, plan 56-06) · **Surface:** cli

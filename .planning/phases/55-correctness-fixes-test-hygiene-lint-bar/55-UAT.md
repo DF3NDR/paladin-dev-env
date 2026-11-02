@@ -3,16 +3,16 @@ status: testing
 phase: 55-correctness-fixes-test-hygiene-lint-bar
 source: [55-01-SUMMARY.md, 55-02-SUMMARY.md, 55-03-SUMMARY.md, 55-04-SUMMARY.md, 55-05-SUMMARY.md, 55-06-SUMMARY.md, 55-07-SUMMARY.md, 55-08-SUMMARY.md, 55-09-SUMMARY.md, 55-10-SUMMARY.md, 55-11-SUMMARY.md, 55-12-SUMMARY.md, 55-13-SUMMARY.md]
 started: 2026-11-02T01:40:47Z
-updated: 2026-11-02T02:00:14Z
+updated: 2026-11-02T02:04:45Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 4
-name: `cargo test` passes with no network
+number: 5
+name: Cancel test is non-flaky under repeated parallel runs
 expected: |
-  In a sandbox with no network (e.g. `unshare -rn` or proxies unset), `cargo test` passes, including `run_api_wiring::tests::build_run_api_persists_*`, which now use a scripted port — no API key, no network, no serial group.
+  `cancel_tests::local_cancel_signals_token` waits on a registration signal (no fixed sleep) and passes on every one of repeated runs inside the full `application::services::run::` filter under parallel load.
 awaiting: user response
 
 ## Tests
@@ -31,7 +31,7 @@ result: pass
 
 ### 4. `cargo test` passes with no network
 expected: In a sandbox with no network (e.g. `unshare -rn` or proxies unset), `cargo test` passes, including `run_api_wiring::tests::build_run_api_persists_*`, which now use a scripted port — no API key, no network, no serial group.
-result: [pending]
+result: pass
 
 ### 5. Cancel test is non-flaky under repeated parallel runs
 expected: `cancel_tests::local_cancel_signals_token` waits on a registration signal (no fixed sleep) and passes on every one of repeated runs inside the full `application::services::run::` filter under parallel load.
@@ -88,9 +88,9 @@ coverage_id: 55-11/D2
 ## Summary
 
 total: 15
-passed: 7
+passed: 8
 issues: 0
-pending: 8
+pending: 7
 skipped: 0
 blocked: 0
 

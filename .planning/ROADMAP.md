@@ -495,7 +495,42 @@ Plans:
   4. The first-run path is walked on the published `0.11.0` crates (README Quick Example → `cargo add` → `basic_paladin`, then `paladin-cli onboarding` and `setup-check` against one real provider key) and every stumble is logged as a finding; the maintainer's local `make coverage` walk of `docs/src/contributing/testing-guide.md` on a Docker-capable machine closes todo `2026-08-13-verify-local-coverage-reproduction` with the measured figure.
   5. Every finding promoted to `in v0.11.1` at severity S1 or S2 is fixed and verified before this phase closes, in plans here or in decimal phases (`56.1`+) inserted once the findings are known; none remains open.
 
-**Plans**: TBD
+**Plans**: 10 plans (Stages A and B; Stage C fix plans are added by a `--gaps` replan from the log)
+
+Plans:
+**Wave 1**
+
+- [ ] 56-01-PLAN.md — offline findings-log checker `scripts/check-findings-log.sh` + fixture harness (in `make test-shell-guards`) and `make check-findings-log`, deliberately outside `check-gates`; red run names DF-01…DF-04 OPEN (DOGF-01)
+- [ ] 56-02-PLAN.md — `config.example.yml` round-trip through `Settings::load_from_file` and `Settings::new` by key-path diff, full fixture + Redis-cadence fixture, drift guard, claimed-complete sections (lead L5), price precision probe (DOGF-03)
+- [ ] 56-03-PLAN.md — Stage B runbooks: coverage walk (proven LF/LH snippet), keyed first-run walk, web3sec relay and triage (DOGF-02, DOGF-04, DOGF-05)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 56-04-PLAN.md — DF-01…DF-04 re-checked on HEAD and closed `in v0.11.1` with pointers to FIRST-01, FIRST-02/03, FIXES-01, TENANT-03..05/07 (DOGF-01)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 56-05-PLAN.md — leads L3 (`paladin` binary logs `Settings` with plaintext API keys), L6 (`Settings::validate()` uncalled at boot) and L4 (dev-UI key unread) reproduced on HEAD and logged; S1/S2 promoted to Stage C (DOGF-01, DOGF-06)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 56-06-PLAN.md — keyless first-run walk on crates.io `0.11.0` (Quick Example → `cargo add` → `basic_paladin` → Quickstart missing-key → CLI install → `setup-check` / `onboarding`), every stumble logged (DOGF-04)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 56-07-PLAN.md — contained S3/S4 docs fixes from the walk (L1 feature name, L2 install line, `paladin-cli` naming, default features, crates.io example note) with proofs (DOGF-04, DOGF-01)
+
+**Wave 6** *(blocked on Wave 5 completion; human-gated)*
+
+- [ ] 56-08-PLAN.md — maintainer's keyed walk (one real OpenAI key) checkpoint, secret scan, triage (DOGF-04)
+
+**Wave 7** *(blocked on Wave 6 completion; human-gated)*
+
+- [ ] 56-09-PLAN.md — maintainer's local `make coverage` walk on Docker, same-commit CI comparison, todo `2026-08-13-verify-local-coverage-reproduction` closed or updated (DOGF-05)
+
+**Wave 8** *(blocked on Wave 7 and on Stage C; human-gated)*
+
+- [ ] 56-10-PLAN.md — web3sec §6 return triaged if relayed; maintainer `checkpoint:decision` (confirm / hold / re-home with owner + date) after Stage C; phase close gate (DOGF-02, DOGF-06, DOGF-01)
 **Scope notes**:
 
 - **Detailed scope is unknown today.** This phase is a fixed frame around unknown content: its plans are written from `.project/v0.11.1/02-dogfood-findings-log.md` once the maintainer's runs and the web3sec return have arrived. Today the log holds only DF-01…DF-04, all pre-seeded from reading the tree and all already owned by earlier phases (DF-01 → FIRST-01, DF-02 → FIRST-02/03, DF-03 → FIXES-01, DF-04 → TENANT-03…05 and TENANT-07), so they are dispositioned here `in v0.11.1` with a pointer to that owner.

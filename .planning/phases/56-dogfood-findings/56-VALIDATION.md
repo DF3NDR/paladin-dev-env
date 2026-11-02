@@ -43,18 +43,21 @@ created: 2026-11-02
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 56-checker | TBD | 1 | DOGF-01 | — | Anchored regexes; no shell interpolation of log content | shell fixture | `./tests/scripts/check-findings-log_test.sh` | ❌ W0 | ⬜ pending |
-| 56-dispositions | TBD | 2 | DOGF-01 | — | N/A | script on real log | `make check-findings-log` | ❌ W0 | ⬜ pending |
-| 56-df-proofs | TBD | 2 | DOGF-01 | — | Re-runs the owners' regression tests (FIRST-01 refusal, TENANT scope) | existing tests + gates | commands in `56-RESEARCH.md` Answer 7 | ✅ | ⬜ pending |
-| 56-roundtrip | TBD | 1 | DOGF-03 | V7/V8 | Failure messages carry key paths, never values; `Settings` is never `{:?}`-printed; fixture creds are fake | integration | `cargo test --test config_example_roundtrip` | ❌ W0 | ⬜ pending |
-| 56-drift-guard | TBD | 1 | DOGF-03 | — | N/A | integration | `cargo test --test config_example_roundtrip` | ❌ W0 | ⬜ pending |
-| 56-walk-keyless | TBD | 2 | DOGF-04 | V8 | Registry source only; no key used | manual evidence + checker | `test -f .planning/phases/56-dogfood-findings/56-FIRST-RUN-WALK.md` + `make check-findings-log` | ❌ W0 | ⬜ pending |
-| 56-walk-keyed | TBD | B | DOGF-04 | V8 | Key only in the maintainer's shell; scratch `.env` deleted | manual | runbook checkpoint | ❌ | ⬜ pending |
-| 56-coverage-walk | TBD | B | DOGF-05 | — | N/A | manual (Docker) | `test -f .planning/todos/completed/2026-08-13-verify-local-coverage-reproduction.md` | ❌ | ⬜ pending |
-| 56-web3sec | TBD | B | DOGF-02 | — | N/A | manual + checker | `make check-findings-log` + grep for owner/date on re-home | ❌ | ⬜ pending |
-| 56-fixes | TBD | C | DOGF-06 | per finding | per finding (e.g. redacting `Debug` for keys, lead L3) | per-fix regression test | each fix's own test + `make api-surface` + `make check-semver` | ❌ Stage C | ⬜ pending |
+| 56-checker | 56-01 (T1-T2) | 1 | DOGF-01 | T-56-01..05 | Anchored regexes; no shell interpolation of log content; never vacuous (`ZERO_ENTRIES`, `UNCLOSED_FENCE`, `UNREADABLE`) | shell fixture | `./tests/scripts/check-findings-log_test.sh` | ❌ W0 | ⬜ pending |
+| 56-roundtrip | 56-02 (T1-T2) | 1 | DOGF-03 | T-56-06..08 | Failure messages carry key paths, never values; `Settings` is never `{:?}`-printed; fixture creds are fake | integration | `cargo test -p paladin-ai --test config_example_roundtrip` | ❌ W0 | ⬜ pending |
+| 56-drift-guard | 56-02 (T3) | 1 | DOGF-03 | T-56-09 | Only `steps: []` may be added to the example (L5) | integration | `cargo test -p paladin-ai --test config_example_roundtrip` | ❌ W0 | ⬜ pending |
+| 56-runbooks | 56-03 (T1-T3) | 1 | DOGF-02, DOGF-04, DOGF-05 | T-56-11..13 | `read -rs` key entry; redaction before paste; W1 empty until relayed | runbook self-check | snippet on synthetic `lcov.info` prints `Lines: 165/200 = 82.50%  (truncated: 82)` | ❌ W0 | ⬜ pending |
+| 56-df-proofs | 56-04 (T1-T2) | 2 | DOGF-01 | T-56-15 | Re-runs the owners' regression tests (FIRST-01 refusal, TENANT scope) | existing tests + gates | commands in `56-RESEARCH.md` Answer 7, each grepped as `<name> ... ok` | ✅ | ⬜ pending |
+| 56-dispositions | 56-04 (T2) | 2 | DOGF-01 | T-56-16 | Append-only (0 deleted log lines) | script on real log | `./scripts/check-findings-log.sh` names none of DF-01…DF-04 | ❌ W0 | ⬜ pending |
+| 56-leads | 56-05 (T1-T2) | 3 | DOGF-01, DOGF-06 | T-56-18..21 | Fake key only; evidence shows `<fake-key>`; L3/L6 logged `open → promote` for Stage C | process probes + checker | `## Lead L3/L4/L6` in `56-DOGFOOD-EVIDENCE.md` + `./scripts/check-findings-log.sh` | ❌ | ⬜ pending |
+| 56-walk-keyless | 56-06 (T1-T2) | 4 | DOGF-04 | T-56-22..25 | Registry source only (cargo metadata source line); no key used | manual evidence + checker | `test -f .planning/phases/56-dogfood-findings/56-FIRST-RUN-WALK.md` + `./scripts/check-findings-log.sh` | ❌ W0 | ⬜ pending |
+| 56-docs-fixes | 56-07 (T1-T3) | 5 | DOGF-04, DOGF-01 | T-56-26..28 | `--locked` install line; frozen records untouched | resolution proof + gates | `make check-version-strings` + `cargo metadata` in scratch | ❌ | ⬜ pending |
+| 56-walk-keyed | 56-08 (T1-T3) | 6 (B) | DOGF-04 | T-56-29..31 | Key only in the maintainer's shell; scratch `.env` deleted; secret scan before commit | manual + scan | runbook checkpoint; 9 K-rows in `## Keyed half (maintainer)` | ❌ | ⬜ pending |
+| 56-coverage-walk | 56-09 (T1-T3) | 7 (B) | DOGF-05 | T-56-32..34 | Same-commit comparison; `int()` truncation | manual (Docker) + gh | `test -f .planning/todos/completed/2026-08-13-verify-local-coverage-reproduction.md` (pass) or `## Update` in the pending todo (fail) | ❌ | ⬜ pending |
+| 56-web3sec | 56-10 (T1-T3) | 8 (B) | DOGF-02, DOGF-06 | T-56-35..37 | No simulated return; maintainer-only decision | manual + checker | `./scripts/check-findings-log.sh` + grep for owner/date on re-home | ❌ | ⬜ pending |
+| 56-fixes | Stage C (`/gsd-plan-phase 56 --gaps`) | C | DOGF-06 | per finding | per finding (e.g. redacting `Debug` for keys, lead L3) | per-fix regression test | each fix's own test + `make api-surface` + `make check-semver` | ❌ Stage C | ⬜ pending |
 
-*Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*. The planner replaces each `TBD` with the actual plan id.
+*Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*. Plan ids filled in by the planner (2026-11-02). Stage C plans are written later from the log (D-06, D-07).
 
 ---
 

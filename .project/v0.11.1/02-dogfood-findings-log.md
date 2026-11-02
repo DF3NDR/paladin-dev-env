@@ -224,3 +224,43 @@ promoted.
 - **Severity:** S3 (misleading config, D-04)
 - **Related:** lead L4 (56-RESEARCH.md); DOGF-03
 - **Disposition:** in v0.11.1 — fixed in plan 56-05: the example's web_server comment says no shipped binary mounts the inspector; wiring it would be a new route (out, D-00d)
+
+### DF-10 — The published README's `[dependencies]` snippet resolves to `paladin-ai 0.5.1`, not the release the reader is looking at
+- **Found:** 2026-11-02 · **By:** Claude (Phase 56, plan 56-06) · **Surface:** docs
+- **Version:** 0.11.0 (published crate)
+- **What happened:** a new user copies the Getting Started block of the README that crates.io shows for
+  `paladin-ai 0.11.0` into a fresh crate and resolves it. The snippet's `0.5` requirement picks `0.5.1`, six minor
+  releases behind the page they read it on, and the same README says `Current version: **0.8.0**`:
+  ```
+  paladin-ai = "0.5"                      # default features: ["llm-openai"]
+  Adding paladin-ai v0.5.1 (available: v0.11.0)
+  Current version: **0.8.0**.
+  ```
+  `cargo metadata` on the scratch crate printed `paladin-ai 0.5.1 registry+https://github.com/rust-lang/crates.io-index`.
+  HEAD's README pins `0.11.0` and says `Current version: **0.11.0**` (Phase 54, FIRST-02), so this is DF-02's defect
+  as a published-crate reader meets it (D-00e).
+- **Expected:** the snippet resolves to the release being read (`0.11.0`).
+- **Repro:** scratch crate outside any repository; replace `[dependencies]` with the block from
+  `~/.cargo/registry/src/*/paladin-ai-0.11.0/README.md` (or `git show v0.11.0:README.md`); run
+  `cargo metadata --format-version 1` and read the `paladin-ai` package version.
+- **Severity:** S3
+- **Related:** DF-02; step 2 of `56-FIRST-RUN-WALK.md`
+- **Disposition:** duplicate of DF-02
+
+### DF-11 — README's `# default features: ["llm-openai"]` comment names one of the three default features
+- **Found:** 2026-11-02 · **By:** Claude (Phase 56, plan 56-06) · **Surface:** docs
+- **Version:** 0.11.0 (published crate; also HEAD a39a338dd)
+- **What happened:** the Getting Started snippet comments `# default features: ["llm-openai"]`. The package's
+  `default` feature is `["llm-openai", "llm-anthropic", "llm-deepseek"]` (published `Cargo.toml` line 77; HEAD root
+  manifest the same), and `cargo add paladin-ai@0.11.0` printed all three as enabled:
+  ```
+             + llm-anthropic
+             + llm-deepseek
+             + llm-openai
+  ```
+  A reader who relies on the comment to trim compile time (`default-features = false`) learns the wrong set.
+- **Expected:** the comment lists all three defaults.
+- **Repro:** `grep -n 'default features' README.md`, then `sed -n '/^default = \[/,/\]/p' Cargo.toml`.
+- **Severity:** S4 (hygiene, D-04: nothing breaks; the reader only compiles more than they thought)
+- **Related:** step 2 of `56-FIRST-RUN-WALK.md`; the same comment in `docs/src/api-reference/crate-map.md`
+- **Disposition:** open → **in v0.11.1** (contained docs fix: plan 56-07)

@@ -3,16 +3,16 @@ status: testing
 phase: 55-correctness-fixes-test-hygiene-lint-bar
 source: [55-01-SUMMARY.md, 55-02-SUMMARY.md, 55-03-SUMMARY.md, 55-04-SUMMARY.md, 55-05-SUMMARY.md, 55-06-SUMMARY.md, 55-07-SUMMARY.md, 55-08-SUMMARY.md, 55-09-SUMMARY.md, 55-10-SUMMARY.md, 55-11-SUMMARY.md, 55-12-SUMMARY.md, 55-13-SUMMARY.md]
 started: 2026-11-02T01:40:47Z
-updated: 2026-11-02T02:04:45Z
+updated: 2026-11-02T02:06:06Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 5
-name: Cancel test is non-flaky under repeated parallel runs
+number: 6
+name: `paladin-llm` single-feature clippy is warning-free
 expected: |
-  `cancel_tests::local_cancel_signals_token` waits on a registration signal (no fixed sleep) and passes on every one of repeated runs inside the full `application::services::run::` filter under parallel load.
+  `cargo clippy -p paladin-llm --tests --no-default-features --features <each single feature> -- -D warnings` (and default features) is clean for all combinations, with cfg gates and no new `allow`.
 awaiting: user response
 
 ## Tests
@@ -35,7 +35,7 @@ result: pass
 
 ### 5. Cancel test is non-flaky under repeated parallel runs
 expected: `cancel_tests::local_cancel_signals_token` waits on a registration signal (no fixed sleep) and passes on every one of repeated runs inside the full `application::services::run::` filter under parallel load.
-result: [pending]
+result: pass
 
 ### 6. `paladin-llm` single-feature clippy is warning-free
 expected: `cargo clippy -p paladin-llm --tests --no-default-features --features <each single feature> -- -D warnings` (and default features) is clean for all combinations, with cfg gates and no new `allow`.
@@ -88,9 +88,9 @@ coverage_id: 55-11/D2
 ## Summary
 
 total: 15
-passed: 8
+passed: 9
 issues: 0
-pending: 7
+pending: 6
 skipped: 0
 blocked: 0
 

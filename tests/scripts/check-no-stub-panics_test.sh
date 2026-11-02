@@ -509,6 +509,17 @@ assert_fire "${FX}" "todo! or unimplemented ! handed to a macro with no delimite
     "crates/x/src/lib.rs:2: todo! (passed to a macro as an identifier) outside #[cfg(test)]" \
     "crates/x/src/lib.rs:3: unimplemented! (passed to a macro as an identifier) outside #[cfg(test)]"
 
+# A path whose last segment is the macro (`core::todo`, not followed by `::`)
+# is the macro to a matcher that pastes it before a `!` (WR-03, round 5).
+fresh stub-ident-path-last-segment
+printf '%s\n' \
+    'macro_rules! call { ($($p:tt)*) => { $($p)*!() }; }' \
+    'pub fn f() -> u8 { call!(core::todo) }' \
+    'pub fn g() -> u8 { call!(::core::unimplemented) }' >"${FX}/crates/x/src/lib.rs"
+assert_fire "${FX}" "a path ending in todo or unimplemented handed to a macro is reported" \
+    "crates/x/src/lib.rs:2: todo! (passed to a macro as an identifier) outside #[cfg(test)]" \
+    "crates/x/src/lib.rs:3: unimplemented! (passed to a macro as an identifier) outside #[cfg(test)]"
+
 fresh root-package
 printf '[package]\nname = "rootpkg"\nversion = "0.1.0"\n' >"${FX}/Cargo.toml"
 mkdir -p "${FX}/src"

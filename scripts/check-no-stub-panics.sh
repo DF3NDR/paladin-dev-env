@@ -101,13 +101,19 @@
 #
 # Renamed and indirect calls: a `use` declaration that renames the macro
 # (`use core::todo as later;`, `use std::{unimplemented as nope}`) is a finding
-# at the rename, and so is the bare identifier `todo` or `unimplemented` inside
-# a macro invocation's tokens or a `macro_rules!` body (`call!(todo)`, whose
-# macro may expand `$m!()`), each named in the finding line. A path segment, a
-# field or a `$todo` metavariable is not the macro. Strict by design: a local
-# variable named `todo` handed to a macro (`println!("{}", todo)`) is reported
-# too; rename it. A call built some other way (a proc macro, `concat_idents!`)
-# is beyond a lexical gate.
+# at the rename, and so is the identifier `todo` or `unimplemented` inside a
+# macro invocation's tokens or a `macro_rules!` body, whatever token follows it
+# (`call!(todo)`, `call!(todo now)`, `call!(todo 1)`, `call!(todo!)`) and also
+# as the last segment of a path (`call!(core::todo)`): the macro may build
+# `$m!()` from it. Each is named in the finding line. Inside macro tokens only
+# four shapes are not read as the macro: a `$todo` metavariable, a field or
+# method after `.` (`t.todo`), a path segment followed by `::`
+# (`crate::todo::f`) and a name followed by a single `:` (`todo: u8`). These
+# are residual limits, not proofs: a matcher that takes such tokens apart
+# (`($p:ident :: $f:ident) => { $p!() }` on `call!(todo::f)`) builds the call
+# and is not reported. Strict by design: a local variable named `todo` handed
+# to a macro (`println!("{}", todo)`) is reported too; rename it. A call built
+# some other way (a proc macro, `concat_idents!`) is beyond a lexical gate.
 #
 # There is NO exemption list, no inline allow marker, no environment switch and
 # no path filter (D-01). To clear a finding, replace the stub with a typed `Err`
@@ -150,10 +156,12 @@ root = os.path.abspath(sys.argv[1])
 # `my_todo!` and `unimplemented_x!` out.
 STUB = re.compile(r'\b(todo|unimplemented)\s*!\s*[\(\[{]')
 # The same macros under another name: a `use` declaration that renames one
-# (`use core::todo as later;`), and the bare identifier handed to a macro,
-# which can build the call from it (`call!(todo)` expanding `$m!()`). A path
-# segment (`crate::todo::f`, `todo::f`), a field (`t.todo`, `todo: u8`) or a
-# `$todo` metavariable is not the macro.
+# (`use core::todo as later;`), and the identifier handed to a macro, which can
+# build the call from it (`call!(todo)` expanding `$m!()`), also as a path's
+# last segment (`call!(core::todo)`). A path segment followed by `::`
+# (`crate::todo::f`), a field or method after `.` (`t.todo`), a name followed by
+# a single `:` (`todo: u8`) and a `$todo` metavariable are not read as the
+# macro (residual limits, see the header).
 USE_DECL = re.compile(r'(?<![\w$])use\b[^;]*;')
 STUB_RENAME = re.compile(r'(?<![\w$])(todo|unimplemented)\s+as\b')
 # An identifier or a literal after the name does not clear it: a matcher such as
@@ -161,7 +169,7 @@ STUB_RENAME = re.compile(r'(?<![\w$])(todo|unimplemented)\s+as\b')
 # `!` with no delimiter after it (`($m:ident !) => { $m!() }` and
 # `call!(todo!)`); a `todo!(` that STUB also matches is deduplicated by offset.
 # `\b` already keeps `todo_x` out.
-STUB_IDENT = re.compile(r'(?<![\w$.:])(todo|unimplemented)\b(?!\s*[:.])')
+STUB_IDENT = re.compile(r'(?<![\w$.])(todo|unimplemented)\b(?!\s*[:.])')
 RENAMED = " (renamed by use ... as)"
 MACRO_TOKEN = " (passed to a macro as an identifier)"
 # The two exempt attribute forms: cfg(test) and cfg(all(test, ...)).

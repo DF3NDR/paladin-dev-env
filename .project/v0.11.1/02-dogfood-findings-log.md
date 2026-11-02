@@ -82,6 +82,7 @@ promoted.
 - **Severity:** S2
 - **Related:** inventory B2, G3 (same unfinished subsystem)
 - **Disposition:** open → recommend **in v0.11.1** (remove or return `Err`; do not finish the feature)
+- **Disposition (2026-11-02):** in v0.11.1 — fixed by FIXES-01 (Phase 55): file deleted and the stub-panic gate holds; proof: make check-no-stub-panics (0 findings) and tests/scripts/check-no-stub-panics_test.sh, re-run green on 6212e3ecf (56-DOGFOOD-EVIDENCE.md)
 
 ### DF-04 — Cross-tenant thread access through `/v1/threads/*`, run submission and fork
 - **Found:** Phase 40 review (2026-09-29), never dispositioned · **By:** code review · **Surface:** server

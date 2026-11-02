@@ -3,16 +3,16 @@ status: testing
 phase: 55-correctness-fixes-test-hygiene-lint-bar
 source: [55-01-SUMMARY.md, 55-02-SUMMARY.md, 55-03-SUMMARY.md, 55-04-SUMMARY.md, 55-05-SUMMARY.md, 55-06-SUMMARY.md, 55-07-SUMMARY.md, 55-08-SUMMARY.md, 55-09-SUMMARY.md, 55-10-SUMMARY.md, 55-11-SUMMARY.md, 55-12-SUMMARY.md, 55-13-SUMMARY.md]
 started: 2026-11-02T01:40:47Z
-updated: 2026-11-02T02:06:06Z
+updated: 2026-11-02T02:06:34Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 6
-name: `paladin-llm` single-feature clippy is warning-free
+number: 7
+name: Content-processing stubs refuse instead of faking results
 expected: |
-  `cargo clippy -p paladin-llm --tests --no-default-features --features <each single feature> -- -D warnings` (and default features) is clean for all combinations, with cfg gates and no new `allow`.
+  `FileContentFetcher::ingest_content` returns an `Err` saying ingestion is unfinished and nothing was stored (URL validation errors still come first). Autonomous planning (`MaxLoops::Auto`) builds subtasks with an empty `expected_output`, and the subtask prompt omits the `EXPECTED OUTPUT` line; a caller-supplied expected output renders exactly as before.
 awaiting: user response
 
 ## Tests
@@ -39,7 +39,7 @@ result: pass
 
 ### 6. `paladin-llm` single-feature clippy is warning-free
 expected: `cargo clippy -p paladin-llm --tests --no-default-features --features <each single feature> -- -D warnings` (and default features) is clean for all combinations, with cfg gates and no new `allow`.
-result: [pending]
+result: pass
 
 ### 7. Content-processing stubs refuse instead of faking results
 expected: `FileContentFetcher::ingest_content` returns an `Err` saying ingestion is unfinished and nothing was stored (URL validation errors still come first). Autonomous planning (`MaxLoops::Auto`) builds subtasks with an empty `expected_output`, and the subtask prompt omits the `EXPECTED OUTPUT` line; a caller-supplied expected output renders exactly as before.
@@ -88,9 +88,9 @@ coverage_id: 55-11/D2
 ## Summary
 
 total: 15
-passed: 9
+passed: 10
 issues: 0
-pending: 6
+pending: 5
 skipped: 0
 blocked: 0
 

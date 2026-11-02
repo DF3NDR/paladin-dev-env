@@ -1,0 +1,263 @@
+# Phase 56 Runbook: keyed first-run walk (DOGF-04, D-13, D-14)
+
+Stage B runbook. It needs one real OpenAI API key and a machine that can compile Rust against
+crates.io. The agent has already run (or will run, in plan 56-06) the keyless half. This is the
+half that needs a key. Paste slots `K1`..`K9` at the end are read by plan 56-08.
+
+## Purpose and decision
+
+- **Requirement:** DOGF-04. Walk the first-run path on the published `0.11.0` crates and log every
+  stumble.
+- **Decision D-13:** the walk uses the crates.io `0.11.0` packages in a scratch crate outside any
+  repository. Never a path dependency, never `[patch]`, never a workspace checkout. Steps follow
+  the README and the Quickstart in order.
+- **Decision D-14:** the keyed half is yours. The key never enters the repo, a log, a slot or a file
+  that survives the walk. The provider is OpenAI, the one the README Quick Example names in its
+  "for real use" line (`OpenAIAdapter::from_env()?`) and onboarding's first option. An extra
+  provider key (Anthropic, DeepSeek) is optional and handled the same way.
+
+## Before you start
+
+You need a Rust toolchain, network access to crates.io, and a few GB of free disk. Run these in one
+shell and keep that shell open for the whole walk, because the key lives only in its environment.
+
+1. Make the scratch directory and keep every build output inside it:
+
+   ```bash
+   WALK=$(mktemp -d) && cd "$WALK"
+   export CARGO_TARGET_DIR="$WALK/target"
+   ```
+
+2. Check that the scratch directory is outside any git repository. This command must print
+   nothing and the message must NOT appear:
+
+   ```bash
+   if git -C "$WALK" rev-parse --show-toplevel 2>/dev/null; then echo "STOP: $WALK is inside a git repository"; fi
+   ```
+
+   If `STOP` appears, `rm -rf "$WALK"` and start again somewhere else.
+3. Enter the key with no echo, so it is never in shell history, a file or a command line:
+
+   ```bash
+   read -rs OPENAI_API_KEY && export OPENAI_API_KEY
+   ```
+
+   Press Enter once after pasting. Nothing is displayed. Then run `echo` to get a fresh line.
+4. Define the redaction filter used by every paste (see `## Redaction`):
+
+   ```bash
+   redact() { sed -E 's/(sk-[A-Za-z0-9_-]{4})[A-Za-z0-9_-]+/\1REDACTED/g; s/(API_KEY=)[^[:space:]]+/\1REDACTED/g'; }
+   ```
+
+5. Record the environment into slot `K1`:
+
+   ```bash
+   { rustc -V; cargo -V; date -u +%FT%TZ; uname -srm; } | redact
+   ```
+
+## Steps
+
+Run every step in `$WALK` unless it says otherwise. Pipe the output of each step through `redact`
+before pasting it into the named slot. Paste verbatim; do not tidy.
+
+1. **K2: the Quickstart, as written.**
+
+   ```bash
+   cargo new my-paladin-agent && cd my-paladin-agent
+   ```
+
+   Print the Quickstart exactly as it was at the release tag. Use a checkout you already have,
+   read-only, and do not `cd` into it:
+
+   ```bash
+   git -C /path/to/paladin-dev-env show v0.11.0:docs/src/getting-started/quickstart.md
+   ```
+
+   Copy its `[dependencies]` block into `Cargo.toml` and its `main.rs` into `src/main.rs`, exactly
+   as printed. If the printed block names a version other than `0.11.0` (the research found the
+   tag's Quickstart may still say `0.10.0`), that is a stumble for `K9`: use `0.11.0` for the three
+   `paladin-*` crates so the walk stays on the published release, and say you changed it. Then:
+
+   ```bash
+   cargo run 2>&1 | redact | tail -40; echo "exit=${PIPESTATUS[0]}"
+   ```
+
+   Paste the output and the exit code into `K2`, plus the dependency block you actually used.
+2. **K3: trace watch-list.** The scoping notes ask whether `paladin.unprofiled_model` or
+   `paladin.usage_unreconciled` fire on the README provider. Run the same binary again:
+
+   ```bash
+   RUST_LOG=info cargo run 2>&1 | redact | grep -E 'unprofiled_model|usage_unreconciled'
+   ```
+
+   Paste each match, or the word `none`. The Quickstart `main.rs` may install no tracing
+   subscriber, in which case `RUST_LOG` has no effect and `none` proves nothing. Say in `K3`
+   whether the program printed any log lines at all. If you add a `tracing-subscriber` call to see
+   the events, that is a change to the walk: name it in `K3`.
+3. **K4: install the CLI.** The CLI ships inside the `paladin-ai` package behind the `cli` feature.
+
+   ```bash
+   cargo install paladin-ai --version 0.11.0 --features cli --locked --bin paladin-cli --root "$WALK/cli" 2>&1 | redact | tail -20; echo "exit=${PIPESTATUS[0]}"
+   ```
+
+   Paste the last 20 lines and the exit code. If the README or docs gave you a different install
+   command, try that one first, paste its failure, and then use the line above. That sequence is
+   itself a stumble for `K9`.
+4. **K5: version.**
+
+   ```bash
+   "$WALK/cli/bin/paladin-cli" --version
+   ```
+5. **K6: onboarding.** Run in `$WALK` (it writes into the current directory; see traps):
+
+   ```bash
+   "$WALK/cli/bin/paladin-cli" onboarding
+   ```
+
+   Choose OpenAI. At the hidden password prompt, paste the key. Paste the prompts and everything
+   printed into `K6`, redacted. Do not `cat` the `.env` it writes. List what it created instead:
+
+   ```bash
+   ls -la "$WALK" "$WALK/examples" 2>&1 | redact
+   ```
+
+   Onboarding validates the key against the provider, so this step makes a real network call.
+6. **K7: setup-check.**
+
+   ```bash
+   "$WALK/cli/bin/paladin-cli" setup-check 2>&1 | redact; echo "exit=${PIPESTATUS[0]}"
+   "$WALK/cli/bin/paladin-cli" setup-check --verbose 2>&1 | redact; echo "exit=${PIPESTATUS[0]}"
+   ```
+
+   Paste both outputs and both exit codes.
+7. **K8 (optional): Anthropic row.** If you have an Anthropic key, enter it the same way
+   (`read -rs ANTHROPIC_API_KEY && export ANTHROPIC_API_KEY`), rerun
+   `"$WALK/cli/bin/paladin-cli" setup-check 2>&1 | redact`, and paste the Anthropic row. Note
+   whether the validator's hard-coded model `claude-3-haiku-20240307` (research lead L8) still
+   answers or comes back as a model-not-found error. If you have no Anthropic key, write
+   `skipped` in `K8`.
+8. **K9: stumbles.** One bullet per step that did not read as written, for example an error
+   message, a doc step that is missing, docs saying `paladin onboarding` where the binary is
+   `paladin-cli`, or a reasoning-effort refusal that does not name its config key. Quote the
+   verbatim text in a code block under the bullet, redacted.
+
+## Traps to record
+
+- **Onboarding writes into the current directory.** It creates `.env` (with your key in it) and an
+  `examples/` directory of sample agent YAML files in `$WALK`. That is why the walk runs in a
+  scratch directory and why `## Cleanup` deletes `.env` first. If `.env` already exists onboarding
+  asks overwrite, skip or merge; record which prompt you saw.
+- **A pro-tier OpenAI model returning 404** is logged as a finding and dispositioned
+  `out (milestone decision 2026-10-27; todo 2026-10-20-openai-responses-api-for-pro-tier)`, per
+  the Deferred section of `56-CONTEXT.md`. Do not work around it.
+- **Disk.** A release build of the CLI needs several GB. `CARGO_TARGET_DIR="$WALK/target"` (set in
+  `## Before you start`) puts it inside the scratch directory so it is removed with it. If you
+  open a new shell mid-walk, set it again.
+
+## Redaction
+
+Run before pasting anything, on everything:
+
+```bash
+sed -E 's/(sk-[A-Za-z0-9_-]{4})[A-Za-z0-9_-]+/\1REDACTED/g'
+```
+
+(the `redact` function above is this plus a second expression for `*_API_KEY=` assignments).
+
+- Never paste `.env`. Never `cat` it.
+- Keys never go on a command line. Use `read -rs` for every key.
+- Never put a key in a file you keep, or in any paste slot.
+- Before you paste, scan the text once for `sk-` followed by 20 or more key characters. If you
+  find one, redact by hand. The agent scans every slot again before committing and stops the
+  plan on any hit.
+
+## Cleanup
+
+Do this as soon as the last step is done, even if the walk failed part-way:
+
+```bash
+shred -u "$WALK/.env" 2>/dev/null || rm -f "$WALK/.env"
+unset OPENAI_API_KEY ANTHROPIC_API_KEY
+cd / && rm -rf "$WALK"
+test ! -e "$WALK" && echo cleaned
+```
+
+The `shred` line falls back to `rm -f "$WALK/.env"` where `shred` is not available. Paste the last
+line (`cleaned`) into `K9`. If you opened extra shells that exported a key, close them.
+
+## Verified by the keyless half
+
+<!-- filled by plan 56-06 with the commands the agent ran keyless, and any correction to the steps above -->
+
+## Paste slots
+
+Fill these in place, after redaction. Each has an HTML comment marking where to paste, then an
+empty fenced block.
+
+### K1 — environment
+
+<!-- paste below this line; redacted -->
+```
+```
+
+### K2 — Quickstart run
+
+<!-- paste below this line; redacted -->
+```
+```
+
+### K3 — trace watch-list matches
+
+<!-- paste below this line; redacted -->
+```
+```
+
+### K4 — CLI install
+
+<!-- paste below this line; redacted -->
+```
+```
+
+### K5 — CLI version
+
+<!-- paste below this line; redacted -->
+```
+```
+
+### K6 — onboarding
+
+<!-- paste below this line; redacted -->
+```
+```
+
+### K7 — setup-check
+
+<!-- paste below this line; redacted -->
+```
+```
+
+### K8 — Anthropic row (optional)
+
+<!-- paste below this line; redacted -->
+```
+```
+
+### K9 — stumbles, and the cleanup line
+
+<!-- paste below this line; redacted -->
+```
+```
+
+## Triage checklist
+
+For plan 56-08. Start only from the filled slots.
+
+- [ ] Scan every slot with the secret pattern from `## Redaction` (`sk-[A-Za-z0-9_-]{20,}`, and
+  any `API_KEY=` line with a value other than `REDACTED`) **before committing anything**. A hit
+  stops the plan and goes back to the maintainer. It is never committed, and the maintainer
+  should rotate that key.
+- [ ] Log each `K9` stumble and each watch-list hit in `K3` as a DF with `**By:** maintainer`.
+  Grade it under D-04, re-check it on HEAD (D-00e) and disposition it under D-05. Entries must
+  parse under `make check-findings-log`; the next free id is the one after the last
+  `### DF-nn` in `.project/v0.11.1/02-dogfood-findings-log.md`.
+- [ ] Copy the redacted outputs into `56-FIRST-RUN-WALK.md` under `## Keyed half (maintainer)`.

@@ -485,6 +485,19 @@ printf '%s\n' \
 assert_fire "${FX}" "todo handed to a macro as a bare identifier is reported" \
     "crates/x/src/lib.rs:2: todo! (passed to a macro as an identifier) outside #[cfg(test)]"
 
+# The bare identifier followed by another token is still the macro's name to a
+# matcher that takes it apart (`($m:ident $x:ident) => { $m!() }`): an
+# identifier or a literal after it does not clear it (WR-03, round 5).
+fresh stub-ident-before-token
+printf '%s\n' \
+    'macro_rules! call { ($m:ident $x:ident) => { $m!() }; }' \
+    'macro_rules! lit { ($m:ident $x:literal) => { $m!() }; }' \
+    'pub fn f() -> u8 { call!(todo now) }' \
+    'pub fn g() -> u8 { lit!(unimplemented 1) }' >"${FX}/crates/x/src/lib.rs"
+assert_fire "${FX}" "todo or unimplemented handed to a macro before an identifier or a literal is reported" \
+    "crates/x/src/lib.rs:3: todo! (passed to a macro as an identifier) outside #[cfg(test)]" \
+    "crates/x/src/lib.rs:4: unimplemented! (passed to a macro as an identifier) outside #[cfg(test)]"
+
 fresh root-package
 printf '[package]\nname = "rootpkg"\nversion = "0.1.0"\n' >"${FX}/Cargo.toml"
 mkdir -p "${FX}/src"

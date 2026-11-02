@@ -156,7 +156,10 @@ STUB = re.compile(r'\b(todo|unimplemented)\s*!\s*[\(\[{]')
 # `$todo` metavariable is not the macro.
 USE_DECL = re.compile(r'(?<![\w$])use\b[^;]*;')
 STUB_RENAME = re.compile(r'(?<![\w$])(todo|unimplemented)\s+as\b')
-STUB_IDENT = re.compile(r'(?<![\w$.:])(todo|unimplemented)\b(?!\s*[!:.\w])')
+# An identifier or a literal after the name does not clear it: a matcher such as
+# `($m:ident $x:ident) => { $m!() }` takes `call!(todo now)` apart. `\b`
+# already keeps `todo_x` out.
+STUB_IDENT = re.compile(r'(?<![\w$.:])(todo|unimplemented)\b(?!\s*[!:.])')
 RENAMED = " (renamed by use ... as)"
 MACRO_TOKEN = " (passed to a macro as an identifier)"
 # The two exempt attribute forms: cfg(test) and cfg(all(test, ...)).
@@ -653,9 +656,14 @@ def analyse(raw, blanked):
         for m in STUB_IDENT.finditer(blanked)
         if in_groups(groups, m.start())
     ]
+    # One finding per token: a `todo` that two rules match (a rename inside
+    # macro tokens) keeps the first label, direct, then renamed, then token.
+    first = {}
+    for at, macro, how in found:
+        first.setdefault(at, (macro, how))
     hits = [
         (blanked.count("\n", 0, at) + 1, macro, how)
-        for at, macro, how in found
+        for at, (macro, how) in sorted(first.items())
         if not any(a <= at <= z for a, z in spans)
     ]
     return hits, decls

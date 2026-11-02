@@ -500,7 +500,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 56-01-PLAN.md — offline findings-log checker `scripts/check-findings-log.sh` + fixture harness (in `make test-shell-guards`) and `make check-findings-log`, deliberately outside `check-gates`; red run names DF-01…DF-04 OPEN (DOGF-01)
+- [x] 56-01-PLAN.md — offline findings-log checker `scripts/check-findings-log.sh` + fixture harness (in `make test-shell-guards`) and `make check-findings-log`, deliberately outside `check-gates`; red run names DF-01…DF-04 OPEN (DOGF-01)
 - [ ] 56-02-PLAN.md — `config.example.yml` round-trip through `Settings::load_from_file` and `Settings::new` by key-path diff, full fixture + Redis-cadence fixture, drift guard, claimed-complete sections (lead L5), price precision probe (DOGF-03)
 - [ ] 56-03-PLAN.md — Stage B runbooks: coverage walk (proven LF/LH snippet), keyed first-run walk, web3sec relay and triage (DOGF-02, DOGF-04, DOGF-05)
 
@@ -531,6 +531,7 @@ Plans:
 **Wave 8** *(blocked on Wave 7 and on Stage C; human-gated)*
 
 - [ ] 56-10-PLAN.md — web3sec §6 return triaged if relayed; maintainer `checkpoint:decision` (confirm / hold / re-home with owner + date) after Stage C; phase close gate (DOGF-02, DOGF-06, DOGF-01)
+
 **Scope notes**:
 
 - **Detailed scope is unknown today.** This phase is a fixed frame around unknown content: its plans are written from `.project/v0.11.1/02-dogfood-findings-log.md` once the maintainer's runs and the web3sec return have arrived. Today the log holds only DF-01…DF-04, all pre-seeded from reading the tree and all already owned by earlier phases (DF-01 → FIRST-01, DF-02 → FIRST-02/03, DF-03 → FIXES-01, DF-04 → TENANT-03…05 and TENANT-07), so they are dispositioned here `in v0.11.1` with a pointer to that owner.

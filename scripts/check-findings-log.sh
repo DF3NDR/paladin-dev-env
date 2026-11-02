@@ -93,6 +93,10 @@ ANY_HEAD_RE = re.compile(r"^#{1,3} ")
 BULLET_RE = re.compile(r"^- \*\*Disposition(?: \(([^)]*)\))?:\*\*\s*(.*)$")
 OPEN_RE = re.compile(r"^open\b")
 IN_RE = re.compile(r"^in v0\.11\.1\b(.*)$", re.DOTALL)
+OUT_RE = re.compile(r"^out\b(.*)$", re.DOTALL)
+OUT_REASON_RE = re.compile(r"^\((.+)\)", re.DOTALL)  # greedy: nested parentheses work
+DUP_RE = re.compile(r"^duplicate of\b(.*)$", re.DOTALL)
+DUP_TARGET_RE = re.compile(r"^DF-(\d+)\b")
 POINTER_STRIP = " \t*`—–-:;,"
 
 
@@ -130,11 +134,14 @@ except (OSError, UnicodeDecodeError) as exc:
 entries = []  # dicts: id, line, bullets [(line, value)]
 current = None
 in_fence = False
+fence_opened_at = 0
 continuing = False  # the previous line belonged to the last disposition bullet
 
 for lineno, line in enumerate(text.splitlines(), start=1):
     if line.strip().startswith(FENCE):
         in_fence = not in_fence
+        if in_fence:
+            fence_opened_at = lineno
         continuing = False
         continue
     if in_fence:
@@ -143,7 +150,8 @@ for lineno, line in enumerate(text.splitlines(), start=1):
         continuing = False
         head = HEAD_RE.match(line)
         if head:
-            current = {"id": head.group(1), "line": lineno, "bullets": []}
+            current = {"id": head.group(1), "num": int(head.group(2)), "line": lineno,
+                       "bullets": []}
             entries.append(current)
         else:
             current = None
@@ -161,8 +169,24 @@ for lineno, line in enumerate(text.splitlines(), start=1):
         continue
     continuing = False
 
-# --- Pass 2: classify each entry's last disposition bullet. ---
+# --- Pass 2: ids. A repeat is DUPLICATE_ID (which wins over NOT_INCREASING);
+# a value lower than the previous heading's, never seen before, is NOT_INCREASING. ---
 findings = []  # (line, token, entry id, hint)
+known_ids = {entry["num"] for entry in entries}
+seen_ids = set()
+previous = None
+for entry in entries:
+    if entry["num"] in seen_ids:
+        findings.append((entry["line"], "DUPLICATE_ID", entry["id"],
+                         "this id already heads an earlier entry (ids compare as integers)"))
+    elif previous is not None and entry["num"] < previous:
+        findings.append((entry["line"], "NOT_INCREASING", entry["id"],
+                         "ids must increase down the log; this one is lower than the entry above"))
+    seen_ids.add(entry["num"])
+    previous = entry["num"]
+
+# --- Pass 3: classify each entry's last disposition bullet. The duplicate-of
+# target is resolved against the full id set from pass 1. ---
 for entry in entries:
     if not entry["bullets"]:
         findings.append((entry["line"], "MISSING", entry["id"],
@@ -180,6 +204,21 @@ for entry in entries:
             findings.append((line, "NO_POINTER", entry["id"],
                              "'in v0.11.1' must name its evidence"))
         continue
+    outed = OUT_RE.match(value)
+    if outed:
+        reason = OUT_REASON_RE.match(outed.group(1).lstrip("*` \t"))
+        if not reason or not reason.group(1).strip():
+            findings.append((line, "BAD_OUT", entry["id"],
+                             "'out' needs a non-blank reason in parentheses: out (<reason>)"))
+        continue
+    duplicate = DUP_RE.match(value)
+    if duplicate:
+        target = DUP_TARGET_RE.match(duplicate.group(1).lstrip("*` \t"))
+        if (not target or int(target.group(1)) == entry["num"]
+                or int(target.group(1)) not in known_ids):
+            findings.append((line, "BAD_DUP_TARGET", entry["id"],
+                             "'duplicate of' must name a different entry present in this log"))
+        continue
     findings.append((line, "UNRECOGNISED", entry["id"],
                      "not 'in v0.11.1 — <pointer>', 'out (<reason>)' or 'duplicate of DF-nn'"))
 
@@ -187,6 +226,10 @@ findings.sort(key=lambda f: (f[0], f[1]))
 
 # --- Named failures, in status-line priority order. ---
 named = []  # (token, detail line)
+if in_fence:
+    named.append(("UNCLOSED_FENCE",
+                  f"UNCLOSED_FENCE: the code fence opened at {shown}:{fence_opened_at} is "
+                  "never closed, so everything after it was ignored."))
 if not entries:
     named.append(("ZERO_ENTRIES",
                   f"ZERO_ENTRIES: no '### DF-nn' entry found outside a code fence in "

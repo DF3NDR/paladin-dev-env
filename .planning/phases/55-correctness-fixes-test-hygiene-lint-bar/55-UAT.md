@@ -3,16 +3,16 @@ status: testing
 phase: 55-correctness-fixes-test-hygiene-lint-bar
 source: [55-01-SUMMARY.md, 55-02-SUMMARY.md, 55-03-SUMMARY.md, 55-04-SUMMARY.md, 55-05-SUMMARY.md, 55-06-SUMMARY.md, 55-07-SUMMARY.md, 55-08-SUMMARY.md, 55-09-SUMMARY.md, 55-10-SUMMARY.md, 55-11-SUMMARY.md, 55-12-SUMMARY.md, 55-13-SUMMARY.md]
 started: 2026-11-02T01:40:47Z
-updated: 2026-11-02T02:13:30Z
+updated: 2026-11-02T02:14:26Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 10
-name: `doc-coverage-report.md` reads as an adequate release-review record
+number: 11
+name: Release records cover every Phase 55 behaviour change
 expected: |
-  The regenerated page reads as a dated measurement record at `14ee125e7`: the two bars and their commands, the twelve `missing_docs` roots and the eight removed suppressions, with no >= 90% figure. (55-11 D3 — reader judgment; `make check-doc-config` and `make check-version-strings` pass.)
+  CHANGELOGs (incl. a new `paladin-storage` `[Unreleased]` anchor), `MIGRATION.md` rows M-B-30..M-B-35, the section 11.6 paragraph and section 11.8 step 6 read correctly to a consumer/operator, and `55-BASE-LAYER-REVIEW.md` gives a keep/fence decision with evidence for each of the 8 items.
 awaiting: user response
 
 ## Tests
@@ -55,7 +55,7 @@ result: pass
 
 ### 10. `doc-coverage-report.md` reads as an adequate release-review record
 expected: The regenerated page reads as a dated measurement record at `14ee125e7`: the two bars and their commands, the twelve `missing_docs` roots and the eight removed suppressions, with no >= 90% figure. (55-11 D3 — reader judgment; `make check-doc-config` and `make check-version-strings` pass.)
-result: [pending]
+result: pass
 
 ### 11. Release records cover every Phase 55 behaviour change
 expected: CHANGELOGs (incl. a new `paladin-storage` `[Unreleased]` anchor), `MIGRATION.md` rows M-B-30..M-B-35, the section 11.6 paragraph and section 11.8 step 6 read correctly to a consumer/operator, and `55-BASE-LAYER-REVIEW.md` gives a keep/fence decision with evidence for each of the 8 items.
@@ -88,9 +88,9 @@ coverage_id: 55-11/D2
 ## Summary
 
 total: 15
-passed: 13
+passed: 14
 issues: 0
-pending: 2
+pending: 1
 skipped: 0
 blocked: 0
 

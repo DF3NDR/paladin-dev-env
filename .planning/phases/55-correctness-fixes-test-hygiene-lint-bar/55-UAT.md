@@ -1,19 +1,16 @@
 ---
-status: testing
+status: complete
 phase: 55-correctness-fixes-test-hygiene-lint-bar
 source: [55-01-SUMMARY.md, 55-02-SUMMARY.md, 55-03-SUMMARY.md, 55-04-SUMMARY.md, 55-05-SUMMARY.md, 55-06-SUMMARY.md, 55-07-SUMMARY.md, 55-08-SUMMARY.md, 55-09-SUMMARY.md, 55-10-SUMMARY.md, 55-11-SUMMARY.md, 55-12-SUMMARY.md, 55-13-SUMMARY.md]
 started: 2026-11-02T01:40:47Z
-updated: 2026-11-02T02:14:26Z
+updated: 2026-11-02T02:15:09Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 11
-name: Release records cover every Phase 55 behaviour change
-expected: |
-  CHANGELOGs (incl. a new `paladin-storage` `[Unreleased]` anchor), `MIGRATION.md` rows M-B-30..M-B-35, the section 11.6 paragraph and section 11.8 step 6 read correctly to a consumer/operator, and `55-BASE-LAYER-REVIEW.md` gives a keep/fence decision with evidence for each of the 8 items.
-awaiting: user response
+[testing complete]
+
 
 ## Tests
 
@@ -59,7 +56,7 @@ result: pass
 
 ### 11. Release records cover every Phase 55 behaviour change
 expected: CHANGELOGs (incl. a new `paladin-storage` `[Unreleased]` anchor), `MIGRATION.md` rows M-B-30..M-B-35, the section 11.6 paragraph and section 11.8 step 6 read correctly to a consumer/operator, and `55-BASE-LAYER-REVIEW.md` gives a keep/fence decision with evidence for each of the 8 items.
-result: [pending]
+result: pass
 
 ### 12. An unversioned field's history is EntityNotFound; purge returns Ok(0)
 expected: A field with no stored versions is EntityNotFound for its history (service and repository) and Ok(0) for a purge
@@ -88,9 +85,9 @@ coverage_id: 55-11/D2
 ## Summary
 
 total: 15
-passed: 14
+passed: 15
 issues: 0
-pending: 1
+pending: 0
 skipped: 0
 blocked: 0
 

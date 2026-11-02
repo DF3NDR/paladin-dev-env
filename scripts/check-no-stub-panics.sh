@@ -119,9 +119,10 @@
 # (`call!(todo)`, `call!(todo now)`, `call!(todo 1)`, `call!(todo!)`) and also
 # as the last segment of a path (`call!(core::todo)`): the macro may build
 # `$m!()` from it. Each is named in the finding line. Inside macro tokens only
-# four shapes are not read as the macro: a `$todo` metavariable, a field or
-# method after `.` (`t.todo`), a path segment followed by `::`
-# (`crate::todo::f`) and a name followed by a single `:` (`todo: u8`). These
+# five shapes are not read as the macro: a `$todo` metavariable, a field or
+# method after `.` (`t.todo`), a name followed by `.` (`todo.f`), a path
+# segment followed by `::` (`crate::todo::f`) and a name followed by a single
+# `:` (`todo: u8`). These
 # are residual limits, not proofs: a matcher that takes such tokens apart
 # (`($p:ident :: $f:ident) => { $p!() }` on `call!(todo::f)`) builds the call
 # and is not reported. Strict by design: a local variable named `todo` handed

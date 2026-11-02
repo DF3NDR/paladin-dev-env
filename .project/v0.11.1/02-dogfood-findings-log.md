@@ -134,3 +134,40 @@ promoted.
   already says prices are DECIMAL STRINGS and shows them quoted)
 - **Related:** DOGF-03; quoted values are pinned byte-identical by `quoted_money_strings_arrive_byte_identical`
 - **Disposition:** out (re-homed: .planning/todos/pending/2026-11-02-unquoted-treasurer-price-loses-digits-on-load.md)
+
+### DF-07 — `paladin` binary logs the whole `Settings` with `{:?}`, printing `http.auth.api_keys[].key` in plaintext
+- **Found:** 2026-11-02 · **By:** Claude (Phase 56, plan 56-05) · **Surface:** cli
+- **Version:** 0.11.0 (tag v0.11.0; reproduced on HEAD 1203a0dfd)
+- **What happened:** `src/main.rs:35` is `info!("Loaded configuration: {:?}", config);`, present at tag v0.11.0 as
+  well. The binary initialises `env_logger` with `default_filter_or("debug")`, so with `RUST_LOG` unset the line is
+  emitted. `Settings` and `ApiKeyConfig` (`src/config/agents.rs`) both `#[derive(Debug)]`, so the literal key is part
+  of the line. Probe with a fake key, a copy of `config.example.yml` whose only change is one `http.auth.api_keys`
+  entry; the first log line (truncated, key replaced):
+  ```
+  [... INFO  paladin] Loaded configuration: Settings { llm_type: "openai", ... auth: AuthConfig { enabled: true, api_keys: [ApiKeyConfig { key: "<fake-key>", name: "l3-probe", role: User, tenant: "Acme-Prod" }], bearer_token: BearerTokenAuthConfig { enabled: false, tenant: None } }, docs: DocsConfig { enabled: true } }), ...
+  ```
+  The literal appears exactly once in the log (count 1). The same line also carries, unredacted, `queue.redis_password`,
+  `file_storage.minio_access_key` / `minio_secret_key` and a non-empty top-level `llm_api_key` (one occurrence each,
+  second probe); `EmailAdapterConfig.password` (feature `notifications`) and credential-bearing URLs are the same
+  shape from source. Provider keys are the exception: `LlmProviderConfig` redacts (`api_key: <redacted>`), which
+  shows the sibling auth/queue/storage types were missed. The process then exited 1 on an unrelated SQLite path
+  error from the example, after the line was written. Evidence: `56-DOGFOOD-EVIDENCE.md` § Lead L3.
+- **Expected:** no credential in any log line at the binary's default filter. Either the `{:?}` of the whole config is
+  dropped, or the credential-bearing types redact in `Debug`. A redacting `Debug` impl for `ApiKeyConfig` (and the
+  queue, file-storage, `Settings.llm_api_key` and SMTP types) changes no public signature (D-00b patch shape);
+  Stage C decides which.
+- **Repro:** from a scratch directory outside the repo, with `config.example.yml` copied to `l3.yml` and the line
+  `    api_keys: []` replaced by one entry (`key: "<fake-key>"`, `name: "l3-probe"`, `role: "user"`,
+  `tenant: "Acme-Prod"`):
+  `cargo build -p paladin-ai --bin paladin --features cli` then
+  `env -u RUST_LOG OPENAI_API_KEY=<fake-key> timeout 20 target/debug/paladin --config ./l3.yml > l3.log 2>&1`, and
+  `grep -c '<the fake literal>' l3.log` (1 or more reproduces).
+- **Severity:** S1 (D-04: graded at the worst credible deployment. The binary's default filter is `debug`, so any
+  container or systemd unit running `paladin --config` ships every static API key into the log aggregator that
+  collects stdout/stderr; the keys are the only authentication in front of the agent API, and the config documents
+  them as literal secrets)
+- **Related:** lead L3 (56-RESEARCH.md); `.github/instructions/security.instructions.md` manual credential-handling
+  review (no log statement may interpolate an API key or `Debug`-format a config type carrying one); same root cause
+  for the unredacted types listed in the audit (`QueueConfig`, `FileStorageConfig`, `Settings.llm_api_key`,
+  `EmailAdapterConfig`)
+- **Disposition:** open → promote **in v0.11.1** (S1, D-05; fix in Stage C, D-06)

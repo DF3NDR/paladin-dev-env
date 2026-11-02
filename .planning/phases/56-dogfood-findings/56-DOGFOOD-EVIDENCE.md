@@ -40,3 +40,115 @@ Notes per entry:
 
 Disk: scoped `-p <pkg>` builds only. Free space on `/` was 2993M before the first cargo command and 2402M after
 the last; no cleanup or retry was needed, and no run failed.
+
+## Lead L3
+
+Plan 56-05 (DOGF-01, DOGF-06, D-00e). Lead L3: the `paladin` binary logs the whole `Settings` with `{:?}`, and
+`ApiKeyConfig` derives `Debug`, so `http.auth.api_keys[].key` would print in plaintext. Plan-start SHA
+`1203a0dfd`. Every credential below is a fake; each is shown as `<fake-key>` and the real probe literals appear
+nowhere in this file (T-56-19).
+
+### Provenance
+
+| check | command | result |
+|-------|---------|--------|
+| the line ships in 0.11.0 | `git show v0.11.0:src/main.rs \| grep -n 'Loaded configuration'` | `35:    info!("Loaded configuration: {:?}", config);` |
+| same call on HEAD | `grep -n 'Loaded configuration' src/main.rs` | `35:    info!("Loaded configuration: {:?}", config);` (identical) |
+| `ApiKeyConfig` at 0.11.0 | `git show v0.11.0:src/config/agents.rs \| grep -n 'pub struct ApiKeyConfig' -B2` | `#[derive(Debug, Clone, Serialize, Deserialize)]` directly above the struct: no redaction at the tag either |
+| log filter | `src/main.rs:24` | `env_logger::Builder::from_env(Env::default().default_filter_or("debug"))`: with `RUST_LOG` unset the binary logs at `debug`, so an `info!` line is emitted |
+
+### Probe
+
+Build: `cargo build -p paladin-ai --bin paladin --features cli` (free space on `/` 5860M before, 4899M after; no
+cleanup needed). Scratch directory from `mktemp -d` outside the repository, deleted at the end.
+
+`l3.yml` is `config.example.yml` with the single line `    api_keys: []` replaced by one entry whose `key` is a
+fake literal, `name: "l3-probe"`, `role: "user"`, `tenant: "Acme-Prod"`.
+
+```
+$ env -u RUST_LOG OPENAI_API_KEY=<fake-key> timeout 20 <repo>/target/debug/paladin --config ./l3.yml > l3.log 2>&1
+exit=1
+$ grep -c '<fake-key literal for api_keys[0].key>' l3.log
+1
+```
+
+`exit=1` is the example's default SQLite path not being openable from the scratch directory
+(`Error: ConnectionError("error returned from database: (code: 14) unable to open database file")`, logged after
+`Starting services...`). It is unrelated to the finding: the leaking line is the FIRST line of the log, written
+before `setup_and_run` ran. Count 1 is a reproduction.
+
+The `Loaded configuration` line (first of 6 log lines, 6657 characters; truncated to the relevant stretch, key
+replaced):
+
+```
+[2026-11-02T13:58:39Z INFO  paladin] Loaded configuration: Settings { llm_type: "openai", llm_url: "https://api.openai.com/v1", llm_api_key: "", server: ServerConfig { host: "0.0.0.0", port: 8080 }, ...
+ ... rate_limit: RateLimitConfig { enabled: false, per_second: 10, burst: 20 }, auth: AuthConfig { enabled: true, api_keys: [ApiKeyConfig { key: "<fake-key>", name: "l3-probe", role: User, tenant: "Acme-Prod" }], bearer_token: BearerTokenAuthConfig { enabled: false, tenant: None } }, docs: DocsConfig { enabled: true } }), agent_runtime: AgentRuntimeConfig { model_call_limit: ...
+```
+
+In the same line the provider keys ARE redacted (`LlmProviderConfig { api_key: <redacted>, ... }`): the
+redaction discipline exists for providers and was not applied to the sibling auth type.
+
+### Probe 2: other unredacted types in the same line
+
+`l3b.yml` is `l3.yml` plus a `queue:` block with `redis_password`, a `file_storage:` block with `minio_access_key`
+and `minio_secret_key`, and a non-empty top-level `llm_api_key`, each a distinct fake. Same command, `exit=1`
+(same unrelated SQLite error). Counts of each distinct fake literal in `l3b.log`:
+
+| field | occurrences in log |
+|-------|--------------------|
+| `http.auth.api_keys[0].key` | 1 |
+| `queue.redis_password` | 1 |
+| `file_storage.minio_secret_key` | 1 |
+| `file_storage.minio_access_key` | 1 |
+| top-level `llm_api_key` | 1 |
+
+Five distinct credentials land in one log line.
+
+### Audit: credential-shaped fields reachable from `Settings`
+
+`Settings` itself is `#[derive(Debug, Serialize, Deserialize, Clone)]` (`src/config/settings.rs:29`) and holds a
+plain `llm_api_key: String` (`:33`), so a derived `Debug` of `Settings` prints it. Found with
+`grep -rnEi "^\s*pub\s+\w*(password|secret|token|key|credential|auth|dsn|endpoint|url|uri)\w*\s*:" src/config
+crates/paladin-llm/src/config` plus a read of every type the `Settings` fields reach.
+
+| type | file | credential-shaped field | `Debug` | redacts? |
+|------|------|------------------------|---------|----------|
+| `Settings` | `src/config/settings.rs:33` | `llm_api_key: String` | derived | NO (empty in the shipped example, but any operator who sets it prints it) |
+| `ApiKeyConfig` | `src/config/agents.rs:94` | `key: String` (the literal secret) | derived | NO (reproduced, probe 1) |
+| `AuthConfig` | `src/config/agents.rs:132` | `api_keys: Vec<ApiKeyConfig>` | derived | NO (delegates to `ApiKeyConfig`) |
+| `BearerTokenAuthConfig` | `src/config/agents.rs:111` | none (`enabled`, `tenant` only; the token is server-issued) | derived | n/a, no secret held |
+| `WebHttpConfig` | `src/config/agents.rs:313` | holds `auth: AuthConfig` | derived | NO (delegates) |
+| `QueueConfig` | `src/config/queue.rs:11` | `redis_password: Option<String>` | derived | NO (reproduced, probe 2) |
+| `FileStorageConfig` | `src/config/file_storage.rs:10` | `minio_access_key`, `minio_secret_key: String` | derived | NO (reproduced, probe 2) |
+| `EmailAdapterConfig` | `crates/paladin-notifications/src/email_notification_adapter.rs:49` | `password: String` (SMTP) | derived | NO (reachable through `NotificationConfig`, feature `notifications`; not in the `cli` build probed, from source) |
+| `QdrantSanctumConfig` | `crates/paladin-memory/src/config/sanctum.rs:24` | `url: String` (may embed credentials) | derived | NO (a URL; credential only if the operator embeds one; source only) |
+| `SourceConfig` | `src/config/web_server.rs:12` | `url: String` (content source URL) | derived | NO (URL; lower risk, source only) |
+| `MCPServerConfig` | `src/config/arsenal.rs:19` | `endpoint: Option<String>`; `auth_token_env` is an env-var NAME and `skip_serializing` | derived | endpoint NO (URL); the token itself is never in config |
+| `LlmProviderConfig` | `crates/paladin-llm/src/config/llm.rs:41` | `api_key: String` | manual (`RedactedKey`) | YES (observed `api_key: <redacted>`) |
+| `OtelConfig` | `src/config/trace.rs:167` | `headers` values | manual | YES (keys only) |
+| `AllowanceWebhookConfig` | `src/config/treasurer.rs:460` | `secret: Option<String>` | manual | YES (`[redacted]`) |
+| `NodeCacheConfig` | `src/config/node_cache.rs:96` | `redis_password: Option<String>` | manual | YES |
+
+Hand-written redacting `Debug` impls under `src/config/` and `crates/paladin-llm/src/` are exactly: `OtelConfig`,
+`AllowanceWebhookConfig`, `NodeCacheConfig`, `LlmProviderConfig` (plus the per-adapter configs `OpenAIConfig`,
+`AnthropicConfig`, ... which are not reachable from `Settings`). No credential-bearing type on the auth, queue
+or file-storage paths has one.
+
+### Whole-config `{:?}` call sites in `src/` outside tests
+
+`grep -rnE` for `{:?}` / `{:#?}` / `{config:?}` / `?config` / `dbg!(` applied to a config or settings value, with
+the matches that sit in `#[cfg(test)]` code excluded (those are the redaction tests themselves):
+
+| site | content | verdict |
+|------|---------|---------|
+| `src/main.rs:35` | `info!("Loaded configuration: {:?}", config);` | the defect: whole `Settings`, at the default `debug` filter |
+| `src/main.rs:30` | `eprintln!("Failed to load configuration: {:?}", e);` | prints the load ERROR `e`, not a config; not a whole-config format |
+| `src/bin/paladin-server.rs:220` | `format!("{:?}", run_configs.run_store.backend)` | a backend label, not a credential-bearing type |
+
+No other non-test site formats a `Settings` or a whole `*Config`. `paladin-server` does NOT log its `Settings`
+(its sibling-binary exposure is nil); the exposure is the `paladin` binary only.
+
+### Classification
+
+Reproduced. Logged as one finding (one root cause: the `Settings` `Debug` chain is derived over credential-bearing
+types, and `src/main.rs:35` renders it). See the findings log entry cited in the plan 56-05 SUMMARY.

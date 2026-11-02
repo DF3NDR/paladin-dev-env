@@ -258,6 +258,7 @@ agent_runtime:
   model_fallback:
     enabled: false
     providers: []
+    steps: []
   tool_errors:
     mode: feed_to_model
     per_tool: {}

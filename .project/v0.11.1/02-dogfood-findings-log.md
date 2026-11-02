@@ -93,3 +93,40 @@ promoted.
 - **Disposition:** open → recommend **in v0.11.1**, first code phase
 
 <!-- append new findings below this line -->
+
+### DF-05 — `config.example.yml` claims `agent_runtime` is written out in full but omits `model_fallback.steps`
+- **Found:** 2026-11-02 · **By:** Claude (Phase 56, plan 56-02) · **Surface:** docs
+- **Version:** 0.11.0 (also HEAD 20808e4ae)
+- **What happened:** the comment above `agent_runtime:` says every field "is written out explicitly and is
+  IDENTICAL to what AgentRuntimeConfig::default() produces". The example writes
+  `model_fallback: { enabled: false, providers: [] }`, but `ModelFallbackConfig` also has a `steps` field. The
+  loaded `Settings` serialises a path the example never writes. Output of
+  `example_sections_claimed_complete_write_every_field` (plan 56-02, lead L5) on the unmodified example:
+  ```
+  config.example.yml claims these sections are written out in full, but the loaded Settings serialises these paths the example does not write:
+    agent_runtime.model_fallback.steps
+  ```
+- **Expected:** every field of the section written out, as the comment says, so an operator reading the example
+  sees that `steps` exists.
+- **Repro:** `cargo test -p paladin-ai --test config_example_roundtrip example_sections_claimed_complete_write_every_field`
+- **Severity:** S3 (misleading config, D-04)
+- **Related:** DOGF-03; lead L5
+- **Disposition:** in v0.11.1 — fixed in plan 56-02: the example writes `steps: []` under `agent_runtime.model_fallback`; regression: `example_sections_claimed_complete_write_every_field`
+
+### DF-06 — An unquoted treasurer price with 19 significant digits loses digits on load
+- **Found:** 2026-11-02 · **By:** Claude (Phase 56, plan 56-02) · **Surface:** library
+- **Version:** 0.11.0 (also HEAD 20808e4ae)
+- **What happened:** `treasurer.pricing.<id>` axes are `String` fields documented as decimal strings. An
+  operator who writes one unquoted gets it read as a number by the `config` crate and re-rendered. Credible
+  prices keep their decimal value (`2.50` loads as `"2.5"`, `10.00` as `"10"`, `0.075` and `15` unchanged,
+  pinned by `unquoted_credible_prices_keep_their_decimal_value`); a 19-significant-digit price does not:
+  ```
+  prompt: 1234567890.123456789   ->   loaded as "1234567890.1234567"
+  ```
+- **Expected:** the same decimal value, or a load error; never a silently different price.
+- **Repro:** a config whose `treasurer.pricing.probe.prompt` is the unquoted literal above, loaded through
+  `Settings::load_from_file` (one-off measurement in plan 56-02, not kept as a test).
+- **Severity:** S4 (hygiene, D-04: no credible per-1M-token price has 19 significant digits, and the example
+  already says prices are DECIMAL STRINGS and shows them quoted)
+- **Related:** DOGF-03; quoted values are pinned byte-identical by `quoted_money_strings_arrive_byte_identical`
+- **Disposition:** out (re-homed: .planning/todos/pending/2026-11-02-unquoted-treasurer-price-loses-digits-on-load.md)

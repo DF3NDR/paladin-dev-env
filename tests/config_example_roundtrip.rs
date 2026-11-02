@@ -476,3 +476,237 @@ fn quoted_money_strings_arrive_byte_identical() {
         "the fixture carries too few quoted money values ({checked}) for this check to mean anything"
     );
 }
+
+// ── drift guard: the full fixture cannot fall behind the example ─────────────
+
+/// Prose comment lines of `config.example.yml` that look like a commented key (`word:`) but are
+/// not one. The pattern is the single leaf the scanner reports; the note is the reason. A row
+/// that matches no scanned line is stale, like every other table.
+const PROSE_COMMENT_LINES: &[Row] = &[Row {
+    pattern: &["Live-verified"],
+    note: "prose: the kimi and gemini 'Live-verified: ...' status sentences",
+}];
+
+/// The marker line after which `config.example.yml` is env-only prose (no config keys).
+const PLATFORM_BANNER: &str = "# Platform API";
+
+/// `(top-level section, leaf key)` for every commented key line above [`PLATFORM_BANNER`].
+///
+/// A commented key line is a `#` comment whose body, after an optional `- `, starts with a key
+/// (`[A-Za-z_][A-Za-z0-9_./-]*`) followed by `:` and then whitespace or the end of the line. The
+/// section is the last live (non-comment, column 0) top-level key above the line.
+fn commented_key_lines(text: &str) -> Vec<(String, String)> {
+    let mut section = String::new();
+    let mut found = Vec::new();
+    for line in text.lines() {
+        if line.starts_with(PLATFORM_BANNER) {
+            break;
+        }
+        let trimmed = line.trim_start();
+        if let Some(body) = trimmed.strip_prefix('#') {
+            let body = body.trim_start();
+            let body = body.strip_prefix("- ").unwrap_or(body);
+            let key: String = body
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '/' | '-'))
+                .collect();
+            let starts_like_a_key = key
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
+            let after = &body[key.len()..];
+            let colon_follows = after
+                .strip_prefix(':')
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace));
+            if starts_like_a_key && colon_follows {
+                found.push((section.clone(), key));
+            }
+        } else if let Some((top, _)) = line
+            .split_once(':')
+            .filter(|_| !line.starts_with(char::is_whitespace))
+        {
+            section = top.trim().to_string();
+        }
+    }
+    found
+}
+
+/// Commented example keys (minus prose rows) that no fixture path under the same section ends in.
+fn commented_pairs_missing(
+    example_text: &str,
+    fixture: &BTreeSet<KeyPath>,
+    prose: &[Row],
+) -> BTreeSet<(String, String)> {
+    commented_key_lines(example_text)
+        .into_iter()
+        .filter(|(_, leaf)| {
+            !prose
+                .iter()
+                .any(|row| matches(row.pattern, std::slice::from_ref(leaf)))
+        })
+        .filter(|(section, leaf)| {
+            !fixture
+                .iter()
+                .any(|p| p.first() == Some(section) && p.last() == Some(leaf))
+        })
+        .collect()
+}
+
+fn render_pairs(pairs: &BTreeSet<(String, String)>) -> String {
+    pairs
+        .iter()
+        .map(|(section, leaf)| format!("{section} / {leaf}"))
+        .collect::<Vec<_>>()
+        .join("\n  ")
+}
+
+#[test]
+fn full_fixture_carries_every_example_key() {
+    let example = repo_path("config.example.yml");
+    let text = std::fs::read_to_string(&example).expect("config.example.yml is readable");
+    let fixture = input_key_paths(&full_fixture());
+
+    let live_missing = missing_paths(&input_key_paths(&example), &fixture);
+    assert!(
+        live_missing.is_empty(),
+        "live key paths of config.example.yml absent from config.example.full.yml:\n  {}",
+        render_sorted(&live_missing)
+    );
+
+    let commented_missing = commented_pairs_missing(&text, &fixture, PROSE_COMMENT_LINES);
+    assert!(
+        commented_missing.is_empty(),
+        "commented key lines of config.example.yml (section / key) with no matching key in \
+         config.example.full.yml:\n  {}",
+        render_pairs(&commented_missing)
+    );
+
+    // Every prose row must still match a scanned line, or it is stale.
+    let scanned: BTreeSet<KeyPath> = commented_key_lines(&text)
+        .into_iter()
+        .map(|(_, leaf)| vec![leaf])
+        .collect();
+    let stale = stale_rows(&scanned, PROSE_COMMENT_LINES);
+    assert!(
+        stale.is_empty(),
+        "PROSE_COMMENT_LINES rows that match no commented line (stale):\n  {}",
+        stale.join("\n  ")
+    );
+}
+
+#[test]
+fn drift_guard_reports_a_commented_key_missing_from_the_fixture() {
+    let example = "trace:\n  log_sink: true\n  #   brand_new_knob: 1\n  # plain prose, no key.\n";
+    let fixture_value: Value = serde_json::json!({"trace": {"log_sink": true}});
+    let fixture = key_paths(&fixture_value);
+
+    let missing = commented_pairs_missing(example, &fixture, &[]);
+    let want: BTreeSet<(String, String)> = [("trace".to_string(), "brand_new_knob".to_string())]
+        .into_iter()
+        .collect();
+    assert_eq!(missing, want, "got:\n  {}", render_pairs(&missing));
+
+    // The live-path half: a live example key the fixture lacks is reported by path.
+    let example_value: Value = serde_json::json!({"trace": {"log_sink": true, "persist": false}});
+    let live_missing = missing_paths(&key_paths(&example_value), &fixture);
+    let want_live: BTreeSet<KeyPath> = [path_of(&["trace", "persist"])].into_iter().collect();
+    assert_eq!(live_missing, want_live);
+
+    // A key the fixture does carry is not reported.
+    let carried: Value = serde_json::json!({"trace": {"brand_new_knob": 1}});
+    assert!(commented_pairs_missing(example, &key_paths(&carried), &[]).is_empty());
+}
+
+// ── lead L5: sections the example claims are written out in full ─────────────
+
+/// Top-level sections whose example comment says every field is written out explicitly.
+const COMPLETE_SECTIONS: &[&str] = &["agent_runtime", "trace"];
+
+#[test]
+fn example_sections_claimed_complete_write_every_field() {
+    let example = repo_path("config.example.yml");
+    let input = input_key_paths(&example);
+    let output = loaded_key_paths(&example);
+
+    let unwritten: BTreeSet<KeyPath> = output
+        .difference(&input)
+        .filter(|p| {
+            p.first()
+                .is_some_and(|top| COMPLETE_SECTIONS.contains(&top.as_str()))
+        })
+        .cloned()
+        .collect();
+    assert!(
+        unwritten.is_empty(),
+        "config.example.yml claims these sections are written out in full, but the loaded \
+         Settings serialises these paths the example does not write:\n  {}",
+        render_sorted(&unwritten)
+    );
+}
+
+// ── price precision: quoted exact, unquoted credible values value-equal ──────
+
+/// Normalises a decimal string for value comparison without float arithmetic: trailing zeros of
+/// the fractional part, and a then-trailing `.`, are trimmed (`"2.50"` and `"2.5"` agree).
+fn normalise_decimal(text: &str) -> String {
+    if text.contains('.') {
+        text.trim_end_matches('0').trim_end_matches('.').to_string()
+    } else {
+        text.to_string()
+    }
+}
+
+/// The required top-level keys, copied from the example, plus one `treasurer.pricing.probe` row
+/// whose prices are written by the caller.
+fn probe_config(pricing_row: &str) -> String {
+    format!(
+        "llm_type: \"openai\"\nllm_url: \"https://api.openai.com/v1\"\nllm_api_key: \"\"\n\
+         max_file_size: 10485760\nsources: []\nserver:\n  host: \"0.0.0.0\"\n  port: 8080\n\
+         treasurer:\n  pricing:\n    probe:\n{pricing_row}"
+    )
+}
+
+/// Loads `yaml` through `Settings::load_from_file` and returns the `treasurer.pricing.probe`
+/// axes as the strings the loader produced.
+fn load_probe_row(yaml: &str) -> Value {
+    let file = tempfile::Builder::new()
+        .suffix(".yml")
+        .tempfile()
+        .expect("temp file");
+    std::fs::write(file.path(), yaml).expect("write temp config");
+    load_to_json(file.path())["treasurer"]["pricing"]["probe"].clone()
+}
+
+#[test]
+fn unquoted_credible_prices_keep_their_decimal_value() {
+    let row = load_probe_row(&probe_config(
+        "      prompt: 2.50\n      completion: 10.00\n      cache_read: 0.075\n      cache_write: 15\n",
+    ));
+    let want = [
+        ("prompt", "2.5"),
+        ("completion", "10"),
+        ("cache_read", "0.075"),
+        ("cache_write", "15"),
+    ];
+    let mut differing: Vec<String> = Vec::new();
+    for (axis, expected) in want {
+        let loaded = row.get(axis).and_then(Value::as_str);
+        if loaded.map(normalise_decimal).as_deref() != Some(expected) {
+            differing.push(format!("treasurer.pricing.probe.{axis}"));
+        }
+    }
+    assert!(
+        differing.is_empty(),
+        "unquoted prices whose decimal value changed on load:\n  {}",
+        differing.join("\n  ")
+    );
+}
+
+#[test]
+fn normalise_decimal_trims_only_the_fractional_tail() {
+    assert_eq!(normalise_decimal("2.50"), "2.5");
+    assert_eq!(normalise_decimal("10.00"), "10");
+    assert_eq!(normalise_decimal("15"), "15");
+    assert_eq!(normalise_decimal("100"), "100", "integers keep their zeros");
+    assert_eq!(normalise_decimal("0.075"), "0.075");
+}

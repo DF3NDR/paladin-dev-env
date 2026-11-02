@@ -1598,7 +1598,8 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// object, `error: null` and the partial output kept, and the one terminal event carries the
     /// reason. A zero or exhausted figure at dispatch records the same halt, and an unreadable
     /// ledger records `ledger_unavailable`, both without calling the LLM; a model that lost its
-    /// price row records `Failed` naming the model, also without calling the LLM. An agent-kind
+    /// price row records the same `Halted` with the `model_unpriced` reason naming the model, also
+    /// without calling the LLM. An agent-kind
     /// run writes no Waypoint (D-08), so a halted one is resumed by resubmission.
     async fn run_agent(
         &self,

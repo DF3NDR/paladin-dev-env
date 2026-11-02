@@ -249,7 +249,8 @@ pub enum HaltReason {
     LedgerUnavailable,
     /// The run's model had no `treasurer.pricing` row when the worker derived its budget at
     /// dispatch (the row was removed after admission), so no spend could be metered and the LLM
-    /// was not called. The run halts resumably: add the price row, then resume or resubmit it.
+    /// was not called. The run halts: add the price row, then resubmit it (an agent-kind run
+    /// writes no Waypoint, so there is no checkpoint to resume from).
     /// It carries the model name only, never a tenant or a key (D-00g); the wire object is
     /// exactly `{"reason":"model_unpriced","model":"<model>"}`.
     ModelUnpriced {

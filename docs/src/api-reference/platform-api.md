@@ -801,7 +801,7 @@ the model response that crosses the figure and is recorded `halted`, not `comple
   called.
 - A model that lost its `treasurer.pricing` row between admission and dispatch records `halted`
   with `halt_reason: { "reason": "model_unpriced", "model": ... }` naming the model; the model is
-  not called, and the run resumes once an operator adds the row.
+  not called. Nothing resumes it: once an operator adds the row, resubmit the run (see below).
 
 **Agent-kind runs have no checkpoint.** The agent loop writes no Waypoint, so a halted agent-kind
 run has `final_waypoint_id: null` and cannot be forked from a checkpoint. Resume it by submitting a

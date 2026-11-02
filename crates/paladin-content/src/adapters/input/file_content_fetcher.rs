@@ -66,8 +66,8 @@ impl FileContentFetcher {
     fn create_video_content(&self, path: &Path) -> Result<ContentType, String> {
         let path_str = path.to_string_lossy().to_string();
 
-        // For now, we'll use a placeholder duration
-        // In a real implementation, you'd use a library like ffmpeg-rust to get actual duration
+        // Unfinished: `get_video_duration` always answers `None` (no media library is chosen),
+        // and `VideoContent` has no "unknown" duration, so an unknown duration is recorded as 0.
         let duration = self.get_video_duration(path).unwrap_or(0);
 
         let video_content =
@@ -79,8 +79,8 @@ impl FileContentFetcher {
     fn create_audio_content(&self, path: &Path) -> Result<ContentType, String> {
         let path_str = path.to_string_lossy().to_string();
 
-        // For now, we'll use a placeholder duration
-        // In a real implementation, you'd use a library like symphonia or rodio to get actual duration
+        // Unfinished: `get_audio_duration` always answers `None` (no media library is chosen),
+        // and `AudioContent` has no "unknown" duration, so an unknown duration is recorded as 0.
         let duration = self.get_audio_duration(path).unwrap_or(0);
 
         let audio_content =
@@ -92,8 +92,9 @@ impl FileContentFetcher {
     fn create_image_content(&self, path: &Path) -> Result<ContentType, String> {
         let path_str = path.to_string_lossy().to_string();
 
-        // For now, we'll use placeholder dimensions
-        // In a real implementation, you'd use a library like image-rs to get actual dimensions
+        // Unfinished: `get_image_dimensions` always answers `None` (no image library is chosen),
+        // and `ImageContent` has no "unknown" resolution, so unknown dimensions are recorded as
+        // (0, 0).
         let resolution = self.get_image_dimensions(path).unwrap_or((0, 0));
 
         let image_content =

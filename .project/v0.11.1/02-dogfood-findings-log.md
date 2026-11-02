@@ -331,6 +331,7 @@ promoted.
 - **Severity:** S3
 - **Related:** lead L1 (56-RESEARCH.md); step 5b of `56-FIRST-RUN-WALK.md`
 - **Disposition:** open → **in v0.11.1** (contained docs fix: plan 56-07)
+- **Disposition (2026-11-02):** in v0.11.1 — fixed in plan 56-07: installation.md names paladin-llm feature openai; proof: cargo metadata resolves the corrected block on crates.io 0.11.0 and rejects the old one naming llm-openai (56-FIRST-RUN-WALK.md, Contained fixes)
 
 ### DF-15 — No doc names a `cargo install` line for `paladin-cli`, and the line a reader tries first fails (lead L2)
 - **Found:** 2026-11-02 · **By:** Claude (Phase 56, plan 56-06) · **Surface:** docs

@@ -54,7 +54,7 @@ paladin-ai-core   = "0.11.0"
 paladin-ports     = "0.11.0"
 
 # LLM providers (pick one or more)
-paladin-llm       = { version = "0.11.0", features = ["llm-openai"] }
+paladin-llm       = { version = "0.11.0", features = ["openai"] }
 
 # Multi-agent orchestration (optional)
 paladin-battalion = "0.11.0"

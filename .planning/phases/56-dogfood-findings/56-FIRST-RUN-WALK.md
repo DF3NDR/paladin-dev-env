@@ -218,3 +218,13 @@ parsed 17 entries from .project/v0.11.1/02-dogfood-findings-log.md
 
 DF-10 and DF-13 parse as `duplicate of DF-02`; DF-16 parses as `out (re-homed: ...)`. `git diff --numstat` for the log
 over this plan shows 0 deleted lines.
+
+## Contained fixes
+
+Plan 56-07 (docs only, plan-start SHA `15392e9aa`), 2026-11-02. Proofs that need crates.io run in a `mktemp -d`
+scratch crate outside the repo and are resolution-only (`cargo metadata`, no compile); the scratch is deleted
+afterwards. Columns: `DF | file(s) | change | proof command | result`.
+
+| DF | file(s) | change | proof command | result |
+|----|---------|--------|---------------|--------|
+| DF-14 (L1) | `docs/src/getting-started/installation.md` | `paladin-llm` line: `features = ["llm-openai"]` becomes `features = ["openai"]`. No other `paladin-llm` dependency line in `docs/src` or `README.md` used an `llm-` feature (`docs/src/getting-started/quickstart.md:26` and `docs/src/api-reference/crate-map.md:230` already say `openai`) | scratch crate whose `[dependencies]` is the corrected block extracted from the page: `cargo metadata --format-version 1 > /dev/null`; then the same block with `features = ["llm-openai"]` | corrected block: exit 0, `Locking 225 packages`, `paladin-ai-core`, `paladin-battalion`, `paladin-llm`, `paladin-memory`, `paladin-ports`, `paladin-storage` all `0.11.0`. Old block: exit 101, `package \`installation-old\` depends on \`paladin-llm\` with feature \`llm-openai\` but \`paladin-llm\` does not have that feature.` |

@@ -518,7 +518,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 56-07-PLAN.md — contained S3/S4 docs fixes from the walk (L1 feature name, L2 install line, `paladin-cli` naming, default features, crates.io example note) with proofs (DOGF-04, DOGF-01)
+- [x] 56-07-PLAN.md — contained S3/S4 docs fixes from the walk (L1 feature name, L2 install line, `paladin-cli` naming, default features, crates.io example note) with proofs (DOGF-04, DOGF-01)
 
 **Wave 6** *(blocked on Wave 5 completion; human-gated)*
 

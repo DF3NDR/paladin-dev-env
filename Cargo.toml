@@ -232,6 +232,8 @@ serial_test = "3.2.0"
 criterion = { version = "0.5", features = ["async_tokio"] }
 insta = "1.34"
 redis = { version = "0.32.2", features = ["aio", "tokio-comp"] }
+# independent YAML parser for tests/config_example_roundtrip.rs input key paths (DOGF-03)
+serde_yaml = "0.9"
 # Integration test dependencies (gated by integration-tests feature)
 wiremock = "0.6"
 # Phase 12.1 Plan 04 (SC2 hermetic proof): stand up a REAL in-process,

@@ -498,6 +498,17 @@ assert_fire "${FX}" "todo or unimplemented handed to a macro before an identifie
     "crates/x/src/lib.rs:3: todo! (passed to a macro as an identifier) outside #[cfg(test)]" \
     "crates/x/src/lib.rs:4: unimplemented! (passed to a macro as an identifier) outside #[cfg(test)]"
 
+# `todo!` with no delimiter after the `!` is no direct call, but a matcher such
+# as `($m:ident !) => { $m!() }` builds one from it (WR-03, round 5).
+fresh stub-ident-bang-no-delimiter
+printf '%s\n' \
+    'macro_rules! call { ($m:ident !) => { $m!() }; }' \
+    'pub fn f() -> u8 { call!(todo!) }' \
+    'pub fn g() -> u8 { call!(unimplemented !) }' >"${FX}/crates/x/src/lib.rs"
+assert_fire "${FX}" "todo! or unimplemented ! handed to a macro with no delimiter is reported" \
+    "crates/x/src/lib.rs:2: todo! (passed to a macro as an identifier) outside #[cfg(test)]" \
+    "crates/x/src/lib.rs:3: unimplemented! (passed to a macro as an identifier) outside #[cfg(test)]"
+
 fresh root-package
 printf '[package]\nname = "rootpkg"\nversion = "0.1.0"\n' >"${FX}/Cargo.toml"
 mkdir -p "${FX}/src"

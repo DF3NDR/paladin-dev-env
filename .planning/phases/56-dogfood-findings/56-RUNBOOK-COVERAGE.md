@@ -349,7 +349,7 @@ Lines: 170650/183901 = 92.79%  (truncated: 92)
 
 For plan 56-09. Start only from the filled slots.
 
-- [ ] Fetch the CI figure for the commit in `C1`:
+- [x] Fetch the CI figure for the commit in `C1`:
 
   ```bash
   gh run list --workflow=ci.yml --commit <C1 sha> --json databaseId,conclusion,headSha,name --limit 5
@@ -358,15 +358,17 @@ For plan 56-09. Start only from the filled slots.
 
   Read the `Lines:` line. If the `gh` call fails, ask the maintainer to paste the figure from the
   CI job summary.
-- [ ] Apply the pass rule: equal whole percents, both >= 82.
-- [ ] Log one S3 DF per `C6` stumble and per trap that bit, each with a contained docs fix to
+- [x] Apply the pass rule: equal whole percents, both >= 82.
+- [x] Log one S3 DF per `C6` stumble and per trap that bit, each with a contained docs fix to
   `docs/src/contributing/testing-guide.md` (D-05). Append entries that parse under
   `make check-findings-log` (next free id is the one after the last `### DF-nn` in
   `.project/v0.11.1/02-dogfood-findings-log.md`).
-- [ ] On pass, `git mv` the todo to `.planning/todos/completed/` and add a
+- [x] On pass, `git mv` the todo to `.planning/todos/completed/` and add a
   `## Resolution (YYYY-MM-DD)` section with: local figure, CI figure, CI run id, commit, and the
   `cargo-llvm-cov` versions (local and CI).
 - [ ] On fail, log a DF with both figures. The todo
   `2026-08-13-verify-local-coverage-reproduction.md` stays pending with a dated update.
 
 CI half unavailable 2026-11-03: `gh run list --workflow=ci.yml --branch main` worked (newest success: run 41246424413, commit 8b23cb4c55a10fcf0b08fab1af595e1f184e5f2e), but `gh run download 41246424413 -n coverage-summary` failed with `error downloading coverage-summary: Get "https://productionresultssa14.blob.core.windows.net/actions-results/...": Forbidden` (the agent egress proxy refused `productionresultssa14.blob.core.windows.net:443`; `gh auth status` also reports the `GH_TOKEN` invalid). Fallback: the maintainer pastes the CI figure (the `Lines:` line from the `coverage-summary` artifact or the `coverage` job summary for C1's commit) into C1 or chat, and Task 3 records its source as maintainer-pasted.
+
+Comparison 2026-11-03: **PASS** (D-17, PD-09-1). Local (C5, maintainer-measured at commit `21dacf0d63b55e7a5f14d76eba207c107e4889aa`): `Lines: 170650/183901 = 92.79%`, truncated 92. CI (run `41703614636`, job `Coverage` id `126153522434`, conclusion `success`, commit `d9a48cfc6`, figure read from the job log by the orchestrator because the artifact blob host is proxy-blocked from the sandbox, so maintainer/orchestrator-relayed, not fetched by `gh run download`): `Lines:     170767/183901 = 92.86%`, truncated 92. The two whole percents are equal and both are >= 82. Same-commit basis: `21dacf0d6`'s own CI run (`41695288977`) was cancelled by the next push, so the comparison uses `d9a48cfc6`, whose delta from `21dacf0d6` is Markdown only (`git diff --stat 21dacf0d6 d9a48cfc6 -- . ':!*.md'` is empty, re-run by the agent), so it measured the same code. Both runs share the denominator 183901; the numerators differ by 117 hit lines (0.07 points), which the walk did not attribute (candidates: nondeterministic hit lines under `--test-threads=1` across environments, or the CI Redis/RustFS stack differing from the compose siblings). Tool: local `cargo-llvm-cov 0.8.7`, rustc 1.97.1; CI pins `cargo-llvm-cov@0.8.7`. Trap 2 (port mismatch, password-protected Redis on a bare host) remains an unverified hypothesis: it did not bite in the devcontainer and was not exercised.

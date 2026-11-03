@@ -1566,7 +1566,7 @@ jobs:
               elif line.startswith("FNH:"): fnh += int(line[4:])
           if lf == 0:
               raise SystemExit("::error::lcov.info contains no LF: records")
-          print("Scope: --workspace --features integration-tests (the gated measurement)")
+          print("Scope: --workspace --features integration-tests,llm-all (the gated measurement)")
           print(f"Lines:     {lh}/{lf} = {100*lh/lf:.2f}%")
           print(f"Functions: {fnh}/{fnf} = {100*fnh/fnf:.2f}%")
           PY

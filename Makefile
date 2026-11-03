@@ -389,7 +389,7 @@ coverage: ## Measure workspace coverage (mirrors CI's `coverage` job — require
 .PHONY: coverage-html
 coverage-html: ## Generate an HTML coverage report at target/coverage
 	@echo "$(CYAN)Generating HTML coverage report...$(NC)"
-	@$(CARGO) llvm-cov --workspace --features integration-tests --html --output-dir target/coverage
+	@$(CARGO) llvm-cov --workspace --features integration-tests,llm-all --html --output-dir target/coverage
 	@echo "Report at target/coverage/html/index.html"
 
 ##@ Code Quality

@@ -82,3 +82,42 @@ whole-percent precision — not the stale historic run.
 
 **Re-check trigger.** 2026-10-16, or the first time a Docker-capable machine is available to the
 repo maintainer, whichever comes first.
+
+## Resolution (2026-11-03, Phase 56 plan 56-09)
+
+The local coverage procedure was walked by the maintainer and agrees with CI on the D-17 pass rule.
+
+| | Local (`make coverage`, C5) | CI (`coverage` job) |
+|---|---|---|
+| Lines | `170650/183901 = 92.79%` | `170767/183901 = 92.86%` |
+| Truncated (PD-09-1) | 92 | 92 |
+| Commit | `21dacf0d63b55e7a5f14d76eba207c107e4889aa` | `d9a48cfc6` (Markdown-only delta from the measured commit) |
+| Run / job | not applicable | run `41703614636`, job `126153522434`, conclusion `success` |
+| `cargo-llvm-cov` | 0.8.7 (installed by hand at CI's pin) | 0.8.7 (`taiki-e/install-action`, `ci.yml`) |
+
+Both whole percents are 92 and both are at or above the 82 floor, so the pass rule holds. The local
+figure is the one the maintainer pasted in C5; it was not copied from CI. The CI figure was read from the
+job log by the orchestrator (the artifact blob host is proxy-blocked from the sandbox), and the measured
+commit's own CI run `41695288977` was cancelled by the next push, hence the Markdown-only comparison
+commit; `git diff --stat 21dacf0d6 d9a48cfc6 -- . ':!*.md'` is empty. The 117-line numerator difference
+on an identical denominator was not attributed.
+
+**Machine.** The walk ran inside the project devcontainer (rustc 1.97.1, cargo 1.97.1; Redis and RustFS
+as compose siblings on `paladin-dev-network`; no Docker socket), not on a bare Docker host. Guide step 1
+(`make services-up`) was therefore not exercised, and the bare-host path with the password-protected
+`docker/docker-compose.yml` Redis (trap 2) is still unwalked.
+
+**Guide gaps found and fixed** (findings log, `.project/v0.11.1/02-dogfood-findings-log.md`):
+
+- DF-21: the guide installed `cargo-llvm-cov` unpinned against CI's 0.8.7 (fixed).
+- DF-22: `make coverage` prints no percentage; the guide said it did (fixed, LF/LH snippet added).
+- DF-23: step 1 cannot run in the devcontainer and the guide did not say the compose siblings suffice (fixed).
+- DF-24: CI's `Scope:` label omitted `llm-all` (fixed, one line in `ci.yml`).
+- DF-25: `make coverage-html` measured without `llm-all` (fixed, one line in `Makefile`).
+- DF-20: the devcontainer image lacks `cargo-llvm-cov` (re-homed to
+  `.planning/todos/pending/2026-11-03-devcontainer-install-cargo-llvm-cov.md`; `Dockerfile.dev` was outside
+  the plan's file scope).
+
+**Not covered by this resolution.** Solution step 6 (`make ci-full`, `make test-cli`, `make bench-check`
+each pass locally) was not part of the D-17 walk and was not run; `make ci-full` includes `make coverage`,
+which the walk did run to exit 0.

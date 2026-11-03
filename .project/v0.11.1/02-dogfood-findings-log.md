@@ -474,3 +474,145 @@ promoted.
   exits 1, so an Anthropic-only user who runs `onboarding` is told their key is bad)
 - **Related:** lead L8 (56-RESEARCH.md), assumption A6; K8 of `56-RUNBOOK-KEYED-WALK.md`; DF-16 (the same file)
 - **Disposition:** open → promote **in v0.11.1** (S2, D-05; fix in Stage C, D-06)
+
+### DF-20 — The devcontainer installs the `llvm-tools-preview` component but not `cargo-llvm-cov`, so the first `make coverage` after a rebuild fails
+- **Found:** 2026-11-03 · **By:** maintainer · **Surface:** docs
+- **Version:** 0.11.0 (devcontainer files at commit 21dacf0d6)
+- **What happened:** on a freshly rebuilt devcontainer, step 0 of the coverage walk could not report a tool version
+  because the subcommand does not exist (C1, first attempt):
+  ```
+  error: no such command: `llvm-cov`
+
+  help: view all installed commands with `cargo --list`
+  help: find a package to install `llvm-cov` with `cargo search cargo-llvm-cov`
+  ```
+  `.devcontainer/Dockerfile.dev:112` adds the `llvm-tools-preview` rustup component and the lines that follow install
+  `cargo-watch`, `cargo-edit`, `cargo-audit`, `cargo-deny`, `cargo-semver-checks` and others, but nothing installs
+  `cargo-llvm-cov`; `post-create.sh` does not either. Yet `.devcontainer/README.md:10` lists "llvm-cov" among the
+  cargo extensions the container provides. Phase 36.1 had found a copy at `/usr/local/cargo/bin/cargo-llvm-cov`, but
+  `/usr/local/cargo/bin` is not a persisted volume in `.devcontainer/docker-compose.yml` (only
+  `/usr/local/cargo/registry` is), so a hand install does not survive a rebuild. The maintainer installed it by hand at
+  CI's pin (`cargo install cargo-llvm-cov --version 0.8.7 --locked`), after which `cargo llvm-cov --version` printed
+  `cargo-llvm-cov 0.8.7`.
+- **Expected:** the project's own devcontainer can run `make coverage` once its services are up, as its README implies.
+- **Repro:** rebuild the devcontainer; `cargo llvm-cov --version`. Source check: `grep -n 'llvm' .devcontainer/Dockerfile.dev
+  .devcontainer/README.md`.
+- **Severity:** S3 (D-04: the README claims a tool the image does not ship; the failure is a clear error with a
+  one-line fix, and CI is unaffected)
+- **Related:** C1, C6 bullet 1, trap 3 of `56-RUNBOOK-COVERAGE.md`; DF-21
+- **Disposition:** open → **in v0.11.1** (contained: add the pinned install to `Dockerfile.dev`)
+- **Disposition (2026-11-03):** out (re-homed: .planning/todos/pending/2026-11-03-devcontainer-install-cargo-llvm-cov.md; the fix is one `RUN cargo install --locked --version 0.8.7 cargo-llvm-cov` line in `.devcontainer/Dockerfile.dev`, a file outside plan 56-09's `files_modified`; the guide now tells a devcontainer reader to check `cargo llvm-cov --version` first, see DF-21)
+
+### DF-21 — The testing guide installs `cargo-llvm-cov` unpinned while CI pins 0.8.7, and says its commands are the same ones CI runs
+- **Found:** 2026-11-03 · **By:** maintainer · **Surface:** docs
+- **Version:** 0.11.0 (`docs/src/contributing/testing-guide.md` at commit 21dacf0d6)
+- **What happened:** the guide's "Prerequisites" gave `cargo install cargo-llvm-cov --locked` (and
+  `cargo binstall cargo-llvm-cov`) with no `--version`, while the guide's opening says "every command here is the same
+  command CI runs, not an approximation of it". CI installs `cargo-llvm-cov@0.8.7` (`taiki-e/install-action`,
+  `.github/workflows/ci.yml:1489`). An unpinned install takes the newest release. The maintainer pinned it by hand
+  (C6):
+  ```
+  Trap 3 (unpinned install in the guide): bit in spirit — the guide's `cargo install
+  cargo-llvm-cov --locked` has no `--version`; the maintainer pinned `0.8.7` by hand to match CI.
+  ```
+  In this walk the pin did not change the outcome (local 92.79 percent against CI 92.86 percent, both truncate to 92),
+  so the unpinned form was not shown to move the figure; the risk is that a newer tool release can, and the guide
+  gave no way to tell tool drift from a code difference.
+- **Expected:** the guide installs the version CI measures with, and says why.
+- **Repro:** `grep -n 'cargo install cargo-llvm-cov' docs/src/contributing/testing-guide.md` against `grep -n
+  'cargo-llvm-cov@' .github/workflows/ci.yml`.
+- **Severity:** S3 (D-04: a guide step that does not match the claim made for it; the fix is a text change)
+- **Related:** C1, C6 (trap 3), trap 3 of `56-RUNBOOK-COVERAGE.md`; DF-20
+- **Disposition:** open → **in v0.11.1** (contained docs fix: plan 56-09)
+- **Disposition (2026-11-03):** in v0.11.1 — fixed in plan 56-09: the guide's Prerequisites now install `cargo-llvm-cov --version 0.8.7 --locked` (and the `cargo binstall` form), name `ci.yml`'s pin as the source and say why (tool drift reads as a CI disagreement), and tell a devcontainer reader to run `cargo llvm-cov --version` first because the image may not carry the tool (DF-20); proof: `grep -n 'version 0.8.7' docs/src/contributing/testing-guide.md` finds both install forms
+
+### DF-22 — `make coverage` prints no coverage percentage, although the guide says it prints an LCOV summary
+- **Found:** 2026-11-03 · **By:** maintainer · **Surface:** docs
+- **Version:** 0.11.0 (`docs/src/contributing/testing-guide.md` "Reading the output" at commit 21dacf0d6)
+- **What happened:** the guide said "`make coverage` prints an LCOV summary". The run (exit 0, every suite passed) ended
+  with the test results and one line, and no figure (C3):
+  ```
+      Finished report saved to lcov.info
+  exit=0
+  ```
+  The maintainer's note (C3): "No percentage was printed (trap 1 confirmed)." `scripts/coverage.sh` runs
+  `cargo llvm-cov ... --lcov --output-path lcov.info`, which writes a file and prints nothing; CI says the same in its
+  own comments above its "Coverage summary" step and computes the figure itself. The maintainer needed the LF/LH
+  snippet from the runbook to get a number (C5):
+  ```
+  Lines: 170650/183901 = 92.79%  (truncated: 92)
+  ```
+- **Expected:** after following the guide the reader can read the line figure the gate compares.
+- **Repro:** `make coverage` with the services up; look for a percentage in the output.
+- **Severity:** S3 (D-04: the guide states output the command does not produce, and the one number the section is
+  about cannot be read from it)
+- **Related:** C3, C5, C6 bullet 3, trap 1 of `56-RUNBOOK-COVERAGE.md`
+- **Disposition:** open → **in v0.11.1** (contained docs fix: plan 56-09)
+- **Disposition (2026-11-03):** in v0.11.1 — fixed in plan 56-09: "Reading the output" now says `make coverage` writes `lcov.info` and prints no percentage, gives the same LF/LH summation CI runs as a copyable snippet, and says to compare its truncated value with the `coverage-summary` artifact of the CI run on the same commit; proof: the snippet prints `Lines: 165/200 = 82.50%  (truncated: 82)` on a two-record `lcov.info` (`LF:100 LH:90`, `LF:100 LH:75`), the runbook's sanity case, and the maintainer's own run of it produced C5
+
+### DF-23 — Guide step 1 (`make services-up`) cannot run inside the project's own devcontainer, and the guide does not say the compose siblings satisfy it there
+- **Found:** 2026-11-03 · **By:** maintainer · **Surface:** docs
+- **Version:** 0.11.0 (`docs/src/contributing/testing-guide.md` "Local generation" at commit 21dacf0d6)
+- **What happened:** the guide's "Local generation" starts with `make services-up`, which runs `docker compose` and so
+  needs a Docker daemon. The devcontainer has no Docker socket, so the step cannot run there. The maintainer skipped it
+  and recorded (C2):
+  ```
+  $ getent hosts redis rustfs
+  redis-cli -h redis -p 6379 ping 2>&1 || echo "redis-cli not installed (script falls back to a TCP probe)"
+  172.19.0.3      redis
+  172.19.0.4      rustfs
+  PONG
+  ```
+  Redis and RustFS were already up as siblings on `paladin-dev-network`
+  (`.devcontainer/docker-compose.yml:36-37` names `redis:6379` and `rustfs:9000`), and `scripts/coverage.sh` probes
+  `redis:6379` / `rustfs:9000` first, so `make coverage` found them. The guide said none of this, so a contributor in the
+  devcontainer meets a step that fails and has no way to know the next one will still work. Redis answered `PONG`
+  unauthenticated on 6379 there (research assumption A3, settled for the devcontainer; the bare-host case with the
+  password-protected `docker/docker-compose.yml` Redis was not walked). Guide step 1 as written was therefore not
+  exercised on a bare host.
+- **Expected:** the guide says what to do in the devcontainer, where most contributors work.
+- **Repro:** in the devcontainer, `make services-up`.
+- **Severity:** S3 (D-04: a guide step that does not read as written in the project's own recommended environment)
+- **Related:** C2, C6 bullet 2, traps 2 and 5 of `56-RUNBOOK-COVERAGE.md` (neither bit or was exercised)
+- **Disposition:** open → **in v0.11.1** (contained docs fix: plan 56-09)
+- **Disposition (2026-11-03):** in v0.11.1 — fixed in plan 56-09: the guide's Prerequisites now carry a paragraph saying that inside the devcontainer there is no Docker socket, that the compose siblings `redis:6379` and `rustfs:9000` are what `scripts/coverage.sh` probes first, that step 1 is skipped there, and how to check the siblings (`getent hosts redis rustfs`, `redis-cli -h redis ping`); proof: `grep -n 'no Docker socket' docs/src/contributing/testing-guide.md`. The bare-host `make services-up` path stays unwalked and is not claimed
+
+### DF-24 — CI's coverage summary prints `Scope: --workspace --features integration-tests`, but the measured scope is `integration-tests,llm-all`
+- **Found:** 2026-11-03 · **By:** maintainer · **Surface:** ci
+- **Version:** 0.11.0 (`.github/workflows/ci.yml` at commit 21dacf0d6; the job log of run 41703614636 shows the label)
+- **What happened:** the `Coverage summary` step of the `coverage` job printed (C1, from the job log of run
+  `41703614636`, job `126153522434`):
+  ```
+  Scope: --workspace --features integration-tests (the gated measurement)
+  Lines:     170767/183901 = 92.86%
+  Functions: 17617/20367 = 86.50%
+  ```
+  The measurement it summarises runs `scripts/coverage.sh`, whose command is
+  `cargo llvm-cov --workspace --features integration-tests,llm-all ...`. The label omits `llm-all`, the feature that
+  brings six of nine LLM adapters into the figure, so a reader comparing a local run with the artifact is told the wrong
+  scope. The artifact `coverage-summary.txt` carries the same label.
+- **Expected:** the label names the scope that was measured.
+- **Repro:** read the `Coverage summary` step of any `ci.yml` `coverage` job; compare with `scripts/coverage.sh:101`.
+- **Severity:** S4 (D-04: a stale label; the number itself is right)
+- **Related:** C6 bullet 5, trap 6 of `56-RUNBOOK-COVERAGE.md`
+- **Disposition:** open → **in v0.11.1** (contained: one label line in `ci.yml`, plan 56-09)
+- **Disposition (2026-11-03):** in v0.11.1 — fixed in plan 56-09: the printed `Scope:` line now reads `--workspace --features integration-tests,llm-all (the gated measurement)`; the step-summary heading two lines below (`### Coverage (workspace, --features integration-tests)`) carries the same stale scope and was left, because plan 56-09 caps its `ci.yml` edit at one line (PD-09-2); proof: `git diff --numstat -- .github/workflows/ci.yml` is `1 1`, `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))"` parses, `actionlint` is not installed here and the CI Workflow Lint job on push is the proof of record
+
+### DF-25 — `make coverage-html` measures `--features integration-tests` without `llm-all`, a different scope from the gated figure the guide tells the reader to compare
+- **Found:** 2026-11-03 · **By:** Claude (by reading, during the coverage walk; the maintainer did not run `make coverage-html`) · **Surface:** docs
+- **Version:** 0.11.0 (`Makefile` at commit 21dacf0d6)
+- **What happened:** the guide's "Local generation" lists `make coverage-html` as step 3 of the same procedure and opens
+  by saying every command is the one CI runs. The Makefile recipe was:
+  ```
+  cargo llvm-cov --workspace --features integration-tests --html --output-dir target/coverage
+  ```
+  without `llm-all`, while the guide's own text on `scripts/coverage.sh` says that omitting it "silently excludes the
+  other six adapters' lines from both the numerator and the denominator". The HTML report's percentage is therefore not
+  comparable to the gated one. This was read from the tree; the target was not run in the walk (trap 4 not run), so no
+  measured difference is claimed.
+- **Expected:** the HTML report covers the same scope as the gate.
+- **Repro:** `make -n coverage-html | grep llvm-cov`.
+- **Severity:** S3 (D-04: the optional guide step reports a figure on a scope the guide says is wrong)
+- **Related:** trap 4 of `56-RUNBOOK-COVERAGE.md`; `scripts/coverage.sh:7-16`
+- **Disposition:** open → **in v0.11.1** (contained: one line in `Makefile`, plan 56-09)
+- **Disposition (2026-11-03):** in v0.11.1 — fixed in plan 56-09: `coverage-html` now passes `--features integration-tests,llm-all`, and the guide says the report has the same scope as the gate and needs the same services; proof: `make -n coverage-html` prints `cargo llvm-cov --workspace --features integration-tests,llm-all --html --output-dir target/coverage`, `git diff --numstat -- Makefile` is `1 1`; the target itself was not run (it needs the services and a full instrumented build)

@@ -417,3 +417,60 @@ promoted.
   the strings inside the binary are a code change (P10) and are re-homed with DF-16's todo.
 - **Disposition:** open → **in v0.11.1** (contained docs fix: plan 56-07)
 - **Disposition (2026-11-02):** in v0.11.1 — fixed in plan 56-07: the six CLI appendix pages invoke paladin-cli onboarding and paladin-cli setup-check; the binary strings stay re-homed with DF-16 (.planning/todos/pending/2026-11-02-setup-check-first-run-output.md, P10); proof: anchored grep finds 0 bare-paladin invocations and 38 paladin-cli ones (56-FIRST-RUN-WALK.md, Contained fixes)
+
+### DF-18 — The Quickstart's `.model("gpt-4")` fails against a real OpenAI key: the model is deprecated
+- **Found:** 2026-11-03 · **By:** maintainer · **Surface:** docs
+- **Version:** 0.11.0 (published crates; `docs/src/getting-started/quickstart.md:53` is byte-identical at tag `v0.11.0` and on HEAD dc190dba6)
+- **What happened:** the Quickstart `main.rs` as written, built against crates.io `0.11.0` with the `openai` feature,
+  stops at the first provider call (exit 1):
+  ```
+  Error: LlmFailure { transience: Permanent, status: None, provider: None, message: "Model not available: {\n    \"error\": {\n        \"message\": \"The model `gpt-4` has been deprecated, learn more here: https://platform.openai.com/docs/deprecations\",\n        \"type\": \"invalid_request_error\",\n        \"param\": null,\n        \"code\": \"model_not_found\"\n    }\n}\n" }
+  ```
+  After `sed -i 's/"gpt-4"/"gpt-4o-mini"/' src/main.rs` the same program prints `Output : Hello! How can I assist you
+  today?`, `Tokens : 32`, `Time   : 1390ms` (exit 0). The exact literal `"gpt-4"` is not a one-page problem: on HEAD it
+  appears at 109 sites in 54 files (40 sites in 18 files under `docs/src`, 69 sites in 36 files under `examples/`, none
+  in `README.md`). The seeded OpenAI registry rows prefer `gpt-4o-mini` and `gpt-5.4-nano`.
+- **Expected:** the first program a new user copies reaches a completion with a key that works.
+- **Repro:** scratch crate with the Quickstart dependency block (`paladin-ai`, `paladin-ports`, `paladin-llm` with
+  `features = ["openai"]`, all `0.11.0`, plus `tokio`) and the Quickstart `main.rs`; `OPENAI_API_KEY` set; `cargo run`.
+  Count: `grep -rn '"gpt-4"' docs/src examples README.md | wc -l` (109).
+- **Severity:** S3 (D-04: a docs literal. The result is a clear provider error on the very first keyed run, but nothing
+  in the library is wrong, and the fix is a text change)
+- **Related:** K2 and K9 of `56-RUNBOOK-KEYED-WALK.md`; step 5 of `56-FIRST-RUN-WALK.md` (the keyless walk stopped at the
+  missing key, one step before this); DF-13 (the same page's version pin)
+- **Disposition:** out (re-homed: .planning/todos/pending/2026-11-03-docs-deprecated-gpt-4-model-literal.md)
+
+### DF-19 — `setup-check` and `onboarding` reject a valid Anthropic key: the probe hard-codes `claude-3-haiku-20240307` (lead L8)
+- **Found:** 2026-11-03 · **By:** maintainer · **Surface:** cli
+- **Version:** 0.11.0 (published crate; `setup_check.rs` and `onboarding.rs` carry the same literal at tag `v0.11.0` and on HEAD dc190dba6)
+- **What happened:** with a working Anthropic key exported alongside the OpenAI key, `setup-check --verbose` fails the
+  Anthropic row and the whole run (exit 1):
+  ```
+  LLM Provider:
+    ✓ OpenAI
+  ℹ   All checks passed
+    ✗ Anthropic
+  ✗   API validation failed: Paladin execution error: Anthropic API validation failed (404 Not Found)
+  ...
+    Passed: 4
+    Failed: 1
+    Skipped: 3
+
+  ✗ Setup check failed - please address the errors above
+  ```
+  The key itself is valid (the maintainer uses it elsewhere). The cause is in the source: the validator posts a one-token
+  request to `https://api.anthropic.com/v1/messages` with `"model": "claude-3-haiku-20240307"`
+  (`src/application/cli/commands/setup_check.rs:101`), and `src/application/cli/commands/onboarding.rs:99` carries the
+  same literal, so `onboarding` validates the same way. A 404 on that request is the status a retired model id gets; the
+  CLI discards the response body, so the id is the inferred cause, not one read from the body. The error text names
+  neither the model nor the provider's reply, so the reader cannot tell a bad key from a bad probe. The seeded registry
+  (`crates/paladin-llm/src/registry/mod.rs`) knows `claude-haiku-5-5` and `claude-opus-4-8`. The OpenAI row passed in the
+  same run, and the OpenAI half of `onboarding` validated (K6).
+- **Expected:** a valid key passes validation; a failure says which model was probed and what the provider answered.
+- **Repro:** install per DF-15; export a valid `ANTHROPIC_API_KEY` (read with `read -rs`); `paladin-cli setup-check
+  --verbose`. Source check: `grep -n '"model"' src/application/cli/commands/setup_check.rs
+  src/application/cli/commands/onboarding.rs`.
+- **Severity:** S2 (D-04: a wrong result. The command meant to confirm a working setup reports a valid key as failed and
+  exits 1, so an Anthropic-only user who runs `onboarding` is told their key is bad)
+- **Related:** lead L8 (56-RESEARCH.md), assumption A6; K8 of `56-RUNBOOK-KEYED-WALK.md`; DF-16 (the same file)
+- **Disposition:** open → promote **in v0.11.1** (S2, D-05; fix in Stage C, D-06)

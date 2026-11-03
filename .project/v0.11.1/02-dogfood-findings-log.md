@@ -629,3 +629,4 @@ promoted.
 - **Severity:** S2 (wrong result: documented operator controls are ignored)
 - **Related:** DF-08 (the fix there judges file values only, by design — plan 56-12 P-12-2); MIGRATION §9.5; inventory §H does not cover it
 - **Disposition:** open → promote **in v0.11.1** (S2, D-05; fix in Stage C, D-06 — plan 56-14)
+- **Disposition (2026-11-03):** in v0.11.1 — fixed by 8859af226, 9dce25b42 (plan 56-14); regression: load_settings_applies_a_trace_env_overlay, load_settings_refuses_a_zero_trace_channel_capacity_from_the_environment, load_settings_applies_an_agent_runtime_env_overlay, load_settings_refuses_an_invalid_agent_runtime_value_from_the_environment, load_settings_applies_a_web_server_env_overlay, load_settings_leaves_file_values_when_no_overlay_is_set, section_wrappers_return_an_overlaid_copy_and_leave_settings_untouched; boot probe refuses PALADIN_TRACE_CHANNEL_CAPACITY=0 (exit 1)

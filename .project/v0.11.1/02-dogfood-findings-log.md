@@ -476,6 +476,7 @@ promoted.
   exits 1, so an Anthropic-only user who runs `onboarding` is told their key is bad)
 - **Related:** lead L8 (56-RESEARCH.md), assumption A6; K8 of `56-RUNBOOK-KEYED-WALK.md`; DF-16 (the same file)
 - **Disposition:** open → promote **in v0.11.1** (S2, D-05; fix in Stage C, D-06)
+- **Disposition (2026-11-03):** in v0.11.1 — fixed by 343300aff, 889b5f1bb (plan 56-13); regression: anthropic_probe_model_is_the_adapters_seeded_default, anthropic_probe_posts_the_probe_model_and_passes_on_200, anthropic_probe_failure_names_the_model_and_the_provider_reply, anthropic_probe_does_not_follow_a_redirect; maintainer re-check 2026-11-03 ✓ Anthropic
 
 ### DF-20 — The devcontainer installs the `llvm-tools-preview` component but not `cargo-llvm-cov`, so the first `make coverage` after a rebuild fails
 - **Found:** 2026-11-03 · **By:** maintainer · **Surface:** docs

@@ -88,11 +88,37 @@ fn cadence_boot_summary(config: &CadenceConfig) -> String {
     format!("Rate pacing enabled (treasurer.cadence.backend: {backend})")
 }
 
-/// Load config, build the agent host, and serve until a shutdown signal.
-async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let config_path = config_path();
-    info!("Loading configuration from '{config_path}'");
-    let settings = Settings::load_from_file(&config_path)?;
+/// Load the server configuration and refuse, at boot, any value the config types reject.
+///
+/// Runs first in [`run`], before any store, provider, registry or listener is built, so a
+/// refusal reaches `main()`'s `paladin-server failed to start: {e}` line, the same path every
+/// other boot refusal takes. It runs, in order: [`Settings::load_from_file`]; the treasurer
+/// check (the boot-time half of PRICE-01, message `invalid treasurer configuration: ...`,
+/// unchanged and still first); then [`Settings::validate`], mapped to
+/// `invalid configuration: <key> ...`.
+///
+/// Why (DF-08): before this, the server booted on a configuration its own
+/// `Settings::validate()` rejects. `trace.channel_capacity: 0` was silently clamped to 1 and
+/// `trace.otel.enabled: true` on a build without the `otel` feature silently exported
+/// nothing. Each validator message names its full key and echoes no secret value (never an
+/// `otel.headers` entry).
+///
+/// Double validation is deliberate and harmless (PD-12-2): `Settings::validate()` re-runs
+/// `TreasurerConfig::validate()`, which is pure and reads the same environment in the same
+/// process, so it cannot fail once the standalone check above it passed. `agent_runtime` is
+/// validated nowhere else on the server path (`validate_config` in `agent_host.rs` walks only
+/// `agents`), so this is its only boot check.
+///
+/// The file value is what is judged and what runs (PD-12-4): no `PALADIN_TRACE_*`,
+/// `APP_AGENT_RUNTIME_*` or `APP_WEB_SERVER_*` overlay is applied to `trace`, `agent_runtime`
+/// or `web_server` at boot.
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be loaded, the treasurer section is invalid, or any
+/// section checked by [`Settings::validate`] is invalid.
+fn load_settings(config_path: &str) -> Result<Settings, Box<dyn std::error::Error>> {
+    let settings = Settings::load_from_file(config_path)?;
 
     // Boot-time half of PRICE-01: a bad treasurer.pricing entry (or APP_TREASURER_CURRENCY
     // override) stops the server here, before any agent, provider or engine is built.
@@ -100,6 +126,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .get_treasurer_config()
         .validate()
         .map_err(|e| format!("invalid treasurer configuration: {e}"))?;
+
+    settings
+        .validate()
+        .map_err(|e| format!("invalid configuration: {e}"))?;
+    Ok(settings)
+}
+
+/// Load config, build the agent host, and serve until a shutdown signal.
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let config_path = config_path();
+    info!("Loading configuration from '{config_path}'");
+    let settings = load_settings(&config_path)?;
 
     // 39-07/D-08: `RunStoreConfig` moved ahead of the agent registry so the Treasurer's
     // spend ledger can be built ONCE, from the SAME backend selection `RunApiConfigs` uses
@@ -766,6 +804,103 @@ mod tests {
             role: UserRole::User,
             tenant: "test-tenant".to_string(),
         }
+    }
+
+    /// Read the shipped `config.example.yml`, apply each `(from, to)` edit, and write the result
+    /// to a `.yml`-suffixed temp file (`Settings::load_from_file` picks YAML by suffix).
+    ///
+    /// Each `from` must occur exactly once, so an edit can never silently miss.
+    fn example_with(edits: &[(&str, &str)]) -> tempfile::NamedTempFile {
+        let mut text =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/config.example.yml"))
+                .expect("config.example.yml must be readable");
+        for (from, to) in edits {
+            assert_eq!(
+                text.matches(from).count(),
+                1,
+                "edit target must occur exactly once in config.example.yml: {from:?}"
+            );
+            text = text.replace(from, to);
+        }
+        let mut file = tempfile::Builder::new()
+            .suffix(".yml")
+            .tempfile()
+            .expect("temp config file");
+        std::io::Write::write_all(&mut file, text.as_bytes()).expect("write temp config");
+        file
+    }
+
+    fn load_error(file: &tempfile::NamedTempFile) -> String {
+        match load_settings(file.path().to_str().expect("utf-8 temp path")) {
+            Ok(_) => panic!("load_settings accepted a configuration it should refuse"),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[test]
+    fn load_settings_refuses_a_zero_trace_channel_capacity() {
+        let file = example_with(&[("  channel_capacity: 1024", "  channel_capacity: 0")]);
+        let err = load_error(&file);
+        assert!(
+            err.contains("invalid configuration: trace.channel_capacity must be greater than 0"),
+            "got: {err}"
+        );
+    }
+
+    #[cfg(not(feature = "otel"))]
+    #[test]
+    fn load_settings_refuses_otel_enabled_without_the_otel_feature() {
+        const SENTINEL: &str = "Bearer test-key-not-a-secret-df08-otel";
+        let file = example_with(&[
+            ("  otel:\n    enabled: false", "  otel:\n    enabled: true"),
+            (
+                "    headers: {}",
+                "    headers:\n      authorization: \"Bearer test-key-not-a-secret-df08-otel\"",
+            ),
+        ]);
+        let err = load_error(&file);
+        assert!(err.contains("trace.otel.enabled"), "got: {err}");
+        assert!(err.contains("otel"), "got: {err}");
+        assert!(
+            !err.contains(SENTINEL),
+            "the refusal must never echo an otel.headers value: {err}"
+        );
+    }
+
+    #[test]
+    fn load_settings_refuses_an_invalid_agent_runtime_value() {
+        let file = example_with(&[(
+            "  model_call_limit:\n    enabled: false\n    max_calls: 10",
+            "  model_call_limit:\n    enabled: true\n    max_calls: 0",
+        )]);
+        let err = load_error(&file);
+        assert!(
+            err.contains(
+                "agent_runtime.model_call_limit.max_calls must be greater than 0 when enabled"
+            ),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn load_settings_accepts_the_shipped_example_config() {
+        let file = example_with(&[]);
+        let result = load_settings(file.path().to_str().expect("utf-8 temp path"));
+        assert!(
+            result.is_ok(),
+            "the shipped example must boot: {:?}",
+            result.err().map(|e| e.to_string())
+        );
+    }
+
+    #[test]
+    fn load_settings_keeps_the_treasurer_refusal_first() {
+        let file = example_with(&[("  currency: \"USD\"", "  currency: \"usd\"")]);
+        let err = load_error(&file);
+        assert!(
+            err.starts_with("invalid treasurer configuration: treasurer.currency"),
+            "got: {err}"
+        );
     }
 
     #[test]

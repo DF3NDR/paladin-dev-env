@@ -220,7 +220,7 @@ fails is rebuilt.*
       `make coverage` procedure on a Docker-capable machine and the todo
       `2026-08-13-verify-local-coverage-reproduction` is closed with the measured figure — G4
 
-- [ ] **DOGF-06**: Every finding promoted to `in v0.11.1` with severity S1 or S2 is fixed before the
+- [x] **DOGF-06**: Every finding promoted to `in v0.11.1` with severity S1 or S2 is fixed before the
       tag, in a phase inserted once the findings are known
 
 ### Register Hygiene (REG)
@@ -367,7 +367,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DOGF-03 | Phase 56 | Complete |
 | DOGF-04 | Phase 56 | Complete |
 | DOGF-05 | Phase 56 | Complete |
-| DOGF-06 | Phase 56 | Pending |
+| DOGF-06 | Phase 56 | Complete |
 | REG-01 | Phase 57 | Pending |
 | REG-02 | Phase 57 | Pending |
 | REG-03 | Phase 57 | Pending |

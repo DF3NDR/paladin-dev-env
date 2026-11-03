@@ -203,6 +203,7 @@ promoted.
   nothing, which is a wrong result with no error, and it applies to every field `validate()` covers)
 - **Related:** lead L6 (56-RESEARCH.md); DF-09 (`web_server` is also covered by the unused `validate()`)
 - **Disposition:** open → promote **in v0.11.1** (S2, D-05; fix in Stage C)
+- **Disposition (2026-11-03):** in v0.11.1 — fixed by 59bb84e0d (plan 56-12); regression: load_settings_refuses_a_zero_trace_channel_capacity, load_settings_refuses_otel_enabled_without_the_otel_feature, load_settings_refuses_an_invalid_agent_runtime_value, load_settings_accepts_the_shipped_example_config; boot probe refuses (exit 1)
 
 ### DF-09 — `web_server.dev_ui.mermaid_url` is documented as live config but no shipped binary mounts the inspector
 - **Found:** 2026-11-02 · **By:** Claude (Phase 56, plan 56-05) · **Surface:** docs

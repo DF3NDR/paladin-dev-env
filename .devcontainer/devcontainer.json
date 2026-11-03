@@ -43,7 +43,7 @@
         "rust-lang.rust-analyzer",
         "vadimcn.vscode-lldb",
         "tamasfe.even-better-toml",
-        "serayuzgur.crates",
+        "fill-labs.dependi",
         // Git and version control
         "eamodio.gitlens",
         "mhutchie.git-graph",

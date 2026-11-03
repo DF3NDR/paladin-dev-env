@@ -5,15 +5,15 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 56
 current_phase_name: Dogfood Findings
 status: verifying
-stopped_at: "Phase 56 plan 56-13 Task 3: awaiting maintainer's real-key Anthropic re-check of the DF-19 fix (checkpoint:human-verify); 56-14 (DF-26) being planned"
-last_updated: "2026-11-03T23:25:33.138Z"
+stopped_at: Completed 56-13-PLAN.md
+last_updated: "2026-11-03T23:44:39.434Z"
 last_activity: 2026-11-02
 last_activity_desc: Phase 56 execution started
 progress:
   total_phases: 5
   completed_phases: 4
-  total_plans: 51
-  completed_plans: 49
+  total_plans: 52
+  completed_plans: 50
 ---
 
 # Project State
@@ -407,6 +407,7 @@ Progress: [█████████░░░░░░░░░░░] 3/7 pha
 | Phase 56 P09 | ~1h | 3 tasks | 8 files |
 | Phase 56 P11 | 15min | 3 tasks | 11 files |
 | Phase 56 P12 | 30min | 2 tasks | 4 files |
+| Phase 56 P13 | 2 sessions | 4 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -769,6 +770,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 56-09: coverage walk PASS under D-17 (local 92.79% vs CI 92.86%, both 92); DF-20..DF-25 logged, DF-21..DF-25 fixed in plan, DF-20 re-homed (Dockerfile.dev outside files_modified)
 - [Phase ?]: 56-11: DF-07 fixed in both halves; summary-only startup line plus redacting Debug on ApiKeyConfig, Settings, QueueConfig, FileStorageConfig, EmailAdapterConfig; URL fields (T-56-41) and Serialize (T-56-42) accepted
 - [Phase 56]: 56-12: paladin-server validates the whole config at boot via load_settings (PD-12-1); treasurer check kept first, agent_runtime validated only here (PD-12-2); binary-only, recorded as M-B-37 (D-00b)
+- [Phase ?]: 56-13: provider-key probes share one module/client (Policy::none, diagnostic_excerpt); Anthropic probe model = ANTHROPIC_DEFAULT_MODEL, drift-tested mirror for no-adapter builds
 
 ### Pending Todos
 
@@ -1141,9 +1143,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-11-03T23:25:33.100Z
-Stopped at: Phase 56 plan 56-13 Task 3: awaiting maintainer's real-key Anthropic re-check of the DF-19 fix (checkpoint:human-verify); 56-14 (DF-26) being planned
-Resume file: .planning/phases/56-dogfood-findings/56-13-PLAN.md
+Last session: 2026-11-03T23:44:39.412Z
+Stopped at: Completed 56-13-PLAN.md
+Resume file: None
 
 ## Operator Next Steps
 

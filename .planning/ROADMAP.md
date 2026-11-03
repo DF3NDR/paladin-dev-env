@@ -531,7 +531,7 @@ Plans:
 **Stage C** *(gap closure from the log, `gap_closure: true`; waves 4, 5 and 7 so they run before 56-10 resumes; chained because each edits `CHANGELOG.md` and the log)*
 
 - [x] 56-11-PLAN.md — DF-07 (S1): the `paladin` binary stops logging the whole `Settings`; redacting `Debug` for `ApiKeyConfig`, `Settings.llm_api_key`, `QueueConfig`, `FileStorageConfig`, `EmailAdapterConfig`; binary re-probe, `M-B-36` + rotation step (DOGF-06, DOGF-01)
-- [ ] 56-12-PLAN.md — DF-08 (S2): `paladin-server` calls `Settings::validate()` at boot through `load_settings`, refusing invalid `trace` / `agent_runtime` values naming the key; binary boot probe, `M-B-37` (DOGF-06, DOGF-01)
+- [x] 56-12-PLAN.md — DF-08 (S2): `paladin-server` calls `Settings::validate()` at boot through `load_settings`, refusing invalid `trace` / `agent_runtime` values naming the key; binary boot probe, `M-B-37` (DOGF-06, DOGF-01)
 - [ ] 56-13-PLAN.md — DF-19 (S2): one shared provider-key probe for `setup-check` and `onboarding`, Anthropic model from the adapter's seeded default, failure names the model with a redacted reply, no redirects; maintainer real-key re-check (DOGF-06, DOGF-01)
 
 **Wave 8** *(blocked on Wave 7 and on Stage C; human-gated)*

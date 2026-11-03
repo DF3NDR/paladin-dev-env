@@ -171,6 +171,7 @@ promoted.
   for the unredacted types listed in the audit (`QueueConfig`, `FileStorageConfig`, `Settings.llm_api_key`,
   `EmailAdapterConfig`)
 - **Disposition:** open → promote **in v0.11.1** (S1, D-05; fix in Stage C, D-06)
+- **Disposition (2026-11-03):** in v0.11.1 — fixed by 74317f48a, fbc514410 (plan 56-11); regression: api_key_config_debug_redacts_the_key, settings_summary_names_no_credential, settings_debug_redacts_every_credential_it_reaches, queue_config_debug_redacts_the_redis_password, file_storage_config_debug_redacts_both_minio_keys, email_adapter_config_debug_redacts_the_password; binary re-probe 0/5
 
 ### DF-08 — `paladin-server` never calls `Settings::validate()`: a `trace` value its type rejects boots
 - **Found:** 2026-11-02 · **By:** Claude (Phase 56, plan 56-05) · **Surface:** server

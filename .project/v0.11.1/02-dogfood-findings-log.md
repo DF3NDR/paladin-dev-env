@@ -377,7 +377,7 @@ promoted.
   LLM Provider:
 
   Environment:
-    ⚠ .env file 
+    ⚠ .env file
   ⚠   Not found - run 'paladin onboarding' to create
   ```
   Exit code 2, as the page documents for warnings. `--verbose` lists `○ OpenAI`, `○ Anthropic`, `○ DeepSeek`,

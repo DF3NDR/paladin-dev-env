@@ -103,12 +103,12 @@ Service:
 LLM Provider:
 
 Environment:
-  ⚠ .env file 
+  ⚠ .env file
 ⚠   Not found - run 'paladin onboarding' to create
 
 System:
-  ✓ Paladin CLI v0.11.0 
-  ✓ Rust Toolchain (rustc 1.97.0 (2d8144b78 2026-07-07)) 
+  ✓ Paladin CLI v0.11.0
+  ✓ Rust Toolchain (rustc 1.97.0 (2d8144b78 2026-07-07))
 
 ┌═══════════┐
 │ Summary │
@@ -132,27 +132,27 @@ Summary adds `Skipped: 5`):
 
 ```
 LLM Provider:
-  ○ OpenAI 
+  ○ OpenAI
 ℹ   OPENAI_API_KEY not configured
-  ○ Anthropic 
+  ○ Anthropic
 ℹ   ANTHROPIC_API_KEY not configured
-  ○ DeepSeek 
+  ○ DeepSeek
 ℹ   DEEPSEEK_API_KEY not configured
 
 Service:
-  ○ Redis 
+  ○ Redis
 ℹ   REDIS_URL not configured
-  ○ Qdrant 
+  ○ Qdrant
 ℹ   QDRANT_URL not configured
 
 Environment:
-  ⚠ .env file 
+  ⚠ .env file
 ⚠   Not found - run 'paladin onboarding' to create
 
 System:
-  ✓ Paladin CLI v0.11.0 
+  ✓ Paladin CLI v0.11.0
 ℹ   All checks passed
-  ✓ Rust Toolchain (rustc 1.97.0 (2d8144b78 2026-07-07)) 
+  ✓ Rust Toolchain (rustc 1.97.0 (2d8144b78 2026-07-07))
 ℹ   All checks passed
 ```
 
@@ -165,8 +165,8 @@ rows (one warning) and with the documented exit-code table.
 **`onboarding`, no TTY** (step 10, `< /dev/null`, `timeout 20`; the box-drawing banner lines elided):
 
 ```
- Welcome 
- Welcome to Paladin! 🛡️ 
+ Welcome
+ Welcome to Paladin! 🛡️
 ✓ Let's get you set up with a multi-agent orchestration framework.
 
 This wizard will help you:
@@ -501,16 +501,16 @@ drwxrwxr-x  4 <user> <user>   4096 Nov  3 12:52 target
 └═══════════════════════┘
 
 LLM Provider:
-  ✓ OpenAI 
+  ✓ OpenAI
 
 Environment:
-  ✓ .env file 
+  ✓ .env file
 
 Service:
 
 System:
-  ✓ Paladin CLI v0.11.0 
-  ✓ Rust Toolchain (rustc 1.97.1 (8bab26f4f 2026-07-14)) 
+  ✓ Paladin CLI v0.11.0
+  ✓ Rust Toolchain (rustc 1.97.1 (8bab26f4f 2026-07-14))
 
 ┌═══════════┐
 │ Summary │
@@ -525,27 +525,27 @@ exit=0
 └═══════════════════════┘
 
 System:
-  ✓ Paladin CLI v0.11.0 
+  ✓ Paladin CLI v0.11.0
 ℹ   All checks passed
-  ✓ Rust Toolchain (rustc 1.97.1 (8bab26f4f 2026-07-14)) 
+  ✓ Rust Toolchain (rustc 1.97.1 (8bab26f4f 2026-07-14))
 ℹ   All checks passed
 
 LLM Provider:
-  ✓ OpenAI 
+  ✓ OpenAI
 ℹ   All checks passed
-  ○ Anthropic 
+  ○ Anthropic
 ℹ   ANTHROPIC_API_KEY not configured
-  ○ DeepSeek 
+  ○ DeepSeek
 ℹ   DEEPSEEK_API_KEY not configured
 
 Environment:
-  ✓ .env file 
+  ✓ .env file
 ℹ   All checks passed
 
 Service:
-  ○ Redis 
+  ○ Redis
 ℹ   REDIS_URL not configured
-  ○ Qdrant 
+  ○ Qdrant
 ℹ   QDRANT_URL not configured
 
 ┌═══════════┐
@@ -564,17 +564,17 @@ exit=0
 ```
  "$WALK/cli/bin/paladin-cli" setup-check --verbose 2>&1 | redact | sed -n '/LLM Provider/,/Environment/p'; echo "exit=${PIPESTATUS[0]}"
 LLM Provider:
-  ✓ OpenAI 
+  ✓ OpenAI
 ℹ   All checks passed
-  ✗ Anthropic 
+  ✗ Anthropic
 ✗   API validation failed: Paladin execution error: Anthropic API validation failed (404 Not Found)
-  ○ DeepSeek 
+  ○ DeepSeek
 ℹ   DEEPSEEK_API_KEY not configured
 
 Service:
-  ○ Redis 
+  ○ Redis
 ℹ   REDIS_URL not configured
-  ○ Qdrant 
+  ○ Qdrant
 ℹ   QDRANT_URL not configured
 
 ┌═══════════┐

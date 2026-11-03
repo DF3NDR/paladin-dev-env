@@ -4,16 +4,16 @@ milestone: v0.11.1
 milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 56
 current_phase_name: Dogfood Findings
-status: verifying
-stopped_at: Completed 56-13-PLAN.md
-last_updated: "2026-11-03T23:44:39.434Z"
+status: executing
+stopped_at: Completed 56-14-PLAN.md
+last_updated: "2026-11-03T23:56:04.098Z"
 last_activity: 2026-11-02
 last_activity_desc: Phase 56 execution started
 progress:
   total_phases: 5
   completed_phases: 4
   total_plans: 52
-  completed_plans: 50
+  completed_plans: 51
 ---
 
 # Project State
@@ -51,11 +51,11 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 ## Current Position
 
 Phase: 56 (Dogfood Findings) — EXECUTING
-Plan: 10 of 10
-Status: Phase complete — ready for verification
+Plan: 13 of 14 complete (56-10, the human-gated wave 9 plan, remains)
+Status: Executing Phase 56 — Stage C closed (DF-26 fixed, DOGF-06 complete); 56-10 remains
 Last activity: 2026-11-02 — Phase 56 execution started
 
-Progress: [█████████░░░░░░░░░░░] 3/7 phases ([██████████] 96%) — Phase 54 plans [████████████████████] 9/9 (100%)
+Progress: [█████████░░░░░░░░░░░] 3/7 phases ([██████████] 98%) — Phase 54 plans [████████████████████] 9/9 (100%)
 
 ## Performance Metrics
 
@@ -408,6 +408,7 @@ Progress: [█████████░░░░░░░░░░░] 3/7 pha
 | Phase 56 P11 | 15min | 3 tasks | 11 files |
 | Phase 56 P12 | 30min | 2 tasks | 4 files |
 | Phase 56 P13 | 2 sessions | 4 tasks | 7 files |
+| Phase 56 P14 | 1 session | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -771,6 +772,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 56-11: DF-07 fixed in both halves; summary-only startup line plus redacting Debug on ApiKeyConfig, Settings, QueueConfig, FileStorageConfig, EmailAdapterConfig; URL fields (T-56-41) and Serialize (T-56-42) accepted
 - [Phase 56]: 56-12: paladin-server validates the whole config at boot via load_settings (PD-12-1); treasurer check kept first, agent_runtime validated only here (PD-12-2); binary-only, recorded as M-B-37 (D-00b)
 - [Phase ?]: 56-13: provider-key probes share one module/client (Policy::none, diagnostic_excerpt); Anthropic probe model = ANTHROPIC_DEFAULT_MODEL, drift-tested mirror for no-adapter builds
+- [Phase ?]: [Phase 56-14] DF-26: load_settings applies trace/agent_runtime/web_server env overlays via new Settings::get_*_config accessors before validate(); treasurer refusal stays first
 
 ### Pending Todos
 
@@ -1143,8 +1145,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-11-03T23:44:39.412Z
-Stopped at: Completed 56-13-PLAN.md
+Last session: 2026-11-03T23:56:04.076Z
+Stopped at: Completed 56-14-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

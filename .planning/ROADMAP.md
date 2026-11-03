@@ -533,7 +533,7 @@ Plans:
 - [x] 56-11-PLAN.md — DF-07 (S1): the `paladin` binary stops logging the whole `Settings`; redacting `Debug` for `ApiKeyConfig`, `Settings.llm_api_key`, `QueueConfig`, `FileStorageConfig`, `EmailAdapterConfig`; binary re-probe, `M-B-36` + rotation step (DOGF-06, DOGF-01)
 - [x] 56-12-PLAN.md — DF-08 (S2): `paladin-server` calls `Settings::validate()` at boot through `load_settings`, refusing invalid `trace` / `agent_runtime` values naming the key; binary boot probe, `M-B-37` (DOGF-06, DOGF-01)
 - [x] 56-13-PLAN.md — DF-19 (S2): one shared provider-key probe for `setup-check` and `onboarding`, Anthropic model from the adapter's seeded default, failure names the model with a redacted reply, no redirects; maintainer real-key re-check (DOGF-06, DOGF-01)
-- [ ] 56-14-PLAN.md — DF-26 (S2): `paladin-server` applies the `PALADIN_TRACE_*` / `APP_AGENT_RUNTIME_*` / `APP_WEB_SERVER_*` overlays in `load_settings` before `Settings::validate()`, through new additive `Settings::get_trace_config` / `get_agent_runtime_config` / `get_web_server_config`; env boot probe (`PALADIN_TRACE_CHANNEL_CAPACITY=0` refused), `M-B-38`; wave 8, after 56-13 (DOGF-06, DOGF-01)
+- [x] 56-14-PLAN.md — DF-26 (S2): `paladin-server` applies the `PALADIN_TRACE_*` / `APP_AGENT_RUNTIME_*` / `APP_WEB_SERVER_*` overlays in `load_settings` before `Settings::validate()`, through new additive `Settings::get_trace_config` / `get_agent_runtime_config` / `get_web_server_config`; env boot probe (`PALADIN_TRACE_CHANNEL_CAPACITY=0` refused), `M-B-38`; wave 8, after 56-13 (DOGF-06, DOGF-01)
 
 **Wave 9** *(blocked on Wave 8 and on Stage C; human-gated)*
 

@@ -187,37 +187,162 @@ block. Leave a slot empty only if the step was not run, and say so in `C6`.
 ### C1 — environment
 
 <!-- paste below this line; redacted -->
+````
+First attempt (before the manual install):
+
 ```
+git rev-parse HEAD; git status --porcelain; rustc -V; cargo -V; cargo llvm-cov --version
+21dacf0d63b55e7a5f14d76eba207c107e4889aa
+rustc 1.97.1 (8bab26f4f 2026-07-14)
+cargo 1.97.1 (c980f4866 2026-06-30)
+error: no such command: `llvm-cov`
+
+help: view all installed commands with `cargo --list`
+help: find a package to install `llvm-cov` with `cargo search cargo-llvm-cov`
 ```
+
+After `cargo install cargo-llvm-cov --version 0.8.7 --locked`:
+
+```
+git rev-parse HEAD; git status --porcelain; rustc -V; cargo -V; cargo llvm-cov --version
+21dacf0d63b55e7a5f14d76eba207c107e4889aa
+rustc 1.97.1 (8bab26f4f 2026-07-14)
+cargo 1.97.1 (c980f4866 2026-06-30)
+cargo-llvm-cov 0.8.7
+```
+
+`git status --porcelain` printed nothing (clean checkout). `docker version` / `docker compose
+version`: not applicable (no Docker socket inside the devcontainer).
+
+**CI figure for the comparison.** The measured commit `21dacf0d6` had its CI run (`41695288977`)
+cancelled when the next push superseded it. The next commit on the branch, `d9a48cfc6`, differs
+from `21dacf0d6` only in `.md` files (`git diff --stat 21dacf0d6 d9a48cfc6 -- . ':!*.md'` is
+empty), so its `coverage` job measures the same code. From CI run `41703614636`, job
+`Coverage` (id `126153522434`, conclusion `success`), summary step, read from the job log by
+the orchestrator (the artifact blob host is proxy-blocked from the sandbox):
+
+```
+Scope: --workspace --features integration-tests (the gated measurement)
+Lines:     170767/183901 = 92.86%
+Functions: 17617/20367 = 86.50%
+```
+````
 
 ### C2 — services
 
 <!-- paste below this line; redacted -->
+````
+`make services-up` was not run: the devcontainer has no Docker socket. The compose siblings are
+already up and `scripts/coverage.sh` probes `redis:6379` / `rustfs:9000` by hostname first.
+
 ```
+$ getent hosts redis rustfs
+redis-cli -h redis -p 6379 ping 2>&1 || echo "redis-cli not installed (script falls back to a TCP probe)"
+172.19.0.3      redis
+172.19.0.4      rustfs
+PONG
 ```
+
+Redis answered `PONG` unauthenticated on 6379 (assumption A3: the compose Redis passes the
+script's probe — settled for the devcontainer).
+````
 
 ### C3 — first coverage run
 
 <!-- paste below this line; redacted -->
+````
+`make coverage 2>&1 | tee coverage-run.log; echo "exit=${PIPESTATUS[0]}"`, then
+`tail -40 coverage-run.log`. All suites passed. Last lines (the `exit=` line printed between the
+tee'd output and the tail):
+
 ```
+    Finished report saved to lcov.info
+exit=0
+test user_controller::tests::test_login_user_auth_failed ... ok
+test user_controller::tests::test_login_user_success ... ok
+test user_controller::tests::test_register_user_service_error ... ok
+test user_controller::tests::test_register_user_success ... ok
+test user_controller::tests::test_user_error_to_response_authentication_failed ... ok
+test user_controller::tests::test_user_error_to_response_invalid_email ... ok
+test user_controller::tests::test_user_error_to_response_user_not_found ... ok
+test user_controller::tests::test_user_to_response ... ok
+test user_controller::tests::test_verify_user_success ... ok
+
+test result: ok. 329 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.90s
+
+     Running tests/auth_rbac.rs (target/llvm-cov-target/debug/deps/auth_rbac-dcf7cee72ea5d1ac)
+
+running 5 tests
+test admin_route_with_admin_token_succeeds ... ok
+test admin_route_with_invalid_token_is_unauthorized ... ok
+test admin_route_with_user_token_is_forbidden ... ok
+test protected_route_with_valid_admin_token_succeeds ... ok
+test protected_route_without_token_is_unauthorized ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.65s
+
+     Running tests/openapi_golden_v0_9.rs (target/llvm-cov-target/debug/deps/openapi_golden_v0_9-d0b2f7e700848e1f)
+
+running 9 tests
+test allowance_429_exception_is_narrowly_scoped ... ok
+test execute_response_exception_is_narrowly_scoped ... ok
+test info_version_is_the_only_normalisation ... ok
+test openapi_v0_9_paths_match_the_frozen_baseline ... ok
+test phase_42_exception_is_narrowly_scoped ... ok
+test ref_closure_is_non_empty_and_fully_resolved ... ok
+test ref_closure_schemas_match_the_frozen_baseline ... ok
+test security_schemes_match_the_frozen_baseline ... ok
+test v0_9_path_restriction_is_non_empty ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s
+
+
+    Finished report saved to lcov.info
 ```
+
+No percentage was printed (trap 1 confirmed).
+````
 
 ### C4 — workaround run (or "none")
 
 <!-- paste below this line; redacted -->
 ```
+none
 ```
 
 ### C5 — snippet output line
 
 <!-- paste below this line; redacted -->
 ```
+Lines: 170650/183901 = 92.79%  (truncated: 92)
 ```
 
 ### C6 — stumbles, one bullet per step that did not read as written
 
 <!-- paste below this line; redacted -->
 ```
+- `cargo-llvm-cov` was missing after a devcontainer rebuild. `.devcontainer/Dockerfile.dev:112`
+  installs the `llvm-tools-preview` rustup component but nothing installs `cargo-llvm-cov`
+  itself (`post-create.sh` neither). Phase 36.1 had found it at `/usr/local/cargo/bin/`, which
+  is not a persisted volume (only `/usr/local/cargo/registry` is), so a hand install was lost
+  on rebuild. Installed by hand at CI's pin `0.8.7`.
+- `make services-up` (guide step 1) is not runnable inside the devcontainer (no Docker socket).
+  The compose siblings `redis`/`rustfs` were used instead; the script's first probe
+  (`redis:6379`) found them. The guide step was therefore not exercised on a bare host.
+- `make coverage` prints no percentage (trap 1); the LF/LH snippet was needed.
+- The measured commit `21dacf0d6` had a cancelled CI run; compared against `d9a48cfc6`
+  (md-only delta, see C1).
+- CI's summary step prints `Scope: --workspace --features integration-tests` while the real
+  scope is `integration-tests,llm-all` (trap 6, confirmed in the job log).
+- Trap 2 (port mismatch 6379/9000 vs 6380/9010): did not bite — not exercised in the
+  devcontainer. Trap 4 (`coverage-html` scope): not run. Trap 5 (`services-up` builds
+  `paladin-app`): not exercised.
+- Trap 3 (unpinned install in the guide): bit in spirit — the guide's `cargo install
+  cargo-llvm-cov --locked` has no `--version`; the maintainer pinned `0.8.7` by hand to match CI.
+- `make services-down`: not applicable. `rm -f coverage-run.log`: done.
+
+**Pass rule (D-17):** local `int(92.79) = 92`, CI `int(92.86) = 92`; equal and both >= 82.
+**PASS.** Delta 117 hit lines on an identical 183901-line denominator.
 ```
 
 ## Triage checklist

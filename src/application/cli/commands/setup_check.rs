@@ -6,7 +6,7 @@
 //! - LLM provider connectivity (OpenAI, Anthropic, DeepSeek)
 //! - Optional service connectivity (Redis, Qdrant)
 
-use super::provider_probe::validate_anthropic_key;
+use super::provider_probe::{validate_anthropic_key, validate_deepseek_key, validate_openai_key};
 use crate::application::cli::error::{CliError, CliResult};
 use crate::application::cli::formatters::output::OutputFormatter;
 use crate::application::cli::formatters::progress::Spinner;
@@ -63,57 +63,7 @@ impl CheckResult {
     }
 }
 
-// API Validation Functions (reused from onboarding)
-
-/// Validate OpenAI API key by calling the models endpoint
-async fn validate_openai_key(api_key: &str) -> CliResult<()> {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|e| CliError::execution(format!("Failed to create HTTP client: {}", e)))?;
-
-    let response = client
-        .get("https://api.openai.com/v1/models")
-        .header("Authorization", format!("Bearer {}", api_key))
-        .send()
-        .await
-        .map_err(|e| CliError::execution(format!("API request failed: {}", e)))?;
-
-    if response.status().is_success() {
-        Ok(())
-    } else {
-        let status = response.status();
-        Err(CliError::execution(format!(
-            "OpenAI API validation failed ({})",
-            status
-        )))
-    }
-}
-
-/// Validate DeepSeek API key by calling the models endpoint
-async fn validate_deepseek_key(api_key: &str) -> CliResult<()> {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|e| CliError::execution(format!("Failed to create HTTP client: {}", e)))?;
-
-    let response = client
-        .get("https://api.deepseek.com/v1/models")
-        .header("Authorization", format!("Bearer {}", api_key))
-        .send()
-        .await
-        .map_err(|e| CliError::execution(format!("API request failed: {}", e)))?;
-
-    if response.status().is_success() {
-        Ok(())
-    } else {
-        let status = response.status();
-        Err(CliError::execution(format!(
-            "DeepSeek API validation failed ({})",
-            status
-        )))
-    }
-}
+// API key validation lives in the shared `provider_probe` module (DF-19).
 
 /// Check Redis connectivity
 async fn check_redis_connectivity(redis_url: &str) -> CliResult<()> {

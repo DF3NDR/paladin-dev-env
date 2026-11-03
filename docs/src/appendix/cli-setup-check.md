@@ -119,6 +119,7 @@ Providers:
   - Authentication
   - API version compatibility
   - Response time
+  - The request goes to the Anthropic adapter's default model (the seeded model the CLI was built with). A failure names that model and quotes Anthropic's reply with credentials redacted.
 
 - **DeepSeek** (`GET /models`)
   - Authentication

@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `paladin-server` validates the whole configuration at boot (`Settings::validate()`, right after the load). A value its type rejects now stops the server on the `paladin-server failed to start: invalid configuration: <key> …` line. The refused values are `trace.channel_capacity: 0`, `trace.value_cap_bytes: 0`, `trace.otel.enabled: true` on a build without the `otel` feature, a non-http(s) `trace.otel.endpoint` while enabled, and any invalid `agent_runtime` value. Before, the server booted on them, clamping the trace queue to 1 or exporting nothing. The refusal names the key and never echoes an `otel.headers` value (`MIGRATION.md` section 11.1 `M-B-37`, section 11.8; DF-08, Phase 56 plan 56-12).
 
+### Fixed
+
+- `paladin-cli setup-check` and `onboarding` no longer reject a valid Anthropic key (DF-19). Both probed a retired claude-3 model id, which Anthropic answers with `404`; they now probe the Anthropic adapter's seeded default model. A failed key check names the provider, the model probed (Anthropic), the HTTP status and the provider's reply, credential-redacted and bounded, where `setup-check` used to drop the reply and `onboarding` printed it raw. The OpenAI, Anthropic and DeepSeek probes now share one HTTP client that never follows a redirect, so the key header cannot be forwarded to another host.
+
 ### Security
 
 - Boot refuses a configured Treasurer whose run worker pool has no engine factory, naming the misconfiguration before any worker spawns or listener binds. The shipped `build_run_api` wiring always installs the factory and is unaffected; only an embedder building its own pool wiring can hit the refusal (TENANT-08).

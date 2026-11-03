@@ -13,6 +13,11 @@ use std::time::Duration;
 
 /// Anthropic Messages endpoint used by the key probe.
 const ANTHROPIC_MESSAGES_URL: &str = "https://api.anthropic.com/v1/messages";
+/// OpenAI model-list endpoint used by the key probe (sends no model).
+const OPENAI_MODELS_URL: &str = "https://api.openai.com/v1/models";
+/// DeepSeek model-list endpoint used by the key probe (sends no model).
+const DEEPSEEK_MODELS_URL: &str = "https://api.deepseek.com/v1/models";
+
 /// Stand-in for the Anthropic adapter's seeded default in builds without `llm-anthropic`.
 ///
 /// `anthropic_probe_model_is_the_adapters_seeded_default` pins it equal to
@@ -119,6 +124,56 @@ async fn validate_anthropic_key_at(
 /// Validate an Anthropic API key with the adapter's seeded default model.
 pub(super) async fn validate_anthropic_key(api_key: &str) -> CliResult<()> {
     validate_anthropic_key_at(ANTHROPIC_MESSAGES_URL, api_key, anthropic_probe_model()).await
+}
+
+/// Validate an OpenAI key by calling `models_url` (the model list; no model is sent).
+async fn validate_openai_key_at(models_url: &str, api_key: &str) -> CliResult<()> {
+    let client = probe_client()?;
+
+    let response = client
+        .get(models_url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .send()
+        .await
+        .map_err(|e| CliError::execution(format!("API request failed: {}", e)))?;
+
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        let status = response.status();
+        let reply = response.text().await.unwrap_or_default();
+        Err(probe_failure("OpenAI", None, status, &reply, api_key))
+    }
+}
+
+/// Validate a DeepSeek key by calling `models_url` (the model list; no model is sent).
+async fn validate_deepseek_key_at(models_url: &str, api_key: &str) -> CliResult<()> {
+    let client = probe_client()?;
+
+    let response = client
+        .get(models_url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .send()
+        .await
+        .map_err(|e| CliError::execution(format!("API request failed: {}", e)))?;
+
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        let status = response.status();
+        let reply = response.text().await.unwrap_or_default();
+        Err(probe_failure("DeepSeek", None, status, &reply, api_key))
+    }
+}
+
+/// Validate an OpenAI API key.
+pub(super) async fn validate_openai_key(api_key: &str) -> CliResult<()> {
+    validate_openai_key_at(OPENAI_MODELS_URL, api_key).await
+}
+
+/// Validate a DeepSeek API key.
+pub(super) async fn validate_deepseek_key(api_key: &str) -> CliResult<()> {
+    validate_deepseek_key_at(DEEPSEEK_MODELS_URL, api_key).await
 }
 
 #[cfg(test)]
@@ -249,5 +304,56 @@ mod tests {
 
         assert!(err.to_string().contains("307"), "{err}");
         target_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn openai_probe_failure_carries_a_redacted_reply() {
+        let sentinel = "test-key-not-a-secret-df19-openai";
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("GET", "/v1/models")
+            .with_status(401)
+            .with_body(format!(
+                r#"{{"error":{{"message":"Incorrect API key provided: {sentinel}"}}}}"#
+            ))
+            .create_async()
+            .await;
+
+        let url = format!("{}/v1/models", server.url());
+        let err = validate_openai_key_at(&url, sentinel)
+            .await
+            .expect_err("a 401 must fail");
+        let text = err.to_string();
+
+        assert!(text.contains("OpenAI API validation failed (401"), "{text}");
+        assert!(!text.contains(sentinel), "key leaked: {text}");
+        assert!(text.contains("[REDACTED]"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn deepseek_probe_failure_carries_a_redacted_reply() {
+        let sentinel = "test-key-not-a-secret-df19-deepseek";
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("GET", "/v1/models")
+            .with_status(401)
+            .with_body(format!(
+                r#"{{"error":{{"message":"Authentication Fails, key {sentinel}"}}}}"#
+            ))
+            .create_async()
+            .await;
+
+        let url = format!("{}/v1/models", server.url());
+        let err = validate_deepseek_key_at(&url, sentinel)
+            .await
+            .expect_err("a 401 must fail");
+        let text = err.to_string();
+
+        assert!(
+            text.contains("DeepSeek API validation failed (401"),
+            "{text}"
+        );
+        assert!(!text.contains(sentinel), "key leaked: {text}");
+        assert!(text.contains("[REDACTED]"), "{text}");
     }
 }

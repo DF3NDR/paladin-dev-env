@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `PlanningService` (autonomous planning) no longer invents an expected output for a planned subtask: `Subtask.expected_output` is empty, and the subtask prompt omits its `EXPECTED OUTPUT` line when none is set (`MIGRATION.md` section 11.1 `M-B-35`; FIXES-02, Phase 55 plan 55-06).
 
+- `paladin-server` validates the whole configuration at boot (`Settings::validate()`, right after the load). A value its type rejects now stops the server on the `paladin-server failed to start: invalid configuration: <key> …` line. The refused values are `trace.channel_capacity: 0`, `trace.value_cap_bytes: 0`, `trace.otel.enabled: true` on a build without the `otel` feature, a non-http(s) `trace.otel.endpoint` while enabled, and any invalid `agent_runtime` value. Before, the server booted on them, clamping the trace queue to 1 or exporting nothing. The refusal names the key and never echoes an `otel.headers` value (`MIGRATION.md` section 11.1 `M-B-37`, section 11.8; DF-08, Phase 56 plan 56-12).
+
 ### Security
 
 - Boot refuses a configured Treasurer whose run worker pool has no engine factory, naming the misconfiguration before any worker spawns or listener binds. The shipped `build_run_api` wiring always installs the factory and is unaffected; only an embedder building its own pool wiring can hit the refusal (TENANT-08).

@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Boot logs one `warn!` under the `paladin::pricing` target per model that has no `treasurer.pricing` row but is reachable by a metered principal (the code agent registry plus stored agent-kind assistants). Boot is never refused; the line names the model and the classes the check does not cover. Add the named rows (`MIGRATION.md` section 11.1 `M-B-32`, section 11.8; FIXES-06, Phase 55 plan 55-09).
 
+- `Settings::get_trace_config()`, `Settings::get_agent_runtime_config()` and `Settings::get_web_server_config()` return the `trace`, `agent_runtime` and `web_server` sections with their documented `PALADIN_TRACE_*`, `APP_AGENT_RUNTIME_*` and `APP_WEB_SERVER_*` environment overlays applied, like the existing `get_*_config()` accessors. `Settings::load_from_file` still returns file values only (DF-26).
+
 ### Changed
 
 - `k8s/server` now delivers the server config as the `config.yml` key of the `paladin-server-secrets` Secret, mounted by both Deployments. `k8s/server/configmap.yaml` and the per-caller API-key env injections and Secret keys are removed. The manifests' labels and image tags read the workspace version, which `make docker-build-server` now also tags (FIRST-01, FIRST-04; `MIGRATION.md` section 11.5).
@@ -28,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `paladin-cli setup-check` and `onboarding` no longer reject a valid Anthropic key (DF-19). Both probed a retired claude-3 model id, which Anthropic answers with `404`; they now probe the Anthropic adapter's seeded default model. A failed key check names the provider, the model probed (Anthropic), the HTTP status and the provider's reply, credential-redacted and bounded, where `setup-check` used to drop the reply and `onboarding` printed it raw. The OpenAI, Anthropic and DeepSeek probes now share one HTTP client that never follows a redirect, so the key header cannot be forwarded to another host.
+
+- `paladin-server` now applies the environment variables `MIGRATION.md` section 9.5 documents for `trace`, `agent_runtime` and `web_server`. Before, it read those sections from the file only, so for example `PALADIN_TRACE_PERSIST=true` or `APP_AGENT_RUNTIME_TOKEN_BUDGET_ENABLED=true` was silently ignored. The overlays are applied before the boot-time `Settings::validate()`, so an invalid overlaid value now refuses boot naming the key, for example `PALADIN_TRACE_CHANNEL_CAPACITY=0`, or `PALADIN_TRACE_OTEL_ENABLED=true` on a build without `otel` (`MIGRATION.md` section 11.1 `M-B-38`, section 11.8; DF-26, Phase 56 plan 56-14).
 
 ### Security
 

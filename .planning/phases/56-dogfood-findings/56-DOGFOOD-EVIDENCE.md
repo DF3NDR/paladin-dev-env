@@ -274,3 +274,81 @@ described the section as "currently just the developer inspector UI" with no not
 the contained fix is a comment correction in `config.example.yml` (comment lines only, D-05). Wiring a route is
 `out` (D-00d). Tests after the edit: `cargo test -p paladin-ai --test config_example_roundtrip` 14 passed, 0
 failed; `cargo test -p paladin-ai --lib --features web-server -- example` 6 passed, 0 failed.
+
+## Close gate
+
+Drafted by plan 56-10 task 1 on 2026-11-03 (plan-start SHA `ed5135a4eac8b74781e3cefe24f0227625e0ff91`). The
+table and the checker output below are read from the log and `./scripts/check-findings-log.sh`, not by eye.
+
+### web3sec status
+
+no web3sec return as of 2026-11-03: slots W1 and W2 of `56-RUNBOOK-WEB3SEC.md` are empty, so nothing was
+triaged and no entry with `**By:** web3sec` was written (D-15, P1). No return was simulated, inferred or
+reconstructed. The D-16 decision for DOGF-02 is not yet taken.
+
+### Every finding
+
+| id | By | severity | last Disposition (120 chars) |
+|----|----|----------|------------------------------|
+| DF-01 | Claude | S2 | in v0.11.1 — fixed by FIRST-01 (Phase 54): the boot refuses an unexpanded ${…} auth key and the example and k8s manif... |
+| DF-02 | Claude | S3 | in v0.11.1 — fixed by FIRST-02/FIRST-03 (Phase 54): README and docs pin 0.11.0 and make check-version-strings gates i... |
+| DF-03 | Claude | S2 | in v0.11.1 — fixed by FIXES-01 (Phase 55): file deleted and the stub-panic gate holds; proof: make check-no-stub-pani... |
+| DF-04 | code review | S1 | in v0.11.1 — fixed by TENANT-03, TENANT-04, TENANT-05, TENANT-07 (Phase 53): every thread, run-submit, fork and cance... |
+| DF-05 | Claude | S3 | in v0.11.1 — fixed in plan 56-02: the example writes steps: [] under agent_runtime.model_fallback; regression: exampl... |
+| DF-06 | Claude | S4 | out (re-homed: .planning/todos/pending/2026-11-02-unquoted-treasurer-price-loses-digits-on-load.md) |
+| DF-07 | Claude | S1 | open → promote **in v0.11.1** (S1, D-05; fix in Stage C, D-06) |
+| DF-08 | Claude | S2 | open → promote **in v0.11.1** (S2, D-05; fix in Stage C) |
+| DF-09 | Claude | S3 | in v0.11.1 — fixed in plan 56-05: the example's web_server comment says no shipped binary mounts the inspector; wirin... |
+| DF-10 | Claude | S3 | duplicate of DF-02 |
+| DF-11 | Claude | S4 | in v0.11.1 — fixed in plan 56-07: README.md and crate-map.md list all three default features; proof: tomllib prints t... |
+| DF-12 | Claude | S4 | in v0.11.1 — fixed in plan 56-07: Quickstart says cargo run --example needs a checkout and how a crates.io user copie... |
+| DF-13 | Claude | S3 | duplicate of DF-02 |
+| DF-14 | Claude | S3 | in v0.11.1 — fixed in plan 56-07: installation.md names paladin-llm feature openai; proof: cargo metadata resolves th... |
+| DF-15 | Claude | S3 | in v0.11.1 — fixed in plan 56-07: installation.md and cli-onboarding.md carry cargo install paladin-ai --features cli... |
+| DF-16 | Claude | S3 | out (re-homed: .planning/todos/pending/2026-11-02-setup-check-first-run-output.md) |
+| DF-17 | Claude | S3 | in v0.11.1 — fixed in plan 56-07: the six CLI appendix pages invoke paladin-cli onboarding and paladin-cli setup-chec... |
+| DF-18 | maintainer | S3 | out (re-homed: .planning/todos/pending/2026-11-03-docs-deprecated-gpt-4-model-literal.md) |
+| DF-19 | maintainer | S2 | open → promote **in v0.11.1** (S2, D-05; fix in Stage C, D-06) |
+| DF-20 | maintainer | S3 | out (re-homed: .planning/todos/pending/2026-11-03-devcontainer-install-cargo-llvm-cov.md; the fix is one RUN cargo in... |
+| DF-21 | maintainer | S3 | in v0.11.1 — fixed in plan 56-09: the guide's Prerequisites now install cargo-llvm-cov --version 0.8.7 --locked (and ... |
+| DF-22 | maintainer | S3 | in v0.11.1 — fixed in plan 56-09: "Reading the output" now says make coverage writes lcov.info and prints no percenta... |
+| DF-23 | maintainer | S3 | in v0.11.1 — fixed in plan 56-09: the guide's Prerequisites now carry a paragraph saying that inside the devcontainer... |
+| DF-24 | maintainer | S4 | in v0.11.1 — fixed in plan 56-09: the printed Scope: line now reads --workspace --features integration-tests,llm-all ... |
+| DF-25 | Claude | S3 | in v0.11.1 — fixed in plan 56-09: coverage-html now passes --features integration-tests,llm-all, and the guide says t... |
+
+### Checker output (`./scripts/check-findings-log.sh`)
+
+```
+Checking the findings log for entries without a final disposition ...
+Findings-log check failed (BAD)
+
+If this failure is unexpected:
+  1. Append a dated '- **Disposition (YYYY-MM-DD):**' bullet under the entry
+     (in v0.11.1 — <pointer>, out (<reason>) or duplicate of DF-nn). Never
+     rewrite an earlier line; the log is append-only (D-01).
+  2. This gate never edits the log. It is run at phase verification and by
+     SHIP-10, not by check-gates or CI.
+
+.project/v0.11.1/02-dogfood-findings-log.md:173: DF-07: OPEN (the last Disposition bullet reads 'open')
+.project/v0.11.1/02-dogfood-findings-log.md:204: DF-08: OPEN (the last Disposition bullet reads 'open')
+.project/v0.11.1/02-dogfood-findings-log.md:476: DF-19: OPEN (the last Disposition bullet reads 'open')
+parsed 25 entries from .project/v0.11.1/02-dogfood-findings-log.md
+exit=1
+```
+
+Ids still named, split by `**By:**`:
+
+- web3sec: none
+- other: DF-07 (By Claude, S1), DF-08 (By Claude, S2), DF-19 (By maintainer, S2). All three are promoted
+  `in v0.11.1` and wait for a Stage C fix plan (`/gsd-plan-phase 56 --gaps`).
+
+### S1/S2 entries whose last Disposition bullet reads `in v0.11.1`
+
+| id | severity | fix pointer | regression test |
+|----|----------|-------------|-----------------|
+| DF-01 | S2 | FIRST-01 (Phase 54) | validate_refuses_an_unexpanded_placeholder_key, validate_refuses_a_placeholder_key_while_auth_is_disabled, validate_names_a_later_entry_whose_key_is_a_placeholder, validate_reports_a_placeholder_key_before_tenant_and_duplicate_checks, build_auth_config_refuses_an_unexpanded_placeholder_key, yaml_env_placeholder_is_not_expanded |
+| DF-03 | S2 | FIXES-01 (Phase 55) | tests/scripts/check-no-stub-panics_test.sh and `make check-no-stub-panics` (0 findings) |
+| DF-04 | S1 | TENANT-03, TENANT-04, TENANT-05, TENANT-07 (Phase 53) | every_thread_id_route_hides_foreign_threads_behind_the_missing_thread_404, cross_tenant_submit_on_a_thread_is_the_unknown_thread_404, cross_tenant_fork_is_the_unknown_thread_404, cross_tenant_cancel_is_a_404_and_writes_no_cancel_flag, cancel_of_another_tenants_run_is_not_found_and_writes_nothing, job_poll_matrix_scopes_by_agent_and_tenant_with_an_admin_bypass, permits_thread_admits_all_and_only_the_latest_runs_tenant |
+
+S1/S2 entries still `open → promote **in v0.11.1**` with no fix pointer yet (Stage C, D-06): DF-07 (S1), DF-08 (S2),
+DF-19 (S2). The close gate verdict is written by plan 56-10 task 3, after the D-16 decision.

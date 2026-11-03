@@ -35,9 +35,28 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
+/// A secret as `Debug` prints it: `<redacted>`, or `""` when empty.
+///
+/// A module-private copy of the three-line rule in `paladin_llm::redaction::RedactedKey` (and
+/// paladin-ai's `config::redaction::RedactedSecret`), both `pub(crate)` there; this crate
+/// depends on neither crate's internals (PD-11-2, DF-07).
+struct RedactedSecret<'a>(&'a str);
+
+impl std::fmt::Debug for RedactedSecret<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0.is_empty() {
+            f.write_str("\"\"")
+        } else {
+            f.write_str("<redacted>")
+        }
+    }
+}
+
 /// Email delivery configuration
+///
+/// `Debug` prints the SMTP `password` as `<redacted>` (DF-07).
 #[doc(hidden)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct EmailAdapterConfig {
     /// SMTP server hostname
     pub smtp_host: String,
@@ -59,6 +78,23 @@ pub struct EmailAdapterConfig {
     pub max_attachment_size: usize,
     /// Rate limit (emails per minute)
     pub rate_limit: Option<u32>,
+}
+
+impl std::fmt::Debug for EmailAdapterConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EmailAdapterConfig")
+            .field("smtp_host", &self.smtp_host)
+            .field("smtp_port", &self.smtp_port)
+            .field("username", &self.username)
+            .field("password", &RedactedSecret(&self.password))
+            .field("from_address", &self.from_address)
+            .field("from_name", &self.from_name)
+            .field("use_tls", &self.use_tls)
+            .field("timeout_seconds", &self.timeout_seconds)
+            .field("max_attachment_size", &self.max_attachment_size)
+            .field("rate_limit", &self.rate_limit)
+            .finish()
+    }
 }
 
 impl Default for EmailAdapterConfig {
@@ -748,5 +784,29 @@ mod tests {
         let content = rendered.unwrap();
         assert_eq!(content.title, "Hello John");
         assert_eq!(content.body, "Dear John, this is a test message.");
+    }
+
+    #[test]
+    fn email_adapter_config_debug_redacts_the_password() {
+        let config = create_test_config();
+        // Non-vacuous: the field really holds the password we expect to hide.
+        assert_eq!(config.password, "password123");
+        let text = format!("{config:?}");
+        assert!(
+            !text.contains("password123"),
+            "EmailAdapterConfig Debug leaked the password"
+        );
+        assert!(
+            text.contains("password: <redacted>"),
+            "no marker in: {text}"
+        );
+        assert!(
+            text.contains("test@example.com"),
+            "username missing: {text}"
+        );
+        assert!(
+            text.contains("smtp.example.com"),
+            "smtp_host missing: {text}"
+        );
     }
 }

@@ -2,6 +2,7 @@
 //!
 //! Interactive wizard to guide new users through Paladin setup
 
+use super::provider_probe::validate_anthropic_key;
 use crate::application::cli::error::{CliError, CliResult};
 use crate::application::cli::formatters::output::OutputFormatter;
 use crate::application::cli::formatters::progress::Spinner;
@@ -9,7 +10,6 @@ use crate::application::cli::interactive::prompts::PromptBuilder;
 use crate::application::cli::interactive::wizard::{StepResult, Wizard, WizardContext, WizardStep};
 use crate::application::cli::templates::env::EnvTemplate;
 use reqwest::Client;
-use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -82,42 +82,6 @@ async fn validate_openai_key(api_key: &str) -> CliResult<()> {
         let error_text = response.text().await.unwrap_or_default();
         Err(CliError::execution(format!(
             "OpenAI API validation failed ({}): {}",
-            status, error_text
-        )))
-    }
-}
-
-/// Validate Anthropic API key by making a minimal request
-async fn validate_anthropic_key(api_key: &str) -> CliResult<()> {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|e| CliError::execution(format!("Failed to create HTTP client: {}", e)))?;
-
-    // Anthropic uses x-api-key header
-    let body = json!({
-        "model": "claude-3-haiku-20240307",
-        "max_tokens": 1,
-        "messages": [{"role": "user", "content": "test"}]
-    });
-
-    let response = client
-        .post("https://api.anthropic.com/v1/messages")
-        .header("x-api-key", api_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| CliError::execution(format!("API request failed: {}", e)))?;
-
-    if response.status().is_success() {
-        Ok(())
-    } else {
-        let status = response.status();
-        let error_text = response.text().await.unwrap_or_default();
-        Err(CliError::execution(format!(
-            "Anthropic API validation failed ({}): {}",
             status, error_text
         )))
     }

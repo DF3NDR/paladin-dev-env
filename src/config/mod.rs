@@ -23,6 +23,7 @@ pub mod node_cache;
 pub mod notifications;
 #[allow(missing_docs)]
 pub mod queue;
+pub(crate) mod redaction;
 #[allow(missing_docs)]
 pub mod run_queue;
 #[allow(missing_docs)]

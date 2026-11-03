@@ -16,6 +16,8 @@ use paladin_core::platform::container::reasoning::{ReasoningEffort, ReasoningFal
 use paladin_core::platform::container::user::UserRole;
 use serde::{Deserialize, Serialize};
 
+use crate::config::redaction::RedactedSecret;
+
 /// Server-wide execution timeout configuration for the HTTP service host.
 ///
 /// Maps onto `paladin_web::TimeoutPolicy`. Absent fields fall back to the defaults
@@ -85,7 +87,10 @@ impl Default for RateLimitConfig {
 /// value containing `${` at boot (FIRST-01); keep a config that holds it out of version
 /// control (a Kubernetes Secret or a mounted file). Every field is checked fail-closed at
 /// boot by [`AuthConfig::validate`]; nothing is trimmed, defaulted or clamped.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `Debug` prints the key as `<redacted>` (DF-07), so no log line, panic message or test failure
+/// that formats this type, or a type holding it, carries the secret.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ApiKeyConfig {
     /// The secret key value presented in the `X-API-Key` header. Must be non-empty, must
     /// not contain `${` (an unexpanded placeholder; the server expands nothing here) and
@@ -104,6 +109,17 @@ pub struct ApiKeyConfig {
     /// bytes.
     #[serde(default)]
     pub tenant: String,
+}
+
+impl std::fmt::Debug for ApiKeyConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ApiKeyConfig")
+            .field("key", &RedactedSecret(&self.key))
+            .field("name", &self.name)
+            .field("role", &self.role)
+            .field("tenant", &self.tenant)
+            .finish()
+    }
 }
 
 /// Opaque server-issued bearer-token settings for the agent API.
@@ -427,6 +443,63 @@ pub struct AgentDefinition {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- Phase 56 Plan 11 (DF-07): Debug never prints an API key ---
+
+    const DF07_API_KEY_SENTINEL: &str = "test-key-not-a-secret-df07-api-key";
+
+    fn df07_entry() -> ApiKeyConfig {
+        ApiKeyConfig {
+            key: DF07_API_KEY_SENTINEL.to_string(),
+            name: "df07-probe".to_string(),
+            role: UserRole::User,
+            tenant: "Acme-Prod".to_string(),
+        }
+    }
+
+    #[test]
+    fn api_key_config_debug_redacts_the_key() {
+        let entry = df07_entry();
+        // Non-vacuous: the field really holds the sentinel before we format it.
+        assert_eq!(entry.key, DF07_API_KEY_SENTINEL);
+        let text = format!("{entry:?}");
+        assert!(
+            !text.contains(DF07_API_KEY_SENTINEL),
+            "ApiKeyConfig Debug leaked the key: {text}"
+        );
+        assert!(text.contains("key: <redacted>"), "no marker in: {text}");
+        assert!(text.contains("df07-probe"), "name missing in: {text}");
+        assert!(text.contains("Acme-Prod"), "tenant missing in: {text}");
+        assert!(text.contains("User"), "role missing in: {text}");
+    }
+
+    #[test]
+    fn auth_and_web_http_config_debug_redact_the_key() {
+        let auth = AuthConfig {
+            enabled: true,
+            api_keys: vec![df07_entry()],
+            bearer_token: BearerTokenAuthConfig::default(),
+        };
+        assert_eq!(auth.api_keys[0].key, DF07_API_KEY_SENTINEL);
+        let auth_text = format!("{auth:?}");
+        assert!(
+            !auth_text.contains(DF07_API_KEY_SENTINEL),
+            "AuthConfig Debug leaked the key: {auth_text}"
+        );
+        assert!(auth_text.contains("<redacted>"), "no marker: {auth_text}");
+
+        let http = WebHttpConfig {
+            auth,
+            ..WebHttpConfig::default()
+        };
+        assert_eq!(http.auth.api_keys[0].key, DF07_API_KEY_SENTINEL);
+        let http_text = format!("{http:?}");
+        assert!(
+            !http_text.contains(DF07_API_KEY_SENTINEL),
+            "WebHttpConfig Debug leaked the key: {http_text}"
+        );
+        assert!(http_text.contains("<redacted>"), "no marker: {http_text}");
+    }
 
     #[test]
     fn deserializes_full_definition() {

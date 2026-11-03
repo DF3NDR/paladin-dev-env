@@ -5,15 +5,15 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 56
 current_phase_name: Dogfood Findings
 status: executing
-stopped_at: "Phase 56 plan 56-08 Task 2: awaiting maintainer's keyed first-run walk (checkpoint:human-action)"
-last_updated: "2026-11-02T14:42:22.663Z"
+stopped_at: Completed 56-08-PLAN.md
+last_updated: "2026-11-03T18:23:42.918Z"
 last_activity: 2026-11-02
 last_activity_desc: Phase 56 execution started
 progress:
   total_phases: 5
   completed_phases: 4
   total_plans: 48
-  completed_plans: 45
+  completed_plans: 46
 ---
 
 # Project State
@@ -51,11 +51,11 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 ## Current Position
 
 Phase: 56 (Dogfood Findings) — EXECUTING
-Plan: 8 of 10
+Plan: 9 of 10
 Status: Ready to execute
 Last activity: 2026-11-02 — Phase 56 execution started
 
-Progress: [█████████░░░░░░░░░░░] 3/7 phases ([█████████░] 94%) — Phase 54 plans [████████████████████] 9/9 (100%)
+Progress: [█████████░░░░░░░░░░░] 3/7 phases ([██████████] 96%) — Phase 54 plans [████████████████████] 9/9 (100%)
 
 ## Performance Metrics
 
@@ -403,6 +403,7 @@ Progress: [█████████░░░░░░░░░░░] 3/7 pha
 | Phase 56 P05 | 12min | 2 tasks | 4 files |
 | Phase 56 P06 | ~20min | 2 tasks | 5 files |
 | Phase 56 P07 | 25min | 3 tasks | 13 files |
+| Phase 56 P08 | 45min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -760,6 +761,8 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: [Phase 56-05] L4 logged S3 (DF-09) and fixed by a comment-only edit to the web_server block of config.example.yml; DOGF-06 stays open until DF-07 and DF-08 are fixed in Stage C
 - [Phase ?]: 56-06: tag Quickstart pins 0.10.0 (DF-13, duplicate of DF-02); setup-check order/headings re-homed (DF-16); DOGF-04 stays open until the keyed half (56-08)
 - [Phase ?]: 56-07: cli-usage.md corrected with the other five CLI appendix pages (DF-17 names six); other subcommand lines still say paladin and are a Stage C decision
+- [Phase 56]: 56-08: DF-18 (Quickstart gpt-4 literal, 109 sites in 54 files, S3) dispositioned out/re-homed to a pending todo, not promoted: not a contained docs fix under D-05
+- [Phase 56]: 56-08: DF-19 (setup-check/onboarding Anthropic probe hard-codes claude-3-haiku-20240307, S2) open -> promote in v0.11.1 for Stage C; no code changed in 56-08
 
 ### Pending Todos
 
@@ -1132,9 +1135,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-11-02T14:42:22.634Z
-Stopped at: Phase 56 plan 56-08 Task 2: awaiting maintainer's keyed first-run walk (checkpoint:human-action)
-Resume file: .planning/phases/56-dogfood-findings/56-RUNBOOK-KEYED-WALK.md
+Last session: 2026-11-03T18:23:42.895Z
+Stopped at: Completed 56-08-PLAN.md
+Resume file: None
 
 ## Operator Next Steps
 

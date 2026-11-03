@@ -522,7 +522,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion; human-gated)*
 
-- [ ] 56-08-PLAN.md — maintainer's keyed walk (one real OpenAI key) checkpoint, secret scan, triage (DOGF-04)
+- [x] 56-08-PLAN.md — maintainer's keyed walk (one real OpenAI key) checkpoint, secret scan, triage (DOGF-04)
 
 **Wave 7** *(blocked on Wave 6 completion; human-gated)*
 

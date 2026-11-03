@@ -212,7 +212,7 @@ fails is rebuilt.*
       optional key present, as a test, and any key the loader rejects or silently ignores is logged as
       a finding — §6 "config loading in general"
 
-- [ ] **DOGF-04**: The first-run path is walked on the published `0.11.0` crates — README Quick
+- [x] **DOGF-04**: The first-run path is walked on the published `0.11.0` crates — README Quick
       Example → `cargo add` → `basic_paladin`, then `paladin-cli onboarding` and `setup-check` against
       one real provider key — and every stumble is logged as a finding — §"Surfaces worth exercising"
 
@@ -365,7 +365,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DOGF-01 | Phase 56 | Complete |
 | DOGF-02 | Phase 56 | Pending |
 | DOGF-03 | Phase 56 | Complete |
-| DOGF-04 | Phase 56 | Pending |
+| DOGF-04 | Phase 56 | Complete |
 | DOGF-05 | Phase 56 | Pending |
 | DOGF-06 | Phase 56 | Pending |
 | REG-01 | Phase 57 | Pending |

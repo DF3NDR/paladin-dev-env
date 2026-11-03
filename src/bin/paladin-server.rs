@@ -118,7 +118,11 @@ fn cadence_boot_summary(config: &CadenceConfig) -> String {
 /// Returns an error when the file cannot be loaded, the treasurer section is invalid, or any
 /// section checked by [`Settings::validate`] is invalid.
 fn load_settings(config_path: &str) -> Result<Settings, Box<dyn std::error::Error>> {
-    let settings = Settings::load_from_file(config_path)?;
+    let mut settings = Settings::load_from_file(config_path)?;
+
+    // DF-26: apply the documented PALADIN_TRACE_* overlay before any check, so the values
+    // judged below are the values the server runs on.
+    settings.trace = settings.get_trace_config();
 
     // Boot-time half of PRICE-01: a bad treasurer.pricing entry (or APP_TREASURER_CURRENCY
     // override) stops the server here, before any agent, provider or engine is built.
@@ -744,6 +748,7 @@ mod tests {
     use paladin::config::agents::{ApiKeyConfig, BearerTokenAuthConfig};
     use paladin_core::platform::container::principal::RunReadScope;
     use paladin_core::platform::container::user::UserRole;
+    use serial_test::serial;
     use std::sync::{Mutex, Once};
     use tower::ServiceExt; // for `Router::oneshot`
 
@@ -830,6 +835,62 @@ mod tests {
         file
     }
 
+    /// The environment-variable prefixes `load_settings` now overlays onto `trace`,
+    /// `agent_runtime` and `web_server` (DF-26, MIGRATION.md section 9.5).
+    const OVERLAY_PREFIXES: [&str; 3] = ["PALADIN_TRACE_", "APP_AGENT_RUNTIME_", "APP_WEB_SERVER_"];
+
+    fn overlay_vars() -> Vec<(String, String)> {
+        std::env::vars()
+            .filter(|(name, _)| OVERLAY_PREFIXES.iter().any(|p| name.starts_with(p)))
+            .collect()
+    }
+
+    /// Restores the overlay-prefixed environment captured before a test touched it. The restore
+    /// runs in `Drop`, so it also runs when the test body panics and a failed assertion cannot
+    /// leak a variable into the next test (T-56-56).
+    struct OverlayEnvGuard {
+        snapshot: Vec<(String, String)>,
+    }
+
+    impl OverlayEnvGuard {
+        fn clear_prefixed() {
+            for (name, _) in overlay_vars() {
+                // SAFETY: every test that sets or reads these prefixes is `#[serial]`, so no
+                // other thread of this test binary reads or writes the process environment for
+                // these names concurrently (the house pattern in `src/config/trace.rs`).
+                unsafe { std::env::remove_var(name) };
+            }
+        }
+    }
+
+    impl Drop for OverlayEnvGuard {
+        fn drop(&mut self) {
+            Self::clear_prefixed();
+            for (name, value) in &self.snapshot {
+                // SAFETY: as in `clear_prefixed` -- `#[serial]` serialises every env toucher.
+                unsafe { std::env::set_var(name, value) };
+            }
+        }
+    }
+
+    /// Run `f` with the three overlay prefixes cleared and only `vars` set, then restore the
+    /// prior environment. Callers must be `#[serial]`.
+    fn with_overlay_env<R>(vars: &[(&str, &str)], f: impl FnOnce() -> R) -> R {
+        let _guard = OverlayEnvGuard {
+            snapshot: overlay_vars(),
+        };
+        OverlayEnvGuard::clear_prefixed();
+        for (name, value) in vars {
+            // SAFETY: as in `clear_prefixed` -- `#[serial]` serialises every env toucher.
+            unsafe { std::env::set_var(name, value) };
+        }
+        f()
+    }
+
+    fn path_of(file: &tempfile::NamedTempFile) -> &str {
+        file.path().to_str().expect("utf-8 temp path")
+    }
+
     fn load_error(file: &tempfile::NamedTempFile) -> String {
         match load_settings(file.path().to_str().expect("utf-8 temp path")) {
             Ok(_) => panic!("load_settings accepted a configuration it should refuse"),
@@ -838,9 +899,48 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn load_settings_refuses_a_zero_trace_channel_capacity() {
         let file = example_with(&[("  channel_capacity: 1024", "  channel_capacity: 0")]);
-        let err = load_error(&file);
+        let err = with_overlay_env(&[], || load_error(&file));
+        assert!(
+            err.contains("invalid configuration: trace.channel_capacity must be greater than 0"),
+            "got: {err}"
+        );
+    }
+
+    /// DF-26: a documented `PALADIN_TRACE_*` variable reaches the `Settings` the server runs on.
+    /// The file says `persist: false`, so `true` can only come from the overlay.
+    #[test]
+    #[serial]
+    fn load_settings_applies_a_trace_env_overlay() {
+        let file = example_with(&[]);
+        let from_file = with_overlay_env(&[], || {
+            Settings::load_from_file(path_of(&file)).expect("example loads")
+        });
+        assert!(
+            !from_file.trace.persist,
+            "premise: the shipped example says persist: false"
+        );
+        let loaded = with_overlay_env(&[("PALADIN_TRACE_PERSIST", "true")], || {
+            load_settings(path_of(&file))
+        });
+        let settings = loaded.expect("a valid overlay must boot");
+        assert!(
+            settings.trace.persist,
+            "PALADIN_TRACE_PERSIST=true was ignored"
+        );
+    }
+
+    /// DF-26 x DF-08: the overlay is applied BEFORE `validate()`, so an invalid overlaid value
+    /// refuses boot on the same line a bad file value does.
+    #[test]
+    #[serial]
+    fn load_settings_refuses_a_zero_trace_channel_capacity_from_the_environment() {
+        let file = example_with(&[]);
+        let err = with_overlay_env(&[("PALADIN_TRACE_CHANNEL_CAPACITY", "0")], || {
+            load_error(&file)
+        });
         assert!(
             err.contains("invalid configuration: trace.channel_capacity must be greater than 0"),
             "got: {err}"
@@ -849,6 +949,7 @@ mod tests {
 
     #[cfg(not(feature = "otel"))]
     #[test]
+    #[serial]
     fn load_settings_refuses_otel_enabled_without_the_otel_feature() {
         const SENTINEL: &str = "Bearer test-key-not-a-secret-df08-otel";
         let file = example_with(&[
@@ -858,7 +959,7 @@ mod tests {
                 "    headers:\n      authorization: \"Bearer test-key-not-a-secret-df08-otel\"",
             ),
         ]);
-        let err = load_error(&file);
+        let err = with_overlay_env(&[], || load_error(&file));
         assert!(err.contains("trace.otel.enabled"), "got: {err}");
         assert!(err.contains("otel"), "got: {err}");
         assert!(
@@ -868,12 +969,13 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn load_settings_refuses_an_invalid_agent_runtime_value() {
         let file = example_with(&[(
             "  model_call_limit:\n    enabled: false\n    max_calls: 10",
             "  model_call_limit:\n    enabled: true\n    max_calls: 0",
         )]);
-        let err = load_error(&file);
+        let err = with_overlay_env(&[], || load_error(&file));
         assert!(
             err.contains(
                 "agent_runtime.model_call_limit.max_calls must be greater than 0 when enabled"
@@ -883,9 +985,10 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn load_settings_accepts_the_shipped_example_config() {
         let file = example_with(&[]);
-        let result = load_settings(file.path().to_str().expect("utf-8 temp path"));
+        let result = with_overlay_env(&[], || load_settings(path_of(&file)));
         assert!(
             result.is_ok(),
             "the shipped example must boot: {:?}",
@@ -894,9 +997,10 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn load_settings_keeps_the_treasurer_refusal_first() {
         let file = example_with(&[("  currency: \"USD\"", "  currency: \"usd\"")]);
-        let err = load_error(&file);
+        let err = with_overlay_env(&[], || load_error(&file));
         assert!(
             err.starts_with("invalid treasurer configuration: treasurer.currency"),
             "got: {err}"

@@ -293,6 +293,28 @@ impl Settings {
         cfg
     }
 
+    /// Get trace configuration with environment variable overrides.
+    ///
+    /// Applies the `PALADIN_TRACE_*` variables (MIGRATION.md section 9.5) to a copy of the
+    /// `trace` section and leaves `self` unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin::config::settings::Settings;
+    ///
+    /// let settings = Settings::default();
+    /// let trace = settings.get_trace_config();
+    /// // `otel.headers` is config-file only (no environment variable), so it is empty here
+    /// // whatever the environment holds.
+    /// assert!(trace.otel.headers.is_empty());
+    /// ```
+    pub fn get_trace_config(&self) -> TraceConfig {
+        let mut cfg = self.trace.clone();
+        cfg.apply_env_overrides();
+        cfg
+    }
+
     /// Create a default [`Herald`](crate::core::platform::container::herald::Herald) instance
     /// from the current herald configuration.
     ///

@@ -243,3 +243,5 @@ For plan 56-09. Start only from the filled slots.
   `cargo-llvm-cov` versions (local and CI).
 - [ ] On fail, log a DF with both figures. The todo
   `2026-08-13-verify-local-coverage-reproduction.md` stays pending with a dated update.
+
+CI half unavailable 2026-11-03: `gh run list --workflow=ci.yml --branch main` worked (newest success: run 41246424413, commit 8b23cb4c55a10fcf0b08fab1af595e1f184e5f2e), but `gh run download 41246424413 -n coverage-summary` failed with `error downloading coverage-summary: Get "https://productionresultssa14.blob.core.windows.net/actions-results/...": Forbidden` (the agent egress proxy refused `productionresultssa14.blob.core.windows.net:443`; `gh auth status` also reports the `GH_TOKEN` invalid). Fallback: the maintainer pastes the CI figure (the `Lines:` line from the `coverage-summary` artifact or the `coverage` job summary for C1's commit) into C1 or chat, and Task 3 records its source as maintainer-pasted.

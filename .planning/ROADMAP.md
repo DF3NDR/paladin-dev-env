@@ -526,7 +526,7 @@ Plans:
 
 **Wave 7** *(blocked on Wave 6 completion; human-gated)*
 
-- [ ] 56-09-PLAN.md — maintainer's local `make coverage` walk on Docker, same-commit CI comparison, todo `2026-08-13-verify-local-coverage-reproduction` closed or updated (DOGF-05)
+- [x] 56-09-PLAN.md — maintainer's local `make coverage` walk on Docker, same-commit CI comparison, todo `2026-08-13-verify-local-coverage-reproduction` closed or updated (DOGF-05)
 
 **Wave 8** *(blocked on Wave 7 and on Stage C; human-gated)*
 

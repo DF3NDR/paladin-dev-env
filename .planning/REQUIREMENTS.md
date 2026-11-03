@@ -216,7 +216,7 @@ fails is rebuilt.*
       Example → `cargo add` → `basic_paladin`, then `paladin-cli onboarding` and `setup-check` against
       one real provider key — and every stumble is logged as a finding — §"Surfaces worth exercising"
 
-- [ ] **DOGF-05**: The maintainer walks `docs/src/contributing/testing-guide.md`'s local
+- [x] **DOGF-05**: The maintainer walks `docs/src/contributing/testing-guide.md`'s local
       `make coverage` procedure on a Docker-capable machine and the todo
       `2026-08-13-verify-local-coverage-reproduction` is closed with the measured figure — G4
 
@@ -366,7 +366,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DOGF-02 | Phase 56 | Pending |
 | DOGF-03 | Phase 56 | Complete |
 | DOGF-04 | Phase 56 | Complete |
-| DOGF-05 | Phase 56 | Pending |
+| DOGF-05 | Phase 56 | Complete |
 | DOGF-06 | Phase 56 | Pending |
 | REG-01 | Phase 57 | Pending |
 | REG-02 | Phase 57 | Pending |

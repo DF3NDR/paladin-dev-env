@@ -495,7 +495,7 @@ Plans:
   4. The first-run path is walked on the published `0.11.0` crates (README Quick Example → `cargo add` → `basic_paladin`, then `paladin-cli onboarding` and `setup-check` against one real provider key) and every stumble is logged as a finding; the maintainer's local `make coverage` walk of `docs/src/contributing/testing-guide.md` on a Docker-capable machine closes todo `2026-08-13-verify-local-coverage-reproduction` with the measured figure.
   5. Every finding promoted to `in v0.11.1` at severity S1 or S2 is fixed and verified before this phase closes, in plans here or in decimal phases (`56.1`+) inserted once the findings are known; none remains open.
 
-**Plans**: 10 plans (Stages A and B; Stage C fix plans are added by a `--gaps` replan from the log)
+**Plans**: 13 plans (Stages A and B: 56-01…56-10; Stage C fix plans 56-11…56-13 added by the `--gaps` replan of 2026-11-03 from the log)
 
 Plans:
 **Wave 1**
@@ -527,6 +527,12 @@ Plans:
 **Wave 7** *(blocked on Wave 6 completion; human-gated)*
 
 - [x] 56-09-PLAN.md — maintainer's local `make coverage` walk on Docker, same-commit CI comparison, todo `2026-08-13-verify-local-coverage-reproduction` closed or updated (DOGF-05)
+
+**Stage C** *(gap closure from the log, `gap_closure: true`; waves 4, 5 and 7 so they run before 56-10 resumes; chained because each edits `CHANGELOG.md` and the log)*
+
+- [ ] 56-11-PLAN.md — DF-07 (S1): the `paladin` binary stops logging the whole `Settings`; redacting `Debug` for `ApiKeyConfig`, `Settings.llm_api_key`, `QueueConfig`, `FileStorageConfig`, `EmailAdapterConfig`; binary re-probe, `M-B-36` + rotation step (DOGF-06, DOGF-01)
+- [ ] 56-12-PLAN.md — DF-08 (S2): `paladin-server` calls `Settings::validate()` at boot through `load_settings`, refusing invalid `trace` / `agent_runtime` values naming the key; binary boot probe, `M-B-37` (DOGF-06, DOGF-01)
+- [ ] 56-13-PLAN.md — DF-19 (S2): one shared provider-key probe for `setup-check` and `onboarding`, Anthropic model from the adapter's seeded default, failure names the model with a redacted reply, no redirects; maintainer real-key re-check (DOGF-06, DOGF-01)
 
 **Wave 8** *(blocked on Wave 7 and on Stage C; human-gated)*
 

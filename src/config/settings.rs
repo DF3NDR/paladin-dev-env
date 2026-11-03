@@ -315,6 +315,50 @@ impl Settings {
         cfg
     }
 
+    /// Get agent runtime configuration with environment variable overrides.
+    ///
+    /// Applies the `APP_AGENT_RUNTIME_<SECTION>_<FIELD>` variables (MIGRATION.md section 9.5) to
+    /// a copy of the `agent_runtime` section and leaves `self` unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin::config::settings::Settings;
+    ///
+    /// let settings = Settings::default();
+    /// let agent_runtime = settings.get_agent_runtime_config();
+    /// // `guardrail.rules` is config-file only (no environment variable), so it is empty here
+    /// // whatever the environment holds.
+    /// assert!(agent_runtime.guardrail.rules.is_empty());
+    /// ```
+    pub fn get_agent_runtime_config(&self) -> AgentRuntimeConfig {
+        let mut cfg = self.agent_runtime.clone();
+        cfg.apply_env_overrides();
+        cfg
+    }
+
+    /// Get web server configuration with environment variable overrides.
+    ///
+    /// Applies the `APP_WEB_SERVER_*` variables (MIGRATION.md section 9.5) to a copy of the
+    /// `web_server` section and leaves `self` unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin::config::settings::Settings;
+    ///
+    /// let settings = Settings::default();
+    /// let before = settings.web_server.clone();
+    /// let _overlaid = settings.get_web_server_config();
+    /// // The accessor works on a copy: the section on `settings` is unchanged.
+    /// assert_eq!(settings.web_server, before);
+    /// ```
+    pub fn get_web_server_config(&self) -> WebServerConfig {
+        let mut cfg = self.web_server.clone();
+        cfg.apply_env_overrides();
+        cfg
+    }
+
     /// Create a default [`Herald`](crate::core::platform::container::herald::Herald) instance
     /// from the current herald configuration.
     ///
@@ -477,6 +521,7 @@ mod tests {
     use super::*;
     use crate::config::{ApiKeyConfig, WebHttpConfig};
     use paladin_core::platform::container::user::UserRole;
+    use serial_test::serial;
 
     const LLM_KEY: &str = "test-key-not-a-secret-df07-llm-api-key";
     const API_KEY: &str = "test-key-not-a-secret-df07-api-key";
@@ -570,5 +615,47 @@ mod tests {
                 "Settings Debug does not name the serialised field `{key}`"
             );
         }
+    }
+
+    /// DF-26: the three section accessors return an overlaid COPY and never mutate `self`.
+    ///
+    /// Set -> compute -> remove -> assert, so no assertion can fire while a variable is set and
+    /// leak it into another test.
+    #[test]
+    #[serial]
+    fn section_wrappers_return_an_overlaid_copy_and_leave_settings_untouched() {
+        let vars = [
+            ("PALADIN_TRACE_PERSIST", "true"),
+            ("APP_AGENT_RUNTIME_TOKEN_BUDGET_ENABLED", "true"),
+            (
+                "APP_WEB_SERVER_DEV_UI_MERMAID_URL",
+                "/static/mermaid.esm.min.mjs",
+            ),
+        ];
+        for (name, value) in vars {
+            // SAFETY: `#[serial]` keeps every test that sets or reads these variables from
+            // running concurrently, as the house pattern in `src/config/trace.rs` does.
+            unsafe { std::env::set_var(name, value) };
+        }
+        let settings = Settings::default();
+        let trace = settings.get_trace_config();
+        let agent_runtime = settings.get_agent_runtime_config();
+        let web_server = settings.get_web_server_config();
+        for (name, _) in vars {
+            // SAFETY: as above.
+            unsafe { std::env::remove_var(name) };
+        }
+
+        assert!(trace.persist, "PALADIN_TRACE_PERSIST was not overlaid");
+        assert!(
+            agent_runtime.token_budget.enabled,
+            "APP_AGENT_RUNTIME_TOKEN_BUDGET_ENABLED was not overlaid"
+        );
+        assert_eq!(web_server.dev_ui.mermaid_url, "/static/mermaid.esm.min.mjs");
+
+        let defaults = Settings::default();
+        assert_eq!(settings.trace, defaults.trace);
+        assert_eq!(settings.agent_runtime, defaults.agent_runtime);
+        assert_eq!(settings.web_server, defaults.web_server);
     }
 }

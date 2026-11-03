@@ -92,10 +92,12 @@ fn cadence_boot_summary(config: &CadenceConfig) -> String {
 ///
 /// Runs first in [`run`], before any store, provider, registry or listener is built, so a
 /// refusal reaches `main()`'s `paladin-server failed to start: {e}` line, the same path every
-/// other boot refusal takes. It runs, in order: [`Settings::load_from_file`]; the treasurer
-/// check (the boot-time half of PRICE-01, message `invalid treasurer configuration: ...`,
-/// unchanged and still first); then [`Settings::validate`], mapped to
-/// `invalid configuration: <key> ...`.
+/// other boot refusal takes. It runs, in order: [`Settings::load_from_file`]; the three overlays
+/// through [`Settings::get_trace_config`], [`Settings::get_agent_runtime_config`] and
+/// [`Settings::get_web_server_config`], written back into the returned [`Settings`]; the
+/// treasurer check (the boot-time half of PRICE-01, message
+/// `invalid treasurer configuration: ...`, unchanged and still first); then
+/// [`Settings::validate`], mapped to `invalid configuration: <key> ...`.
 ///
 /// Why (DF-08): before this, the server booted on a configuration its own
 /// `Settings::validate()` rejects. `trace.channel_capacity: 0` was silently clamped to 1 and
@@ -109,9 +111,13 @@ fn cadence_boot_summary(config: &CadenceConfig) -> String {
 /// validated nowhere else on the server path (`validate_config` in `agent_host.rs` walks only
 /// `agents`), so this is its only boot check.
 ///
-/// The file value is what is judged and what runs (PD-12-4): no `PALADIN_TRACE_*`,
-/// `APP_AGENT_RUNTIME_*` or `APP_WEB_SERVER_*` overlay is applied to `trace`, `agent_runtime`
-/// or `web_server` at boot.
+/// Why the overlays come first (DF-26): the documented `PALADIN_TRACE_*`, `APP_AGENT_RUNTIME_*`
+/// and `APP_WEB_SERVER_*` overlays (MIGRATION.md section 9.5) are applied before any check, so
+/// the judged values are the running values: `PALADIN_TRACE_CHANNEL_CAPACITY=0` is refused, not
+/// booted. An overlay cannot itself fail, because an unset or unparsable variable leaves the
+/// file value, so the treasurer refusal is still first. The treasurer applies its own
+/// `APP_TREASURER_*` through [`Settings::get_treasurer_config`]. The direct readers in
+/// `run_api_wiring`, `agent_host` and `facade_provisioner` receive the overlaid values.
 ///
 /// # Errors
 ///
@@ -120,9 +126,11 @@ fn cadence_boot_summary(config: &CadenceConfig) -> String {
 fn load_settings(config_path: &str) -> Result<Settings, Box<dyn std::error::Error>> {
     let mut settings = Settings::load_from_file(config_path)?;
 
-    // DF-26: apply the documented PALADIN_TRACE_* overlay before any check, so the values
-    // judged below are the values the server runs on.
+    // DF-26: apply the documented PALADIN_TRACE_*, APP_AGENT_RUNTIME_* and APP_WEB_SERVER_*
+    // overlays before any check, so the values judged below are the values the server runs on.
     settings.trace = settings.get_trace_config();
+    settings.agent_runtime = settings.get_agent_runtime_config();
+    settings.web_server = settings.get_web_server_config();
 
     // Boot-time half of PRICE-01: a bad treasurer.pricing entry (or APP_TREASURER_CURRENCY
     // override) stops the server here, before any agent, provider or engine is built.
@@ -945,6 +953,87 @@ mod tests {
             err.contains("invalid configuration: trace.channel_capacity must be greater than 0"),
             "got: {err}"
         );
+    }
+
+    /// DF-26: an `APP_AGENT_RUNTIME_*` variable reaches the running `agent_runtime`. The shipped
+    /// example says token-budget `enabled: false` (with `max_tokens: 100000`, which keeps it valid).
+    #[test]
+    #[serial]
+    fn load_settings_applies_an_agent_runtime_env_overlay() {
+        let file = example_with(&[]);
+        let from_file = with_overlay_env(&[], || {
+            Settings::load_from_file(path_of(&file)).expect("example loads")
+        });
+        assert!(
+            !from_file.agent_runtime.token_budget.enabled,
+            "premise: the shipped example says token_budget.enabled: false"
+        );
+        let loaded = with_overlay_env(
+            &[("APP_AGENT_RUNTIME_TOKEN_BUDGET_ENABLED", "true")],
+            || load_settings(path_of(&file)),
+        );
+        let settings = loaded.expect("a valid overlay must boot");
+        assert!(
+            settings.agent_runtime.token_budget.enabled,
+            "APP_AGENT_RUNTIME_TOKEN_BUDGET_ENABLED=true was ignored"
+        );
+    }
+
+    /// DF-26 x DF-08: an invalid overlaid `agent_runtime` value is refused at boot.
+    #[test]
+    #[serial]
+    fn load_settings_refuses_an_invalid_agent_runtime_value_from_the_environment() {
+        let file = example_with(&[]);
+        let err = with_overlay_env(
+            &[
+                ("APP_AGENT_RUNTIME_MODEL_CALL_LIMIT_ENABLED", "true"),
+                ("APP_AGENT_RUNTIME_MODEL_CALL_LIMIT_MAX_CALLS", "0"),
+            ],
+            || load_error(&file),
+        );
+        assert!(
+            err.contains(
+                "invalid configuration: agent_runtime.model_call_limit.max_calls must be greater than 0 when enabled"
+            ),
+            "got: {err}"
+        );
+    }
+
+    /// DF-26: the `APP_WEB_SERVER_*` overlay is applied for parity with MIGRATION.md section 9.5
+    /// (it still changes nothing at run time: the server mounts no inspector, DF-09).
+    #[test]
+    #[serial]
+    fn load_settings_applies_a_web_server_env_overlay() {
+        let file = example_with(&[]);
+        let loaded = with_overlay_env(
+            &[(
+                "APP_WEB_SERVER_DEV_UI_MERMAID_URL",
+                "/static/mermaid.esm.min.mjs",
+            )],
+            || load_settings(path_of(&file)),
+        );
+        let settings = loaded.expect("a valid overlay must boot");
+        assert_eq!(
+            settings.web_server.dev_ui.mermaid_url,
+            "/static/mermaid.esm.min.mjs"
+        );
+    }
+
+    /// DF-26 guard (T-56-55): with no overlay variable set the overlay is a no-op, so an
+    /// existing deployment's behaviour is unchanged. Passes before and after the fix.
+    #[test]
+    #[serial]
+    fn load_settings_leaves_file_values_when_no_overlay_is_set() {
+        let file = example_with(&[]);
+        let (loaded, from_file) = with_overlay_env(&[], || {
+            (
+                load_settings(path_of(&file)).expect("example boots"),
+                Settings::load_from_file(path_of(&file)).expect("example loads"),
+            )
+        });
+        assert_eq!(loaded.trace, from_file.trace);
+        assert_eq!(loaded.agent_runtime, from_file.agent_runtime);
+        assert_eq!(loaded.web_server, from_file.web_server);
     }
 
     #[cfg(not(feature = "otel"))]

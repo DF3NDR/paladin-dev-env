@@ -5,6 +5,12 @@ All notable changes to `paladin-notifications` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows lockstep workspace versioning.
 
+## [Unreleased]
+
+### Security
+
+- `EmailAdapterConfig`'s `Debug` (feature `email`) prints the SMTP `password` as `<redacted>` (`""` when empty) instead of the secret, so `EmailNotificationAdapter`'s derived `Debug`, a panic message or a log line that formats the config no longer carries it. No field, type or signature changes (`MIGRATION.md` section 11.1 `M-B-36`; DF-07).
+
 ## [0.11.0] - 2026-10-26
 
 No functional change; version bumped in lockstep with the workspace.

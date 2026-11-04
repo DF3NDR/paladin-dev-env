@@ -25,6 +25,9 @@ The archive is read-only. Every `closed` pointer was checked in this phase: a co
 
 | Phase | Id | Title | Disposition | Evidence | Owner (if waived) |
 |-------|----|-------|-------------|----------|-------------------|
+| 38 | CR-01 | Agent-loop early return drops already-accumulated cost instead of cost_tally.total() | closed | commit db7f086d3 (fix(38): report accumulated cost on the before_model early-return path; verified with gh api, touches src/application/services/paladin/paladin_execution_service.rs); on the head the before_model early return reads cost: cost_tally.total() at src/application/services/paladin/paladin_execution_service.rs:1960 and all four return paths in execute_internal use it (lines 1960, 2117, 2405, 2434); cargo test -p paladin-ai --lib agent_loop_ (re-run 2026-11-04: 25 ok, includes agent_loop_sums_cost_across_calls). Caveat: no test drives a before_model Finish on loop 2 or later, so the review's suggested regression test was never added; the closure rests on the commit and the file state | |
+| 38 | WR-01 | Cost::new and the unconditional Add/AddAssign impls accept a negative amount silently | open | LIVE crates/paladin-core/src/platform/container/cost.rs:147 — other: Cost::new(nanos: i64, ..) still validates nothing, Add/AddAssign (cost.rs:179-199) still combine any signs, and the Cost rustdoc (cost.rs:114-120) never says the amount may be negative; latent only, since the non-test producers (derive.rs:167, evaluate.rs:121, mod.rs:320, run_api_wiring.rs:4181) take non-negative figures and nothing builds a negative Cost today. 38-SECURITY.md notes it as advisory, which is not an owner waiver | |
+| 38 | WR-02 | UnpricedModelWarnings capacity is a fixed, unconfigurable module constant shared process-wide | open | LIVE crates/paladin-llm/src/pricing.rs:69 — other: UNPRICED_MODEL_WARNING_CAPACITY is still a fixed 256 const feeding one process-wide LazyLock (pricing.rs:118); no reset or per-adapter set exists. The doc comment states the process-wide dedup is deliberate (D-08) and the effect is limited to a suppressed warn line, so no data or tenant exposure; a record is wanted only if multi-tenant pricing or hot price reload is added | |
 | 40 | WR-01 | POST /v1/runs {thread_id} and fork run against another tenant's thread | closed | TENANT-04; submit_on_another_tenants_thread_is_rejected_as_unknown_thread and fork_on_another_tenants_thread_is_rejected_as_unknown_thread (re-run 2026-11-04: ok); 40-REVIEW-FIX 6d7efb16; 53 locks 2b16763d0, 66002e74b | |
 | 40 | WR-02 | Tenant isolation for cancel enforced only in the HTTP controller | closed | TENANT-05; cancel_of_another_tenants_run_is_not_found_and_writes_nothing (re-run 2026-11-04: ok); 40-REVIEW-FIX fa054746 | |
 | 40 | WR-03 | A corrupt or half-attributed row is a 500 that breaks hidden equals missing | closed | TENANT-06; corrupt_run_row_is_the_missing_run_404_for_a_tenant_principal (re-run 2026-11-04: ok); 40-REVIEW-FIX 05612748, 9afaef2b; migration crates/paladin-storage/migrations/postgres/009_add_run_attribution_check.sql; 53 commits 30b532813, 839a8119a | |
@@ -46,10 +49,15 @@ The archive is read-only. Every `closed` pointer was checked in this phase: a co
 | 50.1 | WR-03 | with_base_url docs promise http(s) validation seven of nine adapters do not perform | closed | 50.1-REVIEW-FIX 5ebd315b (commit exists); is_http_url at crates/paladin-llm/src/registry/mod.rs:169 used in all nine adapters; a_builder_set_non_http_base_url_fails_openai_construction and its eight siblings (re-run 2026-11-04 with --all-features: 9 ok) | |
 | 50.1 | WR-04 | CI muster job comment contradicts the Makefile and the zero-test guard can exit silently | closed | 50.1-REVIEW-FIX c5bdea75 (commit exists); the executed= pipeline carries the guard at .github/workflows/ci.yml:1664 (read 2026-11-04) | |
 
-**Totals:** closed: 20, waived: 0, open: 0
+**Totals:** closed: 21, waived: 0, open: 2
 
 ## Live in tree
 
-None among Phases 40, 42, 46, 48, 50 and 50.1: every finding was found fixed in the tree. Phases 38, 41, 43, 44, 45, 47 and 51 are dispositioned by 57-09 and 57-10.
+None among Phases 40, 42, 46, 48, 50 and 50.1: every finding was found fixed in the tree. Phases 41, 43, 44, 45, 47 and 51 are dispositioned by 57-09 and 57-10.
+
+Phase 38 (57-09; classes follow PD-09-1, confirmed at the 57-10 triage, D-14):
+
+- 38 WR-01, `crates/paladin-core/src/platform/container/cost.rs:147`, class `other`: `Cost::new` and `Add`/`AddAssign` still accept a negative amount and the type's rustdoc does not say so. Latent: no current producer builds a negative `Cost`. The review's fix is either a documentation sentence or a validated constructor.
+- 38 WR-02, `crates/paladin-llm/src/pricing.rs:69`, class `other`: the unpriced-model warning capacity stays a fixed process-wide 256. Deliberate per the module docs (D-08); only a suppressed log line, so a decision record is wanted only when multi-tenant pricing or hot price reload arrives.
 
 Documented residuals, not live findings (recorded in `42-REVIEW-FIX.md`): 42 WR-6's PostgreSQL `max_seq` override and its contract test were Docker-gated and not run by the fixer; two runs dispatched concurrently on one thread can still read the same max and collide (the fork and requeue paths the finding describes are sequential).

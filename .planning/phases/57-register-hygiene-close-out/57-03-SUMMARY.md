@@ -65,15 +65,15 @@ Plan-start SHA: `6d32dbc7d4f013e9e8f0259a55ecfcaf2309ef6a`
 
 ## Task Commits
 
-1. **Task 1 (tracer): thread gate, list walk and submit guard read the owner run (rows 86, 87)** - `a9c7b2619` (fix)
-2. **Task 2: newer-schema owner row skipped in the list and hidden on the gate; owner-rule tests; re-pointed test double (row 85)** - `14f2bf2b9` (fix)
-3. **Task 3: owner-run wording in rustdoc and utoipa descriptions; regenerated openapi.json** - `9ff636ce1` (docs)
+1. **Task 1 (tracer): thread gate, list walk and submit guard read the owner run (rows 86, 87)** - `a9de68468` (fix)
+2. **Task 2: newer-schema owner row skipped in the list and hidden on the gate; owner-rule tests; re-pointed test double (row 85)** - `a5c81bc06` (fix)
+3. **Task 3: owner-run wording in rustdoc and utoipa descriptions; regenerated openapi.json** - `15594e064` (docs)
 
 **Plan metadata:** recorded by the docs commit that follows this file.
 
 ## Tracer gate
 
-tracer gate: verify re-run passed; orchestrator-approved (unattended session), not owner-approved. The re-run executed Task 1's full `<verify>` on the committed state (`a9c7b2619`): the tracer printed `... ok` (1 passed), `cross_tenant_` 3 passed, `application::services::run::submission::` 35 passed, and both greps held.
+tracer gate: verify re-run passed; orchestrator-approved (unattended session), not owner-approved. The re-run executed Task 1's full `<verify>` on the committed state (`a9de68468`): the tracer printed `... ok` (1 passed), `cross_tenant_` 3 passed, `application::services::run::submission::` 35 passed, and both greps held.
 
 ## Red-green
 
@@ -146,12 +146,12 @@ Caveat for 57-11: the rows close as `fixed` only after 57-04 records the migrati
 - **Issue:** the classifier needs the fixed `run store error` message the run routes use, and the constant was a private `const`.
 - **Fix:** made it `pub(crate)` (a one-token change on one line, no public item changed). The alternative, hard-coding a second copy of the string in `thread_controller.rs`, would let the two messages drift apart.
 - **Files modified:** `crates/paladin-web/src/run_controller.rs`
-- **Commit:** `14f2bf2b9`
+- **Commit:** `a5c81bc06`
 
 **2. [Rule 1 - Bug] Dangling intra-doc link to the deleted helper**
 - **Found during:** Task 1 (deleting `latest_run_for_thread`)
 - **Fix:** repointed the `visible_thread_page` doc link at `RunRepositoryPort::owner_run_for_thread` at once, rather than waiting for the Task 3 wording pass; also removed the two imports (`Run`, `RunQuery`) the deleted helper left unused.
-- **Commit:** `a9c7b2619`
+- **Commit:** `a9de68468`
 
 ### Plan assumptions that did not hold (recorded, not defects)
 
@@ -189,4 +189,4 @@ None.
 
 ## Self-Check: PASSED
 
-All five modified source files, the SUMMARY and commits `a9c7b2619`, `14f2bf2b9` and `9ff636ce1` exist; no file was deleted by any commit; all three commits carry the two-line trailer; the only added `unwrap()` calls are in `#[cfg(test)]` code.
+All five modified source files, the SUMMARY and commits `a9de68468`, `a5c81bc06` and `15594e064` exist; no file was deleted by any commit; all three commits carry the two-line trailer; the only added `unwrap()` calls are in `#[cfg(test)]` code.

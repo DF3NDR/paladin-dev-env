@@ -18,7 +18,7 @@
 //! ## Tenant-scoped listing (D-12)
 //!
 //! [`RunQuery::scope`](crate::output::run_repository_port::RunQuery::scope) carries the caller's [`RunReadScope`](paladin_core::platform::container::principal::RunReadScope). The default,
-//! [`RunReadScope::All`](paladin_core::platform::container::principal::RunReadScope::All), is what every internal caller (fork's latest-run
+//! [`RunReadScope::All`](paladin_core::platform::container::principal::RunReadScope::All), is what every internal caller (the thread-owner
 //! lookup, the run inspector, the schedule service) relies on; only the HTTP
 //! `GET /runs` handler narrows it, from the authenticated principal. Every
 //! adapter applies the scope INSIDE its own query -- a `WHERE tenant_id = ?`
@@ -370,6 +370,71 @@ pub trait RunRepositoryPort: Send + Sync {
         thread_id: &ThreadId,
     ) -> Result<Option<Run>, RunRepositoryError>;
 
+    /// The thread's **owner run**: the one run whose attribution decides which tenant the
+    /// thread belongs to.
+    ///
+    /// The owner is the earliest run that carries `submitted_by`, ordered `(submitted_at
+    /// ASC, run_id ASC)`. When no run on the thread is attributed, it is the earliest run
+    /// overall (an unattributed one), so a thread that only a schedule ever ran stays
+    /// Admin-only and a tenant cannot claim it as a brand-new thread. `Ok(None)` means
+    /// exactly one thing: the thread has no run at all.
+    ///
+    /// Why the earliest attributed run (ADR-0063 as amended by Phase 57 D-02): a run added
+    /// to the thread later, whether by an Admin forking it, by a schedule (`submitted_by:
+    /// None`) or by another tenant, must never move or hide the thread. A recency rule
+    /// let any of those do so.
+    ///
+    /// This is an internal authorization read: it always reads the unrestricted scope
+    /// ([`RunReadScope::All`]), never the caller's. The caller then judges the result
+    /// with `RunReadScope::permits_thread`.
+    ///
+    /// # Default implementation
+    ///
+    /// Pages [`list`](Self::list) for the thread (`limit: 100`, following `next_cursor`
+    /// until it is `None`) and keeps the best candidate by the key above (attributed
+    /// first, then `submitted_at`, then `run_id`). It therefore decodes every run on the
+    /// thread, so one unreadable row anywhere fails the lookup. That is acceptable for a
+    /// third-party implementor, and it means adding this method does not break any
+    /// pre-existing implementor of this trait (X-10.4). The three real adapters override
+    /// it with a single-row read (`LIMIT 1`) so a corrupt or newer-schema row that is not
+    /// the owner cannot fail the lookup.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RunRepositoryError::Backend`] when the store fails, and
+    /// [`RunRepositoryError::Serialization`] or [`RunRepositoryError::UnknownSchemaVersion`]
+    /// when a row the lookup has to decode is unreadable (for the default implementation,
+    /// any run on the thread; for a single-row override, the owner run only).
+    async fn owner_run_for_thread(
+        &self,
+        thread_id: &ThreadId,
+    ) -> Result<Option<Run>, RunRepositoryError> {
+        let mut owner: Option<Run> = None;
+        let mut cursor: Option<RunCursor> = None;
+        loop {
+            let page = self
+                .list(RunQuery {
+                    thread_id: Some(thread_id.clone()),
+                    limit: 100,
+                    cursor: cursor.take(),
+                    ..Default::default()
+                })
+                .await?;
+            for run in page.items {
+                let earlier = owner
+                    .as_ref()
+                    .is_none_or(|best| owner_order_key(&run) < owner_order_key(best));
+                if earlier {
+                    owner = Some(run);
+                }
+            }
+            match page.next_cursor {
+                Some(next) => cursor = Some(next),
+                None => return Ok(owner),
+            }
+        }
+    }
+
     /// Idempotently request cancellation of `run_id`, returning its current
     /// status. `AlreadyTerminal` on a terminal run.
     async fn request_cancel(&self, run_id: &RunId) -> Result<RunStatus, RunRepositoryError>;
@@ -423,6 +488,16 @@ pub trait RunRepositoryPort: Send + Sync {
         self.insert(run).await?;
         Ok(run.assistant.version)
     }
+}
+
+/// The ordering key behind [`RunRepositoryPort::owner_run_for_thread`]: attributed runs
+/// sort before unattributed ones, then oldest `submitted_at`, then smallest `run_id`.
+fn owner_order_key(run: &Run) -> (bool, DateTime<Utc>, &str) {
+    (
+        run.submitted_by.is_none(),
+        run.submitted_at,
+        run.run_id.as_str(),
+    )
 }
 
 /// A no-op lease duration placeholder some call sites need — re-exported so

@@ -942,6 +942,14 @@ mod tests {
         contract_tests::get_on_unsupported_schema_version_fails(&fresh_store().await).await;
     }
 
+    #[tokio::test]
+    async fn owner_run_for_thread_ignores_later_admin_and_unattributed_runs() {
+        contract_tests::owner_run_for_thread_ignores_later_admin_and_unattributed_runs(
+            &fresh_store().await,
+        )
+        .await;
+    }
+
     // The one clause that needs a REAL shared on-disk database -- proving
     // the partial unique index (not an in-process lock) enforces the
     // one-active-run-per-thread invariant under true multi-connection

@@ -1432,3 +1432,77 @@ pub async fn list_scoped_pagination_has_no_gap_or_overlap(port: &dyn RunReposito
     assert_eq!(page_sizes, vec![2, 2, 1], "pages of sizes 2, 2, 1");
     assert_eq!(seen, expected_ids, "no gap: every A run seen, in order");
 }
+
+// ── Thread ownership (Phase 57 D-01/D-02, WINDOWS rows 86 and 87) ────────
+//
+// A thread carries no tenant of its own. It belongs to the tenant of its
+// OWNER run: the earliest run carrying `submitted_by`, ordered
+// `(submitted_at ASC, run_id ASC)`. `RunRepositoryPort::owner_run_for_thread`
+// is the one read that answers it, and every adapter must agree.
+
+/// Drive a freshly inserted run to `Completed` so the next `insert` on the
+/// same thread is not rejected with `ThreadBusy` (D-18: one active run per
+/// thread).
+async fn finish_run(port: &dyn RunRepositoryPort, run: &Run) {
+    port.update_status(
+        &run.run_id,
+        RunStatus::Queued,
+        RunStatus::Running,
+        contract_timestamp(),
+    )
+    .await
+    .unwrap();
+    port.update_status(
+        &run.run_id,
+        RunStatus::Running,
+        RunStatus::Completed,
+        contract_timestamp(),
+    )
+    .await
+    .unwrap();
+}
+
+/// A run added after the owner run -- by an Admin acting under another
+/// tenant's attribution, or by a schedule (`submitted_by: None`) -- never
+/// changes who owns the thread (P-02-1, row 87, T-57-05).
+pub async fn owner_run_for_thread_ignores_later_admin_and_unattributed_runs(
+    port: &dyn RunRepositoryPort,
+) {
+    let acme = unique_tenant("contract-owner-acme");
+    let ops = unique_tenant("contract-owner-ops");
+    let thread = unique_thread("contract-owner-ignores-later");
+    let assistant_id = unique("contract-owner-ignores-later");
+    let t0 = contract_timestamp();
+
+    let acme_run = sample_attributed_run(&thread, &assistant_id, t0, &acme, "svc-acme");
+    port.insert(&acme_run).await.unwrap();
+    finish_run(port, &acme_run).await;
+
+    let scheduled = sample_run(&thread, &assistant_id, t0 + chrono::Duration::seconds(1));
+    port.insert(&scheduled).await.unwrap();
+    finish_run(port, &scheduled).await;
+
+    let admin_fork = sample_attributed_run(
+        &thread,
+        &assistant_id,
+        t0 + chrono::Duration::seconds(2),
+        &ops,
+        "admin-key",
+    );
+    port.insert(&admin_fork).await.unwrap();
+    finish_run(port, &admin_fork).await;
+
+    let owner = port
+        .owner_run_for_thread(&thread)
+        .await
+        .unwrap()
+        .expect("a thread with runs has an owner run");
+    assert_eq!(
+        owner.run_id, acme_run.run_id,
+        "a later Admin-tenant run or a later unattributed run must not move ownership"
+    );
+    assert_eq!(
+        owner.submitted_by.as_ref().map(|a| &a.tenant_id),
+        Some(&acme)
+    );
+}

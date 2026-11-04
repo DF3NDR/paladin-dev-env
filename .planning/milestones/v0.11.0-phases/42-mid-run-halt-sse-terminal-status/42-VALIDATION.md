@@ -99,6 +99,7 @@ No separate Wave 0 plan: every new test file or module below is created test-fir
 | Credential-handling review | ALLOW-03, PLAT-09 | security.instructions.md makes the manual review the primary control (no merge-gating Rust SAST) | review every Phase 42 log line, error body, trace event, webhook payload and herald line for key values; record in 42-12-SUMMARY.md |
 | PostgreSQL contract legs and the 82 % coverage floor | ALLOW-03, PLAT-09 | no local PostgreSQL server or cargo-llvm-cov in the devcontainer | confirm CI `postgres-integration` (no `SKIP:`) and `coverage` jobs are green before `/gsd-verify-work` |
 | Over-admission race bound | ALLOW-03, ALLOW-05 | concurrency backstop truths (42-04, 42-07) cannot be reproduced deterministically | reviewer confirms each run's guard halts at its first boundary after exhaustion (42-04 `two_guards_on_one_scope_both_halt_once_the_shared_balance_crosses`) |
+| Judgment-tier verdicts (Phase 42 subset) | ALLOW-03, ALLOW-05, PLAT-09 | accepted as-is by owner decision (milestone open 2026-10-27, inventory F5) | none further: 42-VERIFICATION.md records human_verification_resolved, all 15 verdicts confirmed by the operator (2026-10-07T20:58:19Z); see .planning/phases/57-register-hygiene-close-out/57-JUDGMENT-READ.md |
 
 ---
 

@@ -24,8 +24,12 @@ when `t` is strictly lower, and otherwise records `t` and stores the entry. A st
 holder whose lock expired mid-computation therefore cannot overwrite the entry a newer holder
 already wrote. An equal token is accepted (the same holder writing again). A `Local` token has no
 cross-worker ordering and is a plain `put`. An ignored write is `Ok(())` with a debug line, never
-an error, so the D-29 best-effort contract is untouched. The fence key lives at least
-`max(2 * entry ttl, 1 h)`, so it outlasts the entry it guards.
+an error, so the D-29 best-effort contract is untouched. The fence key lives
+`clamp(2 * entry ttl, 5 min, 30 min)` (`crate::redis_fence::fence_marker_ttl_ms`), so it never
+outlives the Redis Cadence fencing counter that numbers its tokens (43-REVIEW WR-01): the counter
+lives `max(10 * lock ttl, 1 h)`, and 30 minutes is half its floor. The cost is that, for an entry
+TTL above 15 minutes, the marker can expire before the entry, so a late holder's duplicate write
+of the same deterministic result is accepted after at most 30 minutes (ADR-0058 (g)).
 
 `invalidate` removes the fence marker together with the entry (it matches both by prefix); the
 returned count then includes any fence markers removed, which only occur for entries written
@@ -51,13 +55,11 @@ use redis::{AsyncCommands, Client, Script, aio::ConnectionManager};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
+use crate::redis_fence::fence_marker_ttl_ms;
 use paladin_core::platform::container::battlefield::StateDelta;
 use paladin_core::platform::container::node_cache::CachedDelta;
 use paladin_ports::output::cadence_port::FencingToken;
 use paladin_ports::output::node_cache_port::{NodeCacheError, NodeCacheKey, NodeCachePort};
-
-/// The floor for a fence marker's time-to-live (one hour), so a fence outlasts a short entry.
-const MIN_FENCE_TTL_MS: u64 = 60 * 60 * 1000;
 
 /// Fenced-write script: store an entry unless a strictly higher fencing token was seen.
 ///
@@ -72,7 +74,8 @@ const MIN_FENCE_TTL_MS: u64 = 60 * 60 * 1000;
 /// - `ARGV[1]` = the serialized entry
 /// - `ARGV[2]` = the entry's time-to-live, in milliseconds
 /// - `ARGV[3]` = the fencing token, as a decimal string
-/// - `ARGV[4]` = the fence marker's time-to-live, in milliseconds (`max(2 * entry ttl, 1 h)`)
+/// - `ARGV[4]` = the fence marker's time-to-live, in milliseconds (`clamp(2 * entry ttl, 5 min,
+///   30 min)`, see `crate::redis_fence::fence_marker_ttl_ms`)
 pub const NODE_CACHE_PUT_FENCED_LUA: &str = r#"
 local last = tonumber(redis.call('GET', KEYS[2]) or '-1')
 local token = tonumber(ARGV[3])
@@ -303,7 +306,7 @@ impl NodeCachePort for RedisNodeCache {
             // Exactly as `put`: a zero TTL is an immediate expiry and Redis rejects `PX 0`.
             return Ok(());
         }
-        let fence_ttl_ms = ttl_ms.saturating_mul(2).max(MIN_FENCE_TTL_MS);
+        let fence_ttl_ms = fence_marker_ttl_ms(ttl_ms);
 
         let mut conn = self.conn.write().await;
         let stored: i64 = self
@@ -665,6 +668,60 @@ mod tests {
         assert_eq!(zero, 0);
         // Never panics on an absurd TTL.
         assert!(encode_entry(&contract_tests::sample_delta(1), Duration::MAX).is_ok());
+    }
+
+    /// 43-REVIEW WR-01: a fence marker written by an on-time stampede-lock holder (one that writes
+    /// within its lock TTL) must expire no later than the Redis Cadence fencing counter that
+    /// numbered it. Otherwise the counter expires first, the next lock restarts at token 1, and
+    /// `put_fenced` refuses every valid write against the surviving marker. Pure: needs no server.
+    #[test]
+    fn fence_marker_never_outlives_the_counter_that_numbers_it() {
+        use crate::redis_fence::{FENCE_MARKER_CEILING, FENCE_MARKER_FLOOR, fence_counter_ttl_ms};
+
+        const SECOND: u64 = 1_000;
+        const MINUTE: u64 = 60 * SECOND;
+        const HOUR: u64 = 60 * MINUTE;
+
+        let entry_ttls = [
+            SECOND,
+            10 * MINUTE,
+            29 * MINUTE,
+            31 * MINUTE,
+            2 * HOUR,
+            24 * HOUR,
+        ];
+        let lock_ttls = [
+            1,
+            120 * SECOND,
+            6 * MINUTE,
+            30 * MINUTE,
+            31 * MINUTE,
+            2 * HOUR,
+            24 * HOUR,
+        ];
+        assert_eq!(
+            fence_marker_ttl_ms(SECOND),
+            u64::try_from(FENCE_MARKER_FLOOR.as_millis()).unwrap(),
+            "a short entry's marker sits at the floor"
+        );
+        assert_eq!(
+            fence_marker_ttl_ms(2 * HOUR),
+            u64::try_from(FENCE_MARKER_CEILING.as_millis()).unwrap(),
+            "a long entry's marker sits at the ceiling"
+        );
+        for entry in entry_ttls {
+            let marker = fence_marker_ttl_ms(entry);
+            for lock in lock_ttls {
+                let counter =
+                    u64::try_from(fence_counter_ttl_ms(i64::try_from(lock).unwrap())).unwrap();
+                assert!(
+                    lock + marker <= counter,
+                    "entry ttl {entry} ms, lock ttl {lock} ms: lock + marker = {} ms outlives the \
+                     counter's {counter} ms",
+                    lock + marker
+                );
+            }
+        }
     }
 
     async fn stored_delta(cache: &RedisNodeCache, key: &NodeCacheKey) -> Option<StateDelta> {

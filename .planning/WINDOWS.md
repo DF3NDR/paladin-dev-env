@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 25
+open_count: 26
 waived_count: 40
 fixed_count: 34
-total_count: 99
-last_updated: 2026-11-04T20:51:02.196Z
+total_count: 100
+last_updated: 2026-11-04T21:14:43.257Z
 ---
 
 # Broken Windows Ledger
@@ -114,6 +114,7 @@ last_updated: 2026-11-04T20:51:02.196Z
 | 97 | 41 | deviation | src/application/services/treasurer/mod.rs | 251 | 41-REVIEW WR-01 (found live by the Phase 57 sweep, D-14): a won once-per-window operator allowance notice is lost with no recovery when enqueue_operator_delivery fails (logged and swallowed, the notice row is not given back) or when the submission or confirm future is dropped before confirm or abandon completes. Fix: give back on enqueue failure, cancellation-safe confirm and abandon, a submission drop guard (plan 57-14). | open |  | 2026-11-04T19:43:48.535Z |  |
 | 98 | 43 | deviation | crates/paladin-llm/src/cadence.rs | 291 | 43-REVIEW WR-05 (found live by the Phase 57 sweep, D-14): minimum_delay returns err.retry_after() unfiltered, so Retry-After 0, a past HTTP-date or a zero reset reaches CadencePolicy::delay_for as Some(0) and opens a zero-length gate with the streak incremented; a gateway answering every 429 with Retry-After 0 disables pacing. Fix: a zero provider delay is no provider delay (plan 57-15). | open |  | 2026-11-04T20:34:28.135Z |  |
 | 99 | 43 | deviation | crates/paladin-llm/src/cadence.rs | 275 | 43-REVIEW WR-04 (found live by the Phase 57 sweep, D-14): note_failure awaits record_rate_limited inline after the provider's 429, so a caller future dropped in the Redis round trip (outer timeout, run cancel, grace-deadline abort) never records the 429 and the fleet keeps sending into the limit. Fix: record in a spawned task the caller awaits (plan 57-15). | open |  | 2026-11-04T20:51:02.196Z |  |
+| 100 | 43 | deviation | crates/paladin-storage/src/node_cache/redis.rs | 306 | 43-REVIEW WR-01 (found live by the Phase 57 sweep, D-14): the node-cache fence marker TTL max(2 x entry ttl, 1 h) can outlive the cadence fencing counter max(10 x lock ttl, 1 h); for an entry ttl above 30 min the counter expires first, the next lock restarts at token 1 and put_fenced silently refuses every valid write until the marker expires. Fix: one shared definition and a marker capped below the counter (plan 57-16). | open |  | 2026-11-04T21:14:43.257Z |  |
 
 ````json
 [
@@ -1303,6 +1304,18 @@ last_updated: 2026-11-04T20:51:02.196Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-11-04T20:51:02.196Z",
+    "resolved_at": null
+  },
+  {
+    "id": 100,
+    "kind": "deviation",
+    "phase": "43",
+    "file": "crates/paladin-storage/src/node_cache/redis.rs",
+    "line": 306,
+    "description": "43-REVIEW WR-01 (found live by the Phase 57 sweep, D-14): the node-cache fence marker TTL max(2 x entry ttl, 1 h) can outlive the cadence fencing counter max(10 x lock ttl, 1 h); for an entry ttl above 30 min the counter expires first, the next lock restarts at token 1 and put_fenced silently refuses every valid write until the marker expires. Fix: one shared definition and a marker capped below the counter (plan 57-16).",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-04T21:14:43.257Z",
     "resolved_at": null
   }
 ]

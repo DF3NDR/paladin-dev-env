@@ -39,6 +39,11 @@ pub mod cadence;
 #[cfg(any(feature = "redis-queue", feature = "redis-cadence"))]
 pub(crate) mod redis_url;
 
+/// The fencing counter's and the node-cache fence marker's time-to-live rules, defined once so the
+/// marker can never outlive the counter that numbers it (43-REVIEW WR-01). Crate-private.
+#[cfg(any(feature = "redis-cache", feature = "redis-cadence"))]
+pub(crate) mod redis_fence;
+
 /// `NodeCachePort` storage adapters (Doc 04 FT-FR-18…20, D-27). The
 /// in-memory backend is always available (no feature gate, mirroring
 /// `waypoint`'s D-01 precedent); the Redis backend is added behind the

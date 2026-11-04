@@ -35,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `list_files` on the S3/RustFS file-storage adapter (feature `s3`) now honours `ListOptions.limit` as a page size and returns `has_more` and `continuation_token` from the store. Before, the limit was sent as the S3 delimiter: it was ignored, and every key containing its digits was dropped from the listing. Callers that passed a limit and expected everything must follow `continuation_token` (`MIGRATION.md` section 11.1 `M-B-40`; 45-REVIEW CR-01, Phase 57 plan 57-06).
 
+- A run row written by a newer build (an unknown schema version) as a thread's owner no longer fails every tenant's `GET /v1/threads` with `500`, and no longer reveals that the thread exists (WINDOWS row 85, `MIGRATION.md` section 11.1 `M-B-25`). A thread belongs to the tenant of its earliest attributed run (served by the new `RunRepositoryPort::owner_run_for_thread`; a later Admin, schedule or other-tenant run never moves it, `M-B-24`), so a thread that already holds runs from two tenants goes to the earlier one on upgrade (`MIGRATION.md` section 11.8 step 12). ADR-0063 is amended in place (Phase 57, D-02).
+
 ### Security
 
 - Boot refuses a configured Treasurer whose run worker pool has no engine factory, naming the misconfiguration before any worker spawns or listener binds. The shipped `build_run_api` wiring always installs the factory and is unaffected; only an embedder building its own pool wiring can hit the refusal (TENANT-08).

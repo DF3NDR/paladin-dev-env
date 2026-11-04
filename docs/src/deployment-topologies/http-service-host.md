@@ -124,8 +124,9 @@ route (`GET`, `/stream`, `/cancel`, `/webhook-deliveries`) show a `user`-role ke
 tenant's runs, while an `admin`-role key sees every run, including runs recorded without a
 principal. Another tenant's run answers the same `404` as a run that does not exist — never a
 `403`, so a caller cannot learn that a foreign run is there. The `/threads` routes follow the
-same rule through each thread's latest run (a thread with no run is visible to `admin` keys
-only). With `http.auth.enabled: false`,
+same rule through each thread's earliest attributed run (a later `admin` or scheduled run never
+moves a thread, a thread with no run is visible to `admin` keys only, and a thread whose owner
+row was written by a newer build is skipped from a tenant's list and answers it `404`). With `http.auth.enabled: false`,
 every request is an `admin` principal in the `open-access` tenant, which is why open mode keeps
 its deployment-wide read behaviour.
 

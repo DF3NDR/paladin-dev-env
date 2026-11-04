@@ -29,16 +29,26 @@ and this project follows lockstep workspace versioning.
 - Thread visibility gate (TENANT-03, TENANT-06 thread half, Phase 53 plan 53-03; see `MIGRATION.md`
   section 11.1 `M-B-24`): every `/v1/threads/{id}*` route (`GET`, `.../state`, `.../history`,
   `POST .../resume`, `POST .../fork`, `DELETE`) enters one `load_visible_thread` gate. A thread belongs to
-  the tenant of its latest run; a thread another tenant owns answers the same `404` as a missing thread
+  the tenant of its earliest attributed run (Phase 57, D-02: an Admin, schedule or other-tenant run added
+  later never moves it; ADR-0063 as amended, `M-B-24`); a thread another tenant owns answers the same `404` as a missing thread
   (on `resume` and `delete` before the admin check), a run-less thread is Admin-only, and a deployment
   without a run store shows non-admin principals no thread. Thread-route store failures render the
   fixed `thread store error` / `run store error` messages instead of backend text.
 - Tenant-filtered thread list (TENANT-03, Phase 53 plan 53-04; see `MIGRATION.md` section 11.1
-  `M-B-25`): `GET /v1/threads` lists a user-role principal only the threads whose latest run belongs to
-  its tenant (an Admin still lists all; a non-admin without a run store lists none). A page may hold fewer
+  `M-B-25`): `GET /v1/threads` lists a user-role principal only the threads whose earliest attributed run
+  belongs to its tenant (an Admin still lists all; a non-admin without a run store lists none). A page may hold fewer
   than `limit` items with a non-null `next_cursor` because a request examines at most 500 threads; clients
   follow `next_cursor` until `null`. A thread whose owner lookup hits an unreadable run row is skipped and
-  logged for a tenant rather than failing the list.
+  logged for a tenant rather than failing the list (see the `### Fixed` entry for the newer-schema case).
+
+### Fixed
+
+- A run row written by a newer build (an unknown schema version) as a thread's owner no longer fails every
+  tenant's `GET /v1/threads` with `500`, and no longer reveals that the thread exists (WINDOWS row 85,
+  `M-B-25`): the list skips the thread and logs it, and the single-thread routes answer a tenant the
+  missing-thread `404` (an Admin still gets the fixed `500`). The thread-only classifier
+  `thread_owner_error_for_scope` hides it; `GET /v1/runs/{id}` keeps its `500` for a newer-schema run row
+  (T-53-10). ADR-0063 is amended in place (Phase 57, D-02).
 
 ### Changed
 

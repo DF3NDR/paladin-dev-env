@@ -255,9 +255,12 @@ A 15-second heartbeat comment line is emitted on **both** paths to defeat idle-p
 ## Threads
 
 Every thread route is tenant-scoped, by the same rule as the run routes. A thread belongs to the
-tenant of its **latest run** (newest `submitted_at`); a `user`-role principal sees only its own
-tenant's threads, an `admin`-role key sees every thread, and a thread with no run is visible to
-`admin` keys only. A thread the caller may not see answers the same `404` as a thread that does
+tenant of its **earliest attributed run** (the earliest run that recorded a submitting principal,
+by `submitted_at`); a run added later by an `admin` key, by a schedule or by another tenant never
+moves it. A `user`-role principal sees only its own tenant's threads, an `admin`-role key sees
+every thread, and a thread with no run, or one that holds only scheduled runs, is visible to
+`admin` keys only. A thread whose owner row was written by a newer build is skipped from a
+`user`-role principal's list and answers that principal the missing-thread `404`. A thread the caller may not see answers the same `404` as a thread that does
 not exist -- never `403`, on every route below, including `resume` and `delete` -- and the tenant
 is derived from the credential alone (no header, query parameter or body field can name one).
 `GET /v1/threads` therefore lists a `user`-role principal only its own tenant's threads: a page
@@ -662,9 +665,9 @@ tenant's run. `RunResponse.submitted_by` shows the recording tenant and API key 
 key value or the role. A client that used to read other principals' runs must use an
 admin-role key.
 
-`/v1/threads/*` routes follow the same rule through the thread's latest run: another tenant's
-thread answers the same `404` as a missing one, a thread with no run is visible to `admin` keys
-only, and `GET /threads` lists a `user`-role principal only its own tenant's threads (see
+`/v1/threads/*` routes follow the same rule through the thread's earliest attributed run: another
+tenant's thread answers the same `404` as a missing one (also when its owner row was written by a
+newer build), a thread with no run is visible to `admin` keys only, and `GET /threads` lists a `user`-role principal only its own tenant's threads (see
 [Threads](#threads)).
 
 ### Allowance refusals

@@ -74,8 +74,8 @@ and `500` responses were already published on these operations.
 **Thread routes are tenant-scoped and hide a foreign thread behind the missing-thread `404` -- landed Phase 53 (plan 53-03), TENANT-03, TENANT-06 (`M-B-24`, section 11.1).**
 Every `/v1/threads/{id}*` route (`GET /v1/threads/{id}`, `.../state`, `.../history`, `POST .../resume`,
 `POST .../fork`, `DELETE /v1/threads/{id}`) now checks that the caller may see the thread before doing
-anything else. A user-role principal sees a thread only when its latest run belongs to the principal's
-tenant; an admin-role principal sees every thread; a thread with no run is Admin-only; and with no run
+anything else. A user-role principal sees a thread only when its earliest attributed run belongs to the principal's
+tenant (a later Admin, schedule or other-tenant run never moves a thread); an admin-role principal sees every thread; a thread with no run is Admin-only; and with no run
 store wired a non-admin sees no thread. A thread the caller may not see answers
 `404 {"error":{"code":"not_found","message":"unknown thread '<id>'"}}`, byte-identical to a thread that
 does not exist, where v0.11.0 returned `200` on the three `GET` routes and `fork`, and `403` on `resume`
@@ -90,7 +90,7 @@ OpenAPI document changes only on `/v1/threads/...` operations (descriptions, and
 
 **`GET /v1/threads` is tenant-filtered and may return short pages -- landed Phase 53 (plan 53-04), TENANT-03 (`M-B-25`, section 11.1).**
 The thread list no longer enumerates other tenants' threads. A user-role principal receives only the
-threads whose latest run is attributed to its own tenant, newest activity first; threads of other tenants
+threads whose earliest attributed run belongs to its own tenant, newest activity first; threads of other tenants
 and threads with no run are omitted, an admin-role principal lists every thread exactly as before, and a
 non-admin on a deployment without a run store receives `{"items":[],"next_cursor":null}`. Because the
 filter runs after the store is read, a page may hold fewer than `limit` items (even none) while
@@ -138,6 +138,7 @@ No item is marked `#[deprecated]` since `v0.11.0`. A later v0.11.1 deprecation a
 9. Before upgrading `paladin-server`, check its config for `trace.channel_capacity: 0`, `trace.value_cap_bytes: 0`, `trace.otel.enabled: true` on a build without the `otel` feature (the stock `Dockerfile.server` image has none), a non-http(s) `trace.otel.endpoint` with `trace.otel.enabled: true`, and an invalid `agent_runtime` value such as an enabled `model_call_limit` with `max_calls: 0` (`M-B-37`, DF-08). A config that booted v0.11.0 may now refuse at start with `paladin-server failed to start: invalid configuration: <key> …`, naming the key. Fix that key, or for OTLP build with `--features otel` or set `trace.otel.enabled: false`.
 10. Before upgrading `paladin-server`, list the trace, agent-runtime and web-server variables in its environment with `env | grep -E '^(PALADIN_TRACE_|APP_AGENT_RUNTIME_|APP_WEB_SERVER_)'` (`M-B-38`, DF-26). v0.11.0 ignored all of them; v0.11.1 applies each that is set, before the `M-B-37` checks. So remove any you do not want, and fix any whose value those checks refuse (for example `PALADIN_TRACE_OTEL_ENABLED=true` on the stock `Dockerfile.server` image).
 11. After upgrading `paladin-server`, watch the boot log for a `warn!` that names `treasurer.allowance.webhook.secret` (41-REVIEW WR-05, WINDOWS row 89). It means `treasurer.allowance.webhook` is configured with no secret, so every allowance notice is signed with the empty key and `X-Paladin-Signature` authenticates nothing. Set `treasurer.allowance.webhook.secret` (or `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET`) and give the same value to the receiver. An empty value, in YAML or in the environment variable, now counts as unset. Nothing is refused: boot succeeds either way, and the signature for a configured secret is unchanged.
+12. Before upgrading, find any thread that already holds runs from two or more tenants (`M-B-24`, `M-B-25`, WINDOWS rows 85-87): list the runs with `GET /v1/runs?thread_id=<id>` under an Admin key and compare each run's `submitted_by.tenant_id`. After the upgrade the thread routes are tenant-scoped, and such a thread is visible only to the tenant of its earliest attributed run (the earliest run that carries `submitted_by`) and to Admin keys. Every other tenant gets the missing-thread `404` on it, including a tenant that submitted a later run to it, and an Admin run or a schedule run added later never changes that. If a thread must belong to a different tenant, there is no re-assignment: start a new thread under that tenant's key.
 
 A deployment that attaches a Treasurer through its own `RunWorkerPool` wiring must now also install the engine factory, or boot refuses (`M-B-27`, TENANT-08); `paladin-server` as shipped is unaffected.
 

@@ -43,6 +43,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A won once-per-window operator allowance notice is no longer lost silently (41-REVIEW WR-01, `MIGRATION.md` section 11.1 `M-B-44`). A failed enqueue of its operator delivery now gives the notice back, so the next admission in the same window wins it again and enqueues it; `Treasurer::confirm` and `abandon` now complete even when the caller is dropped, and a run submission dropped by a client disconnect settles its admission (confirm when the run row exists, otherwise give back). A notice failure still never fails or delays a run.
 
+- `paladin-llm`: `CadenceLlmAdapter` treats a zero provider delay (`Retry-After: 0`, a past HTTP-date, a zero reset header) as no provider delay, so the gate is at least the base back-off and the streak escalates. Before, the zero reached the port as `Some(0)` and opened a zero-length gate, so a gateway answering every 429 with `Retry-After: 0` disabled pacing. A non-zero provider delay is still honoured exactly (43-REVIEW WR-05, WINDOWS row 98, Phase 57 plan 57-15; `MIGRATION.md` section 11.1 `M-B-45`).
+
+- `paladin-llm`: `CadenceLlmAdapter` records a 429 in a task spawned on the current tokio runtime that the call awaits, so dropping the call's future after the provider's response (an outer timeout, a run cancel, a grace-deadline abort) no longer loses the record and the fleet gate. A call that completes still returns only after the 429 is recorded (43-REVIEW WR-04, WINDOWS row 99, Phase 57 plan 57-15; `MIGRATION.md` section 11.1 `M-B-46`).
+
 ### Security
 
 - Boot refuses a configured Treasurer whose run worker pool has no engine factory, naming the misconfiguration before any worker spawns or listener binds. The shipped `build_run_api` wiring always installs the factory and is unaffected; only an embedder building its own pool wiring can hit the refusal (TENANT-08).

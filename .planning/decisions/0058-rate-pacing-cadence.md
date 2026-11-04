@@ -4,6 +4,8 @@
 
 Accepted
 
+Amended 2026-11-04 (Phase 57).
+
 **Date:** 2026-10-09
 
 **Phase:** 43 (Rate Pacing), plan 43-13. This ADR is written at the close of the phase, after plans 43-01 through
@@ -153,6 +155,8 @@ the response `Date`; an unparseable header yields `None`, never a guess; every d
 `Retry-After` through the generic family, but the reset-derived fallback exists only for the two providers PACE-01
 names. **Gemini's body-level `google.rpc.RetryInfo.retryDelay` is left unparsed** (research assumption A8, low
 impact); it is a documented follow-up, not an oversight.
+
+**Amended 2026-11-04 (Phase 57, 43-REVIEW WR-05):** a zero provider delay (`Retry-After: 0`, an HTTP-date already in the past, or an exhausted dimension whose reset is zero) is not a provider minimum. `CadenceLlmAdapter` hands the port no delay in that case, so the gate falls back to D-04's back-off (at least the base delay, the streak incremented) instead of opening a zero-length gate. Before this amendment the zero reached `CadencePolicy::delay_for` as `Some(0)`, which returns an explicit delay exactly, and a gateway answering every 429 with `Retry-After: 0` disabled pacing. A non-zero provider delay is unchanged: it stays the minimum, below base as well as above it.
 
 ### (e) Degraded mode and the log target (D-05; Open Question 5)
 
@@ -314,6 +318,7 @@ Stated plainly, because "a run is never unpaced" is a bounded guarantee:
 - **Hand-built `FallbackLlmAdapter` chains** that never call `with_cadence` keep hopping immediately on a `429`.
 - **No lock renewal** and the stale-write window it leaves (group (g)).
 - **The compat engine's `error_override` hook** runs first and receives no hints; no shipped preset sets one for `429`.
+- **Amended 2026-11-04 (Phase 57, 43-REVIEW WR-04):** the 429 record now survives a dropped caller. `CadenceLlmAdapter` records the 429 in a task spawned on the current tokio runtime and awaits it, so an outer timeout, a run cancel or a grace-deadline abort after the provider's response no longer cancels the record mid-round-trip. A drop before the record task is spawned (between the provider's response and the record) or a process exit while it runs can still lose the 429 (EA-57-17); both windows are narrower than the one closed and belong to the crash class above.
 
 ### (j) Provider header evidence (plan 43-12)
 

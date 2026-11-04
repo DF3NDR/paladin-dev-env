@@ -91,7 +91,8 @@
 //!
 //! The single-thread routes (`/threads/{id}`, `.../state`, `.../history`, `.../resume`,
 //! `.../fork`, `DELETE /threads/{id}`) apply the same `RunReadScope` rule to a thread's
-//! latest run through `thread_controller`'s `load_visible_thread` gate (ADR-0063).
+//! owner run (its earliest attributed run) through `thread_controller`'s
+//! `load_visible_thread` gate (ADR-0063).
 
 use std::collections::HashMap;
 use std::convert::Infallible;

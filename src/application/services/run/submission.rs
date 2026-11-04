@@ -250,12 +250,13 @@ impl RunSubmissionService {
 
     /// Tenant guard for a caller-supplied Thread (phase 40 review WR-01).
     ///
-    /// A thread carries no tenant of its own, but every run on it carries
-    /// `submitted_by`. When `requested_by` is `Some`, the thread's latest run
-    /// (the newest by `submitted_at`, `run_id` as tiebreak; looked up with the
-    /// unrestricted `All` scope -- this is an internal authorization read, not
-    /// a caller-facing one) must be permitted by the principal's
-    /// [`RunReadScope`] under the one thread-owner rule,
+    /// A thread carries no tenant of its own, but runs on it carry
+    /// `submitted_by`. When `requested_by` is `Some`, the thread's owner run
+    /// (its earliest attributed run -- earliest by `submitted_at`, `run_id` as
+    /// tiebreak, among the runs that carry an attribution; read through
+    /// [`RunRepositoryPort::owner_run_for_thread`], an internal authorization
+    /// read that is not scoped to the caller) must be permitted by the
+    /// principal's [`RunReadScope`] under the one thread-owner rule,
     /// [`RunReadScope::permits_thread`]; otherwise the caller is answered
     /// [`RunSubmissionError::UnknownThread`], the same value a `fork` against a
     /// thread with no runs yields, so a hidden thread is not distinguishable
@@ -269,9 +270,10 @@ impl RunSubmissionService {
     /// (UUIDv7 by default) and full tenant-namespacing of threads is the
     /// deferred thread-tenancy work (40-CONTEXT D-14).
     ///
-    /// Thread birth is why this calls `permits_thread` only with `Some(&latest)`:
+    /// Thread birth is why this calls `permits_thread` only with `Some(&owner)`:
     /// asking it about "no run" would refuse every first submit by a non-admin.
-    /// A corrupt latest-run row surfaces as the redacted `500 "run store error"`
+    /// A later run -- an Admin's, a schedule's or another tenant's -- never moves
+    /// the owner. A corrupt owner-run row surfaces as the redacted `500 "run store error"`
     /// (a repository error, no backend text); the role-dependent `404` mapping
     /// is confined to the read-path load helpers.
     async fn ensure_thread_visible(
@@ -1170,7 +1172,7 @@ mod tests {
     }
 
     /// WR-01: a `User` principal of another tenant must not be able to run
-    /// against a Thread whose latest run belongs to a different tenant, and the
+    /// against a Thread whose owner run belongs to a different tenant, and the
     /// rejection is the SAME `UnknownThread` a fork against a thread with no
     /// runs answers -- never `ThreadBusy`, which would confirm the thread
     /// exists.
@@ -1332,7 +1334,7 @@ mod tests {
             .expect("the owner tenant is admitted although the newest run is globex's");
     }
 
-    /// WR-01 (fork): a `User` of another tenant forking a thread whose latest
+    /// WR-01 (fork): a `User` of another tenant forking a thread whose owner
     /// run is not theirs gets the uniform `UnknownThread`, before the
     /// busy-thread / waypoint checks can confirm the thread exists.
     #[tokio::test]

@@ -34,8 +34,10 @@
 //!
 //! ## Authorization (tenant visibility, ADR-0063)
 //!
-//! A thread carries no tenant of its own; it belongs to the tenant of its **latest run**
-//! -- the newest by `submitted_at`, with `run_id` as the tiebreak. Every
+//! A thread carries no tenant of its own; it belongs to the tenant of its **owner run**:
+//! the **earliest attributed run** (earliest by `submitted_at`, with `run_id` as the
+//! tiebreak, among the runs that carry an attribution). A later run -- an Admin's, a
+//! schedule's or another tenant's -- never moves it. Every
 //! `/v1/threads/{id}*` route (`get_thread`, `get_thread_state`, `get_thread_history`,
 //! `resume_thread`, `fork_thread`, `delete_thread`) enters through one private gate,
 //! `load_visible_thread`, which applies
@@ -44,9 +46,10 @@
 //! body):
 //!
 //! - an **Admin** sees every thread and the gate performs no run lookup;
-//! - a **user-role principal** sees a thread only when its latest run is attributed to
-//!   the principal's tenant;
-//! - a thread with **no run** has no owner and is visible to an Admin only;
+//! - a **user-role principal** sees a thread only when its owner run (its earliest
+//!   attributed run) is attributed to the principal's tenant;
+//! - a thread with **no run**, or only unattributed runs, has no owner and is visible to
+//!   an Admin only;
 //! - with **no run store wired** ([`ThreadApiState::runs`] is `None`) ownership cannot be
 //!   established, so the gate fails closed: a non-admin sees no thread, an Admin is
 //!   unaffected (D-07);
@@ -62,20 +65,22 @@
 //! Store failures never echo backend text: a waypoint-store failure renders the fixed
 //! `500 "thread store error"` and a run-store failure the fixed `500 "run store error"`
 //! (detail to the server log only). A Waypoint or run row the store cannot read
-//! (`Serialization`, or an unsupported Waypoint schema version) is an existence signal, so
-//! for a non-admin it is the same missing-thread `404`; an Admin gets the fixed `500`.
+//! (`Serialization`, or an unsupported Waypoint or owner-run schema version) is an
+//! existence signal, so for a non-admin it is the same missing-thread `404`; an Admin gets
+//! the fixed `500`. (`GET /v1/runs/{id}` keeps its recorded newer-schema `500` residual.)
 //!
 //! The route-enumerating test `every_thread_id_route_hides_foreign_threads_behind_the_missing_thread_404`
 //! reads the `/v1/threads/{id}*` operations from this router's own OpenAPI document and
 //! fails if any is missing from its table, so a future route cannot skip the gate unnoticed.
 //!
 //! Known limitation (D-14): thread ids are not tenant-namespaced, so two tenants that pick
-//! the same id share one thread, and its latest run decides who sees it.
+//! the same id share one thread, and its owner run (the earliest attributed run) decides
+//! who sees it.
 //!
 //! `GET /threads` (the list route) addresses no single thread, so it does not enter
 //! `load_visible_thread`; it applies the same rule per thread instead. An Admin keeps the
 //! single newest-first fetch and performs no owner lookup. For a user-role principal,
-//! `visible_thread_page` walks the store in batches, resolves each examined thread's latest
+//! `visible_thread_page` walks the store in batches, resolves each examined thread's owner
 //! run exactly as the gate does, keeps the threads `permits_thread` admits, and examines at
 //! most `MAX_EXAMINED_THREADS` per request -- so a page may hold fewer than `limit` items
 //! while `next_cursor` still advances, and a client follows `next_cursor` until it is
@@ -244,7 +249,7 @@ const THREAD_STORE_ERROR_MESSAGE: &str = "thread store error";
 
 /// The most threads one tenant-scoped `GET /threads` request examines (D-04, T-53-21).
 ///
-/// Each examined thread costs one latest-run lookup, so this bounds a request to
+/// Each examined thread costs one owner-run lookup, so this bounds a request to
 /// `MAX_EXAMINED_THREADS` run-repository reads and
 /// `MAX_EXAMINED_THREADS / THREAD_SCAN_BATCH` waypoint-store list calls however large the
 /// store is or however few of its threads the caller may see. A walk that reaches the cap
@@ -766,7 +771,7 @@ fn thread_owner_error_for_scope(
 /// activity first (TENANT-03, D-04) -- the `GET /threads` counterpart of
 /// `load_visible_thread`.
 ///
-/// A thread's owner is its latest run, so each examined thread costs one
+/// A thread's owner is its earliest attributed run, so each examined thread costs one
 /// [`RunRepositoryPort::owner_run_for_thread`] lookup (the same read the single-thread gate performs, with
 /// the `All` scope) and is kept when [`RunReadScope::permits_thread`] admits it. The walk
 /// pages the store in [`THREAD_SCAN_BATCH`]-sized `list_threads` calls and stops as soon
@@ -781,10 +786,11 @@ fn thread_owner_error_for_scope(
 /// itself documents, two threads with an identical `last_updated_at` straddling a page
 /// boundary can be skipped; this is a keyset walk, not a snapshot.
 ///
-/// A lookup that fails with [`RunRepositoryError::Serialization`] means that one thread's
-/// run row is unreadable. For a `Tenant` scope the thread is skipped (it is hidden, never
-/// shown) and the error logged, so one tenant's corrupt row cannot fail another tenant's
-/// list. Any other run-repository error, and every waypoint-store error, answers the fixed
+/// A lookup that fails with [`RunRepositoryError::Serialization`] or
+/// [`RunRepositoryError::UnknownSchemaVersion`] means that one thread's owner row is
+/// unreadable or was written by a newer build. For a `Tenant` scope the thread is skipped
+/// (it is hidden, never shown) and the error logged, so one such row cannot fail another
+/// tenant's list (WINDOWS row 85). Any other run-repository error, and every waypoint-store error, answers the fixed
 /// `500` for every role -- a list has no single object to hide (D-09).
 async fn visible_thread_page(
     waypoints: &Arc<dyn WaypointPort>,
@@ -849,8 +855,9 @@ async fn visible_thread_page(
 /// Load a thread's latest Waypoint and check the caller may see the thread -- the single
 /// entry every `/v1/threads/{id}*` route passes through (TENANT-03, D-05).
 ///
-/// A thread carries no tenant of its own: it belongs to the tenant of its **latest run**
-/// (newest by `submitted_at`, `run_id` as the tiebreak), applied through
+/// A thread carries no tenant of its own: it belongs to the tenant of its **owner run**
+/// (the earliest attributed run: earliest by `submitted_at`, `run_id` as the tiebreak,
+/// among the runs that carry an attribution), applied through
 /// [`RunReadScope::permits_thread`]. In order:
 ///
 /// 1. no waypoint backend -> `501` (same as every thread route);
@@ -859,17 +866,19 @@ async fn visible_thread_page(
 ///    outage cannot turn an Admin read into a failure;
 /// 4. no run store wired -> `hidden()` for every non-admin (D-07, fail closed: ownership
 ///    cannot be established, so nothing is shown);
-/// 5. the latest run is read and `permits_thread` applied; a thread with no run is
-///    `hidden()` (Admin-only), as is a thread whose latest run is another tenant's.
+/// 5. the owner run is read and `permits_thread` applied; a thread with no run is
+///    `hidden()` (Admin-only), as is a thread whose owner run is another tenant's. A
+///    later run never changes the owner.
 ///
 /// `hidden()` builds the exact `404 unknown thread '<id>'` a genuinely missing thread
 /// gets, so a hidden thread is indistinguishable from a missing one by status, code,
 /// headers and body (ADR-0054 rule 5, ADR-0063). Store failures go through the shared
-/// role-aware redaction: an unreadable Waypoint or run row is the same `404` for a
-/// `Tenant` scope and a fixed `500` for an Admin.
+/// role-aware redaction: an unreadable Waypoint, or an unreadable or newer-schema owner
+/// run row (`thread_owner_error_for_scope`), is the same `404` for a `Tenant` scope and a
+/// fixed `500` for an Admin.
 ///
 /// Known limitation (D-14): thread ids are not tenant-namespaced, so two tenants that
-/// choose the same id share one thread; the latest run decides who sees it.
+/// choose the same id share one thread; the owner run decides who sees it.
 async fn load_visible_thread(
     state: &ThreadApiState,
     principal: &Principal,
@@ -924,7 +933,8 @@ async fn load_visible_thread(
 /// parleys/responses when suspended.
 ///
 /// Authenticated, any role, tenant-scoped through `load_visible_thread`: a user-role
-/// principal sees only a thread whose latest run belongs to its tenant, an Admin sees
+/// principal sees only a thread whose owner run (its earliest attributed run) belongs to its
+/// tenant, an Admin sees
 /// every thread, and a thread the caller may not see answers the same `404` as a missing
 /// one (ADR-0063).
 ///
@@ -939,7 +949,7 @@ async fn load_visible_thread(
     tag = "threads",
     params(("id" = String, Path, description = "Thread id")),
     responses(
-        (status = 200, description = "Thread state. Tenant-scoped: a user-role principal can read only a thread whose latest run belongs to its tenant; an admin-role principal can read every thread.", body = ThreadStateResponse),
+        (status = 200, description = "Thread state. Tenant-scoped: a user-role principal can read only a thread whose owner (its earliest attributed run) belongs to its tenant; a later Admin or schedule run never moves it; an admin-role principal can read every thread.", body = ThreadStateResponse),
         (status = 400, description = "Invalid thread id", body = ApiErrorBody),
         (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
         (status = 404, description = "Unknown thread (also returned for a thread the caller may not see)", body = ApiErrorBody),
@@ -1063,7 +1073,7 @@ pub async fn resume_thread(
         ("cursor" = Option<String>, Query, description = "Opaque pagination cursor from a previous page's next_cursor"),
     ),
     responses(
-        (status = 200, description = "A page of waypoint summaries. Tenant-scoped: a user-role principal can read only a thread whose latest run belongs to its tenant; an admin-role principal can read every thread.", body = HistoryResponse),
+        (status = 200, description = "A page of waypoint summaries. Tenant-scoped: a user-role principal can read only a thread whose owner (its earliest attributed run) belongs to its tenant; a later Admin or schedule run never moves it; an admin-role principal can read every thread.", body = HistoryResponse),
         (status = 400, description = "limit exceeds 100, or cursor is not a valid waypoint id", body = ApiErrorBody),
         (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
         (status = 404, description = "Unknown thread (also returned for a thread the caller may not see)", body = ApiErrorBody),
@@ -1152,8 +1162,8 @@ async fn thread_summary_dto(state: &ThreadApiState, summary: &ThreadSummary) -> 
 /// D-47). Authenticated, any role, tenant-scoped (TENANT-03, ADR-0063).
 ///
 /// An Admin lists every thread. A user-role principal lists only the threads
-/// whose latest run is attributed to its own tenant; a thread with no run is
-/// Admin-only, and with no run store wired a non-admin lists nothing. Because
+/// whose owner run (its earliest attributed run) is attributed to its own tenant; a
+/// thread with no run is Admin-only, and with no run store wired a non-admin lists nothing. Because
 /// the other tenants' threads are filtered out of a page after it is read, a
 /// page may hold fewer than `limit` items (even none) while `next_cursor` is
 /// still non-null: keep following `next_cursor` until it is `null`. A request
@@ -1205,7 +1215,7 @@ pub async fn list_threads(
         .map(decode_cursor::<DateTime<Utc>>)
         .transpose()?;
 
-    // A non-admin sees only threads whose latest run is its tenant's (TENANT-03, D-04).
+    // A non-admin sees only threads whose owner run is its tenant's (TENANT-03, D-04).
     let scope = principal.read_scope();
     if !matches!(scope, RunReadScope::All) {
         // No run store: ownership cannot be established, so nothing is visible (D-07).
@@ -1273,7 +1283,7 @@ pub async fn list_threads(
     tag = "threads",
     params(("id" = String, Path, description = "Thread id")),
     responses(
-        (status = 200, description = "Thread summary. Tenant-scoped: a user-role principal can read only a thread whose latest run belongs to its tenant; an admin-role principal can read every thread.", body = ThreadResponse),
+        (status = 200, description = "Thread summary. Tenant-scoped: a user-role principal can read only a thread whose owner (its earliest attributed run) belongs to its tenant; a later Admin or schedule run never moves it; an admin-role principal can read every thread.", body = ThreadResponse),
         (status = 400, description = "Invalid thread id", body = ApiErrorBody),
         (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
         (status = 404, description = "Unknown thread (also returned for a thread the caller may not see)", body = ApiErrorBody),
@@ -2279,7 +2289,7 @@ mod tests {
     async fn get_thread_state_with_non_admin_role_is_200_not_403() {
         // Reads stay authenticated-any-role (D-24); only `resume` is
         // narrowed to admin by CR-01. The user-role key owns `scoped-thread`
-        // (its tenant has the latest run), so the read is 200, not 403.
+        // (its tenant holds the owner run), so the read is 200, not 403.
         let parley_id = ParleyId::new();
         let app = authed_thread_app(parley_id);
 

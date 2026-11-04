@@ -5,15 +5,15 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 57
 current_phase_name: register-hygiene-close-out
 status: executing
-stopped_at: Completed 57-15-PLAN.md
-last_updated: "2026-11-04T21:06:04.169Z"
+stopped_at: Completed 57-16-PLAN.md
+last_updated: "2026-11-04T22:04:49.530Z"
 last_activity: 2026-11-04
-last_activity_desc: Completed 57-15 (43 WR-05 and WR-04 fixed; WINDOWS rows 98 and 99 open for 57-11)
+last_activity_desc: Completed 57-16 (43 WR-01 fixed: fence marker capped at 30 min; WINDOWS row 100 open for 57-11)
 progress:
   total_phases: 6
   completed_phases: 5
   total_plans: 68
-  completed_plans: 66
+  completed_plans: 67
 ---
 
 # Project State
@@ -51,11 +51,11 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 ## Current Position
 
 Phase: 57 (register-hygiene-close-out) — EXECUTING
-Plan: 15 of 16 complete (57-15 done; gap plan 57-16 then 57-11 remain)
+Plan: 16 of 16 complete (57-16 done; 57-11 seals the registers next)
 Status: Ready to execute
-Last activity: 2026-11-04 — Completed 57-15 (43 WR-05 and WR-04 fixed; WINDOWS rows 98 and 99 open for 57-11)
+Last activity: 2026-11-04 — Completed 57-16 (43 WR-01 fixed; WINDOWS row 100 open for 57-11)
 
-Progress: [██████████████░░░░░░] 5/7 phases (v0.11.1) — plans [████████████████░░░░] 52/57 ([██████████] 97%)
+Progress: [██████████████░░░░░░] 5/7 phases (v0.11.1) — plans [████████████████░░░░] 52/57 ([██████████] 99%)
 
 ## Performance Metrics
 
@@ -425,6 +425,7 @@ Progress: [██████████████░░░░░░] 5/7 pha
 | Phase 57 P13 | 26min | 3 tasks | 5 files |
 | Phase 57 P14 | 41min | 3 tasks | 7 files |
 | Phase 57 P15 | 42min | 3 tasks | 6 files |
+| Phase 57 P16 | ~60min | 3 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -818,6 +819,8 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 57]: 57-14: confirm/abandon are cancellation-safe in the Treasurer (detached task); a private AdmissionSettlement drop guard settles dropped submissions (PD-14-2, PD-14-3)
 - [Phase 57]: 57-15: A zero provider delay is filtered to None in CadenceLlmAdapter::minimum_delay (not in CadencePolicy::delay_for), so paladin-ports is untouched and the port back-off paces a Retry-After 0 (43-REVIEW WR-05)
 - [Phase 57]: 57-15: note_failure records the 429 in a spawned, awaited task (Handle::try_current, inline fallback); a drop before the spawn or a process exit can still lose it (43-REVIEW WR-04, EA-57-17)
+- [Phase 57]: PD-16-1: cap the node-cache fence marker at clamp(2 x entry ttl, 5 min, 30 min) rather than lengthen the counter; a late duplicate write of the same deterministic result is accepted after 30 minutes (43-REVIEW WR-01, ADR-0058 (g))
+- [Phase 57]: EA-57-20: a holder more than 28 minutes late (default 120 s lock) can still leave a marker outliving the counter; the wait is bounded at 30 minutes (ADR-0058 (i))
 
 ### Pending Todos
 
@@ -1210,8 +1213,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-11-04T21:06:04.143Z
-Stopped at: Completed 57-15-PLAN.md
+Last session: 2026-11-04T22:04:49.506Z
+Stopped at: Completed 57-16-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

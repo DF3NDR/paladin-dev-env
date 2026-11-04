@@ -108,3 +108,35 @@ against its own latest pre-bump figure.
 The remaining steps are web3sec's: re-pin the `paladin` submodule detached on the `v0.11.0` tag, run the
 consumer's gates on the new pin, and send the return report per the hand-off's section 6. Status stays pending
 until web3sec returns (D-15).
+
+## Resolution (2026-11-04)
+
+Closed by Phase 56 plan 56-10 (DOGF-02), on the maintainer's `confirm-triage` decision of 2026-11-04.
+
+web3sec's return arrived on 2026-11-04 by maintainer relay in chat. It is `RETURN-REPORT-50`, dated 2026-10-30,
+written for web3sec's own Phase 50 requirement BUMP-07, and is filed verbatim at
+`.planning/phases/56-dogfood-findings/56-WEB3SEC-RETURN-REPORT-50.md`. The maintainer's note: "bump completed
+successfully". The runbook slots W1 and W2 are filled in `.planning/phases/56-dogfood-findings/56-RUNBOOK-WEB3SEC.md`.
+
+The four items of `47-HANDOFF-web3sec.md` section 6, as received:
+
+1. **Consumer commit:** web3sec C1 `3ad5d03f` (`3ad5d03fba2aea8a7e1a702f3c280f5131ca4495`), one commit carrying the
+   gitlink, the compile adaptation and `Cargo.lock`. Pin verified: `git ls-tree HEAD paladin` is `70657919…` and
+   `describe --exact-match --tags` is `v0.11.0`; `v0.11.0` resolves to `70657919beadbd341a72be2d0107080017a803f0` in
+   this repository too.
+2. **D-2:** lossless `TokenUsage` through `PaladinResult.usage`, 7 web3sec types changed, `total_tokens()` kept as a
+   derived accessor.
+3. **Gates:** `cargo test --workspace --no-fail-fast` 2,821 passed / 0 failed / 2 ignored against web3sec's own
+   re-measured baseline of 2,766 / 0 / 2 at its `ea0b8bce` (a third figure; the 2,592 in step 4 above and the 2,683
+   in the 2026-10-26 update are both superseded and both lower); fmt, clippy and check exit 0.
+4. **Divergences:** six section 5 divergences and six section 7 findings, triaged below.
+
+Findings-log entries (all `**By:** web3sec`): DF-27 and DF-28 (S3, fixed by docs notes in `0c0036714`), DF-29 to DF-33
+and DF-35 (S4, `out` with their reasons), DF-34 and DF-36 (re-homed to
+`.planning/todos/pending/2026-11-04-reasoning-budget-hint-for-deepseek-empty-completion.md` and
+`.planning/todos/pending/2026-11-04-muster-pin-cadence-consumer-imports.md`). No entry is S1 or S2, so Stage C is not
+reopened. The benchmark-parity result in the report (2 of 6 checks under web3sec's own majority-of-3 bar, accepted by
+its operator on 2026-10-30) is the consumer's own bar and is not a Paladin finding.
+
+Step 3 of "What to do" (reconciling the muster) is answered by the report's section 4: the three Cadence paths are
+logged as DF-36.

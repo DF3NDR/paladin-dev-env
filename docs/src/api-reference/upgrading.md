@@ -97,6 +97,14 @@ holds the replacement code, and each row cites its section 10.2 register row.
 **Rate pacing and decorators**
 
 - [DR-7][mig-108]: `LlmError::RateLimitExceeded` becomes a `#[non_exhaustive]` struct variant `{ retry_after, hints }`; build with `LlmError::rate_limited(..)`. A directly built adapter has no 429 pacing unless Cadence is composed, and an `LlmPort` decorator must forward `model_profile` and `check_reasoning` (both in the "Library consumers" subsection of section 10.8).
+- **Cadence is pacing, not a retry.** Section 10.8 says a pin before `v0.10.0` meets 0 retries on a 429 "unless
+  Cadence is composed". Read that as pacing only. Before `v0.10.0` the DeepSeek adapter made up to 4 calls and the
+  Anthropic adapter up to 3 on a 429, inside the adapter. Composing Cadence restores the back-pressure (the next call to
+  that provider and model waits out the gate) but not the retry: the call that received the 429 returns
+  `LlmError::RateLimitExceeded` unchanged and the provider is hit once. A retry has to come from the caller, since
+  `RetryPolicy` and `FallbackLlmAdapter` are the only retry owners. A gate longer than `max_wait` (default 300 s,
+  `treasurer.cadence.max_wait_secs`) is not slept on either: the call returns `RateLimitExceeded` at once, carrying the
+  remaining gate in `retry_after`, without calling the provider. A gate of `max_wait` or less is waited out.
 
 ### Operator checklist
 

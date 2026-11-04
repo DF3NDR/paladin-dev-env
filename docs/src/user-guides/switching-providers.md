@@ -175,6 +175,21 @@ fallback. The `context_window` knob applies to the window field only. The Commis
 `Commissary::for_model`) and the history trimmer ration prompts against the resolved window of the
 model actually in use.
 
+**A window cannot be set below a maximum output.** The adapter-wide `context_window` (and the
+`llm.<provider>.context_window` key) is checked at construction against the maximum output of the
+adapter-wide fallback and of every seeded model of that provider, not only the model in use. A
+window below the largest of them is refused with an error naming the provider, the model and both
+numbers; it is never clamped. For DeepSeek that floor is 393,216 (the maximum output of
+`deepseek-flash` and `deepseek-v4-pro` in the table above), so an adapter-wide window of 64,000
+cannot be built, and `with_context_window` is not a way to ration a DeepSeek prompt to 64,000
+tokens. A per-model override is held to the same rule on the merged profile: lowering a seeded
+model's `context_window` below its maximum output fails unless the same override also lowers
+`max_output_tokens` (which then caps the `max_tokens` the model accepts). To ration prompts to a
+smaller figure without touching the profile, cap it where the prompt is rationed: build the
+`Commissary` with `Commissary::new(provider, capabilities, counter, plan)`, passing
+`ProviderCapabilities` whose `max_context_tokens` is the smaller window, instead of letting
+`Commissary::for_model` read the window from the port.
+
 **Where the keys are visible (owner reading R-1, decided at plan 50-18).** The `paladin.*` keys
 reach every caller, buffered and streamed:
 

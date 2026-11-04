@@ -225,13 +225,13 @@ fails is rebuilt.*
 
 ### Register Hygiene (REG)
 
-- [ ] **REG-01**: The Phase 45 and 51 SUMMARY `requirements-completed` frontmatter carries
+- [x] **REG-01**: The Phase 45 and 51 SUMMARY `requirements-completed` frontmatter carries
       STORE-02 and REASON-02/03/05/06 — F2
 
 - [ ] **REG-02**: WINDOWS rows 56 (already fixed in tree), 68, 69 and 79 are dispositioned with their
       superseding evidence, and `WINDOWS.md` reads `open_count: 0` at the tag — F3, E6, exit criterion
 
-- [ ] **REG-03**: The three `diagnosed` sessions in `.planning/debug/` (kimi fallback profile,
+- [x] **REG-03**: The three `diagnosed` sessions in `.planning/debug/` (kimi fallback profile,
       openai max_completion_tokens, vendor token usage fidelity) are archived as resolved — F4
 
 - [ ] **REG-04**: The Phase 40 judgment-tier prohibitions that carry LLM-judge verdicts get a bounded
@@ -241,7 +241,7 @@ fails is rebuilt.*
       TENANT-04…07 or waived with a reason), leaving zero undispositioned review warnings across
       Phases 38–51 — exit criterion
 
-- [ ] **REG-06**: The three `zip 3.0.0` RustSec exceptions in `SECURITY-EXCEPTIONS.md` are
+- [x] **REG-06**: The three `zip 3.0.0` RustSec exceptions in `SECURITY-EXCEPTIONS.md` are
       re-checked against the current `utoipa-swagger-ui` release and either lifted or re-dated with
       the check recorded — D8
 
@@ -368,12 +368,12 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DOGF-04 | Phase 56 | Complete |
 | DOGF-05 | Phase 56 | Complete |
 | DOGF-06 | Phase 56 | Complete |
-| REG-01 | Phase 57 | Pending |
+| REG-01 | Phase 57 | Complete |
 | REG-02 | Phase 57 | Pending |
-| REG-03 | Phase 57 | Pending |
+| REG-03 | Phase 57 | Complete |
 | REG-04 | Phase 57 | Pending |
 | REG-05 | Phase 57 | Pending |
-| REG-06 | Phase 57 | Pending |
+| REG-06 | Phase 57 | Complete |
 | SHIP-08 | Phase 58 | Pending |
 | SHIP-09 | Phase 58 | Pending |
 | SHIP-10 | Phase 58 | Pending |

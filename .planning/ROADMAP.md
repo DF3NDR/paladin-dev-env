@@ -565,7 +565,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 57-01-PLAN.md — four `zip 3.0.0` exception rows (new RUSTSEC-2026-0429) re-dated per D-31 so `make security` is green; STORE-02 / REASON-02/03/05/06 `requirements-completed`; three debug sessions archived to `.planning/debug/resolved/` (REG-06, REG-01, REG-03)
+- [x] 57-01-PLAN.md — four `zip 3.0.0` exception rows (new RUSTSEC-2026-0429) re-dated per D-31 so `make security` is green; STORE-02 / REASON-02/03/05/06 `requirements-completed`; three debug sessions archived to `.planning/debug/resolved/` (REG-06, REG-01, REG-03)
 - [ ] 57-02-PLAN.md — owner checkpoint on the thread-ownership door, then defaulted `RunRepositoryPort::owner_run_for_thread` (earliest attributed run, one row) on in-memory/SQLite/Postgres with five contract clauses and `permits_thread(owner)` (REG-02 rows 86, 87)
 - [ ] 57-05-PLAN.md — live review findings 45 WR-05 (redact-then-bound run failure text) and 41 WR-05 (empty operator-webhook secret is absent, boot warning), WINDOWS rows minted first (REG-05, REG-02)
 - [ ] 57-07-PLAN.md — Phase 40 judgment-tier worksheet (20 prohibitions + credential checklist over `629ef660...be3a9030`) with the owner's per-row read; Phase 42 subset accepted as-is (REG-04)
@@ -585,6 +585,7 @@ Plans:
 **Wave 4**
 
 - [ ] 57-11-PLAN.md — close-out: every WINDOWS row dispositioned on re-measured evidence, `57-REGISTER-EVIDENCE.md`, strict checker, 40-VALIDATION recording, gates, push and CI read, `open_count: 0` (REG-02, REG-04, REG-05)
+
 **Scope notes**:
 
 - Mostly planning-register work with little code. Inventory F1 (nine phases NOT-VALIDATED) was found already closed at the milestone open (all fifteen Phase 38-51 `VALIDATION.md` files read `status: validated`) and is not a requirement.

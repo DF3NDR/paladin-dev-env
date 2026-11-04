@@ -228,7 +228,7 @@ fails is rebuilt.*
 - [x] **REG-01**: The Phase 45 and 51 SUMMARY `requirements-completed` frontmatter carries
       STORE-02 and REASON-02/03/05/06 — F2
 
-- [ ] **REG-02**: WINDOWS rows 56 (already fixed in tree), 68, 69 and 79 are dispositioned with their
+- [x] **REG-02**: WINDOWS rows 56 (already fixed in tree), 68, 69 and 79 are dispositioned with their
       superseding evidence, and `WINDOWS.md` reads `open_count: 0` at the tag — F3, E6, exit criterion
 
 - [x] **REG-03**: The three `diagnosed` sessions in `.planning/debug/` (kimi fallback profile,
@@ -237,7 +237,7 @@ fails is rebuilt.*
 - [x] **REG-04**: The Phase 40 judgment-tier prohibitions that carry LLM-judge verdicts get a bounded
       human read recorded in the phase's register; the Phase 42 subset is accepted as-is — F5
 
-- [ ] **REG-05**: Phase 40 review warnings WR-01…04 and IN-04 are dispositioned (closed by
+- [x] **REG-05**: Phase 40 review warnings WR-01…04 and IN-04 are dispositioned (closed by
       TENANT-04…07 or waived with a reason), leaving zero undispositioned review warnings across
       Phases 38–51 — exit criterion
 
@@ -369,10 +369,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DOGF-05 | Phase 56 | Complete |
 | DOGF-06 | Phase 56 | Complete |
 | REG-01 | Phase 57 | Complete |
-| REG-02 | Phase 57 | Pending |
+| REG-02 | Phase 57 | Complete |
 | REG-03 | Phase 57 | Complete |
 | REG-04 | Phase 57 | Complete |
-| REG-05 | Phase 57 | Pending |
+| REG-05 | Phase 57 | Complete |
 | REG-06 | Phase 57 | Complete |
 | SHIP-08 | Phase 58 | Pending |
 | SHIP-09 | Phase 58 | Pending |

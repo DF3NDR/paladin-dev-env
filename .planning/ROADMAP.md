@@ -584,7 +584,7 @@ Plans:
 
 **Gap closure** *(fix-in-phase from the 57-10 triage, `gap_closure: true`; waves 4-8, chained because each mints a WINDOWS row and appends `MIGRATION.md` 11.1 `M-B` rows and `[Unreleased]` changelog entries; all run before 57-11)*
 
-- [ ] 57-12-PLAN.md — 51 WR-01 (security): `effort_refusal` renders a fixed per-variant `LlmError` label, never vendor text, directly and through `FallbackLlmAdapter`; planted-secret tests, credential review, WINDOWS row minted first; wave 4 (REG-05, REG-02)
+- [x] 57-12-PLAN.md — 51 WR-01 (security): `effort_refusal` renders a fixed per-variant `LlmError` label, never vendor text, directly and through `FallbackLlmAdapter`; planted-secret tests, credential review, WINDOWS row minted first; wave 4 (REG-05, REG-02)
 - [ ] 57-13-PLAN.md — 45 WR-04 and 45 WR-06: `run_agent` emits its terminal `RunFinished` only after the durable write and ack on every exit (completed, failed, halted); a failed agent run reports its billed spend through the existing `ATTEMPT_SPEND` scope; wave 5 (REG-05, REG-02)
 - [ ] 57-14-PLAN.md — 41 WR-01: a failed operator-notice enqueue gives the notice back; `confirm`/`abandon` survive a dropped caller; a dropped submission settles its admission through a drop guard; wave 6 (REG-05, REG-02)
 - [ ] 57-15-PLAN.md — 43 WR-05 and 43 WR-04: a zero provider delay never opens a zero-length Cadence gate; a 429 is recorded in a spawned, awaited task so a dropped caller cannot lose it; ADR-0058 amended; wave 7 (REG-05, REG-02)

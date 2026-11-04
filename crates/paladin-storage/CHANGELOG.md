@@ -7,6 +7,15 @@ and this project follows lockstep workspace versioning.
 
 ## [Unreleased]
 
+### Added
+
+- `InMemoryRunRepository`, `SqliteRunRepository` and `PostgresRunRepository` override
+  `RunRepositoryPort::owner_run_for_thread` with a single-row read: the SQL adapters run one
+  `ORDER BY (tenant_id IS NULL), submitted_at, run_id LIMIT 1` statement, so a corrupt or
+  newer-schema run row that is not the thread's owner no longer fails the lookup (WINDOWS rows 86
+  and 87, Phase 57 D-01/D-02). The shared contract suite gains five `owner_run_for_thread_*`
+  clauses that all three adapters run.
+
 ### Changed
 
 - Every `ContentListRepository` method on `SqliteStore` (feature `sqlite`) and `MySqlContentRepository` (feature `mysql`) now returns `Err(RepositoryError::QueryError("ContentListRepository::<method> is unfinished for the <backend> backend: content lists are not persisted"))` instead of panicking the calling thread. Neither backend persists content lists; a caller that used these methods must handle the `Err` (`MIGRATION.md` section 11.1 `M-B-30`; FIXES-01, Phase 55).

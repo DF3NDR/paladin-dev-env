@@ -10,9 +10,12 @@ and this project follows lockstep workspace versioning.
 ### Added
 
 - `RunReadScope::permits_thread` -- the thread-visibility rule: a thread belongs to the tenant of
-  its latest run (the newest by `submitted_at`, `run_id` as the tiebreak); `All` sees every
-  thread, a `Tenant` scope sees a thread only when its latest run is attributed to that tenant,
-  and a thread with no run is visible to `All` only (TENANT-03, Phase 53).
+  its owner run (the earliest run carrying `submitted_by`, ordered `submitted_at` then `run_id`
+  ascending; when no run is attributed, the earliest run overall, which only `All` sees); `All`
+  sees every thread, a `Tenant` scope sees a thread only when its owner run is attributed to that
+  tenant, and a thread with no run is visible to `All` only (TENANT-03, Phase 53; Phase 57 D-02
+  replaced the latest-run wording, which never shipped in a release). The parameter is named
+  `owner`; the predicate is unchanged.
 - `RESERVED_PRINCIPAL_LITERALS` (`open-access`, `unattributed`) and `RESERVED_KEY_NAME_LITERALS`
   (`anonymous`) in `platform::container::principal` -- the one source for the literals a
   configured API key name or tenant may not take, exact and case-sensitive. `TenantId::new` is

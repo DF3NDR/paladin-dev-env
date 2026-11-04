@@ -243,9 +243,17 @@ pub enum RunRepositoryError {
 ///         Ok(())
 ///     }
 ///
-///     async fn list(&self, _query: RunQuery) -> Result<RunPage, RunRepositoryError> {
+///     async fn list(&self, query: RunQuery) -> Result<RunPage, RunRepositoryError> {
+///         let items = self
+///             .runs
+///             .lock()
+///             .unwrap()
+///             .values()
+///             .filter(|r| query.thread_id.as_ref().is_none_or(|t| *t == r.thread_id))
+///             .cloned()
+///             .collect();
 ///         Ok(RunPage {
-///             items: vec![],
+///             items,
 ///             next_cursor: None,
 ///         })
 ///     }
@@ -306,9 +314,17 @@ pub enum RunRepositoryError {
 ///     let fetched = repo.get(&run.run_id).await?;
 ///     assert_eq!(
 ///         fetched.map(|r| r.run_id),
-///         Some(run.run_id),
+///         Some(run.run_id.clone()),
 ///         "the inserted run round-trips back out of get"
 ///     );
+///
+///     // `owner_run_for_thread` is not implemented above: the trait's default body answers it
+///     // by paging `list`. A thread with one run is owned by that run; a thread with none has
+///     // no owner.
+///     let owner = repo.owner_run_for_thread(&run.thread_id).await?;
+///     assert_eq!(owner.map(|r| r.run_id), Some(run.run_id.clone()));
+///     let unused = ThreadId::new("thread-without-runs")?;
+///     assert!(repo.owner_run_for_thread(&unused).await?.is_none());
 ///     Ok(())
 /// }
 /// ```
@@ -508,6 +524,7 @@ pub type LeaseDuration = Duration;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use paladin_core::platform::container::principal::{RunAttribution, TenantId};
     use paladin_core::platform::container::run::AssistantRef;
     use std::sync::Arc;
 
@@ -648,5 +665,173 @@ mod tests {
         );
         let resolved = repo.insert_with_latest(&run).await.unwrap();
         assert_eq!(resolved, 7);
+    }
+
+    /// A repository whose `list` serves two fixed pages, recording each call, so the
+    /// default `owner_run_for_thread` can be shown to follow `next_cursor` to the end.
+    struct PagedRepository {
+        first_page: Vec<Run>,
+        second_page: Vec<Run>,
+        queries: std::sync::Mutex<Vec<RunQuery>>,
+    }
+
+    #[async_trait]
+    impl RunRepositoryPort for PagedRepository {
+        async fn insert(&self, _run: &Run) -> Result<(), RunRepositoryError> {
+            Ok(())
+        }
+
+        async fn get(&self, _run_id: &RunId) -> Result<Option<Run>, RunRepositoryError> {
+            Ok(None)
+        }
+
+        async fn update_status(
+            &self,
+            _run_id: &RunId,
+            _from: RunStatus,
+            _to: RunStatus,
+            _at: DateTime<Utc>,
+        ) -> Result<(), RunRepositoryError> {
+            Ok(())
+        }
+
+        async fn record_outcome(
+            &self,
+            _run_id: &RunId,
+            _outcome: RunOutcomeRecord,
+        ) -> Result<(), RunRepositoryError> {
+            Ok(())
+        }
+
+        async fn list(&self, query: RunQuery) -> Result<RunPage, RunRepositoryError> {
+            let on_first_page = query.cursor.is_none();
+            let next_cursor = on_first_page.then(|| RunCursor {
+                submitted_at: Utc::now(),
+                run_id: RunId::new_v7(),
+            });
+            self.queries.lock().unwrap().push(query);
+            let items = if on_first_page {
+                self.first_page.clone()
+            } else {
+                self.second_page.clone()
+            };
+            Ok(RunPage { items, next_cursor })
+        }
+
+        async fn active_run_for_thread(
+            &self,
+            _thread_id: &ThreadId,
+        ) -> Result<Option<Run>, RunRepositoryError> {
+            Ok(None)
+        }
+
+        async fn request_cancel(&self, run_id: &RunId) -> Result<RunStatus, RunRepositoryError> {
+            Err(RunRepositoryError::NotFound {
+                run_id: run_id.clone(),
+            })
+        }
+
+        async fn is_cancel_requested(
+            &self,
+            _thread_id: &ThreadId,
+        ) -> Result<bool, RunRepositoryError> {
+            Ok(false)
+        }
+
+        async fn bump_attempt(&self, _run_id: &RunId) -> Result<u32, RunRepositoryError> {
+            Ok(1)
+        }
+
+        async fn record_resume(
+            &self,
+            _run_id: &RunId,
+            _responses: Vec<ParleyResponse>,
+        ) -> Result<u32, RunRepositoryError> {
+            Ok(1)
+        }
+
+        async fn clear_pending_responses(&self, _run_id: &RunId) -> Result<(), RunRepositoryError> {
+            Ok(())
+        }
+    }
+
+    fn run_at(
+        thread: &ThreadId,
+        submitted_at: DateTime<Utc>,
+        tenant: Option<&str>,
+    ) -> Result<Run, Box<dyn std::error::Error>> {
+        let mut run = Run::new(
+            RunId::new_v7(),
+            thread.clone(),
+            AssistantRef {
+                assistant_id: "a1".to_string(),
+                version: 1,
+            },
+            serde_json::json!({}),
+        );
+        run.submitted_at = submitted_at;
+        if let Some(tenant) = tenant {
+            run = run.with_submitted_by(RunAttribution::new(TenantId::new(tenant)?, "key"));
+        }
+        Ok(run)
+    }
+
+    #[tokio::test]
+    async fn default_impl_of_owner_run_for_thread_walks_every_page()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // PagedRepository does not override `owner_run_for_thread`, so this proves the DEFAULT
+        // follows `next_cursor` to the last page, and that the earliest ATTRIBUTED run beats
+        // both an earlier unattributed run and a later attributed one, wherever they sit.
+        let thread = ThreadId::new("t-owner-default")?;
+        let t0 = Utc::now();
+        let unattributed_first = run_at(&thread, t0, None)?;
+        let late_attributed = run_at(&thread, t0 + chrono::Duration::seconds(5), Some("late"))?;
+        let owner = run_at(&thread, t0 + chrono::Duration::seconds(1), Some("acme"))?;
+        let repo = PagedRepository {
+            first_page: vec![late_attributed, unattributed_first],
+            second_page: vec![owner.clone()],
+            queries: std::sync::Mutex::new(Vec::new()),
+        };
+
+        let found = repo.owner_run_for_thread(&thread).await?;
+        assert_eq!(found.map(|r| r.run_id), Some(owner.run_id));
+
+        let queries = repo.queries.lock().unwrap();
+        assert_eq!(queries.len(), 2, "both pages are read");
+        assert!(
+            queries
+                .iter()
+                .all(|q| q.thread_id.as_ref() == Some(&thread))
+        );
+        assert!(queries.iter().all(|q| q.limit == 100));
+        assert!(queries.iter().all(|q| q.scope == RunReadScope::All));
+        assert!(queries[0].cursor.is_none() && queries[1].cursor.is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn default_impl_of_owner_run_for_thread_falls_back_to_the_earliest_unattributed_run()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let thread = ThreadId::new("t-owner-default-fallback")?;
+        let t0 = Utc::now();
+        let earliest = run_at(&thread, t0, None)?;
+        let later = run_at(&thread, t0 + chrono::Duration::seconds(1), None)?;
+        let repo = PagedRepository {
+            first_page: vec![later],
+            second_page: vec![earliest.clone()],
+            queries: std::sync::Mutex::new(Vec::new()),
+        };
+
+        let found = repo.owner_run_for_thread(&thread).await?;
+        assert_eq!(found.map(|r| r.run_id), Some(earliest.run_id));
+
+        // A repository with no run on the thread has no owner.
+        assert!(
+            MockRepository
+                .owner_run_for_thread(&thread)
+                .await?
+                .is_none()
+        );
+        Ok(())
     }
 }

@@ -730,4 +730,33 @@ mod contract_suite {
         )
         .await;
     }
+
+    #[tokio::test]
+    async fn owner_run_for_thread_returns_the_earliest_attributed_run() {
+        contract_tests::owner_run_for_thread_returns_the_earliest_attributed_run(
+            &InMemoryRunRepository::new(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn owner_run_for_thread_falls_back_to_the_earliest_run_when_none_is_attributed() {
+        contract_tests::owner_run_for_thread_falls_back_to_the_earliest_run_when_none_is_attributed(&InMemoryRunRepository::new()).await;
+    }
+
+    #[tokio::test]
+    async fn owner_run_for_thread_is_none_for_a_thread_with_no_runs() {
+        contract_tests::owner_run_for_thread_is_none_for_a_thread_with_no_runs(
+            &InMemoryRunRepository::new(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn owner_run_for_thread_decodes_only_the_owner_row() {
+        contract_tests::owner_run_for_thread_decodes_only_the_owner_row(
+            &InMemoryRunRepository::new(),
+        )
+        .await;
+    }
 }

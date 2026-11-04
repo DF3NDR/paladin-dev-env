@@ -41,6 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A failed agent-kind run now reports the usage and cost its loop was billed before failing (45-REVIEW WR-06, `MIGRATION.md` section 11.1 `M-B-43`). Its `NodeFinished`, `RunFinished`, SSE `error` figures, herald line and persisted trace used to show zero usage and no cost.
 
+- A won once-per-window operator allowance notice is no longer lost silently (41-REVIEW WR-01, `MIGRATION.md` section 11.1 `M-B-44`). A failed enqueue of its operator delivery now gives the notice back, so the next admission in the same window wins it again and enqueues it; `Treasurer::confirm` and `abandon` now complete even when the caller is dropped, and a run submission dropped by a client disconnect settles its admission (confirm when the run row exists, otherwise give back). A notice failure still never fails or delays a run.
+
 ### Security
 
 - Boot refuses a configured Treasurer whose run worker pool has no engine factory, naming the misconfiguration before any worker spawns or listener binds. The shipped `build_run_api` wiring always installs the factory and is unaffected; only an embedder building its own pool wiring can hit the refusal (TENANT-08).

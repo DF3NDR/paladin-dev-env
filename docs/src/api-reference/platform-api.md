@@ -592,7 +592,9 @@ and ceiling (raising a ceiling re-arms it), so at most one delivery is enqueued 
 delivery itself is at-least-once. A replica running an older build cannot parse the
 `allowance_halted` event, so enable this on every replica before relying on it. Omitting `treasurer.allowance.webhook` disables only this leg -- the durable notice
 row, the trace event and the herald allowance line still occur. If the operator notice cannot be
-enqueued the failure is logged and not retried, and the run is unaffected. A private or loopback
+enqueued the failure is logged and the notice is given back, so the next admission in the same
+window records it again and enqueues the delivery; a client that disconnects mid-submission does
+not lose the notice either. The run is unaffected either way. A private or loopback
 target needs `webhooks.allow_private: true`; the cloud metadata address is always rejected, and
 `paladin-server` refuses to start on a rejected target.
 

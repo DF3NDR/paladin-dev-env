@@ -5,15 +5,15 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 57
 current_phase_name: register-hygiene-close-out
 status: executing
-stopped_at: Completed 57-14-PLAN.md
-last_updated: "2026-11-04T20:22:31.541Z"
+stopped_at: Completed 57-15-PLAN.md
+last_updated: "2026-11-04T21:06:04.169Z"
 last_activity: 2026-11-04
-last_activity_desc: Completed 57-13 (45 WR-04 and WR-06 fixed; WINDOWS rows 95 and 96 open for 57-11)
+last_activity_desc: Completed 57-15 (43 WR-05 and WR-04 fixed; WINDOWS rows 98 and 99 open for 57-11)
 progress:
   total_phases: 6
   completed_phases: 5
   total_plans: 68
-  completed_plans: 65
+  completed_plans: 66
 ---
 
 # Project State
@@ -51,11 +51,11 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 ## Current Position
 
 Phase: 57 (register-hygiene-close-out) — EXECUTING
-Plan: 14 of 16 complete (57-14 done; gap plans 57-15…57-16 then 57-11 remain)
+Plan: 15 of 16 complete (57-15 done; gap plan 57-16 then 57-11 remain)
 Status: Ready to execute
-Last activity: 2026-11-04 — Completed 57-13 (45 WR-04 and WR-06 fixed; WINDOWS rows 95 and 96 open for 57-11)
+Last activity: 2026-11-04 — Completed 57-15 (43 WR-05 and WR-04 fixed; WINDOWS rows 98 and 99 open for 57-11)
 
-Progress: [██████████████░░░░░░] 5/7 phases (v0.11.1) — plans [████████████████░░░░] 52/57 ([██████████] 96%)
+Progress: [██████████████░░░░░░] 5/7 phases (v0.11.1) — plans [████████████████░░░░] 52/57 ([██████████] 97%)
 
 ## Performance Metrics
 
@@ -424,6 +424,7 @@ Progress: [██████████████░░░░░░] 5/7 pha
 | Phase 57 P12 | 20min | 2 tasks | 4 files |
 | Phase 57 P13 | 26min | 3 tasks | 5 files |
 | Phase 57 P14 | 41min | 3 tasks | 7 files |
+| Phase 57 P15 | 42min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -815,6 +816,8 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 57]: 57-13: run_agent emits its terminal RunFinished only after the durable write and ack on every exit (on_committed callback); success-arm write failure logs run id and repository error then nacks; failed-run spend read from ATTEMPT_SPEND on the Err arm only (45 WR-04, WR-06, D-14)
 - [Phase 57]: 57-14: A failed operator enqueue gives the won allowance notice back inside confirm only; mid-run guard notices keep log-and-swallow (PD-14-1)
 - [Phase 57]: 57-14: confirm/abandon are cancellation-safe in the Treasurer (detached task); a private AdmissionSettlement drop guard settles dropped submissions (PD-14-2, PD-14-3)
+- [Phase 57]: 57-15: A zero provider delay is filtered to None in CadenceLlmAdapter::minimum_delay (not in CadencePolicy::delay_for), so paladin-ports is untouched and the port back-off paces a Retry-After 0 (43-REVIEW WR-05)
+- [Phase 57]: 57-15: note_failure records the 429 in a spawned, awaited task (Handle::try_current, inline fallback); a drop before the spawn or a process exit can still lose it (43-REVIEW WR-04, EA-57-17)
 
 ### Pending Todos
 
@@ -1207,8 +1210,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-11-04T20:22:31.513Z
-Stopped at: Completed 57-14-PLAN.md
+Last session: 2026-11-04T21:06:04.143Z
+Stopped at: Completed 57-15-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

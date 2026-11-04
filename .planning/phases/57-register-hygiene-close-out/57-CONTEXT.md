@@ -135,8 +135,8 @@ pending todos.
 - **D-13: Evidence hunting is read-only on the archive.** Prior-phase SUMMARYs, evidence files,
   requirement ids and `git log -S` are the sources; no archived VERIFICATION/SUMMARY is rewritten
   to manufacture a closure.
-- **D-14: A warning found still live in the tree mints a WINDOWS row, then fix or waive by
-  severity.** A correctness or security defect is fixed in this phase beside rows 85-87 (TDD,
+- **D-14: A warning found still live in the tree mints a WINDOWS row, then fix or waive by severity.**
+  A correctness or security defect is fixed in this phase beside rows 85-87 (TDD,
   additive, D-00a/D-00b); anything else is waived under D-03's reason shape. Both outcomes keep
   `open_count` at 0 at seal. The register row then reads `closed` (pointer to the fix) or
   `waived` (pointer to the WINDOWS row).

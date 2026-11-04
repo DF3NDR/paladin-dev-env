@@ -24,6 +24,8 @@ and this project follows lockstep workspace versioning.
 
 - `MinioAdapter::list_files` (feature `s3`) no longer sends `ListOptions.limit` as the S3 delimiter. It is the page size now: with a `limit` or a `continuation_token` the adapter fetches one page, returns at most `limit` files, and reports `has_more` and `continuation_token` from the store; with neither it lists every page. Keys that contain the limit's digits are no longer dropped from a listing, and `health_check` lists with `max-keys` 1 (45-REVIEW CR-01, WINDOWS row 90, Phase 57 plan 57-06; `MIGRATION.md` section 11.1 `M-B-40`).
 
+- With the `redis-cache` adapter, the node-cache fence marker now lives `clamp(2 x entry ttl, 5 min, 30 min)` (it was at least one hour and unbounded above), so it can no longer outlive the Redis Cadence's fencing counter and refuse every valid `put_fenced` write of a later lock epoch. A late duplicate write of the same node result is accepted once the marker has expired (43-REVIEW WR-01, WINDOWS row 100, Phase 57 plan 57-16; `MIGRATION.md` section 11.1 `M-B-47`). Both fence TTL rules now live in one crate-private module; no public item changes.
+
 ### Security
 
 - Every S3 error the adapter raises now carries only the HTTP status and the S3 `<Code>` (for example `HTTP 403 SignatureDoesNotMatch`), or a fixed label for a non-HTTP failure. Before, the raw response body, which can echo the access-key id and request detail, was embedded in `FileStorageError` text (45-REVIEW WR-02, WINDOWS row 91, Phase 57 plan 57-06).

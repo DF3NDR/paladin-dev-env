@@ -47,6 +47,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `paladin-llm`: `CadenceLlmAdapter` records a 429 in a task spawned on the current tokio runtime that the call awaits, so dropping the call's future after the provider's response (an outer timeout, a run cancel, a grace-deadline abort) no longer loses the record and the fleet gate. A call that completes still returns only after the 429 is recorded (43-REVIEW WR-04, WINDOWS row 99, Phase 57 plan 57-15; `MIGRATION.md` section 11.1 `M-B-46`).
 
+- `paladin-storage`: With the `redis-cache` adapter, the node-cache fence marker now lives `clamp(2 x entry ttl, 5 min, 30 min)` (it was at least one hour and unbounded above), so it can no longer outlive the Redis Cadence's fencing counter and refuse every valid `put_fenced` write of a later lock epoch. A late duplicate write of the same node result is accepted once the marker has expired (43-REVIEW WR-01, WINDOWS row 100, Phase 57 plan 57-16; `MIGRATION.md` section 11.1 `M-B-47`). Both fence TTL rules now live in one crate-private module; no public item changes.
+
 ### Security
 
 - Boot refuses a configured Treasurer whose run worker pool has no engine factory, naming the misconfiguration before any worker spawns or listener binds. The shipped `build_run_api` wiring always installs the factory and is unaffected; only an embedder building its own pool wiring can hit the refusal (TENANT-08).

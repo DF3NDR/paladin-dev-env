@@ -537,7 +537,7 @@ Plans:
 
 **Wave 9** *(blocked on Wave 8 and on Stage C; human-gated)*
 
-- [ ] 56-10-PLAN.md — web3sec §6 return triaged if relayed; maintainer `checkpoint:decision` (confirm / hold / re-home with owner + date) after Stage C; phase close gate (DOGF-02, DOGF-06, DOGF-01)
+- [x] 56-10-PLAN.md — web3sec §6 return triaged if relayed; maintainer `checkpoint:decision` (confirm / hold / re-home with owner + date) after Stage C; phase close gate (DOGF-02, DOGF-06, DOGF-01)
 
 **Scope notes**:
 

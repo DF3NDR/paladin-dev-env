@@ -728,6 +728,86 @@ mod tests {
         cache.get(key).await.unwrap().map(|cached| cached.delta)
     }
 
+    /// 43-REVIEW WR-01, observed live: the fence marker a holder wrote must not
+    /// outlive the Redis Cadence's fencing counter, or the next lock epoch (whose
+    /// counter restarts at 1) is refused for as long as the stale marker lives.
+    ///
+    /// The counter's lifetime is hours, so the test moves the marker's clock
+    /// instead of waiting: it shifts the marker's TTL by the counter's lifetime
+    /// (less 50 ms) -- exactly what the passage of that time does to the marker.
+    /// A marker that outlives the counter survives the shift and refuses the
+    /// token-1 write. It touches only keys under its own `cache.config` prefix.
+    #[tokio::test]
+    async fn fenced_write_after_the_counter_expires_is_accepted() {
+        use crate::redis_fence::fence_counter_ttl_ms;
+
+        let Some(cache) = cache_or_skip().await else {
+            return;
+        };
+        let key = NodeCacheKey::new("fence-counter-epoch");
+        let entry_ttl = Duration::from_secs(2 * 60 * 60);
+        let lock_ttl_ms: i64 = 120_000;
+        let counter_ttl_ms = fence_counter_ttl_ms(lock_ttl_ms);
+
+        // The prior epoch: a holder with token 3 writes, leaving a marker of 3.
+        cache
+            .put_fenced(
+                &key,
+                &contract_tests::sample_delta(1),
+                entry_ttl,
+                &FencingToken::Distributed(3),
+            )
+            .await
+            .unwrap();
+
+        // Observe the invariant live, then let the counter's lifetime pass.
+        let client = Client::open(redis_test_url()).unwrap();
+        let mut raw = client.get_multiplexed_async_connection().await.unwrap();
+        let fence = fence_key(&cache.config, &key);
+        let marker_pttl: i64 = redis::cmd("PTTL")
+            .arg(&fence)
+            .query_async(&mut raw)
+            .await
+            .unwrap();
+        assert!(
+            marker_pttl + lock_ttl_ms <= counter_ttl_ms,
+            "lock + marker ({} ms) outlives the counter ({counter_ttl_ms} ms)",
+            marker_pttl + lock_ttl_ms
+        );
+        let shift = counter_ttl_ms - 50;
+        if marker_pttl <= shift {
+            let _: i64 = redis::cmd("DEL")
+                .arg(&fence)
+                .query_async(&mut raw)
+                .await
+                .unwrap();
+        } else {
+            let _: i64 = redis::cmd("PEXPIRE")
+                .arg(&fence)
+                .arg(marker_pttl - shift)
+                .query_async(&mut raw)
+                .await
+                .unwrap();
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // The counter has expired, so the next lock restarts at 1: its write
+        // must be accepted, not refused by a marker left over from token 3.
+        cache
+            .put_fenced(
+                &key,
+                &contract_tests::sample_delta(2),
+                entry_ttl,
+                &FencingToken::Distributed(1),
+            )
+            .await
+            .expect("a fresh epoch's write is accepted");
+        assert_eq!(
+            stored_delta(&cache, &key).await,
+            Some(contract_tests::sample_delta(2))
+        );
+    }
+
     #[tokio::test]
     async fn redis_put_fenced_ignores_a_lower_distributed_token() {
         let Some(cache) = cache_or_skip().await else {
@@ -869,9 +949,12 @@ mod tests {
             .await
             .unwrap();
         assert!(entry_pttl > 0 && entry_pttl <= 30_000, "{entry_pttl}");
+        // The marker is `clamp(2 x entry, 5 min, 30 min)` (43-REVIEW WR-01): a 30 s
+        // entry gets the 5 minute floor, and it still outlives the entry.
+        let marker_ms = i64::try_from(fence_marker_ttl_ms(30_000)).unwrap();
         assert!(
-            fence_pttl > 3_590_000 && fence_pttl <= 3_600_000,
-            "the fence outlives the entry, at least an hour: {fence_pttl}"
+            fence_pttl > marker_ms - 10_000 && fence_pttl <= marker_ms,
+            "the fence outlives the entry by the marker rule ({marker_ms} ms): {fence_pttl}"
         );
         assert_eq!(fence_value, "3");
         drop(conn);

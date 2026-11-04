@@ -272,12 +272,48 @@ impl CadenceLlmAdapter {
 
     /// A call failed: a 429 is recorded with the provider's own delay as the minimum; any other
     /// error opens no gate.
+    ///
+    /// The 429 is recorded in a task spawned on the current tokio runtime, so a caller dropped
+    /// after the provider's response (an outer timeout, a run cancel, a grace-deadline abort)
+    /// cannot cancel the record mid-round-trip and leave the fleet unaware of the limit
+    /// (43-REVIEW WR-04). The caller still awaits the task, so a call that completes returns only
+    /// after the 429 is recorded and the next call's gate read sees it. The task owns the port,
+    /// the key and the minimum. With no runtime handle (a foreign executor) the record runs
+    /// inline, as it always did; a port error or a `JoinError` is logged and never fails or
+    /// alters the call (ADR-0058 (e)).
+    ///
+    /// A drop BEFORE the task is spawned, or a process exit while it runs, can still lose the
+    /// record -- both are narrower than the window this closes (ADR-0058 (i)).
     async fn note_failure(&self, key: &CadenceKey, err: &LlmError, warned: &mut bool) {
-        if matches!(err, LlmError::RateLimitExceeded { .. }) {
-            let minimum = self.minimum_delay(err);
+        if !matches!(err, LlmError::RateLimitExceeded { .. }) {
+            return;
+        }
+        let minimum = self.minimum_delay(err);
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             if let Err(err) = self.wiring.port().record_rate_limited(key, minimum).await {
                 Self::warn_port_error("record_rate_limited", key, &err, warned);
             }
+            return;
+        };
+        let port = Arc::clone(self.wiring.port());
+        let task_key = key.clone();
+        let already_warned = *warned;
+        let recording = runtime.spawn(async move {
+            let mut task_warned = already_warned;
+            if let Err(err) = port.record_rate_limited(&task_key, minimum).await {
+                Self::warn_port_error("record_rate_limited", &task_key, &err, &mut task_warned);
+            }
+            task_warned
+        });
+        match recording.await {
+            Ok(task_warned) => *warned = task_warned,
+            Err(join_err) => log::warn!(
+                target: CADENCE_LOG_TARGET,
+                "cadence record_rate_limited task for provider {} model {} did not complete: \
+                 {join_err}; continuing without pacing for this call",
+                key.provider(),
+                key.model()
+            ),
         }
     }
 
@@ -1252,6 +1288,122 @@ mod tests {
                 .is_clear(),
             "no state leaked to another key"
         );
+    }
+
+    // --- 43-REVIEW WR-04: a 429 is recorded even when the caller's future is dropped ------------
+
+    /// A port whose `record_rate_limited` parks mid-record: it signals `entered`, waits for
+    /// `release`, then delegates to an in-memory port and sets `recorded`. Everything else
+    /// delegates untouched, so the wiring is otherwise a real in-memory Cadence.
+    struct ParkedRecordPort {
+        inner: InMemoryCadence,
+        entered: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        recorded: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl ParkedRecordPort {
+        fn new() -> Self {
+            let policy = CadencePolicy::new(BASE, Duration::from_secs(30)).expect("policy");
+            Self {
+                inner: InMemoryCadence::new(policy).with_jitter(|| 0.999),
+                entered: Arc::new(tokio::sync::Notify::new()),
+                release: Arc::new(tokio::sync::Notify::new()),
+                recorded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl CadencePort for ParkedRecordPort {
+        async fn gate(&self, key: &CadenceKey) -> Result<GateReading, CadenceError> {
+            self.inner.gate(key).await
+        }
+        async fn record_rate_limited(
+            &self,
+            key: &CadenceKey,
+            retry_after: Option<Duration>,
+        ) -> Result<GateReading, CadenceError> {
+            self.entered.notify_one();
+            // `notify_one` stores a permit, so a release sent before this wait still wakes it.
+            self.release.notified().await;
+            let reading = self.inner.record_rate_limited(key, retry_after).await;
+            self.recorded
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            reading
+        }
+        async fn record_success(&self, key: &CadenceKey) -> Result<(), CadenceError> {
+            self.inner.record_success(key).await
+        }
+        async fn try_lock(
+            &self,
+            key: &LockKey,
+            ttl: Duration,
+        ) -> Result<Option<FencingToken>, CadenceError> {
+            self.inner.try_lock(key, ttl).await
+        }
+        async fn unlock(&self, key: &LockKey, token: &FencingToken) -> Result<bool, CadenceError> {
+            self.inner.unlock(key, token).await
+        }
+    }
+
+    /// Yield (bounded) until the parked port has finished recording.
+    async fn wait_until_recorded(port: &ParkedRecordPort) -> bool {
+        for _ in 0..100 {
+            if port.recorded.load(std::sync::atomic::Ordering::SeqCst) {
+                return true;
+            }
+            tokio::task::yield_now().await;
+        }
+        port.recorded.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_429_is_recorded_when_the_generate_future_is_dropped_mid_record() {
+        let port = Arc::new(ParkedRecordPort::new());
+        let wiring = CadenceWiring::new(port.clone(), CadenceSettings::default());
+        let paced = with_cadence(rate_limited_then_ok(), Some(&wiring));
+
+        let call = tokio::spawn(async move { paced.generate(request("gpt-x")).await });
+        port.entered.notified().await;
+        // The caller gives up in the record's round trip (outer timeout, run cancel, abort).
+        call.abort();
+        assert!(call.await.expect_err("the call was aborted").is_cancelled());
+        port.release.notify_one();
+
+        assert!(
+            wait_until_recorded(&port).await,
+            "the 429 was lost: the record died with the dropped caller"
+        );
+        let reading = port
+            .gate(&CadenceKey::new("openai", "gpt-x"))
+            .await
+            .expect("gate");
+        assert_eq!(reading.streak(), 1, "the dropped call's 429 is recorded");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_429_is_recorded_when_the_stream_future_is_dropped_mid_record() {
+        let port = Arc::new(ParkedRecordPort::new());
+        let wiring = CadenceWiring::new(port.clone(), CadenceSettings::default());
+        let paced = with_cadence(rate_limited_then_ok(), Some(&wiring));
+
+        let call =
+            tokio::spawn(async move { paced.generate_stream(request("gpt-x")).await.map(drop) });
+        port.entered.notified().await;
+        call.abort();
+        assert!(call.await.expect_err("the call was aborted").is_cancelled());
+        port.release.notify_one();
+
+        assert!(
+            wait_until_recorded(&port).await,
+            "the stream's 429 was lost: the record died with the dropped caller"
+        );
+        let reading = port
+            .gate(&CadenceKey::new("openai", "gpt-x"))
+            .await
+            .expect("gate");
+        assert_eq!(reading.streak(), 1, "the dropped stream's 429 is recorded");
     }
 
     #[test]

@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 24
+open_count: 25
 waived_count: 40
 fixed_count: 34
-total_count: 98
-last_updated: 2026-11-04T20:34:28.135Z
+total_count: 99
+last_updated: 2026-11-04T20:51:02.196Z
 ---
 
 # Broken Windows Ledger
@@ -113,6 +113,7 @@ last_updated: 2026-11-04T20:34:28.135Z
 | 96 | 45 | deviation | src/application/services/run/worker.rs | 1838 | 45-REVIEW WR-06 (found live by the Phase 57 sweep, D-14): the run_agent Err arm emits NodeFinished with TokenUsage::default() and cost None, so a failed agent run reports zero usage and no cost to RunFinished, the herald and the persisted trace although its loop billed calls before failing. Fix: read the run's ATTEMPT_SPEND scope on the Err arm (plan 57-13). | open |  | 2026-11-04T19:04:46.983Z |  |
 | 97 | 41 | deviation | src/application/services/treasurer/mod.rs | 251 | 41-REVIEW WR-01 (found live by the Phase 57 sweep, D-14): a won once-per-window operator allowance notice is lost with no recovery when enqueue_operator_delivery fails (logged and swallowed, the notice row is not given back) or when the submission or confirm future is dropped before confirm or abandon completes. Fix: give back on enqueue failure, cancellation-safe confirm and abandon, a submission drop guard (plan 57-14). | open |  | 2026-11-04T19:43:48.535Z |  |
 | 98 | 43 | deviation | crates/paladin-llm/src/cadence.rs | 291 | 43-REVIEW WR-05 (found live by the Phase 57 sweep, D-14): minimum_delay returns err.retry_after() unfiltered, so Retry-After 0, a past HTTP-date or a zero reset reaches CadencePolicy::delay_for as Some(0) and opens a zero-length gate with the streak incremented; a gateway answering every 429 with Retry-After 0 disables pacing. Fix: a zero provider delay is no provider delay (plan 57-15). | open |  | 2026-11-04T20:34:28.135Z |  |
+| 99 | 43 | deviation | crates/paladin-llm/src/cadence.rs | 275 | 43-REVIEW WR-04 (found live by the Phase 57 sweep, D-14): note_failure awaits record_rate_limited inline after the provider's 429, so a caller future dropped in the Redis round trip (outer timeout, run cancel, grace-deadline abort) never records the 429 and the fleet keeps sending into the limit. Fix: record in a spawned task the caller awaits (plan 57-15). | open |  | 2026-11-04T20:51:02.196Z |  |
 
 ````json
 [
@@ -1290,6 +1291,18 @@ last_updated: 2026-11-04T20:34:28.135Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-11-04T20:34:28.135Z",
+    "resolved_at": null
+  },
+  {
+    "id": 99,
+    "kind": "deviation",
+    "phase": "43",
+    "file": "crates/paladin-llm/src/cadence.rs",
+    "line": 275,
+    "description": "43-REVIEW WR-04 (found live by the Phase 57 sweep, D-14): note_failure awaits record_rate_limited inline after the provider's 429, so a caller future dropped in the Redis round trip (outer timeout, run cancel, grace-deadline abort) never records the 429 and the fleet keeps sending into the limit. Fix: record in a spawned task the caller awaits (plan 57-15).",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-04T20:51:02.196Z",
     "resolved_at": null
   }
 ]

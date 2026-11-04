@@ -866,10 +866,12 @@ impl EnvOverridable for TreasurerConfig {
             self.allowance.warn_at = v;
         }
         // A secret without a url delivers nothing, so it is applied only to an existing webhook.
+        // An empty value is treated as absent (41-REVIEW WR-05): `Some("")` would look like a
+        // configured secret while signing with the empty key, so it clears the secret instead.
         if let Some(webhook) = self.allowance.webhook.as_mut()
             && let Some(v) = read_env::<String>("APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET")
         {
-            webhook.secret = Some(v);
+            webhook.secret = Some(v).filter(|secret| !secret.is_empty());
         }
         self.cadence.apply_env_overrides();
     }
@@ -1538,6 +1540,43 @@ mod tests {
         assert_eq!(
             with.allowance.webhook.and_then(|w| w.secret).as_deref(),
             Some("from-env")
+        );
+    }
+
+    /// 41-REVIEW WR-05 (D-14): an empty `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET` must not
+    /// shadow a configured secret with `Some("")`, which would look configured while signing
+    /// with the empty key. Empty is absent; a non-empty value is unchanged behaviour.
+    #[test]
+    #[serial]
+    fn empty_env_operator_webhook_secret_is_treated_as_absent() {
+        let yaml = "treasurer:\n  allowance:\n    webhook:\n      url: \"https://ops.example.com/hook\"\n      secret: \"from-yaml\"\n";
+
+        unsafe {
+            env::set_var("APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET", "");
+        }
+        let mut config = deserialize_wrapper(yaml).treasurer;
+        config.apply_env_overrides();
+        unsafe {
+            env::remove_var("APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET");
+        }
+        assert_eq!(
+            config.allowance.webhook.and_then(|w| w.secret),
+            None,
+            "an empty env value is treated as absent"
+        );
+
+        unsafe {
+            env::set_var("APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET", "from-env");
+        }
+        let mut config = deserialize_wrapper(yaml).treasurer;
+        config.apply_env_overrides();
+        unsafe {
+            env::remove_var("APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET");
+        }
+        assert_eq!(
+            config.allowance.webhook.and_then(|w| w.secret).as_deref(),
+            Some("from-env"),
+            "a non-empty env value still overrides (unchanged behaviour)"
         );
     }
 

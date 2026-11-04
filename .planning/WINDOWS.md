@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 14
+open_count: 15
 waived_count: 40
 fixed_count: 34
-total_count: 88
-last_updated: 2026-11-04T14:12:20.397Z
+total_count: 89
+last_updated: 2026-11-04T14:19:23.050Z
 ---
 
 # Broken Windows Ledger
@@ -103,6 +103,7 @@ last_updated: 2026-11-04T14:12:20.397Z
 | 86 | 53 | deviation | crates/paladin-web/src/thread_controller.rs | 739 | 53-REVIEW WR-02, owner-accepted follow-up (53-UAT test 2): the latest-run lookup uses list(limit: 1), and the SQLite/Postgres list decodes limit+1 rows, so one corrupt OLDER run row returns Serialization and locks tenant A out of its own thread (404 on every gated route, 500 for Admin and on submit/fork via ensure_thread_visible in submission.rs:289). Fix: a port method that reads exactly the newest run (LIMIT 1), used in both places. Proposed owner: Phase 55 (correctness fixes). | open |  | 2026-10-31T17:57:36.623Z |  |
 | 87 | 53 | deviation | crates/paladin-core/src/platform/container/principal.rs | 325 | 53-REVIEW WR-03, owner-accepted follow-up (53-UAT test 2): thread ownership is the latest run's submitted_by, so an Admin fork/submit onto tenant A's thread, or an unattributed (schedule-fired, submitted_by None) run, transfers or hides the thread and tenant A gets 404 on a thread it created. Matches SPEC AC-04 as written. Fix: derive ownership from the first or earliest attributed run, or keep the original tenant's attribution on admin forks; at minimum document the transfer in ADR-0063 and parley-and-chronicle.md. Proposed owner: Phase 55 (correctness fixes). | open |  | 2026-10-31T17:57:36.724Z |  |
 | 88 | 45 | deviation | src/application/services/run/worker.rs | 1995 | 45-REVIEW WR-05 (found live by the Phase 57 sweep, D-14): persist_failure stores the agent/engine failure text verbatim on the run row and the failed-persist warn! logs it, so a provider response body or key embedded in an error reaches GET /v1/runs/{id} and the log; worker_tests pinned the raw marker as readable. Fix: redact then bound (plan 57-05). | open |  | 2026-11-04T14:12:20.397Z |  |
+| 89 | 41 | deviation | src/infrastructure/web/run_api_wiring.rs | 1352 | 41-REVIEW WR-05 (found live by the Phase 57 sweep, D-14): an operator webhook configured without a secret (or with APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET="") is signed with the empty key, so X-Paladin-Signature authenticates nothing, and boot gives no signal. Fix: empty is absent plus one boot warning (plan 57-05). | open |  | 2026-11-04T14:19:23.050Z |  |
 
 ````json
 [
@@ -1160,6 +1161,18 @@ last_updated: 2026-11-04T14:12:20.397Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-11-04T14:12:20.397Z",
+    "resolved_at": null
+  },
+  {
+    "id": 89,
+    "kind": "deviation",
+    "phase": "41",
+    "file": "src/infrastructure/web/run_api_wiring.rs",
+    "line": 1352,
+    "description": "41-REVIEW WR-05 (found live by the Phase 57 sweep, D-14): an operator webhook configured without a secret (or with APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET=\"\") is signed with the empty key, so X-Paladin-Signature authenticates nothing, and boot gives no signal. Fix: empty is absent plus one boot warning (plan 57-05).",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-04T14:19:23.050Z",
     "resolved_at": null
   }
 ]

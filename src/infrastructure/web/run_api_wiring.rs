@@ -88,6 +88,7 @@ use crate::config::run_stream::RunStreamConfig;
 use crate::config::run_worker::RunWorkerConfig;
 use crate::config::schedules::SchedulesConfig;
 use crate::config::settings::Settings;
+use crate::config::treasurer::AllowanceWebhookConfig;
 use crate::config::webhooks::WebhooksConfig;
 use crate::infrastructure::cadence::build_cadence;
 use crate::infrastructure::web::facade_provisioner::paladin_port_from_settings_with_cadence;
@@ -815,6 +816,36 @@ fn unpriced_model_warning_line(model: &str) -> String {
     )
 }
 
+/// The one-sentence boot warning for an operator allowance webhook with no signing secret
+/// (41-REVIEW WR-05, D-14), or `None` when there is nothing to say.
+///
+/// Returns `Some` exactly when a webhook is configured and its secret is absent or empty; a
+/// configured secret -- including an unexpanded `${...}` placeholder, the deferred Phase 54
+/// WR-04 -- and an unconfigured webhook are both silent. The sentence names the config key and
+/// the env var an operator would set, and never the webhook URL, a secret value, a tenant or
+/// an API key name (T-57-19). Additive by design: boot is never refused. Pure, so the content
+/// is tested without a process-wide logger.
+fn operator_webhook_secret_warning_line(
+    webhook: Option<&AllowanceWebhookConfig>,
+) -> Option<String> {
+    let webhook = webhook?;
+    if webhook
+        .secret
+        .as_deref()
+        .is_some_and(|secret| !secret.is_empty())
+    {
+        return None;
+    }
+    Some(
+        "the treasurer allowance webhook has no signing secret: set \
+         treasurer.allowance.webhook.secret (or APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET); an empty \
+         value counts as unset, and until one is set every operator notice is signed with the \
+         empty key, which any receiver can reproduce, so X-Paladin-Signature authenticates \
+         nothing"
+            .to_string(),
+    )
+}
+
 /// How many assistants each page of the boot-time stored-model scan asks for (D-07).
 const ASSISTANT_SCAN_PAGE: u32 = 100;
 
@@ -1338,6 +1369,14 @@ pub(crate) async fn build_run_api_with_engine_port(
         None
     };
 
+    // 41-REVIEW WR-05: an operator webhook without a secret signs with the empty key. Warn once
+    // at boot; never refuse (additive, D-00b) and never name the URL or a value.
+    if let Some(line) =
+        operator_webhook_secret_warning_line(treasurer_config.allowance.webhook.as_ref())
+    {
+        log::warn!("{line}");
+    }
+
     // PLAT-05: the webhook delivery drain loop is always spawned when the run store is
     // enabled -- delivery is a persisted, durable queue (D-40), not gated on any per-run
     // webhook actually being configured.
@@ -1354,7 +1393,8 @@ pub(crate) async fn build_run_api_with_engine_port(
             .allowance
             .webhook
             .as_ref()
-            .and_then(|webhook| webhook.secret.clone()),
+            .and_then(|webhook| webhook.secret.clone())
+            .filter(|secret| !secret.is_empty()),
     );
     tasks.push(Arc::new(webhook_service).spawn(&coordinator));
 
@@ -2878,6 +2918,47 @@ mod tests {
         assert!(warns[0].contains(schedule_id(2).as_str()));
         assert!(!warns[0].contains(schedule_id(1).as_str()));
         assert!(warns[0].contains("POST /v1/schedules"));
+    }
+
+    /// 41-REVIEW WR-05 (D-14, T-57-19, P-05-3): a webhook with no secret, or an empty one,
+    /// yields one warning line that names the config key and the env var and says the
+    /// notices are signed with the empty key -- and never the webhook URL.
+    #[test]
+    fn operator_webhook_secret_warning_line_names_the_key_and_never_the_url() {
+        for secret in [None, Some(String::new())] {
+            let webhook = AllowanceWebhookConfig {
+                url: "https://ops.example.com/hook-sentinel-url".to_string(),
+                secret: secret.clone(),
+            };
+            let line = operator_webhook_secret_warning_line(Some(&webhook))
+                .unwrap_or_else(|| panic!("secret {secret:?} must warn"));
+            assert!(
+                line.contains("treasurer.allowance.webhook.secret"),
+                "{line}"
+            );
+            assert!(
+                line.contains("APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET"),
+                "{line}"
+            );
+            assert!(line.contains("empty key"), "{line}");
+            assert!(!line.contains("hook-sentinel-url"), "{line}");
+            assert!(!line.contains("ops.example.com"), "{line}");
+        }
+    }
+
+    /// 41-REVIEW WR-05 (D-00b, P-05-2): a configured secret -- including an unexpanded
+    /// `${...}` placeholder, which is the deferred Phase 54 WR-04 -- and no webhook at all
+    /// are both silent.
+    #[test]
+    fn operator_webhook_secret_warning_line_is_silent_with_a_secret() {
+        for secret in ["op-secret-0123456789", "${ALLOWANCE_WEBHOOK_SECRET}"] {
+            let webhook = AllowanceWebhookConfig {
+                url: "https://ops.example.com/hook".to_string(),
+                secret: Some(secret.to_string()),
+            };
+            assert_eq!(operator_webhook_secret_warning_line(Some(&webhook)), None);
+        }
+        assert_eq!(operator_webhook_secret_warning_line(None), None);
     }
 
     /// AC-17 (ordering): several unattributed schedules found across pages (page size 2) are one

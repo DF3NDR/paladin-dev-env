@@ -248,11 +248,15 @@ impl Treasurer {
     /// Enqueue one operator delivery for a won notice. Best-effort: every failure is logged
     /// at `error` (scope kind, tenant id, error -- never a key value or the secret) and
     /// swallowed, because the run is already admitted and the notice row already exists.
+    ///
+    /// Returns `true` when the delivery was enqueued and `false` after any of the three
+    /// failures (payload serialization, notice thread id, queue `enqueue`), so the caller can
+    /// give the notice back (41-REVIEW WR-01). It reads no `self` field, which lets a detached
+    /// task run it from owned clones.
     async fn enqueue_operator_delivery(
-        &self,
         target: &OperatorNoticeTarget,
         notice: &AllowanceNotice,
-    ) {
+    ) -> bool {
         let scope = notice.warning.scope_kind.as_str();
         let payload = match serde_json::to_string(&AllowanceWarningPayload::from_notice(notice)) {
             Ok(payload) => payload,
@@ -262,7 +266,7 @@ impl Treasurer {
                      payload serialization failed: {error}",
                     notice.tenant_id
                 );
-                return;
+                return false;
             }
         };
         let thread_id = match ThreadId::new(OPERATOR_NOTICE_THREAD_ID) {
@@ -273,7 +277,7 @@ impl Treasurer {
                      invalid notice thread id: {error}",
                     notice.tenant_id
                 );
-                return;
+                return false;
             }
         };
         // A fresh correlation run id that no run owns (C3 Option A): the row can never be
@@ -292,6 +296,45 @@ impl Treasurer {
             log::error!(
                 "operator allowance notice not enqueued ({scope} scope, tenant {}): {error}",
                 notice.tenant_id
+            );
+            return false;
+        }
+        true
+    }
+
+    /// Enqueue the operator delivery of each notice an admission won and give back the ones
+    /// whose enqueue failed (41-REVIEW WR-01), so the next admission in the same window wins
+    /// them again and enqueues them.
+    ///
+    /// With no `target` attached nothing is enqueued and nothing is given back (only the
+    /// webhook leg is off; the durable notice row stays). A give-back failure is logged at
+    /// `error` with the notice count only and never propagated: a notice observes the run, it
+    /// never gates it (D-15).
+    async fn deliver_or_give_back(
+        store: Option<&Arc<dyn TreasuryNoticePort>>,
+        target: Option<&OperatorNoticeTarget>,
+        notices: &[AllowanceNotice],
+    ) {
+        let Some(target) = target else {
+            return;
+        };
+        let mut failed: Vec<String> = Vec::new();
+        for notice in notices {
+            if !Self::enqueue_operator_delivery(target, notice).await {
+                failed.push(notice.notice_id.clone());
+            }
+        }
+        if failed.is_empty() {
+            return;
+        }
+        let Some(store) = store else {
+            return;
+        };
+        if let Err(error) = store.discard(&failed).await {
+            log::error!(
+                "allowance notice give-back failed after a failed operator enqueue \
+                 ({} notice(s)): {error}",
+                failed.len()
             );
         }
     }
@@ -400,7 +443,8 @@ impl Treasurer {
     /// Best-effort, exactly like `confirm`: a failure is logged at `error` and swallowed.
     pub(crate) async fn notify_operator(&self, notice: &AllowanceNotice) {
         if let Some(target) = &self.operator_webhook {
-            self.enqueue_operator_delivery(target, notice).await;
+            // A mid-run guard notice keeps log-and-swallow (PD-14-1): the result is dropped.
+            let _delivered = Self::enqueue_operator_delivery(target, notice).await;
         }
     }
 }
@@ -553,13 +597,18 @@ impl AllowanceAdmissionPort for Treasurer {
     /// per won notice through the durable webhook queue. The durable notice row already exists
     /// from `admit`; this adds only the webhook leg.
     ///
-    /// Best-effort: a serialization, thread-id or enqueue failure is logged at `error` and not
-    /// retried, and `confirm` never fails or blocks the run. With no target attached nothing
-    /// is enqueued.
+    /// Best-effort, and never lost silently (41-REVIEW WR-01): a serialization, thread-id or
+    /// enqueue failure is logged at `error`, and the notice whose delivery failed is given
+    /// back (`TreasuryNoticePort::discard`), so the next admission in the same window wins it
+    /// again and enqueues it. `confirm` never fails or blocks the run. With no target attached
+    /// nothing is enqueued and nothing is given back.
     async fn confirm(&self, admission: &Admission) {
-        for notice in admission.notices() {
-            self.notify_operator(notice).await;
-        }
+        Self::deliver_or_give_back(
+            self.notices.as_ref(),
+            self.operator_webhook.as_ref(),
+            admission.notices(),
+        )
+        .await;
     }
 
     /// Give back the notices this admission won (RESEARCH Pattern 3): the run was admitted but

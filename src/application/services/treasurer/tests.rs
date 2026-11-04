@@ -1377,6 +1377,53 @@ async fn enqueue_failure_is_logged_and_never_blocks() {
     );
 }
 
+/// 41-REVIEW WR-01 (plan 57-14): a won once-per-window notice whose operator delivery could
+/// not be enqueued is given back, so the next admission in the window wins it again instead of
+/// reading `AlreadyRecorded` and returning none.
+#[tokio::test]
+async fn enqueue_failure_gives_the_notice_back_so_the_next_admission_wins_it() {
+    let ledger = two_crossing_ledger();
+    let notices = RecordingNotices::new();
+    let deliveries = Arc::new(FailingDeliveries::default());
+    let treasurer = treasurer_with_operator_webhook(
+        four_ceiling_policy(),
+        &ledger,
+        &notices,
+        deliveries.clone(),
+    );
+
+    let first = admit_svc_a(&treasurer).await.expect("admitted");
+    assert_eq!(first.notices().len(), 2, "the first admission wins both");
+    treasurer.confirm(&first).await;
+
+    assert_eq!(
+        deliveries
+            .enqueue_attempts
+            .load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "one enqueue attempt per won notice"
+    );
+    let mut won: Vec<String> = first
+        .notices()
+        .iter()
+        .map(|notice| notice.notice_id.clone())
+        .collect();
+    won.sort();
+    let mut given_back: Vec<String> = notices.discards().into_iter().flatten().collect();
+    given_back.sort();
+    assert_eq!(
+        given_back, won,
+        "exactly the notices whose enqueue failed are given back"
+    );
+
+    let second = admit_svc_a(&treasurer).await.expect("admitted");
+    assert_eq!(
+        second.notices().len(),
+        2,
+        "the next admission in the same window wins the given-back notices again"
+    );
+}
+
 #[tokio::test]
 async fn agent_path_operator_payload_has_a_null_run_id() {
     let ledger = FakeLedger::new(at(NOW)).with_row("acme", "svc-a", at(WS), 85);

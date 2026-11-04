@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v0.11.1
 milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
-current_phase: 56
-current_phase_name: Dogfood Findings
-status: verifying
-stopped_at: "Phase 56: 14/14 plans complete, VERIFICATION human_needed (11/11, 0 gaps); 4 UAT items await the maintainer — run /gsd-verify-work 56"
-last_updated: "2026-11-04T01:40:08.768Z"
+current_phase: 57
+current_phase_name: Register Hygiene Close-Out
+status: planning
+stopped_at: "Phase 56 complete (VERIFICATION passed 11/11, UAT 4/4, SECURITY 0 open); ready to plan Phase 57"
+last_updated: "2026-11-04T02:24:23.512Z"
 last_activity: 2026-11-04
-last_activity_desc: "56-10 complete: web3sec return triaged into DF-27..DF-36, none S1/S2"
+last_activity_desc: Phase 56 complete, transitioned to Phase 57
 progress:
   total_phases: 5
   completed_phases: 5
@@ -20,12 +20,12 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-11-02 after Phase 55)
+See: .planning/PROJECT.md (updated 2026-11-04 after Phase 56)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 56 — Dogfood Findings
+**Current focus:** Phase 57 — Register Hygiene Close-Out
 52-UAT 3/3 passed; PR #61 merged to `main` as `84686acfb` on 2026-10-30)
 (carried-gaps inventory, dogfood findings log, scoping notes): 7 phases (52-58), 53/53 requirements
 mapped. Phase 52 (CI & Release Pipeline Repair) completed 2026-10-30; Phase 53 (Tenant Isolation Closure) completed 2026-10-31; Phase 54 (First-Run Usability) completed 2026-11-01; next: Phase 55. Decisions at open: OpenAI Responses API out,
@@ -50,18 +50,18 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 
 ## Current Position
 
-Phase: 56 (Dogfood Findings) — ready for verification
-Plan: 14 of 14 complete
-Status: Ready for /gsd-verify-work — close gate OK (checker prints OK over 36 findings; DOGF-02 closed by confirm-triage)
-Last activity: 2026-11-04 — 56-10 complete: web3sec return triaged into DF-27..DF-36, none S1/S2
+Phase: 57 — Register Hygiene Close-Out
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-11-04 — Phase 56 complete, transitioned to Phase 57
 
-Progress: [█████████░░░░░░░░░░░] 3/7 phases ([██████████] 100%) — Phase 54 plans [████████████████████] 9/9 (100%)
+Progress: [██████████████░░░░░░] 5/7 phases (v0.11.1) — plans [████████████████████] 52/52 (100%)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 627
+- Total plans completed: 641
 - Average duration: —
 - Total execution time: —
 
@@ -126,6 +126,7 @@ Progress: [█████████░░░░░░░░░░░] 3/7 pha
 | 53 | 8 | - | - |
 | 54 | 9 | - | - |
 | 55 | 13 | - | - |
+| 56 | 14 | - | - |
 
 *Updated after each plan completion*
 
@@ -419,6 +420,20 @@ Progress: [█████████░░░░░░░░░░░] 3/7 pha
 Phases 22-37.1 is recorded in its own `NN-CONTEXT.md` (and the SUMMARY decision lists) under
 `milestones/v0.10.0-phases/`; the locked ones are ADRs in `.planning/decisions/` and the
 `## Key Decisions` table in PROJECT.md. Only what a later milestone must honour is kept here:
+
+- **Phase 56 dogfood findings (2026-11-04, no ADR; 56-CONTEXT D-01…D-17, close gate OK)** — the
+  findings log is append-only (P3, zero deleted lines since seed `8e02a457e`) and the only
+  checker is `scripts/check-findings-log.sh`, deliberately outside `check-gates` (D-03); 36 `DF-nn`
+  entries all dispositioned (24 `in v0.11.1`, 10 `out` with a todo pointer, 2 duplicates); the
+  seven S1/S2 fixed in Stage C in DF-id order with the `DF-nn` in every commit subject (D-06):
+  `Settings` and four config types get a redacting `Debug` and the startup log prints
+  `settings_summary` only (DF-07, M-B-36, `MIGRATION.md` §11.8 rotation step); `paladin-server`
+  runs `Settings::validate()` after the documented `APP_*` env overlay and before any store or
+  listener (DF-08/DF-26, M-B-37/38); the provider probe is one module with reply redaction and
+  `Policy::none()` (DF-19). Owner calls at UAT 2026-11-04: DF-18 (Quickstart `gpt-4`) stays S3 /
+  re-homed to the 109-site todo; the devcontainer coverage walk (92.79 % local, 92.86 % CI)
+  satisfies DOGF-05; P1/P4/P11 held; the DOGF-02 `confirm-triage` choice (D-16) was the
+  maintainer's.
 
 - **Two-officer token model** — `Commissary` (input-side rationing) is kept and anchored;
   `Treasurer` (output-side spend governance) is reserved for Milestone 14, not built (ADR-0049,
@@ -799,6 +814,23 @@ Four pending todos were acknowledged as deferred at the v0.11.0 close (see *Defe
 
 ### Blockers/Concerns
 
+**Phase 56 close (2026-11-04, 56-VERIFICATION `passed` 11/11, 56-UAT 4/4, 56-SECURITY 0 open):**
+
+- **A complete `sk-proj-…` OpenAI key literal is tracked in
+  `.project/Milestone_3-Completion/Post-Epic_24-cleanup/LIVE_API_TESTS_FIX.md:53`** (in the tree
+  since at least `928c6d5f9`, 2026-07-30, so also in history). Found by the 56-SECURITY tree scan;
+  outside the phase's register (predates it). Maintainer action: rotate the key if it was ever
+  live, scrub the literal, decide on a history purge. A tracked-tree key-shape scan in
+  `check-gates` (the 56-08 staged-file scanner, made standing) is the candidate guard for Phase 57.
+- **Bare-host coverage path still unwalked** — DOGF-05 accepted at UAT on the devcontainer figure
+  (no Docker socket); guide step 1 (`make services-up`) and the password-protected Redis path
+  (trap 2) remain unexercised.
+- **Re-homed `out` findings carry six pending todos** in `.planning/todos/pending/` (DF-06, DF-16,
+  DF-18 incl. the 109-site deprecated `gpt-4` literal sweep, DF-20, DF-34, DF-36). v0.11.1 ships
+  the Quickstart `.model("gpt-4")` line unchanged by owner decision.
+- **Phase 56 work is on `claude/laughing-dirac-e0h2ax`, not yet merged to `main`** — a PR is the
+  maintainer's step before Phase 57 builds on it.
+
 **Phase 54 close (2026-11-01, 54-VERIFICATION `passed` 5/5, 54-UAT 3/3, 54-SECURITY 0 open):**
 
 - **Pre-existing, environment-specific test failure** — `run_api_wiring::tests::build_run_api_persists_no_run_traces_by_default` and `..._persists_run_traces_when_trace_persist_is_set` fail in the sandbox (`the run never reached a terminal status`, 10 s deadline) on base `8b23cb4c5` too; CI was green at the PR #62 merge. No Phase 54 change touches that file. Phase 55 TESTS-01 (hermetic scripted port) is the owner.
@@ -844,7 +876,7 @@ Four pending todos were acknowledged as deferred at the v0.11.0 close (see *Defe
 - **`CODEQL-DISMISSALS.md` rows 40 and 49 carry stale line anchors** (left per D-14; logged in
   deferred-items) — fix when those files are next touched.
 
-- **H-06 (local `make coverage` reproduction) deferred again** to the maintainer on a Docker-capable
+- ~~**H-06 (local `make coverage` reproduction) deferred again**~~ — **closed in Phase 56** (todo in `completed/`, 92.79 % local vs 92.86 % CI, run `41703614636`). Was: deferred to the maintainer on a Docker-capable
   machine; the pending todo stays with `resolves_phase: 56`.
 
 **v0.11.1 roadmap-time findings (2026-10-27, measured against the tree while drafting the roadmap):**
@@ -864,7 +896,7 @@ Four pending todos were acknowledged as deferred at the v0.11.0 close (see *Defe
 - **Phase 55, FIXES-04:** `paladin-eval`'s `RunStatusValue` is not `#[non_exhaustive]`, so adding `Cancelled` trips the
   patch-level semver gate Phase 52 arms; settle shape-or-break at discuss-phase.
 
-- **Phase 56 depends on external inputs** (the maintainer's runs, the web3sec return, a Docker-capable machine for
+- ~~**Phase 56 depends on external inputs**~~ — **all three arrived and were triaged in Phase 56** (DF-10..DF-26 from the walks, DF-27..DF-36 from the web3sec return). Was: (the maintainer's runs, the web3sec return, a Docker-capable machine for
   DOGF-05) that the roadmap cannot schedule; an unreturned DOGF-02 is held or re-homed with an owner and date.
 
 - **Phase 57:** `open_count: 0` also needs rows 64-66 (accepted ADR-0057 contracts) and 77 (Grok deferral) waived with a
@@ -1147,9 +1179,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-11-04T01:40:08.715Z
-Stopped at: Phase 56: 14/14 plans complete, VERIFICATION human_needed (11/11, 0 gaps); 4 UAT items await the maintainer — run /gsd-verify-work 56
-Resume file: .planning/phases/56-dogfood-findings/56-UAT.md
+Last session: 2026-11-04T02:27:21Z
+Stopped at: Phase 56 complete, ready to plan Phase 57
+Resume file: None
 
 ## Operator Next Steps
 

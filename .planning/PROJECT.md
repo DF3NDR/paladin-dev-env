@@ -951,6 +951,20 @@ unless a phase adopts them):
   (FIXES-01 … 03, 05, 06, TESTS-01 … 06, CIREL-08) — Phase 55, verified 2026-11-02. FIXES-04
   (`RunStatusValue::Cancelled`) re-homed to the next minor under D-05, because both eval enums are
   exhaustive and the variant would be a breaking change; WINDOWS row 73 fixed, row 67 waived.
+- ✓ Dogfood findings — the 36 `DF-nn` entries of `.project/v0.11.1/02-dogfood-findings-log.md`
+  (the maintainer's runs, the unkeyed and keyed first-run walks on the published `0.11.0` crates,
+  the local coverage walk and the web3sec return against `70657919`) each carry a final disposition
+  (24 `in v0.11.1`, 10 `out` with a todo pointer, 2 duplicates), held append-only and checked by
+  `scripts/check-findings-log.sh` (43-assertion harness, outside `check-gates`); every S1/S2 fixed
+  before the tag: whole-config startup log replaced by `settings_summary` and five config types given
+  a redacting `Debug` (DF-07, M-B-36, §11.8 rotation step); `paladin-server` validates after the
+  `APP_*` overlay and before any listener (DF-08/DF-26, M-B-37/38); one provider-probe module with
+  reply redaction and no redirects (DF-19); `config.example.yml` round-trips through both loaders
+  with every optional key (`tests/config_example_roundtrip.rs`, 14 tests)
+  (DOGF-01 … DOGF-06) — Phase 56, verified 2026-11-04, no new ADR. Owner calls at UAT: DF-18 stays
+  S3 / re-homed, the devcontainer coverage figure satisfies DOGF-05. Residual: a pre-existing
+  `sk-proj-…` key literal in `.project/…/LIVE_API_TESTS_FIX.md` surfaced by the security scan,
+  escalated to the maintainer.
 
 **Treasurer Spend Governance — shipped v0.11.0, closed 2026-10-27; crates at `0.11.0`**
 (Phases 38-51, 174 plans, 63/66 requirements verified, ADOPT-01…03 superseded). Archive:
@@ -1413,9 +1427,6 @@ while the code ships):
 
 - [ ] Correctness small fixes — `todo!()` fenced, Failed-vs-Halted mapping, `Cancelled` eval
       status, opus-4-8 seed row, hermetic and non-flaky tests, lint leftovers (B2–B6, E1–E5, E7)
-- [ ] Dogfood findings — every `DF-nn` in `02-dogfood-findings-log.md` dispositioned; the
-      promoted ones fixed (content arrives from the maintainer's runs and the web3sec return)
-- [ ] Register hygiene close-out — nine draft phases validated, SUMMARY frontmatter, WINDOWS
       dispositions, debug sessions archived, Phase 40 prohibition read (F1–F5)
 
 Carried-in open items (tracked, not requirements):
@@ -2363,7 +2374,15 @@ rewrites (D-07/D-08/D-12 — ✓ Good; ⚠️ Revisit at Phase 58: `make release
 tag, review CR-01); the crate changelog corrections ride a new `[Unreleased]` entry and ADR-0056 is
 amended in place (D-13/D-14 — ✓ Good); FIRST-08 reconciled by a dated note rather than padding the
 facade snapshot (D-18 — ✓ Good); the provider-key `REPLACE_ME` placeholder in the Secret template
-accepted as residual AR-54-03 (UAT 2026-11-01 — ✓ Good, SC1 scope is `http.auth.api_keys[].key`).
+accepted as residual AR-54-03 (UAT 2026-11-01 — ✓ Good, SC1 scope is `http.auth.api_keys[].key`). Phase 56's owner decisions (no ADR; 56-CONTEXT D-01…D-17): the findings log is append-only and
+its checker stays out of `check-gates` (D-01/D-03 — ✓ Good, zero deleted lines since seed, 36/36
+dispositioned); S1/S2 fixes land in DF-id order with the id in every commit subject (D-06 — ✓ Good);
+the web3sec return is triaged only from the relayed verbatim text and the `confirm-triage` choice is
+the maintainer's (D-15/D-16 — ✓ Good, P1/P4/P11 confirmed at UAT 2026-11-04); the local coverage walk
+passes on integer-truncated same-commit figures (D-17 — ✓ Good, 92.79 % / 92.86 % on a devcontainer,
+bare-host path unwalked); DF-18's Quickstart `gpt-4` literal kept at S3 / re-homed to the 109-site
+sweep (UAT 2026-11-04 — ⚠️ Revisit: the first copied program exits 1 on a working key until that
+todo lands).
 
 ## Evolution
 
@@ -2385,6 +2404,14 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
+*Last updated: 2026-11-04 after **Phase 56: Dogfood Findings** completed and verified — 14 plans,
+DOGF-01…06; verification `passed` 11/11, UAT 4/4 (DF-18 S3 accepted, devcontainer coverage walk
+accepted for DOGF-05, P1/P4/P11 confirmed, keyed-walk evidence confirmed), security 0 open (70
+threats, 5 accepted; one out-of-register finding escalated: a tracked `sk-proj-…` literal in
+`.project/…/LIVE_API_TESTS_FIX.md`). Every `DF-nn` dispositioned, the seven S1/S2 fixed and
+regression-tested, the startup log and config `Debug` no longer print credentials. "Dogfood
+findings" moved to Validated; no new ADR. Next: Phase 57.*
+
 *Last updated: 2026-11-02 after **Phase 55: Correctness Fixes, Test Hygiene & Lint Bar** completed and
 verified — 13 plans, 12 of 13 requirements satisfied and FIXES-04 re-homed to the next minor (D-05);
 verification `passed` 5/5; code review 0 critical / 3 warnings, all three fixed over five fix

@@ -1,7 +1,7 @@
 ---
 phase: 56-dogfood-findings
 verified: 2026-11-04T12:00:00Z
-status: human_needed
+status: passed
 score: 11/11 must-haves verified
 behavior_unverified: 0
 overrides_applied: 0
@@ -10,15 +10,19 @@ gaps: []
 deferred: []
 behavior_unverified_items: []
 human_verification:
+
   - test: "DF-18 severity call: confirm S3 / out (re-homed) is acceptable for 'The Quickstart `.model(\"gpt-4\")` fails against a real OpenAI key'"
     expected: "Maintainer either accepts S3 (docs literal, clear provider error, 109-site sweep re-homed to .planning/todos/pending/2026-11-03-docs-deprecated-gpt-4-model-literal.md) or regrades to S2 and the one-line Quickstart fix (docs/src/getting-started/quickstart.md:53) lands before the tag"
     why_human: "Severity is a judgement (D-04). The first program a new user copies exits 1 on a working key, and v0.11.1 will ship that Quickstart line unchanged. The triager's reason (fixing one of 109 leaves the root cause) is recorded, but whether that outweighs a broken first run is the maintainer's call."
+
   - test: "DOGF-05 scope: confirm a devcontainer walk (no Docker socket, compose siblings) satisfies 'on a Docker-capable machine'"
     expected: "Maintainer accepts the D-17 pass (local 92.79 percent, CI 92.86 percent, both truncate to 92, both >= 82), knowing guide step 1 (`make services-up`) and the bare-host password-protected Redis path (trap 2) were NOT exercised"
     why_human: "The measured figure is relayed maintainer evidence, not reproducible here, and the walk's own SUMMARY says the bare-host path is still unwalked. The todo was closed under the D-17 pass rule, which is met as written."
+
   - test: "Judgment-tier prohibitions P1, P4, P11 (and test-tier P3): record explicit human resolution"
     expected: "P1 (no simulated web3sec return), P4 (no web3sec disposition without evidence) and P11 (agent did not pick the D-16 option) are each read and resolved by the maintainer; P3 (log append-only) gets a standing enforcement test or an accepted waiver"
     why_human: "ADR-550 D4: judgment-tier verdicts here are non-authoritative LLM-judge verdicts, flagged `unverified-prohibition - human review recommended`. P3 is test-tier with no wired enforcement, so it fails closed to flagged even though measured evidence shows it held (see Prohibitions)."
+
   - test: "Relayed maintainer evidence: keyed first-run walk (K1..K9) and DF-19 Anthropic re-check"
     expected: "Maintainer confirms K2/K6/K7/K8 output is theirs and that `setup-check --verbose` read `Anthropic` ok after the DF-19 fix on 2026-11-03"
     why_human: "Real provider keys; the agent and verifier cannot run them. K1 (environment block) was recorded as 'not captured', derived from K6/K7."

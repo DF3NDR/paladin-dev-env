@@ -5,12 +5,12 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 57
 current_phase_name: Register Hygiene Close-Out
 status: planning
-stopped_at: "Phase 56 complete (VERIFICATION passed 11/11, UAT 4/4, SECURITY 0 open); ready to plan Phase 57"
-last_updated: "2026-11-04T02:24:23.512Z"
+stopped_at: Phase 57 context gathered
+last_updated: "2026-11-04T03:01:06.947Z"
 last_activity: 2026-11-04
 last_activity_desc: Phase 56 complete, transitioned to Phase 57
 progress:
-  total_phases: 5
+  total_phases: 6
   completed_phases: 5
   total_plans: 52
   completed_plans: 52
@@ -822,12 +822,15 @@ Four pending todos were acknowledged as deferred at the v0.11.0 close (see *Defe
   outside the phase's register (predates it). Maintainer action: rotate the key if it was ever
   live, scrub the literal, decide on a history purge. A tracked-tree key-shape scan in
   `check-gates` (the 56-08 staged-file scanner, made standing) is the candidate guard for Phase 57.
+
 - **Bare-host coverage path still unwalked** — DOGF-05 accepted at UAT on the devcontainer figure
   (no Docker socket); guide step 1 (`make services-up`) and the password-protected Redis path
   (trap 2) remain unexercised.
+
 - **Re-homed `out` findings carry six pending todos** in `.planning/todos/pending/` (DF-06, DF-16,
   DF-18 incl. the 109-site deprecated `gpt-4` literal sweep, DF-20, DF-34, DF-36). v0.11.1 ships
   the Quickstart `.model("gpt-4")` line unchanged by owner decision.
+
 - **Phase 56 work is on `claude/laughing-dirac-e0h2ax`, not yet merged to `main`** — a PR is the
   maintainer's step before Phase 57 builds on it.
 
@@ -1179,9 +1182,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-11-04T02:27:21Z
-Stopped at: Phase 56 complete, ready to plan Phase 57
-Resume file: None
+Last session: 2026-11-04T03:01:06.754Z
+Stopped at: Phase 57 context gathered
+Resume file: .planning/phases/57-register-hygiene-close-out/57-CONTEXT.md
 
 ## Operator Next Steps
 

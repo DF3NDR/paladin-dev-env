@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 19
+open_count: 20
 waived_count: 40
 fixed_count: 34
-total_count: 93
-last_updated: 2026-11-04T16:19:09.532Z
+total_count: 94
+last_updated: 2026-11-04T18:38:31.139Z
 ---
 
 # Broken Windows Ledger
@@ -108,6 +108,7 @@ last_updated: 2026-11-04T16:19:09.532Z
 | 91 | 45 | deviation | crates/paladin-storage/src/minio.rs | 999 | 45-REVIEW WR-02 (found live by the Phase 57 sweep, D-14): every non-2xx S3 response reaches callers as HttpFailWithBody and the map_err closures format it with Display, embedding the raw body (access-key id, request detail) in FileStorageError text. Fix: one s3_err_summary helper (plan 57-06). | open |  | 2026-11-04T16:16:35.635Z |  |
 | 92 | 45 | deviation | crates/paladin-storage/src/minio.rs | 1008 | 45-REVIEW WR-01 (found live by the Phase 57 sweep, D-14): upload_part / complete_multipart_upload / abort_multipart_upload rustdoc claims rust-s3 auto-aborts a rejected part; with fail-on-err that branch is unreachable, so callers who trust the doc leak open multipart uploads. Fix: correct the docs (plan 57-06). | open |  | 2026-11-04T16:16:35.722Z |  |
 | 93 | 45 | deviation | tests/integration/file_storage_integration_tests.rs | 407 | 45-REVIEW WR-03 (found live by the Phase 57 sweep, D-14): the presigned-URL test converts reqwest::Error with ? and its Display includes the full signed URL (X-Amz-Credential, X-Amz-Signature), so a connection failure prints a live presigned URL into CI logs. Fix: map every reqwest error with without_url (plan 57-06). | open |  | 2026-11-04T16:19:09.532Z |  |
+| 94 | 51 | deviation | src/application/services/paladin/paladin_builder.rs | 1202 | 51-REVIEW WR-01 (found live by the Phase 57 sweep, D-14): effort_refusal renders the whole LlmError into a ConfigurationError, so a check_reasoning error carrying vendor text (ProcessingError, ProviderError message), forwarded unchanged by FallbackLlmAdapter, reaches the caller unredacted. Fix: a fixed per-variant label, no payload (plan 57-12). | open |  | 2026-11-04T18:38:31.139Z |  |
 
 ````json
 [
@@ -1225,6 +1226,18 @@ last_updated: 2026-11-04T16:19:09.532Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-11-04T16:19:09.532Z",
+    "resolved_at": null
+  },
+  {
+    "id": 94,
+    "kind": "deviation",
+    "phase": "51",
+    "file": "src/application/services/paladin/paladin_builder.rs",
+    "line": 1202,
+    "description": "51-REVIEW WR-01 (found live by the Phase 57 sweep, D-14): effort_refusal renders the whole LlmError into a ConfigurationError, so a check_reasoning error carrying vendor text (ProcessingError, ProviderError message), forwarded unchanged by FallbackLlmAdapter, reaches the caller unredacted. Fix: a fixed per-variant label, no payload (plan 57-12).",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-04T18:38:31.139Z",
     "resolved_at": null
   }
 ]

@@ -1185,8 +1185,11 @@ impl PaladinBuilder {
     /// The one refusal message for a reasoning effort the port's `check_reasoning` refused
     /// (D-09): same shape as [`Self::parameter_refusal`] -- model, provider, the
     /// `reasoning_effort` parameter and the value, then why. The provider and model come from the
-    /// error itself, so a refusing hop of a chain is named. Built from names, effort spellings
-    /// and fixed refusal wording only; nothing credential-shaped or request-derived is rendered.
+    /// error itself, so a refusing hop of a chain is named. The `UnsupportedParameter` arm is
+    /// built from names, effort spellings and the port's refusal reason. Any other error is named
+    /// by its fixed kind label only ([`llm_error_label`]): its payload (a provider message, a
+    /// vendor response body) can carry vendor text or a credential and is never rendered
+    /// (51-REVIEW WR-01).
     fn effort_refusal(&self, error: LlmError) -> PaladinError {
         match error {
             LlmError::UnsupportedParameter {
@@ -1200,9 +1203,10 @@ impl PaladinBuilder {
                  'reasoning_effort' = {value}: {reason}"
             )),
             other => PaladinError::ConfigurationError(format!(
-                "reasoning_effort for model '{}' on provider '{}' could not be checked: {other}",
+                "reasoning_effort for model '{}' on provider '{}' could not be checked: {}",
                 self.data.model,
                 self.llm_port.get_provider_name(),
+                llm_error_label(&other),
             )),
         }
     }
@@ -1622,6 +1626,37 @@ impl PaladinBuilder {
     }
 }
 
+/// A short, fixed label for an [`LlmError`], safe to interpolate into a builder
+/// [`PaladinError::ConfigurationError`] -- never the error's own text.
+///
+/// This is the builder's twin of `paladin-battalion`'s crate-private `llm_error_class`. A port's
+/// `check_reasoning` error can carry vendor response text or a credential in its payload (an
+/// out-of-tree port can put anything in a `ProcessingError` or a `ProviderError` message, and
+/// `FallbackLlmAdapter` forwards such an error unchanged), so the builder, as the one rendering
+/// boundary, names only the variant kind and renders no payload at all. Nothing is redacted
+/// because nothing is rendered (security.instructions.md; 51-REVIEW WR-01).
+fn llm_error_label(error: &LlmError) -> &'static str {
+    match error {
+        LlmError::NetworkError(_) => "network error",
+        LlmError::AuthenticationError(_) => "authentication error",
+        LlmError::InvalidPrompt(_) => "invalid prompt",
+        LlmError::RateLimitExceeded { .. } => "rate limit exceeded",
+        LlmError::UsageLimitExceeded { .. } => "usage limit exceeded",
+        LlmError::ModelNotAvailable(_) => "model not available",
+        LlmError::TokenLimitExceeded => "token limit exceeded",
+        LlmError::EmptyCompletion { .. } => "empty completion",
+        LlmError::Refusal { .. } => "refusal",
+        LlmError::UnsupportedParameter { .. } => "unsupported parameter",
+        LlmError::ProcessingError(_) => "processing error",
+        LlmError::Timeout(_) => "timeout",
+        LlmError::ProviderError { .. } => "provider error",
+        LlmError::AllProvidersFailed { .. } => "all providers failed",
+        // `LlmError` is `#[non_exhaustive]`: a future variant gets this generic label until this
+        // match gains its own arm.
+        _ => "unknown error",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1908,6 +1943,106 @@ mod tests {
 
     fn chain_of(hops: Vec<Arc<dyn LlmPort>>) -> Arc<dyn LlmPort> {
         Arc::new(paladin_llm::fallback::FallbackLlmAdapter::new(hops).expect("a non-empty chain"))
+    }
+
+    // ── 51-REVIEW WR-01 (plan 57-12): a failed reasoning check names its kind, never vendor text ──
+
+    /// The secret a vendor error body might carry; no builder message may ever contain it.
+    const PLANTED_SECRET: &str = "sk-planted-51wr01-secret";
+
+    /// WR-01 (security, D-14): a port whose `check_reasoning` fails with an error other than an
+    /// unsupported-parameter refusal can carry vendor response text in the payload. The builder
+    /// renders only the error's fixed kind, so neither the secret nor the body text reaches the
+    /// `ConfigurationError` a caller logs or returns.
+    #[tokio::test]
+    async fn effort_refusal_renders_only_the_error_kind_for_a_failed_check() {
+        let cases = [
+            (
+                LlmError::ProcessingError(format!("vendor body: {PLANTED_SECRET} upstream detail")),
+                "processing error",
+            ),
+            (
+                LlmError::ProviderError {
+                    provider: "vendor".into(),
+                    status: 502,
+                    message: format!("upstream said {PLANTED_SECRET}"),
+                },
+                "provider error",
+            ),
+        ];
+        for (error, label) in cases {
+            let message = configuration_error(
+                PaladinBuilder::new(Arc::new(CheckFailsPort(error)))
+                    .system_prompt("Test")
+                    .model("probe-model")
+                    .reasoning_effort(ReasoningEffort::High)
+                    .build()
+                    .await,
+            );
+            assert!(message.contains("reasoning_effort"), "{message}");
+            assert!(message.contains("probe-model"), "{message}");
+            assert!(message.contains("could not be checked"), "{message}");
+            assert!(message.contains(label), "{message}");
+            for leaked in [
+                PLANTED_SECRET,
+                "vendor body",
+                "upstream detail",
+                "upstream said",
+            ] {
+                assert!(!message.contains(leaked), "leaked {leaked:?}: {message}");
+            }
+        }
+    }
+
+    /// WR-01: `FallbackLlmAdapter::check_reasoning` forwards a non-refusal error unchanged, so the
+    /// builder is the one rendering boundary -- the secret must not reach the message through a
+    /// chain either.
+    #[tokio::test]
+    async fn effort_refusal_through_a_fallback_chain_renders_only_the_error_kind() {
+        let error =
+            LlmError::ProcessingError(format!("vendor body: {PLANTED_SECRET} upstream detail"));
+        let chain = chain_of(vec![Arc::new(CheckFailsPort(error))]);
+        let message = configuration_error(
+            PaladinBuilder::new(chain)
+                .system_prompt("Test")
+                .model("probe-model")
+                .reasoning_effort(ReasoningEffort::High)
+                .build()
+                .await,
+        );
+        assert!(message.contains("reasoning_effort"), "{message}");
+        assert!(message.contains("probe-model"), "{message}");
+        assert!(message.contains("could not be checked"), "{message}");
+        assert!(message.contains("processing error"), "{message}");
+        for leaked in [PLANTED_SECRET, "vendor body", "upstream detail"] {
+            assert!(!message.contains(leaked), "leaked {leaked:?}: {message}");
+        }
+    }
+
+    /// WR-01 regression guard (P-12-2): the `UnsupportedParameter` arm still names the model, the
+    /// provider, the parameter, the value and the port's own reason, unchanged.
+    #[tokio::test]
+    async fn effort_refusal_for_an_unsupported_parameter_names_model_provider_value_and_reason() {
+        let error = LlmError::unsupported_parameter(
+            "reasoning_effort",
+            "high",
+            "stubbed",
+            "probe-model",
+            "it lists only low",
+        );
+        let message = configuration_error(
+            PaladinBuilder::new(Arc::new(CheckFailsPort(error)))
+                .system_prompt("Test")
+                .model("probe-model")
+                .reasoning_effort(ReasoningEffort::High)
+                .build()
+                .await,
+        );
+        assert_eq!(
+            message,
+            "model 'probe-model' on provider 'stubbed' does not accept parameter \
+             'reasoning_effort' = high: it lists only low"
+        );
     }
 
     /// REASON-04/empty (D-03): a hop that reports no model profile cannot be checked, so an
@@ -2925,6 +3060,82 @@ mod tests {
 
         fn model_profile(&self, _model: &str) -> Option<ModelProfile> {
             Some(self.0.clone())
+        }
+    }
+
+    /// Test port whose `check_reasoning` always fails with the held error (51-REVIEW WR-01): the
+    /// shape of an out-of-tree port that returns vendor text from its reasoning check.
+    struct CheckFailsPort(LlmError);
+
+    #[async_trait::async_trait]
+    impl LlmPort for CheckFailsPort {
+        async fn generate(
+            &self,
+            request: paladin_ports::output::llm_port::LlmRequest,
+        ) -> Result<
+            paladin_ports::output::llm_port::LlmResponse,
+            paladin_ports::output::llm_port::LlmError,
+        > {
+            Ok(paladin_ports::output::llm_port::LlmResponse {
+                id: uuid::Uuid::new_v4(),
+                request_id: request.id,
+                model: request.model.clone(),
+                content: "CREATIVE".to_string(),
+                finish_reason: paladin_ports::output::llm_port::FinishReason::Stop,
+                usage: Default::default(),
+                cost: None,
+                created_at: chrono::Utc::now(),
+                function_call: None,
+                metadata: Default::default(),
+                reasoning: None,
+            })
+        }
+
+        async fn generate_stream(
+            &self,
+            _request: paladin_ports::output::llm_port::LlmRequest,
+        ) -> Result<
+            Box<
+                dyn futures::Stream<
+                        Item = Result<
+                            paladin_ports::output::llm_port::StreamingResponse,
+                            paladin_ports::output::llm_port::LlmError,
+                        >,
+                    > + Send,
+            >,
+            paladin_ports::output::llm_port::LlmError,
+        > {
+            unimplemented!()
+        }
+
+        async fn validate_model(
+            &self,
+            _model: &str,
+        ) -> Result<bool, paladin_ports::output::llm_port::LlmError> {
+            Ok(true)
+        }
+
+        async fn get_available_models(
+            &self,
+        ) -> Result<Vec<String>, paladin_ports::output::llm_port::LlmError> {
+            Ok(vec![])
+        }
+
+        fn get_provider_name(&self) -> &'static str {
+            "stubbed"
+        }
+
+        fn get_capabilities(&self) -> paladin_ports::output::llm_port::ProviderCapabilities {
+            paladin_ports::output::llm_port::ProviderCapabilities::default()
+        }
+
+        fn check_reasoning(
+            &self,
+            _model: &str,
+            _effort: Option<ReasoningEffort>,
+            _fallback: Option<ReasoningFallback>,
+        ) -> Result<(), LlmError> {
+            Err(self.0.clone())
         }
     }
 

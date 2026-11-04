@@ -592,7 +592,7 @@ Plans:
 
 **Wave 9** *(blocked on the gap closure plans)*
 
-- [ ] 57-11-PLAN.md — close-out: every WINDOWS row dispositioned on re-measured evidence, `57-REGISTER-EVIDENCE.md`, strict checker, 40-VALIDATION recording, gates, push and CI read, `open_count: 0` (REG-02, REG-04, REG-05)
+- [x] 57-11-PLAN.md — close-out: every WINDOWS row dispositioned on re-measured evidence, `57-REGISTER-EVIDENCE.md`, strict checker, 40-VALIDATION recording, gates, push and CI read, `open_count: 0` (REG-02, REG-04, REG-05)
 
 **Scope notes**:
 

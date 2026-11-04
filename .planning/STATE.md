@@ -4,16 +4,16 @@ milestone: v0.11.1
 milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 57
 current_phase_name: register-hygiene-close-out
-status: executing
-stopped_at: Completed 57-16-PLAN.md
-last_updated: "2026-11-04T22:04:49.530Z"
+status: verifying
+stopped_at: Completed 57-11-PLAN.md
+last_updated: "2026-11-04T23:21:46.779Z"
 last_activity: 2026-11-04
-last_activity_desc: Completed 57-16 (43 WR-01 fixed: fence marker capped at 30 min; WINDOWS row 100 open for 57-11)
+last_activity_desc: Completed 57-11 (registers sealed: WINDOWS open_count 0, review register 43 closed / 8 waived / 0 open, CI on 4b115d511)
 progress:
   total_phases: 6
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 68
-  completed_plans: 67
+  completed_plans: 68
 ---
 
 # Project State
@@ -51,11 +51,11 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 ## Current Position
 
 Phase: 57 (register-hygiene-close-out) — EXECUTING
-Plan: 16 of 16 complete (57-16 done; 57-11 seals the registers next)
-Status: Ready to execute
-Last activity: 2026-11-04 — Completed 57-16 (43 WR-01 fixed; WINDOWS row 100 open for 57-11)
+Plan: 16 of 16 complete (57-11 sealed the registers; phase verification next)
+Status: Phase complete — ready for verification
+Last activity: 2026-11-04 — Completed 57-11 (registers sealed; WINDOWS open_count 0)
 
-Progress: [██████████████░░░░░░] 5/7 phases (v0.11.1) — plans [████████████████░░░░] 52/57 ([██████████] 99%)
+Progress: [██████████████░░░░░░] 5/7 phases (v0.11.1) — plans [████████████████░░░░] 52/57 ([██████████] 100%)
 
 ## Performance Metrics
 
@@ -426,6 +426,7 @@ Progress: [██████████████░░░░░░] 5/7 pha
 | Phase 57 P14 | 41min | 3 tasks | 7 files |
 | Phase 57 P15 | 42min | 3 tasks | 6 files |
 | Phase 57 P16 | ~60min | 3 tasks | 9 files |
+| Phase 57 P11 | ~2h | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -821,6 +822,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 57]: 57-15: note_failure records the 429 in a spawned, awaited task (Handle::try_current, inline fallback); a drop before the spawn or a process exit can still lose it (43-REVIEW WR-04, EA-57-17)
 - [Phase 57]: PD-16-1: cap the node-cache fence marker at clamp(2 x entry ttl, 5 min, 30 min) rather than lengthen the counter; a late duplicate write of the same deterministic result is accepted after 30 minutes (43-REVIEW WR-01, ADR-0058 (g))
 - [Phase 57]: EA-57-20: a holder more than 28 minutes late (default 120 s lock) can still leave a marker outliving the counter; the wait is bounded at 30 minutes (ADR-0058 (i))
+- [Phase 57]: 57-11: WINDOWS sealed at open_count 0 (waived 53, fixed 55, total 108); the Docker-gated rows 68, 90, 93 and 100 were flipped only after CI run 41927940508 on 4b115d511 showed their named tests ok; review register closed 43 / waived 8 / open 0, strict checker 0 failure(s)
 
 ### Pending Todos
 
@@ -1213,8 +1215,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-11-04T22:04:49.506Z
-Stopped at: Completed 57-16-PLAN.md
+Last session: 2026-11-04T23:21:46.749Z
+Stopped at: Completed 57-11-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

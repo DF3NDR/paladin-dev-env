@@ -173,6 +173,19 @@ compensating_control = "The build script never calls ZipArchive::extract or ZipS
 revisit_condition = "utoipa-swagger-ui publishes a release that depends on zip >= 9.0.0"
 
 [[exception]]
+id = "RUSTSEC-2026-0429"
+class = "vulnerability"
+crate = "zip"
+path = "zip 3.0.0 -> utoipa-swagger-ui 9.0.2 [build-dependencies] -> paladin-web (Swagger UI bundle, `vendored` feature)"
+why_present = "utoipa-swagger-ui's build script unpacks the Swagger UI dist bundle with zip at build time so paladin-web can serve the OpenAPI UI; zip is a build-dependency only (the zip extraction API sizes a symlink-target buffer from the entry's declared size before reading it, so a crafted archive aborts the process)."
+why_not_fixable = "Upstream condition met 2026-11-04 but not taken in v0.11.1: utoipa-swagger-ui 10.0.2 depends on zip ^9.0 (build) and utoipa ^6.0.0 (crates.io, checked 2026-11-04); the tree is on utoipa 5.5.0 / utoipa-axum 0.2 / utoipa-swagger-ui 9.0.2, so the lift is a utoipa 6 migration (derive macros, utoipa-axum 0.3, the committed crates/paladin-web/openapi.json snapshot) deferred to the next minor release, not a build-dependency bump; a [patch] override cannot bridge the zip 3 -> 9 API gap."
+owner = "DF3NDR"
+review_date = "2027-03-31 or the first planning day of the next milestone, whichever is earlier"
+scope = "build time only: zip runs inside utoipa-swagger-ui's build script and is linked into no shipped binary; with the `vendored` feature the archive it opens is the fixed bundle compiled into utoipa-swagger-ui-vendored, never a download or user-supplied file"
+compensating_control = "The build script never calls ZipArchive::extract or ZipStreamReader::extract, the APIs all four advisories concern; it walks entries with by_index + enclosed_name() and writes each file itself, and its only input is the crate's own embedded bundle, so no attacker-controlled archive, symlink or mode bit reaches the vulnerable code."
+revisit_condition = "the utoipa 6 migration (utoipa, utoipa-axum, utoipa-swagger-ui 10.x) lands in a minor release"
+
+[[exception]]
 id = "RUSTSEC-2026-0249"
 class = "unmaintained"
 crate = "smartstring"

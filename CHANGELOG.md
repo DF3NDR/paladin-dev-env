@@ -37,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A run row written by a newer build (an unknown schema version) as a thread's owner no longer fails every tenant's `GET /v1/threads` with `500`, and no longer reveals that the thread exists (WINDOWS row 85, `MIGRATION.md` section 11.1 `M-B-25`). A thread belongs to the tenant of its earliest attributed run (served by the new `RunRepositoryPort::owner_run_for_thread`; a later Admin, schedule or other-tenant run never moves it, `M-B-24`), so a thread that already holds runs from two tenants goes to the earlier one on upgrade (`MIGRATION.md` section 11.8 step 12). ADR-0063 is amended in place (Phase 57, D-02).
 
+- An agent-kind run no longer announces its terminal event before the outcome is durable (45-REVIEW WR-04, `MIGRATION.md` section 11.1 `M-B-42`). The worker used to emit `RunFinished` (SSE `done` or `error`, the herald line, the persisted trace row) before the status write, outcome write and `ack`, so a failed write left a terminal event for a run that stayed `running` and was redelivered. The event now follows the committed writes and `ack` for completed, failed and halted runs; a failed write logs one warning and nacks the message, and the attempt that commits emits the one terminal event.
+
+- A failed agent-kind run now reports the usage and cost its loop was billed before failing (45-REVIEW WR-06, `MIGRATION.md` section 11.1 `M-B-43`). Its `NodeFinished`, `RunFinished`, SSE `error` figures, herald line and persisted trace used to show zero usage and no cost.
+
 ### Security
 
 - Boot refuses a configured Treasurer whose run worker pool has no engine factory, naming the misconfiguration before any worker spawns or listener binds. The shipped `build_run_api` wiring always installs the factory and is unaffected; only an embedder building its own pool wiring can hit the refusal (TENANT-08).

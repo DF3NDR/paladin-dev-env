@@ -111,6 +111,31 @@ fn s3_error_code(body: &str) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+/// Render an [`S3Error`] as bounded text that is safe to embed in a [`FileStorageError`], a log
+/// line or a health report (45-REVIEW WR-02).
+///
+/// A non-2xx S3 response reaches callers as `HttpFailWithBody(status, body)`, and the body can
+/// echo the access-key id, the string-to-sign and other request detail; `Display` would embed
+/// all of it. Only the numeric status and the short `<Code>` value (via [`s3_error_code`], which
+/// is bounded to 64 characters) are reported. Every other variant maps to a fixed label that
+/// carries none of the variant's payload text, so it can never leak a secret or a signed URL.
+fn s3_err_summary(e: &S3Error) -> String {
+    match e {
+        S3Error::HttpFailWithBody(status, body) => {
+            format!("HTTP {status} {}", s3_error_code(body))
+        }
+        S3Error::HttpFail => "S3 request failed (non-2xx response)".to_string(),
+        S3Error::MaxExpiry(_) => "presigned URL expiry exceeds the S3 maximum".to_string(),
+        S3Error::Credentials(_)
+        | S3Error::WLCredentials
+        | S3Error::RLCredentials
+        | S3Error::CredentialsReadLock
+        | S3Error::CredentialsWriteLock => "S3 credentials unavailable".to_string(),
+        S3Error::Io(_) => "S3 request failed (io)".to_string(),
+        _ => "S3 request failed".to_string(),
+    }
+}
+
 /// The arguments `list_files` sends to the S3 list-objects call, derived from the caller's
 /// [`ListOptions`] by one pure function so the mapping is testable without a store.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -185,7 +210,10 @@ impl MinioAdapter {
         // Create bucket instance
         let bucket = Bucket::new(&config.bucket, region, credentials)
             .map_err(|e| {
-                FileStorageError::ConfigurationError(format!("Failed to create bucket: {}", e))
+                FileStorageError::ConfigurationError(format!(
+                    "Failed to create bucket: {}",
+                    s3_err_summary(&e)
+                ))
             })?
             .with_path_style();
 
@@ -227,7 +255,7 @@ impl MinioAdapter {
             }
             Ok(Err(e)) => Err(FileStorageError::ConnectionError(format!(
                 "Failed to check bucket: {}",
-                e
+                s3_err_summary(&e)
             ))),
             Err(_) => Err(FileStorageError::Timeout),
         }
@@ -270,7 +298,7 @@ impl MinioAdapter {
                 } else {
                     Err(FileStorageError::ConnectionError(format!(
                         "Failed to create bucket: {}",
-                        e
+                        s3_err_summary(&e)
                     )))
                 }
             }
@@ -398,7 +426,7 @@ impl MinioAdapter {
         F: Fn() -> Fut,
         Fut: std::future::Future<Output = Result<T, S3Error>>,
     {
-        let mut last_error = None;
+        let mut last_error: Option<S3Error> = None;
 
         for attempt in 0..=self.config.max_retries {
             match timeout(self.config.request_timeout, operation()).await {
@@ -420,7 +448,7 @@ impl MinioAdapter {
             "Operation failed after {} retries: {}",
             self.config.max_retries,
             last_error
-                .map(|e| e.to_string())
+                .map(|e| s3_err_summary(&e))
                 .unwrap_or_else(|| "Unknown error".to_string())
         )))
     }
@@ -534,7 +562,7 @@ impl FileStoragePort for MinioAdapter {
             Ok(Err(S3Error::HttpFail)) | Ok(Err(S3Error::HttpFailWithBody(404, _))) => Ok(false),
             Ok(Err(e)) => Err(FileStorageError::IoError(format!(
                 "Failed to check file existence: {}",
-                e
+                s3_err_summary(&e)
             ))),
             Err(_) => Err(FileStorageError::Timeout),
         }
@@ -744,7 +772,7 @@ impl FileStoragePort for MinioAdapter {
                 })
             }
             Ok(Err(e)) => {
-                let error_msg = format!("MinIO health check failed: {}", e);
+                let error_msg = format!("MinIO health check failed: {}", s3_err_summary(&e));
                 self.log_operation(LogLevel::Error, error_msg.clone()).await;
 
                 Ok(StorageHealth {
@@ -974,7 +1002,10 @@ impl AdvancedFileStoragePort for MinioAdapter {
             .presign_put(&object_name, expires_in_secs, None, None)
             .await
             .map_err(|e| {
-                FileStorageError::IoError(format!("Failed to generate upload URL: {}", e))
+                FileStorageError::IoError(format!(
+                    "Failed to generate upload URL: {}",
+                    s3_err_summary(&e)
+                ))
             })?;
 
         Ok(url)
@@ -995,7 +1026,10 @@ impl AdvancedFileStoragePort for MinioAdapter {
             .presign_get(&object_name, expires_in_secs, None)
             .await
             .map_err(|e| {
-                FileStorageError::IoError(format!("Failed to generate download URL: {}", e))
+                FileStorageError::IoError(format!(
+                    "Failed to generate download URL: {}",
+                    s3_err_summary(&e)
+                ))
             })?;
 
         Ok(url)
@@ -1019,7 +1053,10 @@ impl AdvancedFileStoragePort for MinioAdapter {
             .initiate_multipart_upload(&object_name, "application/octet-stream")
             .await
             .map_err(|e| {
-                FileStorageError::IoError(format!("Failed to initiate multipart upload: {}", e))
+                FileStorageError::IoError(format!(
+                    "Failed to initiate multipart upload: {}",
+                    s3_err_summary(&e)
+                ))
             })?;
 
         Ok(encode_multipart_token(&object_name, &response.upload_id))
@@ -1027,9 +1064,14 @@ impl AdvancedFileStoragePort for MinioAdapter {
 
     /// Upload one part and return the part's ETag (raw, opaque to the port).
     ///
-    /// Every non-final part must be at least 5 MiB on S3 and RustFS. `rust-s3` aborts
-    /// the whole upload itself when a part is rejected, so a later abort of that token
-    /// reports the upload as already gone.
+    /// Every non-final part must be at least 5 MiB on S3 and RustFS.
+    ///
+    /// A rejected part returns an error and **leaves the multipart upload open**: this crate
+    /// builds `rust-s3` with its default `fail-on-err` feature, which turns a non-2xx response
+    /// into an error before `rust-s3`'s own abort-on-rejected-part branch can run. The caller
+    /// must call [`FileStoragePort::abort_multipart_upload`] to discard the parts already
+    /// stored, or the store keeps (and bills for) them. Only the bounded S3 status and code
+    /// are reported in the error, never the response body (45-REVIEW WR-01, WR-02).
     async fn upload_part(
         &self,
         upload_id: &str,
@@ -1048,7 +1090,9 @@ impl AdvancedFileStoragePort for MinioAdapter {
                 "application/octet-stream",
             )
             .await
-            .map_err(|e| FileStorageError::IoError(format!("Failed to upload part: {}", e)))?;
+            .map_err(|e| {
+                FileStorageError::IoError(format!("Failed to upload part: {}", s3_err_summary(&e)))
+            })?;
 
         Ok(part.etag)
     }
@@ -1056,9 +1100,9 @@ impl AdvancedFileStoragePort for MinioAdapter {
     /// Complete a multipart upload from its `(part number, ETag)` pairs.
     ///
     /// S3 can answer `200` with an `<Error>` body on completion, so both the status and
-    /// the body are checked; only the bounded S3 error code is reported, never the body.
-    /// `rust-s3` aborts the upload itself when a part fails, so completing after a
-    /// failed part reports the upload as gone.
+    /// the body are checked; only the bounded S3 status and error code are reported, never the
+    /// body. A failed completion, like a rejected part, leaves the multipart upload open: the
+    /// caller must call [`FileStoragePort::abort_multipart_upload`] to discard it (45-REVIEW WR-01).
     async fn complete_multipart_upload(
         &self,
         upload_id: &str,
@@ -1076,10 +1120,16 @@ impl AdvancedFileStoragePort for MinioAdapter {
             .complete_multipart_upload(&key, id, parts)
             .await
             .map_err(|e| {
-                FileStorageError::IoError(format!("Failed to complete multipart upload: {}", e))
+                FileStorageError::IoError(format!(
+                    "Failed to complete multipart upload: {}",
+                    s3_err_summary(&e)
+                ))
             })?;
 
         let body = response.as_str().unwrap_or_default();
+        // `fail-on-err` (a `rust-s3` default feature this crate leaves on) already turns a
+        // non-2xx response into an `Err` above, so the status test is defensive. The `<Error>`
+        // body test is live: S3 can answer `200` with an error document on completion.
         if response.status_code() >= 300 || body.contains("<Error>") {
             return Err(FileStorageError::IoError(format!(
                 "Failed to complete multipart upload: {}",
@@ -1093,8 +1143,9 @@ impl AdvancedFileStoragePort for MinioAdapter {
     /// Abort a multipart upload, discarding every uploaded part.
     ///
     /// A `404 NoSuchUpload` (already aborted or completed) is
-    /// [`FileStorageError::FileNotFound`]; `rust-s3` aborts an upload itself when a
-    /// part fails, so aborting after such a failure reports the same.
+    /// [`FileStorageError::FileNotFound`]. Nothing aborts an upload on the caller's behalf, not
+    /// even after a rejected part, so this is the call that releases a failed upload's parts;
+    /// it reports `FileNotFound` only when the upload no longer exists (45-REVIEW WR-01).
     async fn abort_multipart_upload(&self, upload_id: &str) -> FileStorageResult<()> {
         let (key, id) = decode_multipart_token(upload_id)?;
 
@@ -1107,7 +1158,7 @@ impl AdvancedFileStoragePort for MinioAdapter {
             }
             Err(e) => Err(FileStorageError::IoError(format!(
                 "Failed to abort multipart upload: {}",
-                e
+                s3_err_summary(&e)
             ))),
         }
     }
@@ -1209,6 +1260,74 @@ impl MinioAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn retry_exhaustion_text_never_echoes_the_response_body() {
+        let credentials = Credentials::new(Some("ak"), Some("sk"), None, None, None).unwrap();
+        let region = Region::Custom {
+            region: "us-east-1".to_string(),
+            endpoint: "http://127.0.0.1:1".to_string(),
+        };
+        let adapter = MinioAdapter {
+            bucket: Bucket::new("b", region, credentials)
+                .unwrap()
+                .with_path_style(),
+            config: MinioConfig {
+                max_retries: 0,
+                ..MinioConfig::default()
+            },
+            log_port: None,
+        };
+
+        let err = adapter
+            .execute_with_retry(|| async {
+                Err::<(), _>(S3Error::HttpFailWithBody(
+                    403,
+                    "<Error><Code>AccessDenied</Code><AWSAccessKeyId>AKIAEXAMPLE0000000000\
+                     </AWSAccessKeyId></Error>"
+                        .to_string(),
+                ))
+            })
+            .await
+            .unwrap_err();
+        let text = err.to_string();
+        assert!(text.contains("HTTP 403 AccessDenied"), "got {text}");
+        assert!(!text.contains("AKIA"), "got {text}");
+    }
+
+    #[test]
+    fn s3_err_summary_never_echoes_the_response_body() {
+        let body = "<Error><Code>SignatureDoesNotMatch</Code>\
+            <AWSAccessKeyId>AKIAEXAMPLE0000000000</AWSAccessKeyId>\
+            <StringToSign>secret-request-detail</StringToSign></Error>";
+        let summary = s3_err_summary(&S3Error::HttpFailWithBody(403, body.to_string()));
+        assert_eq!(summary, "HTTP 403 SignatureDoesNotMatch");
+        assert!(!summary.contains("AKIA"));
+        assert!(!summary.contains("secret-request-detail"));
+
+        // A body with no <Code> reports the status and the fixed fallback code.
+        let summary = s3_err_summary(&S3Error::HttpFailWithBody(
+            500,
+            "internal detail AKIAEXAMPLE0000000000".to_string(),
+        ));
+        assert_eq!(summary, format!("HTTP 500 {}", s3_error_code("")));
+        assert!(!summary.contains("AKIA"));
+        assert!(!summary.contains("internal detail"));
+
+        // A non-HTTP variant yields a fixed string carrying none of its payload text.
+        let summary = s3_err_summary(&S3Error::Credentials(
+            s3::creds::error::CredentialsError::ConfigMissingAccessKeyId,
+        ));
+        assert!(!summary.is_empty());
+        assert!(!summary.to_lowercase().contains("accesskeyid"));
+        let summary = s3_err_summary(&S3Error::Io(std::io::Error::other(
+            "secret-io-detail AKIAEXAMPLE0000000000",
+        )));
+        assert!(!summary.contains("secret-io-detail"));
+        assert!(!summary.contains("AKIA"));
+        assert!(!s3_err_summary(&S3Error::HttpFail).is_empty());
+        assert!(!s3_err_summary(&S3Error::MaxExpiry(999_999)).contains("999999"));
+    }
 
     #[test]
     fn list_request_sends_the_limit_as_max_keys_never_as_a_delimiter() {

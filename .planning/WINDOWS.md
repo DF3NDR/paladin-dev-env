@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 16
+open_count: 18
 waived_count: 40
 fixed_count: 34
-total_count: 90
-last_updated: 2026-11-04T16:13:05.569Z
+total_count: 92
+last_updated: 2026-11-04T16:16:35.722Z
 ---
 
 # Broken Windows Ledger
@@ -105,6 +105,8 @@ last_updated: 2026-11-04T16:13:05.569Z
 | 88 | 45 | deviation | src/application/services/run/worker.rs | 1995 | 45-REVIEW WR-05 (found live by the Phase 57 sweep, D-14): persist_failure stores the agent/engine failure text verbatim on the run row and the failed-persist warn! logs it, so a provider response body or key embedded in an error reaches GET /v1/runs/{id} and the log; worker_tests pinned the raw marker as readable. Fix: redact then bound (plan 57-05). | open |  | 2026-11-04T14:12:20.397Z |  |
 | 89 | 41 | deviation | src/infrastructure/web/run_api_wiring.rs | 1352 | 41-REVIEW WR-05 (found live by the Phase 57 sweep, D-14): an operator webhook configured without a secret (or with APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET="") is signed with the empty key, so X-Paladin-Signature authenticates nothing, and boot gives no signal. Fix: empty is absent plus one boot warning (plan 57-05). | open |  | 2026-11-04T14:19:23.050Z |  |
 | 90 | 45 | deviation | crates/paladin-storage/src/minio.rs | 551 | 45-REVIEW CR-01 (found live by the Phase 57 sweep, D-14): list_files passes ListOptions.limit to rust-s3 Bucket::list as the delimiter, so the limit is ignored and every key containing the limit's digits is rolled into CommonPrefixes and dropped; health_check repeats it. Fix: list_page with max_keys plus continuation (plan 57-06). | open |  | 2026-11-04T16:13:05.569Z |  |
+| 91 | 45 | deviation | crates/paladin-storage/src/minio.rs | 999 | 45-REVIEW WR-02 (found live by the Phase 57 sweep, D-14): every non-2xx S3 response reaches callers as HttpFailWithBody and the map_err closures format it with Display, embedding the raw body (access-key id, request detail) in FileStorageError text. Fix: one s3_err_summary helper (plan 57-06). | open |  | 2026-11-04T16:16:35.635Z |  |
+| 92 | 45 | deviation | crates/paladin-storage/src/minio.rs | 1008 | 45-REVIEW WR-01 (found live by the Phase 57 sweep, D-14): upload_part / complete_multipart_upload / abort_multipart_upload rustdoc claims rust-s3 auto-aborts a rejected part; with fail-on-err that branch is unreachable, so callers who trust the doc leak open multipart uploads. Fix: correct the docs (plan 57-06). | open |  | 2026-11-04T16:16:35.722Z |  |
 
 ````json
 [
@@ -1186,6 +1188,30 @@ last_updated: 2026-11-04T16:13:05.569Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-11-04T16:13:05.569Z",
+    "resolved_at": null
+  },
+  {
+    "id": 91,
+    "kind": "deviation",
+    "phase": "45",
+    "file": "crates/paladin-storage/src/minio.rs",
+    "line": 999,
+    "description": "45-REVIEW WR-02 (found live by the Phase 57 sweep, D-14): every non-2xx S3 response reaches callers as HttpFailWithBody and the map_err closures format it with Display, embedding the raw body (access-key id, request detail) in FileStorageError text. Fix: one s3_err_summary helper (plan 57-06).",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-04T16:16:35.635Z",
+    "resolved_at": null
+  },
+  {
+    "id": 92,
+    "kind": "deviation",
+    "phase": "45",
+    "file": "crates/paladin-storage/src/minio.rs",
+    "line": 1008,
+    "description": "45-REVIEW WR-01 (found live by the Phase 57 sweep, D-14): upload_part / complete_multipart_upload / abort_multipart_upload rustdoc claims rust-s3 auto-aborts a rejected part; with fail-on-err that branch is unreachable, so callers who trust the doc leak open multipart uploads. Fix: correct the docs (plan 57-06).",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-04T16:16:35.722Z",
     "resolved_at": null
   }
 ]

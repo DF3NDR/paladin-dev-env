@@ -108,3 +108,47 @@ Phases 41 and 43 (57-10 Task 2; classes are the executor's reading, decided at t
 - 43 WR-07, `crates/paladin-storage/src/node_cache/redis.rs:160`, class `other`: the fence marker key collides with an entry key `<key>:fence` (unreachable from in-tree key producers).
 
 Documented residuals, not live findings (recorded in `42-REVIEW-FIX.md`): 42 WR-6's PostgreSQL `max_seq` override and its contract test were Docker-gated and not run by the fixer; two runs dispatched concurrently on one thread can still read the same max and collide (the fork and requeue paths the finding describes are sequential).
+
+## Triage (Phase 57, 2026-11-04)
+
+Recorded by the 57-10 continuation after the Task 3 `checkpoint:decision` (D-14, D-21). The triage decides the outcome of the 15 `open` rows above; it does not change them. Each `open` row stays `open` until 57-11, which sets fix-in-phase rows to `closed` (pointer to the gap-closure fix) and waived rows to `waived` (WINDOWS row plus owner), then runs the checker strict.
+
+**Decision (verbatim, from the owner, am0rfu5@protonmail.com, relayed by the orchestrator on 2026-11-04):** `option-a`
+
+Selected: option-a, "Apply D-14 as proposed: every correctness/security/credential/tenant item is fixed in this phase (gap closure), every other item is waived". No row overrides and no exceptions were given. 43 WR-03 and 43 WR-06 stay `closed` as recorded (documentation-only closures, behaviour unchanged). The 57-07 judgment read handed off no rejects and no violations (57-07-SUMMARY `## Hand-off`: "None"), so the live set is the 15 register rows.
+
+Counts: 15 triaged = 7 fix-in-phase (security 1, correctness 6) + 8 waive (class `other`).
+
+### Fix-in-phase (gap closure before the 57-11 seal)
+
+`/gsd-plan-phase 57 --gaps` plans each as a TDD plan (D-00a, D-00b, D-14); the gap source is `57-10-SUMMARY.md` `## Gaps for closure`. 57-11 refuses to seal while one has no fix commit.
+
+| Phase | Id | Class | Location (head) | Outcome |
+|-------|----|-------|-----------------|---------|
+| 51 | WR-01 | security | `src/application/services/paladin/paladin_builder.rs:1202` | fix-in-phase |
+| 45 | WR-04 | correctness | `src/application/services/run/worker.rs:1793` | fix-in-phase |
+| 45 | WR-06 | correctness | `src/application/services/run/worker.rs:1838` | fix-in-phase |
+| 41 | WR-01 | correctness | `src/application/services/treasurer/mod.rs:251` | fix-in-phase |
+| 43 | WR-01 | correctness | `crates/paladin-storage/src/node_cache/redis.rs:306` | fix-in-phase |
+| 43 | WR-04 | correctness | `crates/paladin-llm/src/cadence.rs:275` | fix-in-phase |
+| 43 | WR-05 | correctness | `crates/paladin-llm/src/cadence.rs:291` | fix-in-phase |
+
+### Waive (minted and waived by 57-11 in the D-03 shape)
+
+57-11 mints one WINDOWS row per item (`windows append --kind deviation`), then waives it with `Re-homed: owner=<owner>, revisit=<condition>, basis=<pointer>. <rationale>` and sets the register row to `waived`, Evidence `WINDOWS row <n>; 2026-11-04`, Owner as below. The owner chose option-a without naming per-item revisit conditions; the revisit and basis below are taken from each row's own evidence and are the text 57-11 applies.
+
+| Phase | Id | Class | Location (head) | Owner | Revisit | Basis |
+|-------|----|-------|-----------------|-------|---------|-------|
+| 38 | WR-01 | other | `crates/paladin-core/src/platform/container/cost.rs:147` | owner (am0rfu5@protonmail.com) | when any producer can build a negative `Cost` (refunds, credits) | 38-REVIEW WR-01; register row 38 WR-01 (latent: no current producer builds a negative Cost) |
+| 38 | WR-02 | other | `crates/paladin-llm/src/pricing.rs:69` | owner (am0rfu5@protonmail.com) | when multi-tenant pricing or hot price reload is added | 38-REVIEW WR-02; pricing.rs doc comment (D-08, process-wide dedup is deliberate) |
+| 51 | WR-02 | other | `src/infrastructure/web/agent_host.rs:201` | owner (am0rfu5@protonmail.com) | next change to `check_reasoning` or the reasoning refusal wording | 51-REVIEW WR-02; register row 51 WR-02 (verdicts agree on is_ok; wording and maintenance drift only) |
+| 41 | WR-02 | other | `src/infrastructure/web/run_api_wiring.rs:1106` | owner (am0rfu5@protonmail.com) | when boot-time DNS availability is reported as an operator issue | 41-REVIEW WR-02; T-41-38 (fail-closed at boot is the recorded intent; send-time guard re-checks) |
+| 41 | WR-03 | other | `src/config/treasurer.rs:865` | owner (am0rfu5@protonmail.com) | next configuration-docs pass over `docs/src/getting-started/configuration.md:405-416` | 41-REVIEW WR-03; MIGRATION M-B-38 (unparsable env value is ignored, project-wide convention) |
+| 41 | WR-04 | other | `src/application/services/treasurer/mod.rs:289` | owner (am0rfu5@protonmail.com) | when a PostgreSQL store clock skew is observed on operator notices | 41-REVIEW WR-04; register row 41 WR-04 (bounded delay of a best-effort alert) |
+| 43 | WR-02 | other | `docs/src/getting-started/configuration.md:632` and `src/config/treasurer.rs:44` | owner (am0rfu5@protonmail.com) | next docs pass (a two-sentence fix) | 43-REVIEW WR-02; crates/paladin-llm/CHANGELOG.md:295-301 |
+| 43 | WR-07 | other | `crates/paladin-storage/src/node_cache/redis.rs:160` | owner (am0rfu5@protonmail.com) | when a caller can hand-compose a `NodeCacheKey`, or the marker key is next changed | 43-REVIEW WR-07; ADR-0058 line 273 (marker location; unreachable from in-tree key producers) |
+
+### Evidence carried to 57-11
+
+- Strict checker before triage: 51 findings, closed 36 / waived 0 / open 15; `--pending-ok` exits 0; strict reports 15 `FAIL OPEN`.
+- Docker-gated items 57-11 must read from CI: 43 WR-01's Redis test (the gap plan adds it), 45 CR-01's RustFS contract case (WINDOWS row 90), 45 WR-03's presigned-URL test (WINDOWS row 93).

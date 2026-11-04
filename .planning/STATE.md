@@ -4,15 +4,15 @@ milestone: v0.11.1
 milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 57
 current_phase_name: Register Hygiene Close-Out
-status: planning
+status: executing
 stopped_at: Phase 57 context gathered
-last_updated: "2026-11-04T03:01:06.947Z"
+last_updated: "2026-11-04T12:50:37.436Z"
 last_activity: 2026-11-04
 last_activity_desc: Phase 56 complete, transitioned to Phase 57
 progress:
   total_phases: 6
   completed_phases: 5
-  total_plans: 52
+  total_plans: 63
   completed_plans: 52
 ---
 
@@ -52,7 +52,7 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 
 Phase: 57 — Register Hygiene Close-Out
 Plan: Not started
-Status: Ready to plan
+Status: Ready to execute
 Last activity: 2026-11-04 — Phase 56 complete, transitioned to Phase 57
 
 Progress: [██████████████░░░░░░] 5/7 phases (v0.11.1) — plans [████████████████████] 52/52 (100%)

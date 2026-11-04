@@ -551,6 +551,7 @@ Plans:
 **Goal**: Every register the milestone audit reads agrees with the tree: no open `WINDOWS.md` row, no undispositioned review warning, no stale frontmatter or diagnosed-but-fixed debug session, and no unchecked advisory exception, so the audit can read `passed` rather than `tech_debt`.
 **Depends on**: Phase 56 (dogfood findings and fixes can mint or close `WINDOWS.md` rows) and Phase 53 (the Phase 40 warnings close on its evidence)
 **Requirements**: REG-01, REG-02, REG-03, REG-04, REG-05, REG-06
+**UI hint**: no
 **Success Criteria** (what must be TRUE):
 
   1. `windows status` reports `open_count: 0`: rows 56, 68, 69 and 79 are dispositioned with their superseding evidence, rows 58, 62, 63, 67 and 73 are closed on the evidence of Phases 53-55 or waived with a reason, every other open row is waived with a reason or re-homed with an owner and a date, and any row minted by Phases 52-56 is included.

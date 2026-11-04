@@ -388,6 +388,9 @@ mod tests {
     #[ignore]
     pub async fn test_presigned_urls() -> Result<(), Box<dyn std::error::Error>> {
         let ctx = FileStorageTestContext::new().await?;
+        // Every reqwest error here is mapped with `without_url()`: its `Display` otherwise includes
+        // the full presigned URL (access key id and signature), which would land in CI logs on a
+        // connection failure (45-REVIEW WR-03).
         let http = reqwest::Client::new();
 
         let file_path = PathBuf::from("presigned/test.txt");
@@ -408,9 +411,20 @@ mod tests {
             "✅ Generated presigned download URL for {}",
             download_url.split('?').next().unwrap_or_default()
         );
-        let response = http.get(&download_url).send().await?;
+        let response = http
+            .get(&download_url)
+            .send()
+            .await
+            .map_err(|e| e.without_url())?;
         assert!(response.status().is_success());
-        assert_eq!(response.bytes().await?.as_ref(), content);
+        assert_eq!(
+            response
+                .bytes()
+                .await
+                .map_err(|e| e.without_url())?
+                .as_ref(),
+            content
+        );
 
         // Presigned upload URL: a real PUT through it, then read the object back.
         let upload_path = PathBuf::from("presigned/upload.txt");
@@ -428,7 +442,8 @@ mod tests {
             .put(&upload_url)
             .body(upload_content.clone())
             .send()
-            .await?;
+            .await
+            .map_err(|e| e.without_url())?;
         assert!(response.status().is_success());
 
         // Read it back through a presigned download URL for the same path.
@@ -436,9 +451,20 @@ mod tests {
             .adapter
             .generate_download_url(&upload_path, Duration::from_secs(3600), None)
             .await?;
-        let response = http.get(&readback_url).send().await?;
+        let response = http
+            .get(&readback_url)
+            .send()
+            .await
+            .map_err(|e| e.without_url())?;
         assert!(response.status().is_success());
-        assert_eq!(response.bytes().await?.as_ref(), upload_content.as_slice());
+        assert_eq!(
+            response
+                .bytes()
+                .await
+                .map_err(|e| e.without_url())?
+                .as_ref(),
+            upload_content.as_slice()
+        );
 
         ctx.cleanup().await?;
         Ok(())

@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 18
+open_count: 19
 waived_count: 40
 fixed_count: 34
-total_count: 92
-last_updated: 2026-11-04T16:16:35.722Z
+total_count: 93
+last_updated: 2026-11-04T16:19:09.532Z
 ---
 
 # Broken Windows Ledger
@@ -107,6 +107,7 @@ last_updated: 2026-11-04T16:16:35.722Z
 | 90 | 45 | deviation | crates/paladin-storage/src/minio.rs | 551 | 45-REVIEW CR-01 (found live by the Phase 57 sweep, D-14): list_files passes ListOptions.limit to rust-s3 Bucket::list as the delimiter, so the limit is ignored and every key containing the limit's digits is rolled into CommonPrefixes and dropped; health_check repeats it. Fix: list_page with max_keys plus continuation (plan 57-06). | open |  | 2026-11-04T16:13:05.569Z |  |
 | 91 | 45 | deviation | crates/paladin-storage/src/minio.rs | 999 | 45-REVIEW WR-02 (found live by the Phase 57 sweep, D-14): every non-2xx S3 response reaches callers as HttpFailWithBody and the map_err closures format it with Display, embedding the raw body (access-key id, request detail) in FileStorageError text. Fix: one s3_err_summary helper (plan 57-06). | open |  | 2026-11-04T16:16:35.635Z |  |
 | 92 | 45 | deviation | crates/paladin-storage/src/minio.rs | 1008 | 45-REVIEW WR-01 (found live by the Phase 57 sweep, D-14): upload_part / complete_multipart_upload / abort_multipart_upload rustdoc claims rust-s3 auto-aborts a rejected part; with fail-on-err that branch is unreachable, so callers who trust the doc leak open multipart uploads. Fix: correct the docs (plan 57-06). | open |  | 2026-11-04T16:16:35.722Z |  |
+| 93 | 45 | deviation | tests/integration/file_storage_integration_tests.rs | 407 | 45-REVIEW WR-03 (found live by the Phase 57 sweep, D-14): the presigned-URL test converts reqwest::Error with ? and its Display includes the full signed URL (X-Amz-Credential, X-Amz-Signature), so a connection failure prints a live presigned URL into CI logs. Fix: map every reqwest error with without_url (plan 57-06). | open |  | 2026-11-04T16:19:09.532Z |  |
 
 ````json
 [
@@ -1212,6 +1213,18 @@ last_updated: 2026-11-04T16:16:35.722Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-11-04T16:16:35.722Z",
+    "resolved_at": null
+  },
+  {
+    "id": 93,
+    "kind": "deviation",
+    "phase": "45",
+    "file": "tests/integration/file_storage_integration_tests.rs",
+    "line": 407,
+    "description": "45-REVIEW WR-03 (found live by the Phase 57 sweep, D-14): the presigned-URL test converts reqwest::Error with ? and its Display includes the full signed URL (X-Amz-Credential, X-Amz-Signature), so a connection failure prints a live presigned URL into CI logs. Fix: map every reqwest error with without_url (plan 57-06).",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-04T16:19:09.532Z",
     "resolved_at": null
   }
 ]

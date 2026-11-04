@@ -20,6 +20,18 @@ and this project follows lockstep workspace versioning.
 
 - Every `ContentListRepository` method on `SqliteStore` (feature `sqlite`) and `MySqlContentRepository` (feature `mysql`) now returns `Err(RepositoryError::QueryError("ContentListRepository::<method> is unfinished for the <backend> backend: content lists are not persisted"))` instead of panicking the calling thread. Neither backend persists content lists; a caller that used these methods must handle the `Err` (`MIGRATION.md` section 11.1 `M-B-30`; FIXES-01, Phase 55).
 
+### Fixed
+
+- `MinioAdapter::list_files` (feature `s3`) no longer sends `ListOptions.limit` as the S3 delimiter. It is the page size now: with a `limit` or a `continuation_token` the adapter fetches one page, returns at most `limit` files, and reports `has_more` and `continuation_token` from the store; with neither it lists every page. Keys that contain the limit's digits are no longer dropped from a listing, and `health_check` lists with `max-keys` 1 (45-REVIEW CR-01, WINDOWS row 90, Phase 57 plan 57-06; `MIGRATION.md` section 11.1 `M-B-40`).
+
+### Security
+
+- Every S3 error the adapter raises now carries only the HTTP status and the S3 `<Code>` (for example `HTTP 403 SignatureDoesNotMatch`), or a fixed label for a non-HTTP failure. Before, the raw response body, which can echo the access-key id and request detail, was embedded in `FileStorageError` text (45-REVIEW WR-02, WINDOWS row 91, Phase 57 plan 57-06).
+
+### Documentation
+
+- `upload_part`, `complete_multipart_upload` and `abort_multipart_upload` no longer claim `rust-s3` aborts a rejected multipart upload. It does not (its `fail-on-err` default returns the error first), so the caller must call `abort_multipart_upload` to release the stored parts (45-REVIEW WR-01, WINDOWS row 92, Phase 57 plan 57-06).
+
 ## [0.11.0] - 2026-10-26
 
 ### Fixed

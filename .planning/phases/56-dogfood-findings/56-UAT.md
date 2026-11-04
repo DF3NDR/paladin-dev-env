@@ -3,24 +3,23 @@ status: testing
 phase: 56-dogfood-findings
 source: [56-VERIFICATION.md]
 started: 2026-11-04T01:40:07Z
-updated: 2026-11-04T01:40:07Z
+updated: 2026-11-04T01:47:41Z
 ---
 
 ## Current Test
 
-number: 1
-name: DF-18 severity call — is S3 / out (re-homed) acceptable for the Quickstart's deprecated `gpt-4` literal?
+number: 2
+name: DOGF-05 scope — does a devcontainer walk satisfy "on a Docker-capable machine"?
 expected: |
-  Maintainer either accepts S3 (docs literal, clear provider error, 109-site sweep re-homed to
-  .planning/todos/pending/2026-11-03-docs-deprecated-gpt-4-model-literal.md) or regrades to S2, in
-  which case the one-line Quickstart fix (docs/src/getting-started/quickstart.md:53) lands before the tag.
+  Accept the D-17 pass (local 92.79 %, CI 92.86 %, both truncate to 92, both ≥ 82) knowing guide
+  step 1 (`make services-up`) and the bare-host password-protected Redis path (trap 2) were not
+  exercised; or ask for a bare-host re-run.
 awaiting: user response
-
 ## Tests
 
 ### 1. DF-18 severity call — Quickstart `.model("gpt-4")` fails against a real OpenAI key
 expected: Accept S3 / re-homed (v0.11.1 ships the Quickstart line unchanged; the 109-site sweep is a todo), or regrade to S2 and land the one-line Quickstart fix before the tag. The first program a new user copies exits 1 on a working key; the triager's reason (fixing one of 109 leaves the root cause) is recorded.
-result: [pending]
+result: pass
 
 ### 2. DOGF-05 scope — does a devcontainer walk satisfy "on a Docker-capable machine"?
 expected: Accept the D-17 pass (local 92.79 %, CI 92.86 %, both truncate to 92, both ≥ 82) knowing guide step 1 (`make services-up`) and the bare-host password-protected Redis path (trap 2) were not exercised; or ask for a bare-host re-run.
@@ -37,9 +36,9 @@ result: [pending]
 ## Summary
 
 total: 4
-passed: 0
+passed: 1
 issues: 0
-pending: 4
+pending: 3
 skipped: 0
 blocked: 0
 

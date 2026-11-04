@@ -51,7 +51,7 @@ key-decisions:
   - "TraceEvent fires against 0.10.1 (enum_struct_variant_field_added), so its register entry stays Y and the lint is added to paladin-core's table; it is not retired to N/A."
   - "make security reports three new RustSec advisories in transitive TLS-root crates; recorded as a blocker (a gate that runs and reports a finding), not relabelled a CI gate, and the lockfile was not touched."
 
-requirements-completed: []
+requirements-completed: [REASON-03, REASON-06]
 requirements-progress: [REASON-03, REASON-06, REASON-07]
 
 completed: 2026-10-22
@@ -198,3 +198,7 @@ None. No endpoint, auth path or schema was added; the only new files are plannin
 - FOUND: `.planning/phases/51-adjustable-reasoning-effort/51-EFFORT-SMOKE.md` (contains `kimi-k3`; negative key-shape grep clean), `.cargo/semver-checks-allowlist.toml` (no `register-only (unmeasured` entry), `MIGRATION.md` (`| DR-20 |`, `llm.<provider>.reasoning_wire`).
 - FOUND: commits `8ae06649` and `2c914cfe` on `worktree-agent-a81cfbdd279066ef4`.
 - Open item stated above, not a self-check failure: `make security` (3 new advisories) and CI's `coverage` job gate the seal.
+
+## Requirements-completed amended (Phase 57, 2026-11-04)
+
+This was the last plan that progressed REASON-03 and REASON-06 per `51-VERIFICATION.md`, whose requirements table reads `| REASON-03 | 02-05, 10-12, 14 | SATISFIED | Truth 3 |` and `| REASON-06 | 01, 03, 05, 11-14 | SATISFIED with caveats | Truth 4; W-1, W-2 owner decisions |`. Recorded under D-41; the `requirements-progress` key is unchanged.

@@ -1,8 +1,9 @@
 ---
-status: diagnosed
+status: resolved
 trigger: "G-50-5b (openai-max-completion-tokens): The OpenAI adapter sends `max_tokens`, which the seeded default model `gpt-5.4-nano` rejects with HTTP 400 (WINDOWS.md row 75). The owner chose to fix it by having the OpenAI adapter always send `max_completion_tokens`."
 created: 2026-10-17T16:20:00Z
-updated: 2026-10-17T16:50:00Z
+updated: 2026-11-04T14:09:48Z
+resolved: 2026-11-04 — closed by WINDOWS row 75 (fixed)
 goal: find_root_cause_only
 ---
 

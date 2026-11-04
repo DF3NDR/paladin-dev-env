@@ -1,8 +1,9 @@
 ---
-status: diagnosed
+status: resolved
 trigger: "G-50-5a (vendor-token-usage-fidelity): Token usage mapping in paladin-llm discards each vendor's own reported total and may drop billable token categories, so Treasurer pricing and allowance checks can understate what the vendor actually bills (WINDOWS.md row 74)."
 created: 2026-10-17T00:00:00Z
-updated: 2026-10-17T01:00:00Z
+updated: 2026-11-04T14:09:48Z
+resolved: 2026-11-04 — closed by WINDOWS row 74 (fixed)
 goal: find_root_cause_only
 ---
 

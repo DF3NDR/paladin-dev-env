@@ -1,8 +1,9 @@
 ---
-status: diagnosed
+status: resolved
 trigger: "G-50-5c (kimi-fallback-profile-stale): The Kimi adapter-wide fallback profile (applies to unseeded Kimi model ids) declares temperature Fixed(1.0), top_p Fixed(0.95) and penalties -2.0..2.0 from a 2026-08-22 measurement that the 2026-10-15 probe contradicts (WINDOWS.md row 76). The owner chose to align the fallback with the seeded Kimi profiles: temperature, top_p, frequency_penalty and presence_penalty not sent."
 created: 2026-10-17T16:15:24Z
-updated: 2026-10-17T16:55:00Z
+updated: 2026-11-04T14:09:48Z
+resolved: 2026-11-04 — closed by WINDOWS row 76 (fixed)
 goal: find_root_cause_only
 ---
 

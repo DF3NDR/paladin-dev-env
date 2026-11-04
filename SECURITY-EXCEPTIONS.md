@@ -13,7 +13,7 @@ Two configuration files mirror this register mechanically, and neither is itself
 governance:
 
 - **`.cargo/audit.toml`** is the authoritative *suppression* surface for `cargo audit`. Its
-  `[advisories] ignore` array holds exactly the eight `vulnerability`-class rows below, and nothing
+  `[advisories] ignore` array holds exactly the nine `vulnerability`-class rows below, and nothing
   else.
 - **`deny.toml`** mirrors `.cargo/audit.toml`'s vulnerability class exactly, and adds one
   clearly-labelled `unmaintained` class of its own. `cargo audit` does not fail a build on an
@@ -41,9 +41,9 @@ and security-advisory UI, aimed at a security researcher disclosing a *new* find
 developer auditing an *existing* suppression — is a separate deliverable for a different audience,
 and is deliberately not addressed by this file.
 
-## The fifteen live suppressions
+## The sixteen live suppressions
 
-Eight vulnerability-class advisories (mirrored exactly between `.cargo/audit.toml` and `deny.toml`)
+Nine vulnerability-class advisories (mirrored exactly between `.cargo/audit.toml` and `deny.toml`)
 and seven unmaintained-class advisories (`deny.toml` only). This is the tree-verified live set, not
 the fifteen the corpus's own record remembers — see the note immediately below the payload for why
 four advisories that appear in `deny.toml`'s history are absent from this register on purpose.
@@ -59,6 +59,8 @@ register row(s) checked against 11 deny.toml and 5 .cargo/audit.toml ignore entr
 satisfied", exit 0. Only the register's account of itself was stale.)*
 
 *(Count updated 2026-10-19 at the Phase 50 seal: three vulnerability-class rows were added for `RUSTSEC-2026-0367/0368/0369` (`zip 3.0.0`, build-dependency of `utoipa-swagger-ui` under `paladin-web`), published 2026-10-09/10 with no upstream release that reaches the patched `zip >= 9`; the rows carry the build-time-only scope and the never-calls-`extract` compensating control.)*
+
+*(Count updated 2026-11-04 at Phase 57 (REG-06, D-30 to D-32): a fourth vulnerability-class row was added for `RUSTSEC-2026-0429` (`zip 3.0.0`, `ZipArchive::extract` aborts the process on a symlink entry with a large declared size; published 2026-10-22, in the advisory-db 2026-11-02, and `make security` was red until this row). The earlier rows' revisit condition (an upstream release that reaches `zip >= 9`) was met on 2026-11-04 by `utoipa-swagger-ui` 10.0.2, which depends on `zip ^9.0` (build) but also requires `utoipa ^6.0.0`; the lift was not taken in v0.11.1 because it is the utoipa 6 migration, not a build-dependency bump. All four rows were re-dated to the D-31 review date and revisit condition, and the compensating control was re-measured from the 9.0.2 build script (`by_index` + `enclosed_name()`, no method-call use of the extraction API).)*
 
 *(Twelfth row added 2026-10-14: `RUSTSEC-2024-0449` (`unsafe-libyaml`, the parser behind
 `serde_yaml` 0.9 in `paladin-eval` and the facade's optional `cli` feature), an unmaintained-class
@@ -139,12 +141,12 @@ class = "vulnerability"
 crate = "zip"
 path = "zip 3.0.0 -> utoipa-swagger-ui 9.0.2 [build-dependencies] -> paladin-web (Swagger UI bundle, `vendored` feature)"
 why_present = "utoipa-swagger-ui's build script unpacks the Swagger UI dist bundle with zip at build time so paladin-web can serve the OpenAPI UI; zip is a build-dependency only (insecure preservation of SUID/SGID bits during extraction)."
-why_not_fixable = "Every published utoipa-swagger-ui release pins zip below the patched 9.0.0: 9.0.2 requires ^3.0 and 10.0.0/10.0.1 require ^8.6 (crates.io index, checked 2026-10-19), so neither a minor nor a major bump clears the advisory, and a [patch] override cannot bridge the zip 3 -> 9 API gap."
+why_not_fixable = "Upstream condition met 2026-11-04 but not taken in v0.11.1: utoipa-swagger-ui 10.0.2 depends on zip ^9.0 (build) and utoipa ^6.0.0 (crates.io, checked 2026-11-04); the tree is on utoipa 5.5.0 / utoipa-axum 0.2 / utoipa-swagger-ui 9.0.2, so the lift is a utoipa 6 migration (derive macros, utoipa-axum 0.3, the committed crates/paladin-web/openapi.json snapshot) deferred to the next minor release, not a build-dependency bump; a [patch] override cannot bridge the zip 3 -> 9 API gap."
 owner = "DF3NDR"
-review_date = "2026-12-31"
+review_date = "2027-03-31 or the first planning day of the next milestone, whichever is earlier"
 scope = "build time only: zip runs inside utoipa-swagger-ui's build script and is linked into no shipped binary; with the `vendored` feature the archive it opens is the fixed bundle compiled into utoipa-swagger-ui-vendored, never a download or user-supplied file"
-compensating_control = "The build script never calls ZipArchive::extract or ZipStreamReader::extract, the APIs all three advisories concern; it walks entries with by_index + enclosed_name() and writes each file itself, and its only input is the crate's own embedded bundle, so no attacker-controlled archive, symlink or mode bit reaches the vulnerable code."
-revisit_condition = "utoipa-swagger-ui publishes a release that depends on zip >= 9.0.0"
+compensating_control = "The build script never calls ZipArchive::extract or ZipStreamReader::extract, the APIs all four advisories concern; it walks entries with by_index + enclosed_name() and writes each file itself, and its only input is the crate's own embedded bundle, so no attacker-controlled archive, symlink or mode bit reaches the vulnerable code."
+revisit_condition = "the utoipa 6 migration (utoipa, utoipa-axum, utoipa-swagger-ui 10.x) lands in a minor release"
 
 [[exception]]
 id = "RUSTSEC-2026-0368"
@@ -152,12 +154,12 @@ class = "vulnerability"
 crate = "zip"
 path = "zip 3.0.0 -> utoipa-swagger-ui 9.0.2 [build-dependencies] -> paladin-web (Swagger UI bundle, `vendored` feature)"
 why_present = "utoipa-swagger-ui's build script unpacks the Swagger UI dist bundle with zip at build time so paladin-web can serve the OpenAPI UI; zip is a build-dependency only (ZipArchive::extract creates symlinks whose targets point outside the destination directory)."
-why_not_fixable = "Every published utoipa-swagger-ui release pins zip below the patched 9.0.0: 9.0.2 requires ^3.0 and 10.0.0/10.0.1 require ^8.6 (crates.io index, checked 2026-10-19), so neither a minor nor a major bump clears the advisory, and a [patch] override cannot bridge the zip 3 -> 9 API gap."
+why_not_fixable = "Upstream condition met 2026-11-04 but not taken in v0.11.1: utoipa-swagger-ui 10.0.2 depends on zip ^9.0 (build) and utoipa ^6.0.0 (crates.io, checked 2026-11-04); the tree is on utoipa 5.5.0 / utoipa-axum 0.2 / utoipa-swagger-ui 9.0.2, so the lift is a utoipa 6 migration (derive macros, utoipa-axum 0.3, the committed crates/paladin-web/openapi.json snapshot) deferred to the next minor release, not a build-dependency bump; a [patch] override cannot bridge the zip 3 -> 9 API gap."
 owner = "DF3NDR"
-review_date = "2026-12-31"
+review_date = "2027-03-31 or the first planning day of the next milestone, whichever is earlier"
 scope = "build time only: zip runs inside utoipa-swagger-ui's build script and is linked into no shipped binary; with the `vendored` feature the archive it opens is the fixed bundle compiled into utoipa-swagger-ui-vendored, never a download or user-supplied file"
-compensating_control = "The build script never calls ZipArchive::extract or ZipStreamReader::extract, the APIs all three advisories concern; it walks entries with by_index + enclosed_name() and writes each file itself, and its only input is the crate's own embedded bundle, so no attacker-controlled archive, symlink or mode bit reaches the vulnerable code."
-revisit_condition = "utoipa-swagger-ui publishes a release that depends on zip >= 9.0.0"
+compensating_control = "The build script never calls ZipArchive::extract or ZipStreamReader::extract, the APIs all four advisories concern; it walks entries with by_index + enclosed_name() and writes each file itself, and its only input is the crate's own embedded bundle, so no attacker-controlled archive, symlink or mode bit reaches the vulnerable code."
+revisit_condition = "the utoipa 6 migration (utoipa, utoipa-axum, utoipa-swagger-ui 10.x) lands in a minor release"
 
 [[exception]]
 id = "RUSTSEC-2026-0369"
@@ -165,12 +167,12 @@ class = "vulnerability"
 crate = "zip"
 path = "zip 3.0.0 -> utoipa-swagger-ui 9.0.2 [build-dependencies] -> paladin-web (Swagger UI bundle, `vendored` feature)"
 why_present = "utoipa-swagger-ui's build script unpacks the Swagger UI dist bundle with zip at build time so paladin-web can serve the OpenAPI UI; zip is a build-dependency only (extract applies Unix permissions through symlinks without confining the target)."
-why_not_fixable = "Every published utoipa-swagger-ui release pins zip below the patched 9.0.0: 9.0.2 requires ^3.0 and 10.0.0/10.0.1 require ^8.6 (crates.io index, checked 2026-10-19), so neither a minor nor a major bump clears the advisory, and a [patch] override cannot bridge the zip 3 -> 9 API gap."
+why_not_fixable = "Upstream condition met 2026-11-04 but not taken in v0.11.1: utoipa-swagger-ui 10.0.2 depends on zip ^9.0 (build) and utoipa ^6.0.0 (crates.io, checked 2026-11-04); the tree is on utoipa 5.5.0 / utoipa-axum 0.2 / utoipa-swagger-ui 9.0.2, so the lift is a utoipa 6 migration (derive macros, utoipa-axum 0.3, the committed crates/paladin-web/openapi.json snapshot) deferred to the next minor release, not a build-dependency bump; a [patch] override cannot bridge the zip 3 -> 9 API gap."
 owner = "DF3NDR"
-review_date = "2026-12-31"
+review_date = "2027-03-31 or the first planning day of the next milestone, whichever is earlier"
 scope = "build time only: zip runs inside utoipa-swagger-ui's build script and is linked into no shipped binary; with the `vendored` feature the archive it opens is the fixed bundle compiled into utoipa-swagger-ui-vendored, never a download or user-supplied file"
-compensating_control = "The build script never calls ZipArchive::extract or ZipStreamReader::extract, the APIs all three advisories concern; it walks entries with by_index + enclosed_name() and writes each file itself, and its only input is the crate's own embedded bundle, so no attacker-controlled archive, symlink or mode bit reaches the vulnerable code."
-revisit_condition = "utoipa-swagger-ui publishes a release that depends on zip >= 9.0.0"
+compensating_control = "The build script never calls ZipArchive::extract or ZipStreamReader::extract, the APIs all four advisories concern; it walks entries with by_index + enclosed_name() and writes each file itself, and its only input is the crate's own embedded bundle, so no attacker-controlled archive, symlink or mode bit reaches the vulnerable code."
+revisit_condition = "the utoipa 6 migration (utoipa, utoipa-axum, utoipa-swagger-ui 10.x) lands in a minor release"
 
 [[exception]]
 id = "RUSTSEC-2026-0429"

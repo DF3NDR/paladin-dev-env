@@ -630,3 +630,184 @@ promoted.
 - **Related:** DF-08 (the fix there judges file values only, by design — plan 56-12 P-12-2); MIGRATION §9.5; inventory §H does not cover it
 - **Disposition:** open → promote **in v0.11.1** (S2, D-05; fix in Stage C, D-06 — plan 56-14)
 - **Disposition (2026-11-03):** in v0.11.1 — fixed by 8859af226, 9dce25b42 (plan 56-14); regression: load_settings_applies_a_trace_env_overlay, load_settings_refuses_a_zero_trace_channel_capacity_from_the_environment, load_settings_applies_an_agent_runtime_env_overlay, load_settings_refuses_an_invalid_agent_runtime_value_from_the_environment, load_settings_applies_a_web_server_env_overlay, load_settings_leaves_file_values_when_no_overlay_is_set, section_wrappers_return_an_overlaid_copy_and_leave_settings_untouched; boot probe refuses PALADIN_TRACE_CHANNEL_CAPACITY=0 (exit 1)
+
+### DF-27 — An adapter-wide `context_window` cannot be set below a model's maximum output, so a DeepSeek ration window of 64,000 cannot be pinned through the adapter
+- **Found:** 2026-10-30 (report), relayed 2026-11-04 · **By:** web3sec · **Surface:** docs
+- **Version:** 0.11.0 (the report pins `v0.11.0` = `70657919beadbd341a72be2d0107080017a803f0`)
+- **What happened:** the return, section 5 item 1 and section 7 item 1 (one root), quoted below. Checked on HEAD by reading source, not by running anything (no cargo build in plan 56-10): `with_context_window` in `crates/paladin-llm/src/registry/mod.rs` validates the adapter-wide window against the adapter-wide fallback and against every seeded model's maximum output, not only the model in use; the seeded maximum output of `deepseek-flash` and `deepseek-v4-pro` is 393,216 (Switching providers table), so any window below that is refused at construction. The `context_window` field's rustdoc (`crates/paladin-llm/src/deepseek/adapter.rs`) says "Construction fails when it is below a model's maximum output", and `context_window_override_beats_a_seeded_window_on_deepseek` pins a 100,000 window being refused with `393216` in the message. So web3sec's account is right, and the refusal is deliberate, loud and never a clamp. The gap is the guide: MIGRATION.md §10.8 (frozen) offers `with_context_window(n)` as the remedy for the 16x DeepSeek ration growth (64,000 to 1,048,576) and the Switching providers page's window paragraph said nothing of a floor, so the remedy cannot produce the 64,000 it was computed from.
+  ```
+  1. **Window pin knob (D-06).** The intent (keep today's effective 200,000 Anthropic / 64,000 DeepSeek ration
+     windows) is kept, but the knob differs: the cap is applied at the Commissary site (`build_deductive_commissary`
+     replaces `Commissary::from_port`, using `pinned_ration_window`), not via adapter `context_window` or
+     `model_overrides`, because the adapter-wide pin is unconstructible for DeepSeek (finding 7.1).
+  ```
+  and, from section 7 item 1:
+  ```
+  1. **DeepSeek adapter-wide window pin is unconstructible below `max_output_tokens`.** Setting
+     `DeepSeekConfig.context_window = Some(64_000)` fails adapter construction (the adapter-wide knob cannot be set
+     below the model's `max_output_tokens`), so a consumer cannot pin a smaller DeepSeek ration window through the
+     adapter. We cap at the Commissary site instead. Covered by `deductive::pin_tests`. Consider a documented
+     per-role or Commissary-level window cap.
+  ```
+- **Expected:** the guide says the adapter-wide window has a floor at the largest maximum output, and where to cap a ration window instead.
+- **Repro:** `DeepSeekConfig::new(key, "deepseek-flash".to_string()).with_context_window(64_000)`, then `DeepSeekAdapter::new(config)`: an `Err` naming `deepseek`, the model and both numbers. Not run here; the source and the pinning test above are the evidence.
+- **Severity:** S3 (D-04: misleading guide; nothing is wrong at run time, construction refuses with a named error, so it is not S2)
+- **Related:** `47-HANDOFF-web3sec.md` §6 item 4; `MIGRATION.md` §10.8, Library consumers, Direct-adapter bullet "The adapter-wide context window follows the seeded default model" (frozen); return report §5 item 1 and §7 item 1; `docs/src/user-guides/switching-providers.md` "Window precedence"
+- **Disposition (2026-11-04):** in v0.11.1 — fixed in plan 56-10 by 0c0036714 (docs only): Switching providers gains "A window cannot be set below a maximum output", which states the check against every seeded model, the 393,216 DeepSeek floor, that `with_context_window` cannot ration a DeepSeek prompt to 64,000, that a per-model override is held to the same rule on the merged profile, and that a smaller ration window is capped with `Commissary::new` and `ProviderCapabilities { max_context_tokens }` instead of `Commissary::for_model`. MIGRATION §10.8 stays byte-frozen (D-00c), so the note lives in the page, not the register. web3sec's "per-role or Commissary-level window cap" is answered with the existing `Commissary::new` route; a per-role knob would be new API and is not added (D-00d). Proof: `grep -n 'cannot be set below a maximum output' docs/src/user-guides/switching-providers.md`; the refusal itself is unchanged and was not re-run
+
+### DF-28 — Cadence is pacing, not a retry, but MIGRATION §10.8's pre-v0.10.0 paragraph reads as if composing it restores the 429 retries
+- **Found:** 2026-10-30 (report), relayed 2026-11-04 · **By:** web3sec · **Surface:** docs
+- **Version:** 0.11.0 (the report pins `v0.11.0` = `70657919beadbd341a72be2d0107080017a803f0`)
+- **What happened:** the return, section 5 item 2 and section 7 item 3 (one root). Checked on HEAD: `crates/paladin-llm/src/cadence.rs` module docs, "Gate, never retry (D-01)" and "A gate beyond `max_wait` is surfaced, not slept (D-06)": the decorator waits on the gate before it delegates, never re-issues a request, and the call that received the 429 returns the inner error unchanged, so the inner call count stays 1; `CadenceSettings::default().max_wait()` and `CadenceConfig::default().max_wait_secs` are 300 s. web3sec's account of the behaviour is right. Two refinements: the 300 s applies to a gate (the wait after a 429), so a gate of 300 s or less is waited out and only a longer one surfaces `RateLimitExceeded` at once, carrying the remaining gate in `retry_after`; and the call that got the 429 always surfaces it. The wording at fault is one sentence of §10.8's pre-v0.10.0 paragraph, "both now make 0 retries ... unless Cadence is composed", which a pre-v0.10 reader takes as retries restored. Every other statement is already right: M-B-05 ("wait or surface a rate-limit error after `max_wait_secs`"), `docs/src/getting-started/configuration.md` and `docs/src/architecture/treasurer.md` ("never retried inside the pacing layer"), ADR-0058. The two places that say "unless Cadence is composed" are §10.8 (frozen) and the `DR-7` bullet of `docs/src/api-reference/upgrading.md`.
+  ```
+  2. **Cadence composed, no in-adapter 429 retry (D-08).** We compose Cadence as a pacing gate and add explicit
+     `RateLimitExceeded` transient arms. We did NOT add a bounded 429 retry loop; the single retry stays in each
+     stage's transient arm. This is pacing parity, not retry parity (finding 7.3).
+  ```
+  and, from section 7 item 3:
+  ```
+  3. **Cadence is pacing, not retry, for a pre-v0.10 consumer.** A consumer upgrading from before v0.10 had
+     in-adapter bounded 429 retries (DeepSeek up to 4, Anthropic up to 3 calls, ~100 ms·2ⁿ). Composing Cadence
+     restores back-pressure (gate and wait) but the failing call surfaces `RateLimitExceeded` unchanged and the inner
+     call count stays 1. The migration guide should frame Cadence as the replacement for retry-on-429 only with a
+     stage-level retry, and state that the default `max_wait` (300 s) surfaces `RateLimitExceeded`.
+  ```
+- **Expected:** a pre-v0.10 consumer is told that Cadence replaces the back-pressure of the old in-adapter retry and not the retry, and what the default `max_wait` does.
+- **Repro:** read `MIGRATION.md` §10.8 "Starting before `v0.10.0`" as a pin before `v0.10.0`; compose Cadence; a 429 from the provider still comes back as `RateLimitExceeded` from that call (`crates/paladin-llm/src/cadence.rs`, "Gate, never retry"). Not run here.
+- **Severity:** S3 (D-04: misleading guide wording; the behaviour is the documented one)
+- **Related:** `47-HANDOFF-web3sec.md` §6 item 4; `MIGRATION.md` §10.8, Library consumers, "Starting before `v0.10.0`" and the Direct-adapter Cadence bullet (frozen); M-B-05; ADR-0058; return report §5 item 2 and §7 item 3
+- **Disposition (2026-11-04):** in v0.11.1 — fixed in plan 56-10 by 0c0036714 (docs only): `docs/src/api-reference/upgrading.md`, "Rate pacing and decorators", gains "Cadence is pacing, not a retry", which says to read §10.8's "unless Cadence is composed" as pacing only, that the call which got the 429 returns `RateLimitExceeded` unchanged with the provider hit once, that `RetryPolicy` and `FallbackLlmAdapter` are the only retry owners, and that a gate longer than `max_wait` (default 300 s, `treasurer.cadence.max_wait_secs`) surfaces `RateLimitExceeded` at once while a gate of `max_wait` or less is waited out. Placed in the non-frozen book page that repeats the claim, because MIGRATION §10.8 is byte-frozen (D-00c) and §11 holds v0.11.1 changes, not corrections of a v0.10.1-to-v0.11.0 reading. Proof: `grep -n 'Cadence is pacing, not a retry' docs/src/api-reference/upgrading.md`
+
+### DF-29 — web3sec routes a typed `Refusal` to a never-retried `Refused` disposition in six stages, beyond the shape-proof arm MIGRATION §10.8 needs
+- **Found:** 2026-10-30 (report), relayed 2026-11-04 · **By:** web3sec · **Surface:** library
+- **Version:** 0.11.0 (the report pins `v0.11.0` = `70657919beadbd341a72be2d0107080017a803f0`)
+- **What happened:** the return, section 5 item 3. Checked against HEAD: `LlmError::Refusal { provider, model, detail, .. }` is `Permanent`, and §10.8 says to match it (`LlmError::Refusal { .. }`, `#[non_exhaustive]`). Routing it to an explicit never-retried error in more stages than the guide strictly needs is a consumer design choice that follows the documented contract; nothing in the guide failed to read as written, and the report says it adds no `DegradationReason`. This entry is not a defect and is recorded only because the runbook makes every §5 divergence its own entry.
+  ```
+  3. **Refusal disposition spread beyond deductive.** §10.8 only needs the shape-proof arm. We route typed `Refusal`
+     to an explicit never-retried `Refused` error in deductive, triage, tribunal, prover, design-doc and the armory,
+     without adding a new `DegradationReason`.
+  ```
+- **Expected:** n/a (the consumer extended a documented arm).
+- **Repro:** n/a
+- **Severity:** S4 (not a defect)
+- **Related:** `47-HANDOFF-web3sec.md` §6 item 4; `MIGRATION.md` §10.8 "A refusal is `LlmError::Refusal { .. }`" (frozen); return report §5 item 3
+- **Disposition (2026-11-04):** out (consumer adaptation choice; no Paladin change)
+
+### DF-30 — web3sec forwards `model_profile` and `check_reasoning` in all four of its `LlmPort` decorators
+- **Found:** 2026-10-30 (report), relayed 2026-11-04 · **By:** web3sec · **Surface:** library
+- **Version:** 0.11.0 (the report pins `v0.11.0` = `70657919beadbd341a72be2d0107080017a803f0`)
+- **What happened:** the return, section 5 item 4. This is the step MIGRATION §10.8 asks for (Direct-adapter bullet: "An `LlmPort` decorator must forward `model_profile` and `check_reasoning`"), taken in full and early, as a prerequisite for the consumer's own Phase 51 adoption. It is a divergence from the muster's scope only in that web3sec did it all at once. No Paladin change follows. Recorded because the runbook makes every §5 divergence its own entry.
+  ```
+  4. **Decorator forwarding.** `model_profile` and `check_reasoning` are forwarded in all four decorators now (8
+     one-liners), as a prerequisite for adopting P51.
+  ```
+- **Expected:** n/a (the guide's step, followed).
+- **Repro:** n/a
+- **Severity:** S4 (not a defect)
+- **Related:** `47-HANDOFF-web3sec.md` §6 item 4; `MIGRATION.md` §10.8 Direct-adapter bullet on decorator forwarding (frozen); DR-21; return report §5 item 4
+- **Disposition (2026-11-04):** out (consumer adaptation choice; no Paladin change; it is the step the guide asks for)
+
+### DF-31 — web3sec's bump is one pointer-plus-adaptation-plus-lock commit followed by separate behaviour and lockfile commits, not a literal single commit
+- **Found:** 2026-10-30 (report), relayed 2026-11-04 · **By:** web3sec · **Surface:** library
+- **Version:** 0.11.0 (the report pins `v0.11.0` = `70657919beadbd341a72be2d0107080017a803f0`)
+- **What happened:** the return, section 5 item 5, and section 1: C1 `3ad5d03f` carries the gitlink move, the 19-file compile adaptation and `Cargo.lock` in one commit, with the behaviour work as later TDD commits and a separate security lockfile commit `a2e531d0`. The hand-off's single-bump rule (`47-HANDOFF-web3sec.md` §1) asks for the pointer, the adaptation and `Cargo.lock` together in one consumer commit, which C1 is; later consumer work is outside it. So this is not a divergence from the rule, only from a literal reading of the report's own plan. Consumer process, not a Paladin matter.
+  ```
+  5. **Commit shape.** Not a literal single commit: C1 (pointer + compile adaptation + lock), then TDD behaviour
+     commits per plan, then a separate lockfile commit `a2e531d0`.
+  ```
+- **Expected:** n/a
+- **Repro:** n/a
+- **Severity:** S4 (not a defect)
+- **Related:** `47-HANDOFF-web3sec.md` §1 "The single-bump rule" and §6; return report §1 and §5 item 5
+- **Disposition (2026-11-04):** out (consumer process choice; no Paladin change)
+
+### DF-32 — web3sec swaps its DeepSeek default `deepseek-v4-flash` for `deepseek-flash` and asks which model strings are aliases and for how long they resolve
+- **Found:** 2026-10-30 (report), relayed 2026-11-04 · **By:** web3sec · **Surface:** docs
+- **Version:** 0.11.0 (the report pins `v0.11.0` = `70657919beadbd341a72be2d0107080017a803f0`)
+- **What happened:** the return, section 5 item 6 and section 7 item 2 (one root). Checked on HEAD: `deepseek-flash` is the only seeded DeepSeek default (`DEEPSEEK_DEFAULT_MODEL`, `registry/seeded.rs`); `deepseek-v4-flash` is not seeded and runs on the adapter-wide fallback with one warning per model. The Switching providers page already says so in its "DeepSeek model ids" paragraph, which records web3sec's own 2026-10-24 finding that the live listing holds `deepseek-flash` and not `deepseek-v4-flash`, and its footnote [g] and the "Probed but not seeded" paragraph say a seeded row matches its id exactly and any other alias runs on the fallback and is true only on its verified-on date. What the report adds is a consumer-side datum (the old string answered and echoed the same backend on 2026-10-28). It carries no captured body, Paladin has not re-probed the listing, and how long a vendor keeps an alias answering is the vendor's to say, not Paladin's, so it cannot be put in the guide as a date. Choosing the seeded id is the consumer's own choice and the one the page recommends.
+  ```
+  6. **DeepSeek default.** Swapped `deepseek-v4-flash` → `deepseek-flash` (live-listed, seeded) rather than relying on
+     the alias.
+  ```
+  and, from section 7 item 2:
+  ```
+  2. **`deepseek-v4-flash` → `deepseek-flash` alias behaviour.** The old string was an alias to the same backend (live
+     echo, 2026-10-28), no longer present in the provider listing. Benchmark history rows therefore carry two strings
+     for one backend. The guide should say which strings are aliases and for how long they resolve.
+  ```
+- **Expected:** the guide names which strings are seeded and says an alias runs on the fallback; it cannot name a vendor's alias lifetime.
+- **Repro:** `grep -n 'DeepSeek model ids' -A6 docs/src/user-guides/switching-providers.md`
+- **Severity:** S4 (the guide already says it; the open ask is a vendor property)
+- **Related:** `47-HANDOFF-web3sec.md` §6 item 4; return report §3 "Model-string note", §5 item 6 and §7 item 2; `docs/src/user-guides/switching-providers.md` "DeepSeek model ids", footnote [g]
+- **Disposition (2026-11-04):** out (already documented on HEAD: Switching providers, "DeepSeek model ids" and footnote [g], D-00e; an alias's lifetime is vendor-side and a re-probe enters only with a captured body, D-00d)
+
+### DF-33 — web3sec reports MIGRATION §10.8 tooling and cross-references still citing `9.8`-style labels
+- **Found:** 2026-10-30 (report), relayed 2026-11-04 · **By:** web3sec · **Surface:** docs
+- **Version:** 0.11.0 (the report pins `v0.11.0` = `70657919beadbd341a72be2d0107080017a803f0`)
+- **What happened:** the return, section 7 item 4. Re-checked on HEAD, by content: every `9.8` that is a section label is correct for its context. `MIGRATION.md` `## 9.8 Upgrade checklist` is the real v0.10.0 checklist; `docs/src/api-reference/upgrading.md` cites `§9.1–§9.8` and `MIGRATION.md §9.8` only inside "Upgrading from v0.9.x to v0.10.0"; `tests/consumer_surface_muster.rs` cites section 10.8; no script, test, Makefile or workflow cites `9.8` (the only other hit is `spin 0.9.8` in `CHANGELOG.md`). Paladin's own pending todo `2026-10-14-web3sec-single-bump-to-v0-11-0.md` says "9.8" in its early text but carries a dated note (2026-10-24) saying those mentions are history. The tooling the report means is in web3sec's workspace, not in this tree; the report names no file. If web3sec names one, it re-enters as a new finding.
+  ```
+  4. **MIGRATION §10.8 tooling still cites `9.8`-style section labels.** Tooling and cross-references in the guide
+     and muster still use `9.8`-style labels where §10.8 is current.
+  ```
+- **Expected:** every cross-reference to the v0.10.1-to-v0.11.0 checklist reads `10.8`.
+- **Repro:** `grep -rnE '\b9\.8\b' --include=*.md --include=*.rs --include=*.sh --include=*.toml --include=*.yml --include=Makefile .` outside `.planning`, `.project` and `target`: four hits (the real `## 9.8` heading, two citations inside the book's v0.9.x-to-v0.10.0 section, and `spin 0.9.8` in `CHANGELOG.md`), all correct or unrelated.
+- **Severity:** S4 (does not reproduce on HEAD)
+- **Related:** `47-HANDOFF-web3sec.md` §6 item 4; return report §7 item 4; D-00e
+- **Disposition (2026-11-04):** out (does not reproduce on HEAD: the only `9.8` section labels are the real §9.8 and the v0.9.x-to-v0.10.0 section of the book's Upgrading page, D-00e; the tooling named is in web3sec's own tree, not Paladin's)
+
+### DF-34 — Intermittent DeepSeek empty completion under a tight `max_tokens`: web3sec asks for a reasoning-budget note and a budget-aware default or reasoning-share hint
+- **Found:** 2026-10-30 (report), relayed 2026-11-04 · **By:** web3sec · **Surface:** docs
+- **Version:** 0.11.0 (the report pins `v0.11.0` = `70657919beadbd341a72be2d0107080017a803f0`)
+- **What happened:** the return, section 7 item 5, and section 3 (tare control: `Empty completion: finish_reason=length ... reasoning likely consumed the entire max_tokens budget` on one intermittent DeepSeek call, failed in r1 and r2, succeeded in r3; no body captured). Checked on HEAD: the requested note already exists. `docs/src/user-guides/reasoning-effort.md`, "Effort, output budget and timeout", says reasoning tokens are output tokens, that the budget must cover the reasoning and the answer, and that a call which spends the whole cap thinking finishes `length` with no text and returns `LlmError::EmptyCompletion`, a runtime backstop and not a validation. The error text itself advises "retry with a larger max_tokens" (`crates/paladin-llm/src/response_guards.rs`). v0.11.0 made the condition typed on purpose (M-B-16). What is not on HEAD is the other half of the ask, a budget-aware default or hint, which is new behaviour with a design question (warn, refuse or raise an explicit budget) in a no-new-features patch, and web3sec gave an error string, not a captured body.
+  ```
+  5. **Intermittent DeepSeek reasoning-budget empty-completion under a tight `max_tokens` budget.** web3sec's
+     pre-disclosed-match and triage calls to `deepseek-flash` intermittently return `Empty completion:
+     finish_reason=length … reasoning likely consumed the entire max_tokens budget` (failed in 2 of 3 post-bump
+     repeats, succeeded in 1). v0.11.0's typed `EmptyCompletion` makes the failure visible and mappable to
+     `TruncatedCompletion`, but it moves a previously silent condition into benchmark variance. Worth a Paladin-side
+     note on reasoning-model budgets, and a possible budget-aware default or reasoning-share hint for DeepSeek.
+  ```
+- **Expected:** the guide covers reasoning-model budgets (it does); a budget-aware default is a later design.
+- **Repro:** n/a (intermittent, vendor-side; not reproduced by Paladin).
+- **Severity:** S4 (the docs half is already on HEAD; the rest is an enhancement request)
+- **Related:** `47-HANDOFF-web3sec.md` §6 item 4; M-B-16; return report §3 and §7 item 5; CONTEXT D-00d
+- **Disposition (2026-11-04):** out (re-homed: .planning/todos/pending/2026-11-04-reasoning-budget-hint-for-deepseek-empty-completion.md; the note web3sec asks for is already in reasoning-effort.md "Effort, output budget and timeout" and the error text, D-00e)
+
+### DF-35 — web3sec's own `triage_llm_it` test asserts a `Severity:` preamble that its FU-4 commit stripped
+- **Found:** 2026-10-30 (report), relayed 2026-11-04 · **By:** web3sec · **Surface:** library
+- **Version:** 0.11.0 (the report pins `v0.11.0` = `70657919beadbd341a72be2d0107080017a803f0`)
+- **What happened:** the return, section 7 item 6, labelled by the report itself "not a Paladin finding (FYI)". The test and the commit are in web3sec's tree and cannot be checked here; nothing in the report points at Paladin code, and it says Phase 50 touched neither `into_finding_draft` nor the test.
+  ```
+  6. **Stale consumer test, not a Paladin finding (FYI).** `crates/audit-agents/tests/triage_llm_it.rs:215`
+     asserts `finding.hypothesis.contains("Severity:")`, which contradicts FU-4 (commit `8d242970`, which stripped the
+     Severity/Difficulty preamble). The test is `#[ignore]`d, predates Phase 50, and Phase 50 touched neither
+     `into_finding_draft` nor the test. It is not a model drift or a v0.11.0 regression. Cleanup todo:
+     `.planning/todos/pending/2026-10-29-stale-triage-llm-it-severity-preamble-assertions.md`.
+  ```
+- **Expected:** n/a
+- **Repro:** n/a
+- **Severity:** S4 (not a defect in Paladin)
+- **Related:** return report §7 item 6
+- **Disposition (2026-11-04):** out (consumer-side; not a Paladin finding, per the report itself)
+
+### DF-36 — The consumer-surface muster does not pin the three Cadence import paths web3sec's Phase 50 code takes
+- **Found:** 2026-10-30 (report), relayed 2026-11-04 · **By:** web3sec · **Surface:** library
+- **Version:** 0.11.0 (the report pins `v0.11.0` = `70657919beadbd341a72be2d0107080017a803f0`)
+- **What happened:** the return, section 4. Of the five "new paths" it lists, `LlmError::Refusal { .. }` and `LlmError::RateLimitExceeded { .. }` are already pinned by `tests/consumer_surface_muster.rs`; `paladin::infrastructure::cadence::build_cadence`, `paladin::infrastructure::cadence::with_cadence` and `paladin::config::treasurer::CadenceConfig` are not (`grep -c` on each name in the muster is 0). All three resolve on HEAD (`src/infrastructure/cadence.rs` re-exports `with_cadence` and defines `build_cadence`; `src/config/treasurer.rs` defines `CadenceConfig`) and §10.8's Cadence recipe names them. They are not unguarded: the `build_cadence` doctest compiles `CadenceConfig` and `build_cadence`, and `.project/current-exports.txt`, the `make api-surface` baseline, lists all three. So the surface cannot move unnoticed; the muster, the file that exists to mirror the consumer's imports, simply does not say so.
+  ```
+  Paladin P46 already pinned the four web3sec muster gaps in PALADIN-FEEDBACK-P46.md; the remaining "pinned but
+  unused" muster items are forward-looking adoption pins. The web3sec `use paladin::` / `paladin_ports::` /
+  `paladin_memory::` inventory (73 paths at the dogfood) was re-run after the behaviour work. **New paths** in
+  consumer code since the dogfood:
+
+  | Path | Introduced by | Use |
+  |---|---|---|
+  | `paladin::infrastructure::cadence::build_cadence` | 50-06 | one process-wide Cadence per run |
+  | `paladin::infrastructure::cadence::with_cadence` | 50-06 | wraps all ten `build_*_llm` adapters |
+  | `paladin::config::treasurer::CadenceConfig` | 50-06 | `CadenceConfig::default()` |
+  ```
+- **Expected:** the muster pins every path the consumer imports (runbook: every real `use` line the muster missed is its own entry).
+- **Repro:** `grep -c 'build_cadence\|with_cadence\|CadenceConfig' tests/consumer_surface_muster.rs` prints 0.
+- **Severity:** S3 (D-04: a muster gap with no behavioural effect)
+- **Related:** `47-HANDOFF-web3sec.md` §6 item 4; `tests/consumer_surface_muster.rs`; `.project/current-exports.txt`; return report §4
+- **Disposition (2026-11-04):** out (re-homed: .planning/todos/pending/2026-11-04-muster-pin-cadence-consumer-imports.md; adding the pins is a one-file test change whose proof is a facade compile, which this docs-only plan does not run, and the paths are already guarded by the `build_cadence` doctest and the api-surface baseline)

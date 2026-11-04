@@ -310,10 +310,12 @@ BACKEND=sqlite|postgres`) is wired.
 > credential.
 
 > **Who can see a thread.** Every thread route is tenant-scoped. A principal sees a thread when
-> the thread's latest run (newest `submitted_at`) belongs to the principal's tenant; an
-> admin-role credential sees every thread; a thread with no run is visible to admin credentials
-> only. A thread you may not see answers `404`, exactly like a thread that does not exist -- never
-> `403` -- on `GET .../state`, `GET .../history`, `POST .../resume`, `POST .../fork` and
+> the thread's earliest attributed run (the first run that recorded who submitted it) belongs to the
+> principal's tenant. In plain terms, a thread belongs to the tenant whose run first wrote to it,
+> and a run added later by an admin credential, by a schedule or by another tenant never changes
+> that. An admin-role credential sees every thread; a thread with no run, or one that holds only
+> scheduled runs, is visible to admin credentials only. A thread you may not see answers `404`,
+> exactly like a thread that does not exist -- never `403` -- on `GET .../state`, `GET .../history`, `POST .../resume`, `POST .../fork` and
 > `DELETE` alike. Answering an approval gate through `POST .../resume` still requires an
 > admin-role credential: a key of another tenant gets `404`, a user-role key of the thread's own
 > tenant gets `403`. A request header, query parameter or body field cannot name a tenant. The

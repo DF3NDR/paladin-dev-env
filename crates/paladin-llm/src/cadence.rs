@@ -283,8 +283,14 @@ impl CadenceLlmAdapter {
 
     /// The provider's own delay for `err`, as the minimum the port must honour.
     ///
-    /// An explicit `Retry-After` / `retry-after-ms` delay is returned unchanged: it is the
-    /// provider's stated minimum and is never reduced. A delay derived from a reset header
+    /// A zero delay (`Retry-After: 0`, a past HTTP-date, a zero reset) is not a provider
+    /// minimum: it is treated as none, so the port takes its own back-off branch and the gate is
+    /// at least the base delay with the streak escalating. Passing the zero through would open a
+    /// zero-length gate, and a gateway answering every 429 with `Retry-After: 0` would disable
+    /// pacing (43-REVIEW WR-05).
+    ///
+    /// A non-zero explicit `Retry-After` / `retry-after-ms` delay is returned unchanged: it is
+    /// the provider's stated minimum and is never reduced. A delay derived from a reset header
     /// ([`RetryDelaySource::ResetHeader`]) is clamped to `max_backoff`, because a quota's
     /// full-replenishment time over-estimates how long the provider needs before the next
     /// request is admitted. `None` when the provider gave nothing -- no delay is invented.
@@ -293,7 +299,9 @@ impl CadenceLlmAdapter {
             .rate_limit_hints()
             .and_then(|hints| hints.effective_retry_after())
             .is_some_and(|(_, source)| source == RetryDelaySource::ResetHeader);
-        let delay = err.retry_after()?;
+        // A zero delay is no provider delay (43-REVIEW WR-05): filtered before the clamp so the
+        // port's back-off, not an instantly-clear gate, paces the next call.
+        let delay = err.retry_after().filter(|delay| !delay.is_zero())?;
         Some(if reset_derived {
             delay.min(self.wiring.settings().max_backoff())
         } else {
@@ -689,6 +697,112 @@ mod tests {
             waited >= CadenceSettings::default().max_backoff(),
             "the estimate is used, only bounded; waited {waited:?}"
         );
+    }
+
+    /// The gate reading the port holds for `gpt-x` on the `openai` mock provider.
+    async fn reading_for_gpt_x(wiring: &CadenceWiring) -> GateReading {
+        let key = CadenceKey::new("openai", "gpt-x");
+        wiring.port().gate(&key).await.expect("gate")
+    }
+
+    /// Drives one 429 carrying `error` through a paced `generate` and returns the reading the
+    /// port holds afterwards. The call itself must hand the provider's 429 back unchanged.
+    async fn gate_after_one_429(error: LlmError) -> GateReading {
+        let wiring = wiring();
+        let paced = with_cadence(error_then_ok(error), Some(&wiring));
+
+        let result = paced.generate(request("gpt-x")).await;
+
+        assert!(
+            matches!(result, Err(LlmError::RateLimitExceeded { .. })),
+            "the provider's 429 is returned unchanged"
+        );
+        reading_for_gpt_x(&wiring).await
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_zero_retry_after_gates_at_least_the_base_delay() {
+        let reading = gate_after_one_429(LlmError::rate_limited(Some(Duration::ZERO))).await;
+
+        assert!(
+            reading.wait() >= BASE,
+            "a zero Retry-After is no provider delay; the gate was {:?}",
+            reading.wait()
+        );
+        assert_eq!(reading.streak(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_past_http_date_retry_after_gates_at_least_the_base_delay() {
+        let parsed = crate::rate_limit_headers::parse_retry_after(
+            "Wed, 21 Oct 2015 07:28:00 GMT",
+            std::time::SystemTime::now(),
+            None,
+        );
+        assert_eq!(parsed, Some(Duration::ZERO), "a past date parses to zero");
+
+        let reading = gate_after_one_429(LlmError::rate_limited(parsed)).await;
+
+        assert!(
+            reading.wait() >= BASE,
+            "a past HTTP-date is no provider delay; the gate was {:?}",
+            reading.wait()
+        );
+        assert_eq!(reading.streak(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_zero_reset_gates_at_least_the_base_delay() {
+        let error = LlmError::rate_limited_with_hints(exhausted_requests_hint(Duration::ZERO));
+        assert_eq!(error.retry_after(), Some(Duration::ZERO));
+
+        let reading = gate_after_one_429(error).await;
+
+        assert!(
+            reading.wait() >= BASE,
+            "a zero reset is no provider delay; the gate was {:?}",
+            reading.wait()
+        );
+        assert_eq!(reading.streak(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn repeated_zero_delay_429s_escalate_the_streak() {
+        let wiring = wiring();
+        let inner = Arc::new(
+            MockLlmAdapter::new()
+                .with_provider_name("openai")
+                .with_script(vec![
+                    MockScriptEntry::Error(LlmError::rate_limited(Some(Duration::ZERO))),
+                    MockScriptEntry::Error(LlmError::rate_limited(Some(Duration::ZERO))),
+                    MockScriptEntry::Text("ok".to_string()),
+                ]),
+        );
+        let paced = with_cadence(inner.clone(), Some(&wiring));
+
+        assert!(paced.generate(request("gpt-x")).await.is_err());
+        // Let the first gate lapse so the second call is sent rather than gated.
+        tokio::time::advance(Duration::from_secs(5)).await;
+        assert!(paced.generate(request("gpt-x")).await.is_err());
+
+        let reading = reading_for_gpt_x(&wiring).await;
+        assert_eq!(inner.call_count(), 2);
+        assert_eq!(reading.streak(), 2, "repeated zero-delay 429s escalate");
+        assert!(reading.wait() >= BASE, "the gate was {:?}", reading.wait());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_nonzero_retry_after_below_base_is_still_honoured_exactly() {
+        let reading =
+            gate_after_one_429(LlmError::rate_limited(Some(Duration::from_millis(10)))).await;
+
+        let ten = Duration::from_millis(10);
+        assert!(
+            reading.wait() >= ten && reading.wait() <= ten + TIMER_ROUNDING,
+            "a non-zero provider delay below base is the minimum as given; the gate was {:?}",
+            reading.wait()
+        );
+        assert_eq!(reading.streak(), 1);
     }
 
     #[tokio::test(start_paused = true)]

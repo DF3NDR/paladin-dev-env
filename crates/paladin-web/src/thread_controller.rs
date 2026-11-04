@@ -93,11 +93,10 @@ use serde::{Deserialize, Serialize};
 
 use paladin_core::platform::container::parley::{ParleyKind, ParleyRequest, ParleyResponse};
 use paladin_core::platform::container::principal::RunReadScope;
-use paladin_core::platform::container::run::Run;
 use paladin_core::platform::container::waypoint::{ThreadId, Waypoint, WaypointId, WaypointStatus};
 use paladin_ports::input::parley_port::{ParleyError, ParleyPort};
 use paladin_ports::input::run_submission_port::{ForkRun, RunSubmissionPort};
-use paladin_ports::output::run_repository_port::{RunQuery, RunRepositoryError, RunRepositoryPort};
+use paladin_ports::output::run_repository_port::{RunRepositoryError, RunRepositoryPort};
 use paladin_ports::output::waypoint_port::{
     ThreadSummary, WaypointError, WaypointPort, WaypointSummary,
 };
@@ -730,32 +729,12 @@ fn waypoint_error_for_scope(
     )
 }
 
-/// The newest run on `thread` by `submitted_at` (`run_id` as the tiebreak), or `None`
-/// when the thread has no run row.
-///
-/// An internal authorization read: the query keeps the default `All` scope so the owner
-/// is found regardless of who is asking -- the caller's scope is applied afterwards by
-/// [`RunReadScope::permits_thread`], never pushed into this query.
-async fn latest_run_for_thread(
-    runs: &Arc<dyn RunRepositoryPort>,
-    thread: &ThreadId,
-) -> Result<Option<Run>, RunRepositoryError> {
-    let page = runs
-        .list(RunQuery {
-            thread_id: Some(thread.clone()),
-            limit: 1,
-            ..Default::default()
-        })
-        .await?;
-    Ok(page.items.into_iter().next())
-}
-
 /// Collect up to `limit` threads `scope` may see, walking the waypoint store newest
 /// activity first (TENANT-03, D-04) -- the `GET /threads` counterpart of
 /// `load_visible_thread`.
 ///
 /// A thread's owner is its latest run, so each examined thread costs one
-/// [`latest_run_for_thread`] lookup (the same read the single-thread gate performs, with
+/// [`RunRepositoryPort::owner_run_for_thread`] lookup (the same read the single-thread gate performs, with
 /// the `All` scope) and is kept when [`RunReadScope::permits_thread`] admits it. The walk
 /// pages the store in [`THREAD_SCAN_BATCH`]-sized `list_threads` calls and stops as soon
 /// as `limit` threads are kept, the store is exhausted, or [`MAX_EXAMINED_THREADS`]
@@ -797,9 +776,9 @@ async fn visible_thread_page(
         for summary in batch {
             examined += 1;
             cursor = Some(summary.last_updated_at);
-            match latest_run_for_thread(runs, &summary.thread_id).await {
-                Ok(latest) => {
-                    if scope.permits_thread(latest.as_ref()) {
+            match runs.owner_run_for_thread(&summary.thread_id).await {
+                Ok(owner) => {
+                    if scope.permits_thread(owner.as_ref()) {
                         visible.push(summary);
                     }
                 }
@@ -888,8 +867,8 @@ async fn load_visible_thread(
     let Some(runs) = state.runs.as_ref() else {
         return Err(hidden());
     };
-    let latest = match latest_run_for_thread(runs, thread).await {
-        Ok(latest) => latest,
+    let owner = match runs.owner_run_for_thread(thread).await {
+        Ok(owner) => owner,
         Err(e) => {
             return Err(run_repo_error_for_scope(
                 &scope,
@@ -899,7 +878,7 @@ async fn load_visible_thread(
             ));
         }
     };
-    if !scope.permits_thread(latest.as_ref()) {
+    if !scope.permits_thread(owner.as_ref()) {
         return Err(hidden());
     }
     Ok(waypoint)
@@ -2883,8 +2862,11 @@ mod tests {
         }
     }
 
+    /// D-02 (WINDOWS rows 86/87): a thread belongs to the tenant of its **earliest attributed
+    /// run**. A later run from another tenant -- however many -- never moves it. (Before Phase
+    /// 57 the newest run owned the thread, and this test pinned the opposite outcome.)
     #[tokio::test]
-    async fn mixed_tenant_thread_belongs_to_the_latest_runs_tenant() {
+    async fn mixed_tenant_thread_belongs_to_the_earliest_attributed_runs_tenant() {
         let fixture = ThreadFixture::new();
         let t = fixture.waypoint("legacy-thread");
         let t0 = Utc::now();
@@ -2912,16 +2894,17 @@ mod tests {
             }
         };
 
-        // The newest run is globex's: globex and Admin see the thread, acme does not.
-        assert_eq!(status_for("foreign-key").await, StatusCode::OK);
+        // The earliest attributed run is acme's: acme and Admin see the thread, globex does
+        // not, although globex's run is the newest.
+        assert_eq!(status_for("owner-key").await, StatusCode::OK);
         assert_eq!(status_for("admin-key").await, StatusCode::OK);
-        assert_eq!(status_for("owner-key").await, StatusCode::NOT_FOUND);
+        assert_eq!(status_for("foreign-key").await, StatusCode::NOT_FOUND);
 
-        // A still newer acme run moves the thread back to acme.
+        // A further globex run changes nothing.
         fixture.runs.seed_run(run_on(
             &t,
-            "acme",
-            "svc-a",
+            "globex",
+            "svc-b",
             t0 + chrono::Duration::seconds(2),
         ));
         assert_eq!(status_for("owner-key").await, StatusCode::OK);

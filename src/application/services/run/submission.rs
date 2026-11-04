@@ -286,22 +286,18 @@ impl RunSubmissionService {
         if scope == RunReadScope::All {
             return Ok(());
         }
-        let page = self
+        let owner = self
             .repository
-            .list(RunQuery {
-                thread_id: Some(thread_id.clone()),
-                limit: 1,
-                ..Default::default()
-            })
+            .owner_run_for_thread(thread_id)
             .await
             .map_err(map_repository_error)?;
-        match page.items.into_iter().next() {
-            Some(latest) if !scope.permits_thread(Some(&latest)) => {
+        match owner {
+            Some(owner) if !scope.permits_thread(Some(&owner)) => {
                 Err(RunSubmissionError::UnknownThread {
                     thread_id: thread_id.clone(),
                 })
             }
-            // A latest run the scope permits, or no run row at all (thread birth).
+            // An owner run the scope permits, or no run row at all (thread birth).
             _ => Ok(()),
         }
     }

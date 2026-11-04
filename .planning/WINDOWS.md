@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 13
+open_count: 14
 waived_count: 40
 fixed_count: 34
-total_count: 87
-last_updated: 2026-11-01T19:15:36.167Z
+total_count: 88
+last_updated: 2026-11-04T14:12:20.397Z
 ---
 
 # Broken Windows Ledger
@@ -102,6 +102,7 @@ last_updated: 2026-11-01T19:15:36.167Z
 | 85 | 53 | deviation | crates/paladin-web/src/thread_controller.rs | 815 | 53-REVIEW WR-01, owner-accepted follow-up (53-UAT test 2): a run row with UnknownSchemaVersion on any tenant's thread falls into the Err(other) arm of visible_thread_page and aborts the walk, so every non-admin GET /v1/threads returns 500 until the row is repaired (likely after a downgrade). Fix: skip-and-log UnknownSchemaVersion in the list walk like Serialization; consider making it hideable in run_repo_error_for_scope. Proposed owner: Phase 55 (correctness fixes). | open |  | 2026-10-31T17:57:36.525Z |  |
 | 86 | 53 | deviation | crates/paladin-web/src/thread_controller.rs | 739 | 53-REVIEW WR-02, owner-accepted follow-up (53-UAT test 2): the latest-run lookup uses list(limit: 1), and the SQLite/Postgres list decodes limit+1 rows, so one corrupt OLDER run row returns Serialization and locks tenant A out of its own thread (404 on every gated route, 500 for Admin and on submit/fork via ensure_thread_visible in submission.rs:289). Fix: a port method that reads exactly the newest run (LIMIT 1), used in both places. Proposed owner: Phase 55 (correctness fixes). | open |  | 2026-10-31T17:57:36.623Z |  |
 | 87 | 53 | deviation | crates/paladin-core/src/platform/container/principal.rs | 325 | 53-REVIEW WR-03, owner-accepted follow-up (53-UAT test 2): thread ownership is the latest run's submitted_by, so an Admin fork/submit onto tenant A's thread, or an unattributed (schedule-fired, submitted_by None) run, transfers or hides the thread and tenant A gets 404 on a thread it created. Matches SPEC AC-04 as written. Fix: derive ownership from the first or earliest attributed run, or keep the original tenant's attribution on admin forks; at minimum document the transfer in ADR-0063 and parley-and-chronicle.md. Proposed owner: Phase 55 (correctness fixes). | open |  | 2026-10-31T17:57:36.724Z |  |
+| 88 | 45 | deviation | src/application/services/run/worker.rs | 1995 | 45-REVIEW WR-05 (found live by the Phase 57 sweep, D-14): persist_failure stores the agent/engine failure text verbatim on the run row and the failed-persist warn! logs it, so a provider response body or key embedded in an error reaches GET /v1/runs/{id} and the log; worker_tests pinned the raw marker as readable. Fix: redact then bound (plan 57-05). | open |  | 2026-11-04T14:12:20.397Z |  |
 
 ````json
 [
@@ -1147,6 +1148,18 @@ last_updated: 2026-11-01T19:15:36.167Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-10-31T17:57:36.724Z",
+    "resolved_at": null
+  },
+  {
+    "id": 88,
+    "kind": "deviation",
+    "phase": "45",
+    "file": "src/application/services/run/worker.rs",
+    "line": 1995,
+    "description": "45-REVIEW WR-05 (found live by the Phase 57 sweep, D-14): persist_failure stores the agent/engine failure text verbatim on the run row and the failed-persist warn! logs it, so a provider response body or key embedded in an error reaches GET /v1/runs/{id} and the log; worker_tests pinned the raw marker as readable. Fix: redact then bound (plan 57-05).",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-04T14:12:20.397Z",
     "resolved_at": null
   }
 ]

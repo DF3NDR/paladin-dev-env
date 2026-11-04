@@ -61,7 +61,9 @@ use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
 use paladin_storage::webhook::in_memory::InMemoryWebhookDeliveryRepository;
 
 use super::resolver::{AssistantResolver, CodeWorkflowResolver};
-use super::worker::{LeaseHeartbeat, RunWorkerOptions, RunWorkerPool};
+use super::worker::{
+    LeaseHeartbeat, RUN_ERROR_CHAR_BUDGET, RunWorkerOptions, RunWorkerPool, bounded_run_error,
+};
 
 /// A [`PaladinPort`] that must never be called -- every graph in this
 /// module is Function/Gate-only, mirroring the `UnusedPaladinPort`
@@ -1690,6 +1692,54 @@ fn terminal_count(events: &[paladin_core::platform::container::run::RunStreamEve
         .count()
 }
 
+/// 45-REVIEW WR-05 (D-14, T-57-17): [`bounded_run_error`] redacts secret
+/// shapes BEFORE it bounds the length (`security.instructions.md`:
+/// truncating first can slice a secret across the budget boundary and leak
+/// its tail), and leaves plain short text untouched.
+#[test]
+fn bounded_run_error_redacts_before_bounding() {
+    // A bare provider-key shape is redacted.
+    let redacted = bounded_run_error("boom: sk-agent-secret-marker");
+    assert!(
+        !redacted.contains("sk-agent-secret-marker"),
+        "got {redacted:?}"
+    );
+    assert!(redacted.starts_with("boom:"), "got {redacted:?}");
+
+    // A long body ending in a bearer token is bounded AND the token is gone.
+    let long = format!("{} Bearer abcdef0123456789", "x".repeat(5_000));
+    let bounded = bounded_run_error(&long);
+    assert!(
+        !bounded.contains("abcdef0123456789"),
+        "the trailing bearer token must not survive, got a {}-char string",
+        bounded.chars().count()
+    );
+    assert!(
+        bounded.chars().count() <= RUN_ERROR_CHAR_BUDGET + 64,
+        "bounded to the budget plus the elision marker, got {} chars",
+        bounded.chars().count()
+    );
+
+    // A secret straddling the budget boundary is not partially present:
+    // redaction runs first, so no fragment of the key survives truncation.
+    let straddle = format!(
+        "{}sk-straddle-secret-abcdefghij tail",
+        "y".repeat(RUN_ERROR_CHAR_BUDGET - 6)
+    );
+    let bounded = bounded_run_error(&straddle);
+    assert!(
+        !bounded.contains("straddle-secret") && !bounded.contains("abcdefghij"),
+        "no fragment of a boundary-straddling secret may remain, got {} chars",
+        bounded.chars().count()
+    );
+
+    // Plain short text round-trips unchanged.
+    assert_eq!(
+        bounded_run_error("Execution error: provider returned 503"),
+        "Execution error: provider returned 503"
+    );
+}
+
 /// D-15, T-45-08, T-45-10: every agent run ends with EXACTLY ONE terminal
 /// wire event. A failure is one `error` (status `failed`, `message: null`,
 /// exactly like a graph run's engine-emitted failure) -- never an `error`
@@ -1726,10 +1776,20 @@ async fn agent_kind_run_emits_exactly_one_terminal_event() {
     );
     let failed = repository.get(&run_id).await.unwrap().unwrap();
     assert_eq!(failed.status, RunStatus::Failed);
-    assert_eq!(
-        failed.error.as_deref(),
-        Some(format!("Execution error: {AGENT_FAILURE_TEXT}").as_str()),
-        "the failure text stays readable through GET /runs/{{id}}"
+    // 45-REVIEW WR-05 (D-14): the stored error is redacted before it is
+    // bounded and persisted, so the provider-secret marker never reaches
+    // `GET /runs/{id}` -- while the non-secret prefix stays diagnosable.
+    let stored_error = failed
+        .error
+        .as_deref()
+        .expect("a failed run stores its error");
+    assert!(
+        stored_error.starts_with("Execution error: llm exploded:"),
+        "the diagnosable prefix survives redaction, got {stored_error:?}"
+    );
+    assert!(
+        !stored_error.contains("sk-agent-secret-marker"),
+        "the stored run error must not carry the secret-shaped marker, got {stored_error:?}"
     );
 
     // --- success ---

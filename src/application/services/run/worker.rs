@@ -137,6 +137,25 @@ fn run_model_label(graph: &WarGraph) -> String {
 }
 
 /// The `graph_fingerprint` an agent run's `TraceEvent::RunStarted` carries.
+/// Character budget for a failed run's persisted `error` (and the matching
+/// failed-persist `warn!` line). A run's error is user-facing through
+/// `GET /v1/runs/{id}`, so it gets more room than the 256-character webhook
+/// `last_error` diagnostic, but it is still bounded.
+pub(super) const RUN_ERROR_CHAR_BUDGET: usize = 2048;
+
+/// Redact-then-bound an agent or engine failure text before it is persisted
+/// on the run row or logged (45-REVIEW WR-05, `security.instructions.md`).
+///
+/// The failure text can embed a provider response body or an API key (an
+/// echoed header, a leaked key in an error page). Secret-shaped substrings
+/// are redacted FIRST and the result is bounded SECOND: truncating first
+/// could slice a secret across the budget boundary and leak its tail. This
+/// mirrors `bounded_error` in `webhook/service.rs` (D-43).
+pub(super) fn bounded_run_error(text: &str) -> String {
+    let redacted = paladin_llm::redaction::redact_secret_patterns(text);
+    paladin_llm::redaction::bounded_excerpt(&redacted, RUN_ERROR_CHAR_BUDGET)
+}
+
 /// A legacy `Runnable::Agent` run has no `WarGraph`, hence no fingerprint;
 /// this sentinel stands in. Every sink accepts any string here -- the
 /// bus sink maps `RunStarted` to no wire event at all (D-24), and the
@@ -1807,7 +1826,8 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                 // -> `map_trace_event` (`message: null`, exactly like a graph
                 // run's engine-emitted failure); this arm makes no direct bus
                 // publish of its own. The failure text is persisted on the
-                // run row below and stays readable through `GET /runs/{id}`.
+                // run row below (redacted then bounded, 45-REVIEW WR-05) and
+                // stays diagnosable through `GET /runs/{id}`.
                 let duration_ms = elapsed_ms(started);
                 dispatcher.emit(TraceEvent::NodeFinished {
                     superstep: 0,
@@ -1985,7 +2005,8 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     }
 
     /// Persist a run's failure: status `Running -> Failed`, the outcome record
-    /// carrying `error_text`, then `ack` -- or, on a repository error, log at
+    /// carrying `error_text` (redacted then bounded by [`bounded_run_error`]),
+    /// then `ack` -- or, on a repository error, log at
     /// `warn` and `nack` with a 1s delay so the run is retried rather than
     /// lost. On the ack path ONLY, enqueues the run's subscribed `failed`
     /// webhook delivery (D-40 ordering: strictly after the status write and
@@ -1998,6 +2019,9 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         run: &Run,
         error_text: String,
     ) -> Result<bool, WorkerError> {
+        // 45-REVIEW WR-05: the stored `error` and the failed-persist `warn!`
+        // below both carry only the redacted, bounded text.
+        let error_text = bounded_run_error(&error_text);
         let now = chrono::Utc::now();
         let record_result: Result<(), RunRepositoryError> = async {
             self.repository

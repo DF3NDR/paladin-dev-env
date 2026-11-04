@@ -2,7 +2,7 @@
 
 Stage B runbook. The web3sec consumer's workspace is not in this repository and nothing about its
 return can be inferred, so this runbook only prepares the relay, the paste slot and the triage.
-Paste slots `W1` and `W2` at the end are read by plan 56-10. Both are empty in this commit.
+Paste slots `W1` and `W2` at the end are read by plan 56-10. Both were empty in the commit that created this runbook; they were filled on 2026-11-04 (see `W1`, `W2`).
 
 ## Purpose and decision
 
@@ -68,14 +68,33 @@ paste a secret into this repository.
 
 ### W1 — the consumer's return, verbatim
 
+The return arrived as a whole file, 193 lines, which is filed verbatim and unedited at
+`.planning/phases/56-dogfood-findings/56-WEB3SEC-RETURN-REPORT-50.md` (commit `a5ebe7983`). Pasting the whole
+body here would duplicate it, so W1 holds a pointer plus the report's own header block, copied verbatim.
+Triage reads the filed file (D-15: nothing in it was reconstructed, summarised or edited). It was scanned for
+secrets before filing: 0 found, so nothing was redacted.
+
 <!-- paste below this line; redacted -->
 ```
+# RETURN-REPORT-50 — web3sec Phase 50 consumer return report to Paladin
+
+**From:** web3sec (Web3 Security Paladin), Phase 50 "Upgrade Paladin submodule to v0.11.0"
+**To:** Paladin maintainers (v0.11.0 "Crate Release", Paladin P46 docs window and after)
+**Date:** 2026-10-30 · **Pin:** `v0.11.0` = `70657919beadbd341a72be2d0107080017a803f0`
+**Requirement:** BUMP-07 (this report). Sibling: [PALADIN-FEEDBACK-P46.md](PALADIN-FEEDBACK-P46.md) (already sent).
 ```
 
 ### W2 — received date, channel, maintainer note
 
 <!-- paste below this line; redacted -->
 ```
+Received: 2026-11-04.
+Channel: relayed by the maintainer in chat (the file itself was supplied by the maintainer).
+Report date: 2026-10-30 (pin v0.11.0 = 70657919beadbd341a72be2d0107080017a803f0). web3sec produced it for its own
+  Phase 50 requirement BUMP-07 on that date; it was not carried across to Paladin at the time, so it reached the
+  Phase 56 tree five days after it was written.
+Maintainer note (2026-11-04): "bump completed successfully".
+Redaction: none needed (0 secrets in the report; it carries no raw Refusal.detail text, per its own preamble).
 ```
 
 ## Triage checklist

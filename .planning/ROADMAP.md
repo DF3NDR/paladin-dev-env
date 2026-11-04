@@ -580,7 +580,7 @@ Plans:
 **Wave 3**
 
 - [x] 57-04-PLAN.md — ADR-0063 amended for the earliest-attributed-run rule; guides, MIGRATION 11.1/11.6/11.8 and `[Unreleased]` changelogs (REG-02)
-- [ ] 57-10-PLAN.md — register rows for Phases 41, 43, 45 (register complete at 51 findings); owner triage of every live finding and reject (REG-05)
+- [x] 57-10-PLAN.md — register rows for Phases 41, 43, 45 (register complete at 51 findings); owner triage of every live finding and reject (REG-05)
 
 **Wave 4**
 

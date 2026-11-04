@@ -5,15 +5,15 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 57
 current_phase_name: register-hygiene-close-out
 status: executing
-stopped_at: Completed 57-04-PLAN.md
-last_updated: "2026-11-04T16:43:42.929Z"
+stopped_at: "Completed 57-10-PLAN.md (triage option-a; gap closure pending: /gsd-plan-phase 57 --gaps)"
+last_updated: "2026-11-04T17:14:08.196Z"
 last_activity: 2026-11-04
 last_activity_desc: Phase 57 execution started
 progress:
   total_phases: 6
   completed_phases: 5
   total_plans: 63
-  completed_plans: 61
+  completed_plans: 62
 ---
 
 # Project State
@@ -51,11 +51,11 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 ## Current Position
 
 Phase: 57 (register-hygiene-close-out) — EXECUTING
-Plan: 10 of 11
+Plan: 11 of 11
 Status: Ready to execute
 Last activity: 2026-11-04 — Phase 57 execution started
 
-Progress: [██████████████░░░░░░] 5/7 phases (v0.11.1) — plans [████████████████████] 52/52 ([██████████] 97%)
+Progress: [██████████████░░░░░░] 5/7 phases (v0.11.1) — plans [████████████████████] 52/52 ([██████████] 98%)
 
 ## Performance Metrics
 
@@ -420,6 +420,7 @@ Progress: [██████████████░░░░░░] 5/7 pha
 | Phase 57 P06 | 28min | 3 tasks | 6 files |
 | Phase 57 P09 | 35min | 2 tasks | 5 files |
 | Phase 57 P04 | 35min | 2 tasks | 7 files |
+| Phase 57 P10 | ~1h | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -806,6 +807,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 57-02: thread ownership is the earliest attributed run, served by one defaulted RunRepositoryPort::owner_run_for_thread with an earliest-run fallback (owner selected option-a; D-01/D-02)
 - [Phase 57]: 57-09: 51 WR-01 is security-class LIVE (unredacted LlmError into ConfigurationError); 38 WR-01/WR-02 and 51 WR-02 other-class LIVE; all four go to the 57-10 triage
 - [Phase ?]: [Phase 57-04] ADR-0063 amended in place to the earliest-attributed-run owner rule (D-02); M-B-24/M-B-25 amended, 11.8 step 12 added; root CHANGELOG gets a new Fixed bullet because it had no thread bullet to amend
+- [Phase 57]: 57-10: owner chose option-a (D-14 as proposed): 7 correctness/security items (51 WR-01; 45 WR-04, WR-06; 41 WR-01; 43 WR-01, WR-04, WR-05) fixed in-phase via gap closure; 8 other-class items waived by 57-11 in the D-03 shape
 
 ### Pending Todos
 
@@ -1198,8 +1200,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-11-04T16:43:42.903Z
-Stopped at: Completed 57-04-PLAN.md
+Last session: 2026-11-04T17:14:08.173Z
+Stopped at: Completed 57-10-PLAN.md (triage option-a; gap closure pending: /gsd-plan-phase 57 --gaps)
 Resume file: None
 
 ## Operator Next Steps

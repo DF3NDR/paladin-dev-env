@@ -559,7 +559,31 @@ Plans:
   4. A bounded human read of the Phase 40 judgment-tier prohibitions that carry LLM-judge verdicts is recorded in that phase's register, and the Phase 42 subset is recorded as accepted as-is.
   5. The three `zip 3.0.0` RustSec exceptions in `SECURITY-EXCEPTIONS.md` are re-checked against the current `utoipa-swagger-ui` release and either lifted or re-dated with the check recorded, with `make security` green.
 
-**Plans**: TBD
+**Plans**: 11 plans (three blocking owner checkpoints: 57-02 Task 1, 57-07 Task 3, 57-10 Task 3; fix-in-phase items from the 57-10 triage are added by `/gsd-plan-phase 57 --gaps` before 57-11)
+
+Plans:
+**Wave 1**
+
+- [ ] 57-01-PLAN.md — four `zip 3.0.0` exception rows (new RUSTSEC-2026-0429) re-dated per D-31 so `make security` is green; STORE-02 / REASON-02/03/05/06 `requirements-completed`; three debug sessions archived to `.planning/debug/resolved/` (REG-06, REG-01, REG-03)
+- [ ] 57-02-PLAN.md — owner checkpoint on the thread-ownership door, then defaulted `RunRepositoryPort::owner_run_for_thread` (earliest attributed run, one row) on in-memory/SQLite/Postgres with five contract clauses and `permits_thread(owner)` (REG-02 rows 86, 87)
+- [ ] 57-05-PLAN.md — live review findings 45 WR-05 (redact-then-bound run failure text) and 41 WR-05 (empty operator-webhook secret is absent, boot warning), WINDOWS rows minted first (REG-05, REG-02)
+- [ ] 57-07-PLAN.md — Phase 40 judgment-tier worksheet (20 prohibitions + credential checklist over `629ef660...be3a9030`) with the owner's per-row read; Phase 42 subset accepted as-is (REG-04)
+- [ ] 57-08-PLAN.md — never-vacuous `scripts/check-review-dispositions.sh` + regression test; register rows for Phases 40, 42, 46, 48, 50, 50.1 (REG-05)
+
+**Wave 2**
+
+- [ ] 57-03-PLAN.md — thread gate, list walk and submit guard read the owner run (HTTP tracer over SQLite); newer-schema owner row skipped and hidden for a tenant; `openapi.json` descriptions (REG-02 rows 85-87)
+- [ ] 57-06-PLAN.md — live review findings 45 CR-01 (`list_files` limit as delimiter), WR-01, WR-02 (`s3_err_summary`), WR-03 (`without_url`), WINDOWS rows minted first (REG-05, REG-02)
+- [ ] 57-09-PLAN.md — register rows for Phases 38 (incl. CR-01), 44, 47, 51 on hunted evidence (REG-05)
+
+**Wave 3**
+
+- [ ] 57-04-PLAN.md — ADR-0063 amended for the earliest-attributed-run rule; guides, MIGRATION 11.1/11.6/11.8 and `[Unreleased]` changelogs (REG-02)
+- [ ] 57-10-PLAN.md — register rows for Phases 41, 43, 45 (register complete at 51 findings); owner triage of every live finding and reject (REG-05)
+
+**Wave 4**
+
+- [ ] 57-11-PLAN.md — close-out: every WINDOWS row dispositioned on re-measured evidence, `57-REGISTER-EVIDENCE.md`, strict checker, 40-VALIDATION recording, gates, push and CI read, `open_count: 0` (REG-02, REG-04, REG-05)
 **Scope notes**:
 
 - Mostly planning-register work with little code. Inventory F1 (nine phases NOT-VALIDATED) was found already closed at the milestone open (all fifteen Phase 38-51 `VALIDATION.md` files read `status: validated`) and is not a requirement.
@@ -611,7 +635,7 @@ Plans:
 | 54. First-Run Usability | v0.11.1 | 9/9 | Complete    | 2026-11-01 |
 | 55. Correctness Fixes, Test Hygiene & Lint Bar | v0.11.1 | 13/13 | Complete    | 2026-11-02 |
 | 56. Dogfood Findings | v0.11.1 | 14/14 | Complete    | 2026-11-04 |
-| 57. Register Hygiene Close-Out | v0.11.1 | 0/TBD | Not started | - |
+| 57. Register Hygiene Close-Out | v0.11.1 | 0/11 | Planned | - |
 | 58. Crate Release | v0.11.1 | 0/TBD | Not started | - |
 
 **v0.8.0 shipped 2026-08-24:** 14 phases, 149 plans, 65/65 requirements, 1,014 commits

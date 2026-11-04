@@ -234,7 +234,7 @@ fails is rebuilt.*
 - [x] **REG-03**: The three `diagnosed` sessions in `.planning/debug/` (kimi fallback profile,
       openai max_completion_tokens, vendor token usage fidelity) are archived as resolved — F4
 
-- [ ] **REG-04**: The Phase 40 judgment-tier prohibitions that carry LLM-judge verdicts get a bounded
+- [x] **REG-04**: The Phase 40 judgment-tier prohibitions that carry LLM-judge verdicts get a bounded
       human read recorded in the phase's register; the Phase 42 subset is accepted as-is — F5
 
 - [ ] **REG-05**: Phase 40 review warnings WR-01…04 and IN-04 are dispositioned (closed by
@@ -371,7 +371,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REG-01 | Phase 57 | Complete |
 | REG-02 | Phase 57 | Pending |
 | REG-03 | Phase 57 | Complete |
-| REG-04 | Phase 57 | Pending |
+| REG-04 | Phase 57 | Complete |
 | REG-05 | Phase 57 | Pending |
 | REG-06 | Phase 57 | Complete |
 | SHIP-08 | Phase 58 | Pending |

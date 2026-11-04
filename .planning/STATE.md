@@ -5,15 +5,15 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 57
 current_phase_name: register-hygiene-close-out
 status: executing
-stopped_at: Completed 57-08-PLAN.md
-last_updated: "2026-11-04T14:38:46.430Z"
+stopped_at: Completed 57-07-PLAN.md
+last_updated: "2026-11-04T15:12:49.197Z"
 last_activity: 2026-11-04
 last_activity_desc: Phase 57 execution started
 progress:
   total_phases: 6
   completed_phases: 5
   total_plans: 63
-  completed_plans: 55
+  completed_plans: 56
 ---
 
 # Project State
@@ -51,11 +51,11 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 ## Current Position
 
 Phase: 57 (register-hygiene-close-out) — EXECUTING
-Plan: 4 of 11
+Plan: 5 of 11
 Status: Ready to execute
 Last activity: 2026-11-04 — Phase 57 execution started
 
-Progress: [██████████████░░░░░░] 5/7 phases (v0.11.1) — plans [████████████████████] 52/52 ([█████████░] 87%)
+Progress: [██████████████░░░░░░] 5/7 phases (v0.11.1) — plans [████████████████████] 52/52 ([█████████░] 89%)
 
 ## Performance Metrics
 
@@ -414,6 +414,7 @@ Progress: [██████████████░░░░░░] 5/7 pha
 | Phase 57 P01 | approx 10min (continuation) | 3 tasks | 14 files |
 | Phase 57 P05 | 12min | 3 tasks | 9 files |
 | Phase 57 P08 | 35min | 3 tasks | 36 files |
+| Phase 57 P07 | 30min | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -796,6 +797,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 57]: [Phase 57-01] RUSTSEC-2026-0429 governed as fourth zip row; upstream condition met 2026-11-04 (utoipa-swagger-ui 10.0.2) but lift deferred to the utoipa 6 migration in the next minor release
 - [Phase 57]: 57-05: empty operator-webhook secret is absent and boot warns (additive, never refuses); run failure text is redacted then bounded to 2048 chars before persist and log
 - [Phase ?]: 57-08: check-review-dispositions.sh reads register rows only inside the '## Dispositions' section; WR-/CR-/IN- ids do not count as closed-row pointers; MALFORMED_ROW added as a fifteenth class
+- [Phase ?]: 57-07: owner confirmed all 26 Phase 40 judgment rows (20 prohibitions + C1..C6) on 2026-11-04; 0 rejects; tier split derived 13 test / 7 code
 
 ### Pending Todos
 
@@ -1188,8 +1190,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-11-04T14:38:46.402Z
-Stopped at: Completed 57-08-PLAN.md
+Last session: 2026-11-04T15:12:49.170Z
+Stopped at: Completed 57-07-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

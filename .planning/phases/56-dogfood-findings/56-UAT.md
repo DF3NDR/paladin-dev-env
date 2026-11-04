@@ -1,20 +1,15 @@
 ---
-status: testing
+status: complete
 phase: 56-dogfood-findings
 source: [56-VERIFICATION.md]
 started: 2026-11-04T01:40:07Z
-updated: 2026-11-04T02:15:13Z
+updated: 2026-11-04T02:16:45Z
 ---
 
 ## Current Test
 
-number: 4
-name: Relayed keyed evidence — K1..K9 and the DF-19 Anthropic re-check
-expected: |
-  Maintainer confirms the K2/K6/K7/K8 output in 56-RUNBOOK-KEYED-WALK.md is theirs, and that
-  `setup-check --verbose` read `✓ Anthropic` on commit 889b5f1bb on 2026-11-03. K1 was recorded as
-  "not captured".
-awaiting: user response
+[testing complete]
+
 ## Tests
 
 ### 1. DF-18 severity call — Quickstart `.model("gpt-4")` fails against a real OpenAI key
@@ -31,15 +26,17 @@ result: pass
 
 ### 4. Relayed keyed evidence — K1..K9 and the DF-19 Anthropic re-check
 expected: Maintainer confirms the K2/K6/K7/K8 output in 56-RUNBOOK-KEYED-WALK.md is theirs, and that `setup-check --verbose` read `✓ Anthropic` on commit 889b5f1bb on 2026-11-03. K1 was recorded as "not captured".
-result: [pending]
+result: pass
 
 ## Summary
 
 total: 4
-passed: 3
+passed: 4
 issues: 0
-pending: 1
+pending: 0
 skipped: 0
 blocked: 0
 
 ## Gaps
+
+[none]

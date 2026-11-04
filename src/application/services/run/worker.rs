@@ -201,6 +201,11 @@ fn compose_run_sink(
 /// run" invariant auditable: the usage and cost totals always come from the dispatcher's own
 /// tallies, and an agent loop has no superstep, so `total_supersteps` and the dropped count are
 /// always zero here.
+///
+/// **Called only once the exit's durable writes and `ack` have succeeded** (45-REVIEW WR-04): the
+/// terminal event reaches the bus, the herald and the persisted trace, so it must never describe
+/// a run whose row is still `running`. A failed write or a nack therefore emits no terminal event,
+/// and the attempt that finally commits emits the run's one terminal event.
 fn emit_agent_run_finished(
     dispatcher: &TraceDispatcher,
     status: RunFinishStatus,
@@ -1594,6 +1599,10 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// **Exactly one terminal wire event.** A failure emits `RunFinished
     /// { Failed }`, which maps to the single `error` event with `message:
     /// null` -- the same shape a graph run's engine-emitted failure has.
+    /// Every terminal event is emitted only after its exit's durable writes and
+    /// `ack` succeeded (45-REVIEW WR-04): a failed write nacks the message (or
+    /// propagates the error for a halt or a failed `ack`) and emits nothing, so
+    /// the attempt that commits emits the run's one terminal event.
     /// This method makes no direct bus publish of its own and does not go
     /// through `record_engine_failure` (whose own publish would be a second
     /// `error`); it calls `persist_failure` instead. The failure text stays
@@ -1697,13 +1706,18 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         });
         let derived_budget = match derived_budget {
             DispatchBudget::Halt(reason) => {
-                emit_agent_run_finished(
-                    &dispatcher,
-                    RunFinishStatus::Halted,
-                    Some(reason.clone()),
-                    0,
-                );
-                let persisted = self.persist_agent_halt(leased, run, None, reason).await;
+                // 45-REVIEW WR-04: the terminal event follows the halt's committed writes.
+                let finished_reason = reason.clone();
+                let persisted = self
+                    .persist_agent_halt(leased, run, None, reason, || {
+                        emit_agent_run_finished(
+                            &dispatcher,
+                            RunFinishStatus::Halted,
+                            Some(finished_reason),
+                            0,
+                        );
+                    })
+                    .await;
                 self.unbind_after_drain(run).await;
                 return persisted;
             }
@@ -1778,45 +1792,76 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                 // the one terminal event carries the reason (SSE `done`, the `halted` webhook).
                 if let StopReason::AllowanceHalted(refusal) = &result.stop_reason {
                     let reason = HaltReason::AllowanceExhausted(refusal.clone());
-                    emit_agent_run_finished(
-                        &dispatcher,
-                        RunFinishStatus::Halted,
-                        Some(reason.clone()),
-                        duration_ms,
-                    );
+                    // 45-REVIEW WR-04: the terminal event follows the halt's committed writes.
+                    let finished_reason = reason.clone();
                     let persisted = self
-                        .persist_agent_halt(leased, run, Some(result.output), reason)
+                        .persist_agent_halt(leased, run, Some(result.output), reason, || {
+                            emit_agent_run_finished(
+                                &dispatcher,
+                                RunFinishStatus::Halted,
+                                Some(finished_reason),
+                                duration_ms,
+                            );
+                        })
                         .await;
                     self.unbind_after_drain(run).await;
                     return persisted;
                 }
-                emit_agent_run_finished(&dispatcher, RunFinishStatus::Completed, None, duration_ms);
                 async {
-                    self.repository
-                        .update_status(
-                            &run.run_id,
-                            RunStatus::Running,
-                            RunStatus::Completed,
-                            chrono::Utc::now(),
-                        )
-                        .await?;
-                    self.repository
-                        .record_outcome(
-                            &run.run_id,
-                            RunOutcomeRecord {
-                                error: None,
-                                output: Some(serde_json::Value::String(result.output)),
-                                final_waypoint_id: None,
-                                halt_reason: None,
-                            },
-                        )
-                        .await?;
-                    self.queue.ack(&leased.token).await?;
-                    // D-40, D-15: strictly AFTER the status write and ack;
-                    // logged and never propagated (P2).
-                    self.enqueue_webhook_delivery(run, RunStatus::Completed, None, None)
-                        .await;
-                    Ok(true)
+                    let written: Result<(), RunRepositoryError> = async {
+                        self.repository
+                            .update_status(
+                                &run.run_id,
+                                RunStatus::Running,
+                                RunStatus::Completed,
+                                chrono::Utc::now(),
+                            )
+                            .await?;
+                        self.repository
+                            .record_outcome(
+                                &run.run_id,
+                                RunOutcomeRecord {
+                                    error: None,
+                                    output: Some(serde_json::Value::String(result.output)),
+                                    final_waypoint_id: None,
+                                    halt_reason: None,
+                                },
+                            )
+                            .await?;
+                        Ok(())
+                    }
+                    .await;
+                    match written {
+                        Ok(()) => {
+                            self.queue.ack(&leased.token).await?;
+                            // 45-REVIEW WR-04: the one terminal event follows the committed
+                            // status, outcome and ack -- never a row that is still `running`.
+                            emit_agent_run_finished(
+                                &dispatcher,
+                                RunFinishStatus::Completed,
+                                None,
+                                duration_ms,
+                            );
+                            // D-40, D-15: strictly AFTER the status write and ack;
+                            // logged and never propagated (P2).
+                            self.enqueue_webhook_delivery(run, RunStatus::Completed, None, None)
+                                .await;
+                            Ok(true)
+                        }
+                        Err(repo_err) => {
+                            // The run is redelivered, so no terminal event is emitted for an
+                            // outcome that never committed (PD-13-3). Only the run id and the
+                            // repository error are logged, never the output (P-13-3).
+                            log::warn!(
+                                "run worker: failed to record the completion of run {}: {repo_err}",
+                                run.run_id
+                            );
+                            self.queue
+                                .nack(&leased.token, Duration::from_secs(1))
+                                .await?;
+                            Ok(true)
+                        }
+                    }
                 }
                 .await
             }
@@ -1841,8 +1886,17 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                     reasoning_effective: None,
                     cache_hit: false,
                 });
-                emit_agent_run_finished(&dispatcher, RunFinishStatus::Failed, None, duration_ms);
-                self.persist_failure(leased, run, error.to_string()).await
+                // 45-REVIEW WR-04: `RunFinished { Failed }` follows the committed failure
+                // writes and ack, from inside `persist_failure`, never its nack branch.
+                self.persist_failure(leased, run, error.to_string(), || {
+                    emit_agent_run_finished(
+                        &dispatcher,
+                        RunFinishStatus::Failed,
+                        None,
+                        duration_ms,
+                    );
+                })
+                .await
             }
         };
 
@@ -1920,12 +1974,17 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// `halted` webhook delivery carrying the reason (D-19; an enqueue error is logged and never
     /// changes the run's status, P2). An agent-kind run writes no Waypoint (D-08), so there is
     /// no `final_waypoint_id`; it is resumed by resubmission.
+    ///
+    /// `on_committed` publishes the run's one terminal event; it runs only after both writes and
+    /// the `ack` succeeded, before the webhook enqueue (45-REVIEW WR-04). A failed write or ack
+    /// returns the error without calling it.
     async fn persist_agent_halt(
         &self,
         leased: &LeasedRun,
         run: &Run,
         output: Option<String>,
         reason: HaltReason,
+        on_committed: impl FnOnce() + Send,
     ) -> Result<bool, WorkerError> {
         self.repository
             .record_outcome(
@@ -1947,6 +2006,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
             )
             .await?;
         self.queue.ack(&leased.token).await?;
+        on_committed();
         self.enqueue_webhook_delivery(run, RunStatus::Halted, None, Some(&reason))
             .await;
         Ok(true)
@@ -2001,7 +2061,9 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
             .await;
             bus.unbind(&run.thread_id).await;
         }
-        self.persist_failure(leased, run, error_text).await
+        // The graph path's wire event is published above (or by the engine), so there is no
+        // terminal event left to emit once the failure commits.
+        self.persist_failure(leased, run, error_text, || {}).await
     }
 
     /// Persist a run's failure: status `Running -> Failed`, the outcome record
@@ -2013,11 +2075,17 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// ack; a delivery error is logged and never changes the run's status,
     /// prohibition P2). Publishes nothing on the bus -- callers own their
     /// wire event.
+    ///
+    /// `on_committed` is the caller's terminal-event hook (45-REVIEW WR-04): it runs after the
+    /// status and outcome writes and the `ack` succeeded, before the webhook enqueue, and never
+    /// on the repository-error nack branch, so no terminal event describes a run whose row stays
+    /// `running` and is redelivered.
     async fn persist_failure(
         &self,
         leased: &LeasedRun,
         run: &Run,
         error_text: String,
+        on_committed: impl FnOnce() + Send,
     ) -> Result<bool, WorkerError> {
         // 45-REVIEW WR-05: the stored `error` and the failed-persist `warn!`
         // below both carry only the redacted, bounded text.
@@ -2045,6 +2113,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         match record_result {
             Ok(()) => {
                 self.queue.ack(&leased.token).await?;
+                on_committed();
                 self.enqueue_webhook_delivery(run, RunStatus::Failed, None, None)
                     .await;
             }

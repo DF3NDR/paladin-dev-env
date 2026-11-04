@@ -3,17 +3,17 @@ status: testing
 phase: 56-dogfood-findings
 source: [56-VERIFICATION.md]
 started: 2026-11-04T01:40:07Z
-updated: 2026-11-04T02:13:19Z
+updated: 2026-11-04T02:15:13Z
 ---
 
 ## Current Test
 
-number: 3
-name: Judgment-tier prohibitions P1, P4, P11 and test-tier P3
+number: 4
+name: Relayed keyed evidence — K1..K9 and the DF-19 Anthropic re-check
 expected: |
-  Maintainer confirms P1 (no simulated web3sec return), P4 (no web3sec disposition without evidence)
-  and P11 (the agent did not pick the D-16 option) held; P3 (findings log append-only) is accepted on
-  the measured evidence (zero deleted lines since the seed commit) or gets a standing enforcement test.
+  Maintainer confirms the K2/K6/K7/K8 output in 56-RUNBOOK-KEYED-WALK.md is theirs, and that
+  `setup-check --verbose` read `✓ Anthropic` on commit 889b5f1bb on 2026-11-03. K1 was recorded as
+  "not captured".
 awaiting: user response
 ## Tests
 
@@ -27,7 +27,7 @@ result: pass
 
 ### 3. Judgment-tier prohibitions P1, P4, P11 and test-tier P3
 expected: Maintainer confirms P1 (no simulated web3sec return), P4 (no web3sec disposition without evidence) and P11 (the agent did not pick the D-16 option) held; P3 (findings log append-only) is accepted on the measured evidence (zero deleted lines since the seed commit) or gets a standing enforcement test.
-result: [pending]
+result: pass
 
 ### 4. Relayed keyed evidence — K1..K9 and the DF-19 Anthropic re-check
 expected: Maintainer confirms the K2/K6/K7/K8 output in 56-RUNBOOK-KEYED-WALK.md is theirs, and that `setup-check --verbose` read `✓ Anthropic` on commit 889b5f1bb on 2026-11-03. K1 was recorded as "not captured".
@@ -36,9 +36,9 @@ result: [pending]
 ## Summary
 
 total: 4
-passed: 2
+passed: 3
 issues: 0
-pending: 2
+pending: 1
 skipped: 0
 blocked: 0
 

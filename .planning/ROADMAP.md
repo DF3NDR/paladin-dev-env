@@ -560,7 +560,7 @@ Plans:
   4. A bounded human read of the Phase 40 judgment-tier prohibitions that carry LLM-judge verdicts is recorded in that phase's register, and the Phase 42 subset is recorded as accepted as-is.
   5. The three `zip 3.0.0` RustSec exceptions in `SECURITY-EXCEPTIONS.md` are re-checked against the current `utoipa-swagger-ui` release and either lifted or re-dated with the check recorded, with `make security` green.
 
-**Plans**: 11 plans (three blocking owner checkpoints: 57-02 Task 1, 57-07 Task 3, 57-10 Task 3; fix-in-phase items from the 57-10 triage are added by `/gsd-plan-phase 57 --gaps` before 57-11)
+**Plans**: 16 plans (three blocking owner checkpoints: 57-02 Task 1, 57-07 Task 3, 57-10 Task 3; gap closure plans 57-12…57-16 added by the `--gaps` replan of 2026-11-04 for the seven fix-in-phase items of the 57-10 triage, before 57-11)
 
 Plans:
 **Wave 1**
@@ -582,7 +582,15 @@ Plans:
 - [x] 57-04-PLAN.md — ADR-0063 amended for the earliest-attributed-run rule; guides, MIGRATION 11.1/11.6/11.8 and `[Unreleased]` changelogs (REG-02)
 - [x] 57-10-PLAN.md — register rows for Phases 41, 43, 45 (register complete at 51 findings); owner triage of every live finding and reject (REG-05)
 
-**Wave 4**
+**Gap closure** *(fix-in-phase from the 57-10 triage, `gap_closure: true`; waves 4-8, chained because each mints a WINDOWS row and appends `MIGRATION.md` 11.1 `M-B` rows and `[Unreleased]` changelog entries; all run before 57-11)*
+
+- [ ] 57-12-PLAN.md — 51 WR-01 (security): `effort_refusal` renders a fixed per-variant `LlmError` label, never vendor text, directly and through `FallbackLlmAdapter`; planted-secret tests, credential review, WINDOWS row minted first; wave 4 (REG-05, REG-02)
+- [ ] 57-13-PLAN.md — 45 WR-04 and 45 WR-06: `run_agent` emits its terminal `RunFinished` only after the durable write and ack on every exit (completed, failed, halted); a failed agent run reports its billed spend through the existing `ATTEMPT_SPEND` scope; wave 5 (REG-05, REG-02)
+- [ ] 57-14-PLAN.md — 41 WR-01: a failed operator-notice enqueue gives the notice back; `confirm`/`abandon` survive a dropped caller; a dropped submission settles its admission through a drop guard; wave 6 (REG-05, REG-02)
+- [ ] 57-15-PLAN.md — 43 WR-05 and 43 WR-04: a zero provider delay never opens a zero-length Cadence gate; a 429 is recorded in a spawned, awaited task so a dropped caller cannot lose it; ADR-0058 amended; wave 7 (REG-05, REG-02)
+- [ ] 57-16-PLAN.md — 43 WR-01: the node-cache fence marker is capped below the fencing counter's floor, both TTLs in one crate-private `redis_fence` module; pure invariant test plus a Docker-gated live Redis case read from CI; wave 8 (REG-05, REG-02)
+
+**Wave 9** *(blocked on the gap closure plans)*
 
 - [ ] 57-11-PLAN.md — close-out: every WINDOWS row dispositioned on re-measured evidence, `57-REGISTER-EVIDENCE.md`, strict checker, 40-VALIDATION recording, gates, push and CI read, `open_count: 0` (REG-02, REG-04, REG-05)
 

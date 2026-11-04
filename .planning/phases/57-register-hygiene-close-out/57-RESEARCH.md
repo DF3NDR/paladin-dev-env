@@ -364,20 +364,28 @@ gh api "repos/DF3NDR/paladin-dev-env/commits/84686acfb/check-runs?per_page=100" 
 | A6 | The two pre-existing red CI jobs besides Security/License (SDK smoke) are out of Phase 57's registers | REG-06 | If Phase 58 expects CI fully green, someone must own the SDK smoke failure |
 | A7 | Waiving 41 WR-05 by pointing to the owner-deferred Phase 54 WR-04 is acceptable | REG-05 | Owner may require the fix under D-14 |
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+All six questions are answered by the Phase 57 plans (plan-checker revision 1, 2026-11-04). Each RESOLVED note names the plan decision or task that owns the answer.
 
 1. **D-01 vs D-02: one port method or two?**
    - What we know: ownership moves to the earliest attributed run; the only two callers of the old latest-run lookup are the authorization gate and `ensure_thread_visible`.
    - What's unclear: whether the owner still wants a literal "newest run" method in the public surface.
    - Recommendation: one defaulted `thread_owner_run`; ask once in plan review.
+   - **RESOLVED:** PD-02-1 (`57-02-PLAN.md`) adopts one defaulted `RunRepositoryPort::owner_run_for_thread` (the earliest attributed run, with the earliest-run fallback of PD-02-2), named after the trait's `active_run_for_thread`. The "ask once" is the blocking `checkpoint:decision` at 57-02 Task 1 (option-a recommended; option-b adds D-01's literal newest-run method; option-c keeps the latest-run rule). The door fails closed: 57-02 Tasks 2-3, 57-03 Task 1 and 57-04 Task 1 run only when `57-02-SUMMARY.md` `## Decision` opens with `Selected: option-a`; any other answer stops them for a plan revision.
 2. **Fourth zip advisory: lift or except?**
    - What we know: lifting needs utoipa 6 (D-30 defers it); the same compensating control covers 0429.
    - Recommendation: add the fourth exception row, mirror it, re-date all four.
+   - **RESOLVED:** PD-01-1 (`57-01-PLAN.md`): RUSTSEC-2026-0429 gets a fourth `zip 3.0.0` row on the D-31 terms, under the same build-time-only compensating control re-measured from the build script, mirrored in `.cargo/audit.toml` and `deny.toml`; all four rows are re-dated (PD-01-2). The lift stays with the utoipa 6 migration (D-30, deferred).
 3. **How far does D-14 go for the live warnings (45 CR-01, 45 WR-02, 45 WR-05, 41 WR-05, others the hunt finds)?**
    - Recommendation: classify first, then an owner checkpoint (fix in Phase 57 vs waive under D-03 with a named owner and date); do not start fixes before the classified list exists.
+   - **RESOLVED:** Findings whose liveness was verified at plan time are fixed in this phase under D-14 by 57-05 (45 WR-05, 41 WR-05; PD-05-1) and 57-06 (45 CR-01, WR-01, WR-02, WR-03; PD-06-1), each minting its WINDOWS row first. Everything else the 57-08..57-10 sweep or the 57-07 judgment read finds live (plan-time expectation: at least 45 WR-04 and WR-06) is classified first and decided at one owner `checkpoint:decision`, 57-10 Task 3 (PD-10-1). Fix-in-phase items go through the expected `/gsd-plan-phase 57 --gaps` pass before 57-11, whose precondition halts while any of them has no fix commit.
 4. **Do Critical findings belong in `57-REVIEW-DISPOSITIONS.md`?** Recommendation: yes (38 CR-01 `closed`, 45 CR-01 `open` until fixed); a register that omits a live Critical does not match the tree.
+   - **RESOLVED:** PD-08-1 (`57-08-PLAN.md`): yes. 38 CR-01 and 45 CR-01 are register rows, 51 findings in total (47 WR, 2 CR, Phase 40 IN-01/IN-04). 45 CR-01 closes on the 57-06 fix (57-10 Task 1).
 5. **Orphaned Phase 55 deferrals:** "News API key in the URL (`D-52-03-01`, `news_api_fetcher.rs`)" and "`${...}` in the treasurer webhook `secret`" were routed to a `56.x` phase that was never created (Phase 56 became dogfood). They are not WINDOWS rows, so they do not affect `open_count`, but nothing owns them. Recommendation: note in `57-REGISTER-EVIDENCE.md` where they landed (Phase 54 deferral for the second) or re-home them explicitly.
+   - **RESOLVED:** PD-11-3 (`57-11-PLAN.md`): `57-REGISTER-EVIDENCE.md` `## Orphaned deferrals` records where each item now sits, with owner and revisit (the second is Phase 54 WR-04, owner-deferred). Neither is a WINDOWS row, and nothing is implemented for them in this phase.
 6. **Pending todos files for Phase 44 follow-ups** (`2026-10-11-reject-removed-v0-10-battalion-config-keys.md`, `2026-10-11-phase-44-review-follow-ups.md`) are cited by `44-REVIEW-FIX.md` as untracked; confirm they exist before citing them as waiver evidence for 44 WR-03..05.
+   - **RESOLVED:** Confirmed at plan time: both files exist under `.planning/todos/completed/` (not `pending/`), each `completed: 2026-10-24`. 57-09 Task 2 step 2 reads their resolution sections and verifies each fix on the head before citing them for 44 WR-03..05 (D-13: evidence hunted, never asserted).
 
 ## Environment Availability
 

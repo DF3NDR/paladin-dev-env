@@ -3,17 +3,17 @@ status: testing
 phase: 56-dogfood-findings
 source: [56-VERIFICATION.md]
 started: 2026-11-04T01:40:07Z
-updated: 2026-11-04T01:47:41Z
+updated: 2026-11-04T02:13:19Z
 ---
 
 ## Current Test
 
-number: 2
-name: DOGF-05 scope — does a devcontainer walk satisfy "on a Docker-capable machine"?
+number: 3
+name: Judgment-tier prohibitions P1, P4, P11 and test-tier P3
 expected: |
-  Accept the D-17 pass (local 92.79 %, CI 92.86 %, both truncate to 92, both ≥ 82) knowing guide
-  step 1 (`make services-up`) and the bare-host password-protected Redis path (trap 2) were not
-  exercised; or ask for a bare-host re-run.
+  Maintainer confirms P1 (no simulated web3sec return), P4 (no web3sec disposition without evidence)
+  and P11 (the agent did not pick the D-16 option) held; P3 (findings log append-only) is accepted on
+  the measured evidence (zero deleted lines since the seed commit) or gets a standing enforcement test.
 awaiting: user response
 ## Tests
 
@@ -23,7 +23,7 @@ result: pass
 
 ### 2. DOGF-05 scope — does a devcontainer walk satisfy "on a Docker-capable machine"?
 expected: Accept the D-17 pass (local 92.79 %, CI 92.86 %, both truncate to 92, both ≥ 82) knowing guide step 1 (`make services-up`) and the bare-host password-protected Redis path (trap 2) were not exercised; or ask for a bare-host re-run.
-result: [pending]
+result: pass
 
 ### 3. Judgment-tier prohibitions P1, P4, P11 and test-tier P3
 expected: Maintainer confirms P1 (no simulated web3sec return), P4 (no web3sec disposition without evidence) and P11 (the agent did not pick the D-16 option) held; P3 (findings log append-only) is accepted on the measured evidence (zero deleted lines since the seed commit) or gets a standing enforcement test.
@@ -36,9 +36,9 @@ result: [pending]
 ## Summary
 
 total: 4
-passed: 1
+passed: 2
 issues: 0
-pending: 3
+pending: 2
 skipped: 0
 blocked: 0
 

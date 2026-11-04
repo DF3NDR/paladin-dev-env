@@ -71,7 +71,7 @@ repository insert and one queue enqueue, with no engine work on the request path
 p99 ≤ 250ms budget is an architectural property of that fact, not a number to tune).
 
 `GET /v1/runs/{run_id}` returns the full `Run`: `run_id`, `thread_id`, `assistant_id`, `version`,
-`status`, `submitted_at`/`started_at`/`finished_at`, `error` (the engine's error, when `Failed`),
+`status`, `submitted_at`/`started_at`/`finished_at`, `error` (the engine's error, when `Failed`; secret-shaped substrings are redacted and the text is bounded to 2,048 characters before it is stored),
 `final_waypoint_id` (the final Waypoint the run reached; `null` until it records one) and
 `halt_reason` (why a run halted on spend; `null` otherwise) -- see [Halted runs](#halted-runs).
 
@@ -580,7 +580,9 @@ for a tenant-scope notice. `timestamp` is the ledger store's clock when the noti
 `allowance_halted`) and `X-Paladin-Delivery: <delivery id>`. If a `secret` is configured it is signed exactly like a run
 webhook -- `X-Paladin-Signature: sha256=<hex>`, HMAC-SHA256 over the raw request body bytes -- with
 `treasurer.allowance.webhook.secret` (or `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET`). Verify it over
-the raw bytes you received, as above. Without a secret the body is signed with the empty key.
+the raw bytes you received, as above. An empty secret is treated as absent. Without a secret the body is signed with the empty key,
+which any receiver can reproduce, so the signature authenticates nothing; boot logs one warning naming
+`treasurer.allowance.webhook.secret` when the webhook has none (it never contains the URL).
 
 **Delivery semantics.** At most one notice of each kind is recorded per scope, limit kind, window
 and ceiling (raising a ceiling re-arms it), so at most one delivery is enqueued for each; the

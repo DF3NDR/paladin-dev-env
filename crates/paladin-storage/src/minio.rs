@@ -111,6 +111,31 @@ fn s3_error_code(body: &str) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+/// The arguments `list_files` sends to the S3 list-objects call, derived from the caller's
+/// [`ListOptions`] by one pure function so the mapping is testable without a store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ListPageRequest {
+    prefix: String,
+    delimiter: Option<String>,
+    continuation_token: Option<String>,
+    max_keys: Option<usize>,
+}
+
+/// Map [`ListOptions`] to the S3 list request.
+///
+/// `ListOptions::limit` is the page size (`max-keys`). It must never be sent as the S3
+/// `delimiter`: the store would treat the limit's digits as a path separator and roll every
+/// key containing them into `CommonPrefixes`, silently dropping those objects (45-REVIEW CR-01).
+/// No delimiter is ever sent, so the listing is flat and complete.
+fn list_page_request(options: &ListOptions) -> ListPageRequest {
+    ListPageRequest {
+        prefix: options.prefix.clone().unwrap_or_default(),
+        delimiter: None,
+        continuation_token: options.continuation_token.clone(),
+        max_keys: options.limit,
+    }
+}
+
 /// Adapter for an S3-compatible store using the rust-s3 crate (RustFS in dev/test/CI;
 /// MinIO, AWS S3, DigitalOcean Spaces or any SigV4 S3 endpoint in production).
 #[doc(hidden)]
@@ -357,6 +382,16 @@ impl MinioAdapter {
         headers
     }
 
+    /// Apply the caller's filters to listed objects and append the survivors as `FileItem`s.
+    fn collect_listed(&self, objects: Vec<Object>, options: &ListOptions, out: &mut Vec<FileItem>) {
+        for object in objects {
+            let path = PathBuf::from(&object.key);
+            if self.should_include_file(&object, &path, options) {
+                out.push(self.s3_object_to_file_item(&object, path));
+            }
+        }
+    }
+
     /// Execute operation with timeout and retries
     async fn execute_with_retry<F, T, Fut>(&self, operation: F) -> FileStorageResult<T>
     where
@@ -544,38 +579,54 @@ impl FileStoragePort for MinioAdapter {
         Ok(file_item)
     }
 
+    /// List files, honouring `limit` as the page size and `continuation_token` as the resume
+    /// point.
+    ///
+    /// With a `limit` or a `continuation_token` this issues exactly one S3 list-objects page and
+    /// reports `has_more` / `continuation_token` from that page's truncation state, so a caller
+    /// can follow the token to the rest. Without either it lists every page. The prefix, size and
+    /// extension filters run after the fetch, so a filtered page may hold fewer than `limit`
+    /// items while `has_more` is still `true`; callers keep following the token until it is
+    /// `None`.
     async fn list_files(&self, options: Option<ListOptions>) -> FileStorageResult<FileListResult> {
         let options = options.unwrap_or_default();
-
-        let prefix = options.prefix.clone().unwrap_or_default();
-        let max_keys = options.limit.map(|l| l.to_string());
-
-        let results = self
-            .execute_with_retry(|| self.bucket.list(prefix.clone(), max_keys.clone()))
-            .await
-            .map_err(|e| FileStorageError::IoError(format!("Failed to list files: {}", e)))?;
+        let req = list_page_request(&options);
+        let paged = req.max_keys.is_some() || req.continuation_token.is_some();
 
         let mut files = Vec::new();
+        let mut has_more = false;
+        let mut continuation_token = None;
 
-        // Process all list results
-        for list_result in results {
-            for object in list_result.contents {
-                let path = PathBuf::from(&object.key);
+        if paged {
+            let (page, _status) = self
+                .execute_with_retry(|| {
+                    self.bucket.list_page(
+                        req.prefix.clone(),
+                        req.delimiter.clone(),
+                        req.continuation_token.clone(),
+                        None,
+                        req.max_keys,
+                    )
+                })
+                .await
+                .map_err(|e| FileStorageError::IoError(format!("Failed to list files: {}", e)))?;
 
-                // Apply filters
-                if self.should_include_file(&object, &path, &options) {
-                    let file_item = self.s3_object_to_file_item(&object, path);
-                    files.push(file_item);
-                }
+            has_more = page.is_truncated;
+            continuation_token = page.next_continuation_token;
+            self.collect_listed(page.contents, &options, &mut files);
+        } else {
+            let results = self
+                .execute_with_retry(|| self.bucket.list(req.prefix.clone(), req.delimiter.clone()))
+                .await
+                .map_err(|e| FileStorageError::IoError(format!("Failed to list files: {}", e)))?;
+
+            for list_result in results {
+                self.collect_listed(list_result.contents, &options, &mut files);
             }
         }
 
         // Sort files by modification date (newest first)
         files.sort_by_key(|b| std::cmp::Reverse(b.modified_at));
-
-        // For simplicity, we'll assume no more results for now
-        let has_more = false;
-        let continuation_token = None;
 
         Ok(FileListResult {
             files,
@@ -674,7 +725,8 @@ impl FileStoragePort for MinioAdapter {
         // Try to list objects as a simple health check
         match timeout(
             self.config.connection_timeout,
-            self.bucket.list("".to_string(), Some("1".to_string())),
+            self.bucket
+                .list_page(String::new(), None, None, None, Some(1)),
         )
         .await
         {
@@ -1157,6 +1209,26 @@ impl MinioAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn list_request_sends_the_limit_as_max_keys_never_as_a_delimiter() {
+        let options = ListOptions {
+            prefix: Some("p/".to_string()),
+            limit: Some(5),
+            continuation_token: Some("tok".to_string()),
+            ..Default::default()
+        };
+        let req = list_page_request(&options);
+        assert_eq!(req.delimiter, None, "the limit must never be a delimiter");
+        assert_eq!(req.max_keys, Some(5));
+        assert_eq!(req.continuation_token, Some("tok".to_string()));
+        assert_eq!(req.prefix, "p/");
+
+        let req = list_page_request(&ListOptions::default());
+        assert_eq!(req.delimiter, None);
+        assert_eq!(req.max_keys, None);
+        assert_eq!(req.continuation_token, None);
+    }
 
     #[test]
     fn test_minio_config_default() {

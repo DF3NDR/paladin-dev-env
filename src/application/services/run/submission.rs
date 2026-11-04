@@ -12,6 +12,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::Utc;
 
+use paladin_core::platform::container::allowance::Admission;
 use paladin_core::platform::container::assistant::AssistantSource;
 use paladin_core::platform::container::principal::{PrincipalRef, RunReadScope};
 use paladin_core::platform::container::run::{ForkSpec, Run, RunId};
@@ -185,6 +186,83 @@ pub struct RunSubmissionService {
     /// [`RunSubmissionService::with_treasurer`]. `None` (the default) means admission is a
     /// no-op.
     treasurer: Option<Arc<dyn AllowanceAdmissionPort>>,
+}
+
+/// Settles an admission whose submission future was dropped before it settled it itself
+/// (41-REVIEW WR-01, plan 57-14).
+///
+/// Armed when `admit` returns and disarmed by [`AdmissionSettlement::settle`]. If it is
+/// dropped while armed (a client disconnect while `persist_and_enqueue` awaits), `Drop` spawns
+/// a task that reads the run row: a row that exists means the submission was persisted, so the
+/// admission is confirmed; no row means it is given back (`abandon`). An unreadable row is
+/// given back rather than kept: a possible second notice is preferred to a lost one, the
+/// preference the review's own fix states. The guard settles only through
+/// [`AllowanceAdmissionPort`], never a Treasurer internal.
+struct AdmissionSettlement {
+    treasurer: Arc<dyn AllowanceAdmissionPort>,
+    repository: Arc<dyn RunRepositoryPort>,
+    run_id: RunId,
+    admission: Option<Admission>,
+}
+
+impl AdmissionSettlement {
+    /// Arm a guard over a freshly won `admission`.
+    fn new(
+        treasurer: Arc<dyn AllowanceAdmissionPort>,
+        repository: Arc<dyn RunRepositoryPort>,
+        run_id: RunId,
+        admission: Admission,
+    ) -> Self {
+        Self {
+            treasurer,
+            repository,
+            run_id,
+            admission: Some(admission),
+        }
+    }
+
+    /// Disarm the guard and settle the admission: `confirm` when the run was `persisted`,
+    /// otherwise `abandon`.
+    async fn settle(mut self, persisted: bool) {
+        if let Some(admission) = self.admission.take() {
+            if persisted {
+                self.treasurer.confirm(&admission).await;
+            } else {
+                self.treasurer.abandon(&admission).await;
+            }
+        }
+    }
+}
+
+impl Drop for AdmissionSettlement {
+    fn drop(&mut self) {
+        let Some(admission) = self.admission.take() else {
+            return;
+        };
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            log::error!(
+                "the allowance admission for run {} could not be settled: no runtime",
+                self.run_id
+            );
+            return;
+        };
+        let treasurer = Arc::clone(&self.treasurer);
+        let repository = Arc::clone(&self.repository);
+        let run_id = self.run_id.clone();
+        handle.spawn(async move {
+            match repository.get(&run_id).await {
+                Ok(Some(_)) => treasurer.confirm(&admission).await,
+                Ok(None) => treasurer.abandon(&admission).await,
+                Err(error) => {
+                    log::warn!(
+                        "run {run_id} could not be read to settle its dropped allowance \
+                         admission, giving the notice back: {error}"
+                    );
+                    treasurer.abandon(&admission).await;
+                }
+            }
+        });
+    }
 }
 
 impl RunSubmissionService {
@@ -364,6 +442,11 @@ impl RunSubmissionService {
     /// `abandon` on a persistence failure, so a run that was admitted but never enqueued does
     /// not hold an allowance notice.
     ///
+    /// A dropped submission future (a client disconnect while the row is written or queued)
+    /// still settles its admission through [`AdmissionSettlement`] (41-REVIEW WR-01): `confirm`
+    /// when the run row exists, `abandon` otherwise. A drop inside `admit` itself, before it
+    /// returns the `Admission`, is the one window no guard can cover.
+    ///
     /// A request with no principal (`run.submitted_by` is `None`, an internal caller) or a
     /// service without a Treasurer is never gated and never touches `confirm` / `abandon`.
     /// A refusal returns [`RunSubmissionError::AllowanceExhausted`]; any other admission error
@@ -383,9 +466,12 @@ impl RunSubmissionService {
         use_latest: bool,
         model: Option<&str>,
     ) -> Result<(), RunSubmissionError> {
-        let admission = match (&self.treasurer, &run.submitted_by) {
-            (Some(treasurer), Some(subject)) => Some(
-                match model {
+        // The guard is armed the moment the admission exists and disarmed by `settle`, so a
+        // submission future dropped at any await in `persist_and_enqueue` (a client
+        // disconnect) still settles its admission (41-REVIEW WR-01).
+        let settlement = match (&self.treasurer, &run.submitted_by) {
+            (Some(treasurer), Some(subject)) => {
+                let admission = match model {
                     Some(model) => {
                         treasurer
                             .admit_for_model(subject, Some(&run.run_id), model)
@@ -393,18 +479,21 @@ impl RunSubmissionService {
                     }
                     None => treasurer.admit(subject, Some(&run.run_id)).await,
                 }
-                .map_err(map_admission_error)?,
-            ),
+                .map_err(map_admission_error)?;
+                Some(AdmissionSettlement::new(
+                    Arc::clone(treasurer),
+                    Arc::clone(&self.repository),
+                    run.run_id.clone(),
+                    admission,
+                ))
+            }
             _ => None,
         };
 
         let persisted = self.persist_and_enqueue(run, use_latest).await;
 
-        if let (Some(treasurer), Some(admission)) = (&self.treasurer, &admission) {
-            match &persisted {
-                Ok(()) => treasurer.confirm(admission).await,
-                Err(_) => treasurer.abandon(admission).await,
-            }
+        if let Some(settlement) = settlement {
+            settlement.settle(persisted.is_ok()).await;
         }
         persisted
     }
@@ -1662,6 +1751,229 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, RunSubmissionError::Forbidden { .. }));
+    }
+
+    // --- 41-REVIEW WR-01 (plan 57-14): a dropped submission settles its admission ---------
+
+    /// A repository whose `insert` signals `entered` and then never completes, so a test can
+    /// drop a submission after admission and before its run row is written. Every other call
+    /// is delegated to an in-memory repository.
+    struct ParkingRepository {
+        inner: InMemoryRunRepository,
+        entered: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait]
+    impl RunRepositoryPort for ParkingRepository {
+        async fn insert(&self, _run: &Run) -> Result<(), RunRepositoryError> {
+            self.entered.notify_one();
+            std::future::pending::<()>().await;
+            Ok(())
+        }
+
+        async fn get(&self, run_id: &RunId) -> Result<Option<Run>, RunRepositoryError> {
+            self.inner.get(run_id).await
+        }
+
+        async fn update_status(
+            &self,
+            run_id: &RunId,
+            from: paladin_core::platform::container::run::RunStatus,
+            to: paladin_core::platform::container::run::RunStatus,
+            at: chrono::DateTime<Utc>,
+        ) -> Result<(), RunRepositoryError> {
+            self.inner.update_status(run_id, from, to, at).await
+        }
+
+        async fn record_outcome(
+            &self,
+            run_id: &RunId,
+            outcome: paladin_ports::output::run_repository_port::RunOutcomeRecord,
+        ) -> Result<(), RunRepositoryError> {
+            self.inner.record_outcome(run_id, outcome).await
+        }
+
+        async fn list(
+            &self,
+            query: RunQuery,
+        ) -> Result<paladin_ports::output::run_repository_port::RunPage, RunRepositoryError>
+        {
+            self.inner.list(query).await
+        }
+
+        async fn active_run_for_thread(
+            &self,
+            thread_id: &ThreadId,
+        ) -> Result<Option<Run>, RunRepositoryError> {
+            self.inner.active_run_for_thread(thread_id).await
+        }
+
+        async fn request_cancel(
+            &self,
+            run_id: &RunId,
+        ) -> Result<paladin_core::platform::container::run::RunStatus, RunRepositoryError> {
+            self.inner.request_cancel(run_id).await
+        }
+
+        async fn is_cancel_requested(
+            &self,
+            thread_id: &ThreadId,
+        ) -> Result<bool, RunRepositoryError> {
+            self.inner.is_cancel_requested(thread_id).await
+        }
+
+        async fn bump_attempt(&self, run_id: &RunId) -> Result<u32, RunRepositoryError> {
+            self.inner.bump_attempt(run_id).await
+        }
+
+        async fn record_resume(
+            &self,
+            run_id: &RunId,
+            responses: Vec<paladin_core::platform::container::parley::ParleyResponse>,
+        ) -> Result<u32, RunRepositoryError> {
+            self.inner.record_resume(run_id, responses).await
+        }
+
+        async fn clear_pending_responses(&self, run_id: &RunId) -> Result<(), RunRepositoryError> {
+            self.inner.clear_pending_responses(run_id).await
+        }
+    }
+
+    /// A queue whose `enqueue` signals `entered` and then never completes, so a test can drop a
+    /// submission after its run row is written and before it is queued.
+    struct ParkingQueue {
+        entered: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait]
+    impl RunQueuePort for ParkingQueue {
+        async fn enqueue(&self, _run: QueuedRun) -> Result<(), QueueError> {
+            self.entered.notify_one();
+            std::future::pending::<()>().await;
+            Ok(())
+        }
+
+        async fn dequeue(
+            &self,
+            _lease: std::time::Duration,
+        ) -> Result<Option<paladin_ports::output::run_queue_port::LeasedRun>, QueueError> {
+            Ok(None)
+        }
+
+        async fn extend_lease(
+            &self,
+            _token: &paladin_ports::output::run_queue_port::LeaseToken,
+            _lease: std::time::Duration,
+        ) -> Result<(), QueueError> {
+            Ok(())
+        }
+
+        async fn ack(
+            &self,
+            _token: &paladin_ports::output::run_queue_port::LeaseToken,
+        ) -> Result<(), QueueError> {
+            Ok(())
+        }
+
+        async fn nack(
+            &self,
+            _token: &paladin_ports::output::run_queue_port::LeaseToken,
+            _requeue_delay: std::time::Duration,
+        ) -> Result<(), QueueError> {
+            Ok(())
+        }
+
+        async fn depth(&self) -> Result<u64, QueueError> {
+            Ok(0)
+        }
+    }
+
+    /// Poll `treasurer.counts()` (bounded: 50 x 10 ms) until it reads `expected`; returns the
+    /// last reading.
+    async fn counts_settle_to(
+        treasurer: &RecordingTreasurer,
+        expected: (u32, u32, u32),
+    ) -> (u32, u32, u32) {
+        let mut counts = treasurer.counts();
+        for _ in 0..50 {
+            if counts == expected {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            counts = treasurer.counts();
+        }
+        counts
+    }
+
+    #[tokio::test]
+    async fn a_submission_dropped_before_its_row_is_written_gives_the_notice_back() {
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(ParkingRepository {
+            inner: InMemoryRunRepository::new(),
+            entered: entered.clone(),
+        });
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let treasurer = RecordingTreasurer::new(Script::Admit);
+        let service = Arc::new(
+            RunSubmissionService::new(repository, queue, Arc::new(resolver))
+                .with_treasurer(treasurer.clone()),
+        );
+
+        let caller = {
+            let service = Arc::clone(&service);
+            tokio::spawn(async move {
+                service
+                    .submit(submit_as(
+                        None,
+                        Some(principal_ref("acme", "svc-a", UserRole::User)),
+                    ))
+                    .await
+            })
+        };
+        entered.notified().await;
+        caller.abort();
+
+        assert_eq!(
+            counts_settle_to(&treasurer, (1, 0, 1)).await,
+            (1, 0, 1),
+            "no run row exists, so the dropped submission gives its admission back"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_submission_dropped_after_its_row_is_written_confirms_the_notice() {
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(ParkingQueue {
+            entered: entered.clone(),
+        });
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let treasurer = RecordingTreasurer::new(Script::Admit);
+        let service = Arc::new(
+            RunSubmissionService::new(repository, queue, Arc::new(resolver))
+                .with_treasurer(treasurer.clone()),
+        );
+
+        let caller = {
+            let service = Arc::clone(&service);
+            tokio::spawn(async move {
+                service
+                    .submit(submit_as(
+                        None,
+                        Some(principal_ref("acme", "svc-a", UserRole::User)),
+                    ))
+                    .await
+            })
+        };
+        entered.notified().await;
+        caller.abort();
+
+        assert_eq!(
+            counts_settle_to(&treasurer, (1, 1, 0)).await,
+            (1, 1, 0),
+            "the run row exists, so the dropped submission confirms its admission"
+        );
     }
 
     #[tokio::test]

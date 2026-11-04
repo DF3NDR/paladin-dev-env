@@ -17,8 +17,17 @@
 //!   once-per-window notice from the [`TreasuryNoticePort`](paladin_ports::output::treasury_notice_port::TreasuryNoticePort) (when one is attached with
 //!   [`Treasurer::with_notices`](crate::application::services::treasurer::Treasurer::with_notices)). The claim is store-enforced across replicas; a notice-store
 //!   failure is logged and the run is still admitted. A claim is made BEFORE the run row is
-//!   inserted, so `abandon` gives an admitted-but-never-persisted run's notices back (a crash in
-//!   between can lose a window's notice but never duplicate it).
+//!   inserted, so `abandon` gives an admitted-but-never-persisted run's notices back. A won
+//!   notice is delivered or given back on every path but two (41-REVIEW WR-01): a failed
+//!   operator enqueue gives the notice back, so the next admission in the window wins it again;
+//!   `confirm` and `abandon` run in a detached task, so a dropped caller does not cancel them;
+//!   and a dropped run submission settles its admission through a drop guard (`confirm` when
+//!   the run row exists, otherwise give back). Only a process crash between claim and
+//!   settlement, or a drop inside `admit` itself before it returns the `Admission`, can still
+//!   lose a window's notice; a guard whose run-row read fails gives the notice back, so that
+//!   window can notify twice rather than never. Mid-run guard notices (`notify_operator`,
+//!   called by `TreasurerSpendGuard`) keep log-and-swallow: the warning is also the run's trace
+//!   event and herald line, and giving it back would re-emit it in another run.
 //! - **The operator webhook rides the durable queue** (ALLOW-04, D-17): when an
 //!   [`OperatorNoticeTarget`](crate::application::services::treasurer::OperatorNoticeTarget) is attached ([`Treasurer::with_operator_webhook`](crate::application::services::treasurer::Treasurer::with_operator_webhook)), `confirm`
 //!   enqueues one `webhook_deliveries` row (event `allowance_warning`) per notice the
@@ -339,6 +348,30 @@ impl Treasurer {
         }
     }
 
+    /// Run `work` to completion even if the caller awaiting it is dropped (41-REVIEW WR-01).
+    ///
+    /// `confirm` and `abandon` are awaited inline by the run submission path and by the HTTP
+    /// agent routes, both of which a client disconnect can drop at any await. The work owns
+    /// everything it needs, so it runs in a task spawned on the current runtime and the caller
+    /// merely awaits its `JoinHandle`: dropping the caller drops the handle, not the task. A
+    /// `JoinError` (a panic inside the work) is logged with the notice count only and never
+    /// propagated. With no runtime handle (a caller outside tokio) the work runs inline.
+    async fn run_detached<F>(what: &'static str, notice_count: usize, work: F)
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                if let Err(error) = handle.spawn(work).await {
+                    log::error!(
+                        "allowance notice {what} task ended abnormally ({notice_count} notice(s)): {error}"
+                    );
+                }
+            }
+            Err(_) => work.await,
+        }
+    }
+
     /// Claim the notice for one warn crossing and, when this admission won it, return it.
     ///
     /// `AlreadyRecorded` yields `None` (another admission owns the window's notice). A store
@@ -602,20 +635,29 @@ impl AllowanceAdmissionPort for Treasurer {
     /// back (`TreasuryNoticePort::discard`), so the next admission in the same window wins it
     /// again and enqueues it. `confirm` never fails or blocks the run. With no target attached
     /// nothing is enqueued and nothing is given back.
+    ///
+    /// The work runs in a detached task that owns clones of the notice store, the operator
+    /// target and the admission's notices, so a dropped caller (a client disconnect) does not
+    /// cancel it (41-REVIEW WR-01).
     async fn confirm(&self, admission: &Admission) {
-        Self::deliver_or_give_back(
-            self.notices.as_ref(),
-            self.operator_webhook.as_ref(),
-            admission.notices(),
-        )
+        let store = self.notices.clone();
+        let target = self.operator_webhook.clone();
+        let notices = admission.notices().to_vec();
+        let count = notices.len();
+        Self::run_detached("confirm", count, async move {
+            Self::deliver_or_give_back(store.as_ref(), target.as_ref(), &notices).await;
+        })
         .await;
     }
 
     /// Give back the notices this admission won (RESEARCH Pattern 3): the run was admitted but
     /// never persisted or enqueued, so the next admission in the same window must win them
     /// again. A discard failure is logged at `error` and never propagated.
+    ///
+    /// Like `confirm`, the discard runs in a detached task that owns its inputs, so a dropped
+    /// caller does not cancel it (41-REVIEW WR-01).
     async fn abandon(&self, admission: &Admission) {
-        let Some(notices) = &self.notices else {
+        let Some(notices) = self.notices.clone() else {
             return;
         };
         if admission.is_empty() {
@@ -626,12 +668,16 @@ impl AllowanceAdmissionPort for Treasurer {
             .iter()
             .map(|notice| notice.notice_id.clone())
             .collect();
-        if let Err(error) = notices.discard(&ids).await {
-            log::error!(
-                "allowance notice discard failed for an abandoned admission ({} notice(s)): {error}",
-                ids.len()
-            );
-        }
+        let count = ids.len();
+        Self::run_detached("abandon", count, async move {
+            if let Err(error) = notices.discard(&ids).await {
+                log::error!(
+                    "allowance notice discard failed for an abandoned admission ({} notice(s)): {error}",
+                    ids.len()
+                );
+            }
+        })
+        .await;
     }
 }
 

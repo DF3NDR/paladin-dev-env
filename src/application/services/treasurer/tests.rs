@@ -1424,6 +1424,114 @@ async fn enqueue_failure_gives_the_notice_back_so_the_next_admission_wins_it() {
     );
 }
 
+/// A delivery queue whose `enqueue` parks until released, so a test can drop the caller of
+/// `confirm` while an enqueue is in flight (41-REVIEW WR-01, plan 57-14). It records into an
+/// in-memory queue once released.
+struct ParkedDeliveries {
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+    inner: InMemoryWebhookDeliveryRepository,
+}
+
+impl ParkedDeliveries {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            entered: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+            inner: InMemoryWebhookDeliveryRepository::new(),
+        })
+    }
+}
+
+#[async_trait]
+impl WebhookDeliveryRepositoryPort for ParkedDeliveries {
+    async fn enqueue(
+        &self,
+        delivery: OperatorDelivery,
+    ) -> Result<(), WebhookDeliveryRepositoryError> {
+        self.entered.notify_one();
+        self.release.notified().await;
+        self.inner.enqueue(delivery).await
+    }
+
+    async fn get(
+        &self,
+        delivery_id: &WebhookDeliveryId,
+    ) -> Result<Option<OperatorDelivery>, WebhookDeliveryRepositoryError> {
+        self.inner.get(delivery_id).await
+    }
+
+    async fn claim_due(
+        &self,
+        now: DateTime<Utc>,
+        limit: u32,
+    ) -> Result<Vec<OperatorDelivery>, WebhookDeliveryRepositoryError> {
+        self.inner.claim_due(now, limit).await
+    }
+
+    async fn record_attempt(
+        &self,
+        delivery_id: &WebhookDeliveryId,
+        result: WebhookAttemptResult,
+    ) -> Result<(), WebhookDeliveryRepositoryError> {
+        self.inner.record_attempt(delivery_id, result).await
+    }
+
+    async fn list_for_run(
+        &self,
+        run_id: &RunId,
+        limit: u32,
+        cursor: Option<WebhookDeliveryId>,
+    ) -> Result<WebhookDeliveryPage, WebhookDeliveryRepositoryError> {
+        self.inner.list_for_run(run_id, limit, cursor).await
+    }
+}
+
+/// 41-REVIEW WR-01 (plan 57-14): dropping the caller of `confirm` mid-enqueue (a client
+/// disconnect) must not strand the admission's notices; `confirm`'s work runs in a detached
+/// task, so the delivery is still recorded after the caller is aborted.
+#[tokio::test]
+async fn confirm_completes_when_its_caller_is_dropped_mid_enqueue() {
+    let ledger = FakeLedger::new(at(NOW)).with_row("acme", "svc-a", at(WS), 85);
+    let notices = RecordingNotices::new();
+    let deliveries = ParkedDeliveries::new();
+    let treasurer = Arc::new(treasurer_with_operator_webhook(
+        key_policy(),
+        &ledger,
+        &notices,
+        deliveries.clone(),
+    ));
+    let admission = admit_svc_a(&treasurer).await.expect("admitted");
+    assert_eq!(admission.notices().len(), 1);
+
+    let caller = {
+        let treasurer = Arc::clone(&treasurer);
+        tokio::spawn(async move { treasurer.confirm(&admission).await })
+    };
+    deliveries.entered.notified().await;
+    caller.abort();
+    // `notify_one` stores a permit, so the release cannot race with the waiter.
+    deliveries.release.notify_one();
+
+    let mut recorded = 0;
+    for _ in 0..50 {
+        recorded = deliveries
+            .inner
+            .claim_due(at(NOW), 10)
+            .await
+            .expect("claim")
+            .len();
+        if recorded > 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        recorded, 1,
+        "the delivery is enqueued although the caller of confirm was dropped"
+    );
+}
+
 #[tokio::test]
 async fn agent_path_operator_payload_has_a_null_run_id() {
     let ledger = FakeLedger::new(at(NOW)).with_row("acme", "svc-a", at(WS), 85);

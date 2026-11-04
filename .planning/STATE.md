@@ -5,15 +5,15 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 57
 current_phase_name: register-hygiene-close-out
 status: executing
-stopped_at: Completed 57-12-PLAN.md
-last_updated: "2026-11-04T18:53:23.524Z"
+stopped_at: Completed 57-13-PLAN.md
+last_updated: "2026-11-04T19:19:39.418Z"
 last_activity: 2026-11-04
-last_activity_desc: Completed 57-12 (51 WR-01 fixed, WINDOWS row 94 open for 57-11)
+last_activity_desc: Completed 57-13 (45 WR-04 and WR-06 fixed; WINDOWS rows 95 and 96 open for 57-11)
 progress:
   total_phases: 6
   completed_phases: 5
   total_plans: 68
-  completed_plans: 63
+  completed_plans: 64
 ---
 
 # Project State
@@ -51,11 +51,11 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 ## Current Position
 
 Phase: 57 (register-hygiene-close-out) — EXECUTING
-Plan: 12 of 16 complete (57-12 done; gap plans 57-13…57-16 then 57-11 remain)
+Plan: 13 of 16 complete (57-13 done; gap plans 57-14…57-16 then 57-11 remain)
 Status: Ready to execute
-Last activity: 2026-11-04 — Completed 57-12 (51 WR-01 fix; WINDOWS row 94 open for 57-11)
+Last activity: 2026-11-04 — Completed 57-13 (45 WR-04 and WR-06 fixed; WINDOWS rows 95 and 96 open for 57-11)
 
-Progress: [██████████████░░░░░░] 5/7 phases (v0.11.1) — plans [████████████████░░░░] 52/57 ([█████████░] 93%)
+Progress: [██████████████░░░░░░] 5/7 phases (v0.11.1) — plans [████████████████░░░░] 52/57 ([█████████░] 94%)
 
 ## Performance Metrics
 
@@ -422,6 +422,7 @@ Progress: [██████████████░░░░░░] 5/7 pha
 | Phase 57 P04 | 35min | 2 tasks | 7 files |
 | Phase 57 P10 | ~1h | 3 tasks | 5 files |
 | Phase 57 P12 | 20min | 2 tasks | 4 files |
+| Phase 57 P13 | 26min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -810,6 +811,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: [Phase 57-04] ADR-0063 amended in place to the earliest-attributed-run owner rule (D-02); M-B-24/M-B-25 amended, 11.8 step 12 added; root CHANGELOG gets a new Fixed bullet because it had no thread bullet to amend
 - [Phase 57]: 57-10: owner chose option-a (D-14 as proposed): 7 correctness/security items (51 WR-01; 45 WR-04, WR-06; 41 WR-01; 43 WR-01, WR-04, WR-05) fixed in-phase via gap closure; 8 other-class items waived by 57-11 in the D-03 shape
 - [Phase 57]: [57-12] llm_error_label is a private fixed-label twin of llm_error_class in paladin_builder.rs; a failed reasoning check names its kind only, no payload rendered or logged (51-REVIEW WR-01, WINDOWS row 94)
+- [Phase 57]: 57-13: run_agent emits its terminal RunFinished only after the durable write and ack on every exit (on_committed callback); success-arm write failure logs run id and repository error then nacks; failed-run spend read from ATTEMPT_SPEND on the Err arm only (45 WR-04, WR-06, D-14)
 
 ### Pending Todos
 
@@ -1202,8 +1204,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-11-04T18:53:23.498Z
-Stopped at: Completed 57-12-PLAN.md
+Last session: 2026-11-04T19:19:39.383Z
+Stopped at: Completed 57-13-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

@@ -684,7 +684,7 @@ fn parse_run_status(raw: &str) -> Result<RunStatus, ApiError> {
 /// routes renders (WR-03/WR-04). The detail -- which can carry connection strings,
 /// schema names, or (for a half-attributed or corrupt row) another tenant's data
 /// shape -- goes to the server log only.
-const RUN_STORE_ERROR_MESSAGE: &str = "run store error";
+pub(crate) const RUN_STORE_ERROR_MESSAGE: &str = "run store error";
 
 /// Log a repository/backend failure server-side and return the generic `500`.
 ///

@@ -1250,6 +1250,88 @@ mod tests {
             .unwrap();
     }
 
+    /// D-02 (WINDOWS rows 86/87, T-57-09): the submit guard reads the thread's **owner
+    /// run** (its earliest attributed run), not its newest. acme owns the thread; a later
+    /// globex run is the newest. An acme principal is admitted and a globex principal is
+    /// refused as an unknown thread, so a tenant that only touched the thread later cannot
+    /// submit onto it.
+    #[tokio::test]
+    async fn submit_guard_reads_the_owner_run_not_the_newest_run() {
+        use paladin_core::platform::container::run::RunStatus;
+
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, repository, queue) = service_with(resolver);
+
+        let accepted = service
+            .submit(submit_on_thread(
+                "acme-thread",
+                Some(principal_ref("acme", "svc-a", UserRole::User)),
+            ))
+            .await
+            .unwrap();
+        let acme_run = repository.get(&accepted.run_id).await.unwrap().unwrap();
+        let mut globex_run = Run::new(
+            RunId::new_v7(),
+            acme_run.thread_id.clone(),
+            acme_run.assistant.clone(),
+            serde_json::json!({}),
+        )
+        .with_submitted_by(principal_ref("globex", "svc-b", UserRole::User).attribution());
+        globex_run.submitted_at = acme_run.submitted_at + chrono::Duration::seconds(1);
+
+        // Finish acme's run so the next insert is not `ThreadBusy`, add globex's run as the
+        // newest, and finish that too: the thread is idle, owned by acme, newest run globex's.
+        for (run, insert) in [(&acme_run, false), (&globex_run, true)] {
+            if insert {
+                repository.insert(run).await.unwrap();
+            }
+            repository
+                .update_status(
+                    &run.run_id,
+                    RunStatus::Queued,
+                    RunStatus::Running,
+                    Utc::now(),
+                )
+                .await
+                .unwrap();
+            repository
+                .update_status(
+                    &run.run_id,
+                    RunStatus::Running,
+                    RunStatus::Completed,
+                    Utc::now(),
+                )
+                .await
+                .unwrap();
+        }
+        let depth_before = queue.depth().await.unwrap();
+
+        let err = service
+            .submit(submit_on_thread(
+                "acme-thread",
+                Some(principal_ref("globex", "svc-b", UserRole::User)),
+            ))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, RunSubmissionError::UnknownThread { .. }),
+            "the newest run's tenant does not own the thread, got {err:?}"
+        );
+        assert_eq!(
+            queue.depth().await.unwrap(),
+            depth_before,
+            "a refused submit enqueues nothing"
+        );
+
+        service
+            .submit(submit_on_thread(
+                "acme-thread",
+                Some(principal_ref("acme", "svc-a2", UserRole::User)),
+            ))
+            .await
+            .expect("the owner tenant is admitted although the newest run is globex's");
+    }
+
     /// WR-01 (fork): a `User` of another tenant forking a thread whose latest
     /// run is not theirs gets the uniform `UnknownThread`, before the
     /// busy-thread / waypoint checks can confirm the thread exists.

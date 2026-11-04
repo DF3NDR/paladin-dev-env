@@ -54,7 +54,6 @@ use paladin_core::platform::container::run::{
     ForkSpec, Run, RunEventKind, RunId, RunStatus, RunStreamEventKind, RunStreamMode,
 };
 use paladin_core::platform::container::run_scope::RunScope;
-use paladin_core::platform::container::token_usage::TokenUsage;
 use paladin_core::platform::container::trace::{RunFinishStatus, TraceEvent};
 use paladin_core::platform::container::treasury_ledger::{LedgerScope, SettlementContext};
 use paladin_core::platform::container::waypoint::{NodeId, NodeOutcomeKind, Waypoint, WaypointId};
@@ -67,6 +66,7 @@ use paladin_ports::output::run_repository_port::{
     RunOutcomeRecord, RunRepositoryError, RunRepositoryPort,
 };
 use paladin_ports::output::run_trace_port::RunTracePort;
+use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope};
 use paladin_ports::output::trace_sink_port::{
     CompositeSink, RUN_TRACE_EMITTER, TraceEmitter, TraceSink,
 };
@@ -1752,16 +1752,19 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         if let Some(budget) = derived_budget {
             run_scope = run_scope.with_derived_token_budget(budget);
         }
-        let call = with_run_trace_scope(
+        // 45-REVIEW WR-06: a fresh attempt spend scope around the agent call. The production
+        // port records every billed call into the active scope (the 50-29 `ATTEMPT_SPEND`
+        // carrier), so a loop that is billed and then fails still leaves its figures here.
+        // Following the carrier's rule it is read on failure only: the success arm keeps
+        // `PaladinResult.usage`/`cost`, so each outcome has exactly one source and nothing is
+        // counted twice. A port that records nothing still reports zero, as before.
+        let spend = SpendScope::new();
+        let heartbeat = HeartbeatHandle::new();
+        let traced_call = with_run_trace_scope(
             &emitter,
-            paladin_port.execute_scoped(
-                paladin.as_ref(),
-                &input_text,
-                &HeartbeatHandle::new(),
-                &run_scope,
-            ),
-        )
-        .await;
+            paladin_port.execute_scoped(paladin.as_ref(), &input_text, &heartbeat, &run_scope),
+        );
+        let call = ATTEMPT_SPEND.scope(spend.clone(), traced_call).await;
 
         let persisted = match call {
             Ok(result) => {
@@ -1874,14 +1877,16 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                 // run row below (redacted then bounded, 45-REVIEW WR-05) and
                 // stays diagnosable through `GET /runs/{id}`.
                 let duration_ms = elapsed_ms(started);
+                // 45-REVIEW WR-06: what the loop was billed before it failed.
+                let incurred = spend.snapshot();
                 dispatcher.emit(TraceEvent::NodeFinished {
                     superstep: 0,
                     node_id,
                     attempt,
                     outcome: NodeOutcomeKind::Failed,
                     duration_ms,
-                    usage: TokenUsage::default(),
-                    cost: None,
+                    usage: incurred.usage().clone(),
+                    cost: incurred.cost(),
                     reasoning_requested: None,
                     reasoning_effective: None,
                     cache_hit: false,

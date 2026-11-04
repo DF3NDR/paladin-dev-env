@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 21
+open_count: 22
 waived_count: 40
 fixed_count: 34
-total_count: 95
-last_updated: 2026-11-04T18:59:44.917Z
+total_count: 96
+last_updated: 2026-11-04T19:04:46.983Z
 ---
 
 # Broken Windows Ledger
@@ -110,6 +110,7 @@ last_updated: 2026-11-04T18:59:44.917Z
 | 93 | 45 | deviation | tests/integration/file_storage_integration_tests.rs | 407 | 45-REVIEW WR-03 (found live by the Phase 57 sweep, D-14): the presigned-URL test converts reqwest::Error with ? and its Display includes the full signed URL (X-Amz-Credential, X-Amz-Signature), so a connection failure prints a live presigned URL into CI logs. Fix: map every reqwest error with without_url (plan 57-06). | open |  | 2026-11-04T16:19:09.532Z |  |
 | 94 | 51 | deviation | src/application/services/paladin/paladin_builder.rs | 1202 | 51-REVIEW WR-01 (found live by the Phase 57 sweep, D-14): effort_refusal renders the whole LlmError into a ConfigurationError, so a check_reasoning error carrying vendor text (ProcessingError, ProviderError message), forwarded unchanged by FallbackLlmAdapter, reaches the caller unredacted. Fix: a fixed per-variant label, no payload (plan 57-12). | open |  | 2026-11-04T18:38:31.139Z |  |
 | 95 | 45 | deviation | src/application/services/run/worker.rs | 1793 | 45-REVIEW WR-04 (found live by the Phase 57 sweep, D-14): run_agent emits the terminal RunFinished (Completed at :1793, Failed at :1844) before update_status/record_outcome/ack and before persist_failure, whose repository-error branch nacks, so subscribers, the herald and the trace see done or error for a run whose row stays running and is redelivered. Fix: emit only after the durable write and ack, on every exit (plan 57-13). | open |  | 2026-11-04T18:59:44.917Z |  |
+| 96 | 45 | deviation | src/application/services/run/worker.rs | 1838 | 45-REVIEW WR-06 (found live by the Phase 57 sweep, D-14): the run_agent Err arm emits NodeFinished with TokenUsage::default() and cost None, so a failed agent run reports zero usage and no cost to RunFinished, the herald and the persisted trace although its loop billed calls before failing. Fix: read the run's ATTEMPT_SPEND scope on the Err arm (plan 57-13). | open |  | 2026-11-04T19:04:46.983Z |  |
 
 ````json
 [
@@ -1251,6 +1252,18 @@ last_updated: 2026-11-04T18:59:44.917Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-11-04T18:59:44.917Z",
+    "resolved_at": null
+  },
+  {
+    "id": 96,
+    "kind": "deviation",
+    "phase": "45",
+    "file": "src/application/services/run/worker.rs",
+    "line": 1838,
+    "description": "45-REVIEW WR-06 (found live by the Phase 57 sweep, D-14): the run_agent Err arm emits NodeFinished with TokenUsage::default() and cost None, so a failed agent run reports zero usage and no cost to RunFinished, the herald and the persisted trace although its loop billed calls before failing. Fix: read the run's ATTEMPT_SPEND scope on the Err arm (plan 57-13).",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-11-04T19:04:46.983Z",
     "resolved_at": null
   }
 ]

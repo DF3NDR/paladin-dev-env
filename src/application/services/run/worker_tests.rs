@@ -2004,6 +2004,133 @@ async fn failed_agent_run_node_finished_carries_no_reasoning() {
     }
 }
 
+// --- 57-13 (45-REVIEW WR-06): a failed agent run reports the spend it incurred ---
+
+/// A [`PaladinPort`] standing in for a multi-loop agent whose first call was billed and
+/// whose second loop then failed: it records the first call into the active
+/// `ATTEMPT_SPEND` scope exactly as `PaladinExecutionService` does at every fold, then
+/// returns an error that carries no figures.
+struct SpendsThenFailsPaladinPort {
+    usage: TokenUsage,
+    cost: paladin_core::platform::container::cost::Cost,
+}
+
+#[async_trait]
+impl PaladinPort for SpendsThenFailsPaladinPort {
+    async fn execute(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinResult, PaladinError> {
+        paladin_ports::output::spend_scope::record_incurred_spend(&self.usage, Some(&self.cost));
+        Err(PaladinError::ExecutionError("second call failed".into()))
+    }
+
+    async fn execute_stream(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinStream, PaladinError> {
+        unreachable!("this test never calls execute_stream")
+    }
+
+    fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+        Ok(())
+    }
+}
+
+/// The `(usage, cost)` of the one persisted `NodeFinished` row and of the `RunFinished`
+/// row (with its status) of an agent run's trace.
+#[allow(clippy::type_complexity)]
+fn failed_run_figures(
+    rows: &[paladin_core::platform::container::trace::TraceRecord],
+) -> (
+    (
+        TokenUsage,
+        Option<paladin_core::platform::container::cost::Cost>,
+    ),
+    (
+        RunFinishStatus,
+        TokenUsage,
+        Option<paladin_core::platform::container::cost::Cost>,
+    ),
+) {
+    let node = rows
+        .iter()
+        .find_map(|r| match &r.event {
+            TraceEvent::NodeFinished { usage, cost, .. } => Some((usage.clone(), cost.clone())),
+            _ => None,
+        })
+        .expect("an agent run persists a NodeFinished row");
+    let run = rows
+        .iter()
+        .find_map(|r| match &r.event {
+            TraceEvent::RunFinished {
+                status,
+                usage,
+                cost,
+                ..
+            } => Some((*status, usage.clone(), cost.clone())),
+            _ => None,
+        })
+        .expect("an agent run persists a RunFinished row");
+    (node, run)
+}
+
+/// 45-REVIEW WR-06: a loop that was billed for a call and then failed reports exactly that
+/// usage and cost on its `NodeFinished` and, folded through the dispatcher, on `RunFinished`
+/// and the persisted trace -- not zero and `None`.
+#[tokio::test]
+async fn failed_agent_run_reports_the_spend_it_incurred_before_failing() {
+    use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+    use paladin_core::platform::container::waypoint::NodeOutcomeKind;
+
+    let usd = CurrencyCode::new("USD").expect("USD is valid");
+    let port = Arc::new(SpendsThenFailsPaladinPort {
+        usage: TokenUsage::new(1_000, 2_000),
+        cost: Cost::new(22_500_000, usd.clone()),
+    });
+    let (worker, repository, queue, traces) =
+        agent_pool_with_traces(port, Arc::new(AgentOnlyResolver));
+    let (_run_id, thread_id) = submit(&repository, &queue, "code-agent").await;
+
+    assert!(worker.run_once().await.unwrap());
+    let rows = read_agent_trace(&traces, &thread_id).await;
+    let (outcome, _, _) = node_finished_reasoning(&rows);
+    assert_eq!(outcome, NodeOutcomeKind::Failed);
+    let ((node_usage, node_cost), (status, run_usage, run_cost)) = failed_run_figures(&rows);
+    let expected_cost = Some(Cost::new(22_500_000, usd));
+    assert_eq!(
+        node_usage,
+        TokenUsage::new(1_000, 2_000),
+        "the failed NodeFinished carries the usage billed before the failure"
+    );
+    assert_eq!(node_cost, expected_cost, "and the cost billed before it");
+    assert_eq!(status, RunFinishStatus::Failed);
+    assert_eq!(run_usage, TokenUsage::new(1_000, 2_000));
+    assert_eq!(run_cost, expected_cost);
+}
+
+/// 45-REVIEW WR-06 guard: a first-call failure that billed nothing still reports zero usage
+/// and no cost -- the scope is read, not invented.
+#[tokio::test]
+async fn failed_agent_run_with_no_billed_call_reports_zero_spend() {
+    let (worker, repository, queue, traces) = agent_pool_with_traces(
+        Arc::new(AlwaysFailsPaladinPort),
+        Arc::new(AgentOnlyResolver),
+    );
+    let (_run_id, thread_id) = submit(&repository, &queue, "code-agent").await;
+
+    assert!(worker.run_once().await.unwrap());
+    let rows = read_agent_trace(&traces, &thread_id).await;
+    let ((node_usage, node_cost), (status, run_usage, run_cost)) = failed_run_figures(&rows);
+    assert_eq!(node_usage, TokenUsage::default());
+    assert_eq!(node_cost, None);
+    assert_eq!(status, RunFinishStatus::Failed);
+    assert_eq!(run_usage, TokenUsage::default());
+    assert_eq!(run_cost, None);
+}
+
 /// Drain every event currently buffered on `rx`.
 fn drain_events(
     rx: &mut tokio::sync::broadcast::Receiver<

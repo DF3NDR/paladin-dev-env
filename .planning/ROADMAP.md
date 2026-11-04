@@ -574,7 +574,7 @@ Plans:
 **Wave 2**
 
 - [x] 57-03-PLAN.md — thread gate, list walk and submit guard read the owner run (HTTP tracer over SQLite); newer-schema owner row skipped and hidden for a tenant; `openapi.json` descriptions (REG-02 rows 85-87)
-- [ ] 57-06-PLAN.md — live review findings 45 CR-01 (`list_files` limit as delimiter), WR-01, WR-02 (`s3_err_summary`), WR-03 (`without_url`), WINDOWS rows minted first (REG-05, REG-02)
+- [x] 57-06-PLAN.md — live review findings 45 CR-01 (`list_files` limit as delimiter), WR-01, WR-02 (`s3_err_summary`), WR-03 (`without_url`), WINDOWS rows minted first (REG-05, REG-02)
 - [ ] 57-09-PLAN.md — register rows for Phases 38 (incl. CR-01), 44, 47, 51 on hunted evidence (REG-05)
 
 **Wave 3**

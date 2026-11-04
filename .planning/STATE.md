@@ -5,15 +5,15 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 57
 current_phase_name: register-hygiene-close-out
 status: executing
-stopped_at: Completed 57-06-PLAN.md
-last_updated: "2026-11-04T16:23:05.563Z"
+stopped_at: Completed 57-09-PLAN.md
+last_updated: "2026-11-04T16:34:42.129Z"
 last_activity: 2026-11-04
 last_activity_desc: Phase 57 execution started
 progress:
   total_phases: 6
   completed_phases: 5
   total_plans: 63
-  completed_plans: 59
+  completed_plans: 60
 ---
 
 # Project State
@@ -51,11 +51,11 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 ## Current Position
 
 Phase: 57 (register-hygiene-close-out) — EXECUTING
-Plan: 8 of 11
+Plan: 9 of 11
 Status: Ready to execute
 Last activity: 2026-11-04 — Phase 57 execution started
 
-Progress: [██████████████░░░░░░] 5/7 phases (v0.11.1) — plans [████████████████████] 52/52 ([█████████░] 94%)
+Progress: [██████████████░░░░░░] 5/7 phases (v0.11.1) — plans [████████████████████] 52/52 ([██████████] 95%)
 
 ## Performance Metrics
 
@@ -418,6 +418,7 @@ Progress: [██████████████░░░░░░] 5/7 pha
 | Phase 57 P02 | 70min | 3 tasks | 9 files |
 | Phase 57 P03 | 75min | 3 tasks | 5 files |
 | Phase 57 P06 | 28min | 3 tasks | 6 files |
+| Phase 57 P09 | 35min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -802,6 +803,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 57-08: check-review-dispositions.sh reads register rows only inside the '## Dispositions' section; WR-/CR-/IN- ids do not count as closed-row pointers; MALFORMED_ROW added as a fifteenth class
 - [Phase ?]: 57-07: owner confirmed all 26 Phase 40 judgment rows (20 prohibitions + C1..C6) on 2026-11-04; 0 rejects; tier split derived 13 test / 7 code
 - [Phase ?]: 57-02: thread ownership is the earliest attributed run, served by one defaulted RunRepositoryPort::owner_run_for_thread with an earliest-run fallback (owner selected option-a; D-01/D-02)
+- [Phase 57]: 57-09: 51 WR-01 is security-class LIVE (unredacted LlmError into ConfigurationError); 38 WR-01/WR-02 and 51 WR-02 other-class LIVE; all four go to the 57-10 triage
 
 ### Pending Todos
 
@@ -1194,8 +1196,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-11-04T16:23:05.537Z
-Stopped at: Completed 57-06-PLAN.md
+Last session: 2026-11-04T16:34:42.102Z
+Stopped at: Completed 57-09-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

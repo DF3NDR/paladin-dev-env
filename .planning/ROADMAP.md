@@ -569,7 +569,7 @@ Plans:
 - [ ] 57-02-PLAN.md — owner checkpoint on the thread-ownership door, then defaulted `RunRepositoryPort::owner_run_for_thread` (earliest attributed run, one row) on in-memory/SQLite/Postgres with five contract clauses and `permits_thread(owner)` (REG-02 rows 86, 87)
 - [x] 57-05-PLAN.md — live review findings 45 WR-05 (redact-then-bound run failure text) and 41 WR-05 (empty operator-webhook secret is absent, boot warning), WINDOWS rows minted first (REG-05, REG-02)
 - [ ] 57-07-PLAN.md — Phase 40 judgment-tier worksheet (20 prohibitions + credential checklist over `629ef660...be3a9030`) with the owner's per-row read; Phase 42 subset accepted as-is (REG-04)
-- [ ] 57-08-PLAN.md — never-vacuous `scripts/check-review-dispositions.sh` + regression test; register rows for Phases 40, 42, 46, 48, 50, 50.1 (REG-05)
+- [x] 57-08-PLAN.md — never-vacuous `scripts/check-review-dispositions.sh` + regression test; register rows for Phases 40, 42, 46, 48, 50, 50.1 (REG-05)
 
 **Wave 2**
 

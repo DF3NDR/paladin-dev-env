@@ -514,7 +514,9 @@ impl WizardStep for SummaryStep {
     }
 }
 
-/// Write .env file with API keys
+/// Write .env file with API keys.
+///
+/// On unix the file is written at mode 0600 (see [`write_env_file_at`]).
 fn write_env_file(context: &WizardContext, merge: bool) -> CliResult<()> {
     let provider_names = context
         .get(KEY_SELECTED_PROVIDERS)
@@ -554,6 +556,29 @@ fn write_env_file(context: &WizardContext, merge: bool) -> CliResult<()> {
 ///
 /// Separate from [`write_env_file`] so tests can target an explicit path instead of
 /// changing the working directory (tests run in parallel).
+///
+/// On unix the file is created with mode 0600 (it holds provider API keys), and an
+/// existing, wider file is narrowed to 0600 through the open handle before the first
+/// byte is written (WR-04). Other targets keep the plain whole-file write.
+#[cfg(unix)]
+fn write_env_file_at(path: &Path, content: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    // The create mode applies only to a new file; narrow an older, wider one before
+    // any key goes in.
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    file.write_all(content.as_bytes())
+}
+
+/// Write `content` to `path` as the whole `.env` file (plain write on non-unix targets).
+#[cfg(not(unix))]
 fn write_env_file_at(path: &Path, content: &str) -> std::io::Result<()> {
     std::fs::write(path, content)
 }

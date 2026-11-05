@@ -165,7 +165,7 @@ A library consumer moves from `0.11.0` to `0.11.1` without changing source: no p
 signature or type changed, and no serialized schema changed except that the credential fields of
 nine config types are no longer written when those types are serialised (`M-B-50`, `M-B-51`;
 loading is unchanged); section 11.2 has no row and `.cargo/semver-checks-allowlist.toml` has no
-entry; `scripts/check-semver.sh` on `0143b50d5` (`0143b50d596eee90a3b185c2e9ce94ad0292a2a8`,
+entry; `scripts/check-semver.sh` on `48146bc99` (`48146bc99b6941a1d9fc50b60b5e6983c3f39dcf`,
 2026-11-05) reads `0 failure(s)` for all twelve packages at `--release-type patch`, 223 checks
 each. Run-time behaviour changes that a library consumer can observe are in section 11.1: M-B-30,
 M-B-33, M-B-34, M-B-35, M-B-40, M-B-41, M-B-45, M-B-46, M-B-47, and the credential-class changes

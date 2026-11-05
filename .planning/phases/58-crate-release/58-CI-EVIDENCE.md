@@ -37,6 +37,8 @@ RESEARCH.md that was not re-measured is labelled as a research figure.
 - SHA-C2: d88c519abb556ef32ad6def7533a4851754597f0
 - SHA-C3: ac9411ea0039eea6a4f61b3328977228cd766253
 - STAMP: 2026-11-05
+- SHA-R: 48146bc99b6941a1d9fc50b60b5e6983c3f39dcf
+- SHA-R1: 073bdd9ce13bbdb6241f39a632712f96b6789dc2
 
 Machine-readable SHA lines added by plans use the exact form `- SHA-<label>: <40-hex>` on their own line.
 
@@ -91,6 +93,30 @@ after the two `docs(58-01)` commits (`2e1338a80`).
 | 39 | `make finalize-crate-changelogs VERSION=0.11.1`; `make check-changelogs`; `make check-release-consistency RELEASE_TAG=v0.11.1` | `d88c519ab` | exit 0 each; `OK: 12 publishable package(s) checked for version '0.11.1' (date 2026-11-05)`; `OK: 12 publishable package(s) checked, all match tag version '0.11.1' with a changelog section for it` |
 | 40 | `scripts/extract-changelog-section.sh --version 0.11.1` (root) | `d88c519ab` | 16,065 characters, 16,075 bytes (limit 125,000) |
 | 41 | `make check-migration-allowlist`; `make check-gates`; `make check-doc-config` | `ac9411ea0` | exit 0 each; `Allowlist is set-equal to the MIGRATION.md §11.2 deliberate-breaking register`; `161 YAML block(s) checked, 0 failed` |
+| 42 | `git rev-parse HEAD`; `git diff --name-only SHA-C3 HEAD -- . ':!.planning'`; `git status --porcelain --untracked-files=no`; `gh api repos/DF3NDR/paladin-dev-env/branches/main --jq .commit.sha`; `CARGO_INCREMENTAL=0`; `df` | `48146bc99` | `SHA-R` = `48146bc99b6941a1d9fc50b60b5e6983c3f39dcf`; code diff against `SHA-C3` empty; status empty; `main` = `8b23cb4c55a10fcf0b08fab1af595e1f184e5f2e`; `target/debug/incremental` absent; free 5890 MiB (`df -h`: 5.8G) before and 5890 MiB after the offline rows; `cargo llvm-cov` absent (`error: no such command: llvm-cov`), 1.88 toolchain absent |
+| 43 | `grep -c TBD MIGRATION.md`; `make check-migration-allowlist` | `48146bc99` | `0` (grep exits 1 on a zero count); `Allowlist is set-equal to the MIGRATION.md §11.2 deliberate-breaking register (crate\|type pairs).`; `Every crate-wide cargo-semver-checks allow is mirrored by an allowlist entry`; exit 0 (re-seal row 1) |
+| 44 | `make check-gates` | `48146bc99` | exit 0; `11 publishable crate(s) checked, all have a CHANGELOG.md`; `12 publishable crate(s) checked, all match the allow-list exactly`; `16 register row(s) checked`; `7 workflow file(s) scanned ... no inline advisory-ignore suppression`; `37 governed dismissal(s) checked`; allowlist set-equal; `OK: 12 crate(s) checked in publish order`; `paladin-core (14) and paladin-ports (12) [dependencies] match ADR-0015's measured sets`; `OK: 128 file(s) scanned, every copyable version string equals '0.11.1' (class 1 Cargo pins: 42; class 2 Current version lines: 1; class 3 k8s labels and image tags: 8; class 4 openapi.json info.version: 1; exempt files: 1)`; `OK: scanned 627 file(s) (19 test-only), 0 finding(s)`; `OK: 184 file(s) scanned, 0 deprecated model literal(s) (allowlisted: 1)` (re-seal row 7; `check-version-strings` runs inside it) |
+| 45 | `make check-changelogs`; `make check-release-consistency RELEASE_TAG=v0.11.1` | `48146bc99` | exit 0 each; `11 publishable crate(s) checked, all have a CHANGELOG.md`; `OK: 12 publishable package(s) checked, all match tag version '0.11.1' with a changelog section for it` (the D-10 CI-conclusion clause was not checked locally, as its own NOTE says) |
+| 46 | per changelog (root plus 11 crate files): count of `^## \[Unreleased\]`, `^## \[0.11.1\] - 2026-11-05$`, first dated heading; `scripts/extract-changelog-section.sh --version 0.11.1 \| wc` | `48146bc99` | 12 files: `[Unreleased]` 1 (empty anchor), `[0.11.1] - 2026-11-05` 1, first dated heading `## [0.11.1] - 2026-11-05` in every file; root section **16,065 characters, 16,075 bytes** (limit 125,000) |
+| 47 | `make check-publish-order` | `48146bc99` | exit 0; `OK: 12 crate(s) checked in publish order ... CRATES exactly matches the cargo-metadata publishable set` (re-seal row 8) |
+| 48 | `cargo test --features web-server --test v0_9_config_boot` | `48146bc99` | exit 0; `test result: ok. 9 passed; 0 failed; 0 ignored` (re-seal row 2; free 5890 MiB before) |
+| 49 | `cargo test -p paladin-web --test openapi_golden_v0_9` | `48146bc99` | exit 0; `test result: ok. 9 passed; 0 failed; 0 ignored` (re-seal row 3) |
+| 50 | `cargo test -p paladin-web --lib openapi_matches_committed_baseline` | `48146bc99` | exit 0; `test result: ok. 1 passed; 0 failed; 0 ignored; 332 filtered out` (re-seal row 3; free 5219 MiB after) |
+| 51 | `SEMVER_PRUNE_LOCAL_CACHE=1 make check-semver` (cargo-semver-checks 0.50.0, 2026-11-05T20:39Z to 20:50Z) | `48146bc99` | exit 0; 12 packages each `223 checks: 223 pass, 31 skip`; `12 package(s) checked against 0.11.0 at --release-type patch; 0 failure(s)` (block under `### D-11 semver on SHA-R`; re-seal row 4; free 5219 MiB before, 5119 MiB after) |
+| 52 | `make publish-dry-run`, run 1 (2026-11-05T20:50:54Z to 21:04:42Z; free 5119 MiB before) | `48146bc99` | **exit 2, infrastructure red (D-00j infrastructure exception).** `clean-code`, `make test`, `cargo test --workspace --doc`, `make audit` and `make build-release` (`Finished release profile in 4m 30s`) passed (`Release check passed!`); `cargo publish --workspace --dry-run` failed at the verify stage with `error: failed to build archive at .../libpaladin_eval-b86dd67823659694.rlib: No space left on device (os error 28)` and the same for `libpaladin_storage-7c8abfbdc6e32a63.rlib`; `error: failed to verify package tarball`; `make: *** [Makefile:669: publish-dry-run] Error 101`; free 98 MiB (`/dev/vda 252G 39G 98M 100%`). Not fixed |
+| 53 | free space (inside `target/` only, no `cargo clean`): remove every `target/debug/deps/{lib,}paladin*` and `doc_examples*` file (about 12 GB, stale generations included) and the matching `target/debug/.fingerprint/paladin*` entries; remove `target/release`, `target/doc`, `target/package` (2026-11-05T21:05Z) | `48146bc99` | free 98 MiB -> 13023 MiB; third-party artifacts and `target/debug/build` kept; no tracked file touched |
+| 54 | `make publish-dry-run`, run 2 (the one allowed re-run; 2026-11-05T21:05:39Z to 21:17:51Z) | `48146bc99` | **exit 0.** `shellcheck clean`; `doc-check passed (ADR-0033)`; `All 105 D-05 public API entry points carry a plural '# Examples' heading`; 40 `test result` lines across the unit and doc-test legs, **6982 passed, 0 failed, 420 ignored**; `Scanning Cargo.lock for vulnerabilities (691 crate dependencies)`, `warning: 9 allowed warnings found`; `Finished release profile in 4m 19s`; `Release check passed!`; `cargo publish --workspace --dry-run`: 12 `Packaged`, 12 `Verifying`, 12 `aborting upload due to dry run`; `Dry-run publish completed`; free 8808 MiB after (re-seal row 6). Packaging order: paladin-ai-core, paladin-ports, paladin-battalion, paladin-llm, paladin-content, paladin-storage, paladin-eval, paladin-herald, paladin-memory, paladin-notifications, paladin-web, paladin-ai; `Uploading` order: paladin-ai-core, paladin-ports, paladin-battalion, paladin-herald, paladin-llm, paladin-notifications, paladin-storage, paladin-web, paladin-content, paladin-eval, paladin-memory, paladin-ai |
+| 55 | MSRV (`env RUSTUP_TOOLCHAIN=1.88 cargo check --workspace --all-features --all-targets`) | not run | `rustup toolchain list` shows stable, `nightly-2026-09-20` and `1.97.1` only: **not run locally -- CI-attributed to `MSRV (Rust 1.88)` (D-00e)** (re-seal row 5) |
+| 56 | `make clean-code` | `48146bc99` | exit 0; `shellcheck clean`; doc tests passed (13 `test result` lines, 689 passed, 0 failed); `doc-check passed (ADR-0033)`; `All 105 D-05 public API entry points carry a plural '# Examples' heading` |
+| 57 | `make security` (`cargo audit` then `cargo deny check`) | `48146bc99` | exit 0; `Scanning Cargo.lock for vulnerabilities (691 crate dependencies)`; `warning: 9 allowed warnings found`; `advisories ok, bans ok, licenses ok, sources ok` |
+| 58 | `make api-surface` | `48146bc99` | exit 0; `API surface extracted ... (4331 items)`; `API surface unchanged` |
+| 59 | `make check-consumer-surface` | `48146bc99` | exit 0; `test the_consumer_surface_still_resolves ... ok`; `1 passed; 0 failed` |
+| 60 | `make test-shell-guards` | `48146bc99` | exit 0; `85 assertion(s) passed.` |
+| 61 | `./scripts/check-doc-models.sh` | `48146bc99` | exit 0; `OK: 184 file(s) scanned, 0 deprecated model literal(s) (allowlisted: 1)` |
+| 62 | `bash .planning/phases/58-crate-release/58-check-register.sh` (strict, no `--draft`) | `48146bc99` | exit 0; `register: checked 135 row(s) (R: 95, V: 40); fixed 52, waived 37, re-homed 46; 0 failure(s)` |
+| 63 | `pre-commit run --all-files` | `48146bc99` | exit 0; every hook Passed (`check toml`, `check yaml`, `check for added large files`, `check for merge conflicts`, `trim trailing whitespace`, `fix end of files`, `Detect hardcoded secrets`, `shellcheck`, `cargo fmt (check)`, `cargo clippy (workspace, -D warnings)`); no hook modified a file; free 8775 MiB |
+| 64 | D-10 correction: edit only the `MIGRATION.md` line 168 semver evidence (`0143b50d5` -> `48146bc99`, date unchanged 2026-11-05); `git diff --name-only SHA-R SHA-R1` | `073bdd9ce` | commit `073bdd9ce13bbdb6241f39a632712f96b6789dc2` `docs(release): name the re-seal head in the MIGRATION 11.8 semver evidence (D-10)` (pre-commit hooks ran on it and passed); the diff prints `MIGRATION.md` and nothing else; **`SHA-R1`** |
+| 65 | on `SHA-R1`: `grep -c TBD MIGRATION.md`; `make check-migration-allowlist`; `make check-gates`; `make check-changelogs`; `make check-release-consistency RELEASE_TAG=v0.11.1`; the 12 changelog `## [0.11.1] - 2026-11-05` greps; root section size; `make check-publish-order`; `make api-surface` | `073bdd9ce` | `0`; allowlist set-equal; `make check-gates` exit 0 (`OK: 128 file(s) scanned, every copyable version string equals '0.11.1'`, `OK: scanned 627 file(s) (19 test-only), 0 finding(s)`, `OK: 184 file(s) scanned, 0 deprecated model literal(s) (allowlisted: 1)`); `11 publishable crate(s) checked, all have a CHANGELOG.md`; `OK: 12 publishable package(s) checked, all match tag version '0.11.1'`; 12 of 12 headings count 1; root section 16,075 bytes; `OK: 12 crate(s) checked in publish order`; `API surface unchanged`; the section 11.8 consumer paragraph names `48146bc99` (re-seal rows 1 and 7 re-read on `SHA-R1`) |
 
 Rows 9-17 ran on 2026-11-05 (17:20Z to 17:28Z) in plan 58-06, on `SHA-S` `fb6d50da0caa5980fca0f70799fe25adb4a830f0` (the head after the register-lock commit `fb6d50da0`; the working tree was clean). No row is red. The Phase 58 register moved from the draft count (fixed 51, waived 37, re-homed 46) to the locked count because plan 58-06 added R-95.
 
@@ -99,6 +125,12 @@ Rows 18-25 ran on 2026-11-05 in plan 58-16, on `SHA-G2` `7b06e5e6b5fcb3f2f6ceabb
 Rows 26-34 ran on 2026-11-05 in plan 58-16 Task 5, on `SHA-S2` `0143b50d596eee90a3b185c2e9ce94ad0292a2a8` (the head after the register commit `0143b50d5`; the working tree was clean). No row is red. `SHA-S2` and `SHA-G2` differ only under `.planning/`: `git diff --name-only SHA-G2 SHA-S2 -- . ':!.planning'` is empty. Disk free read 1.7 GB after the plan's pre-commit run recreated `target/debug/incremental` (1.4 GB), so that directory was removed again (never `cargo clean`) and 3.0 GB was free for the semver run.
 
 Rows 35-41 ran on 2026-11-05 in plan 58-07, after the pre-bump CI read: rows 35-38 on the `SHA-C1` tree, row 39-40 on `SHA-C2`, row 41 on `SHA-C3`. The pre-commit hooks also ran on each of the three bump commits and passed. No row is red.
+
+Rows 42-47 ran on 2026-11-05 (20:32Z to 20:33Z) in plan 58-08 Task 1, on `SHA-R` `48146bc99b6941a1d9fc50b60b5e6983c3f39dcf` (the head after the plan 58-07 completion commit; the code is `SHA-C3`'s: `git diff --name-only SHA-C3 SHA-R -- . ':!.planning'` is empty). They are the re-seal rows 1, 7 and 8 (`58-ACCEPTANCE-AUDIT.md`). No row is red. From the first of these commands D-00j is in force.
+
+Rows 48-55 ran on 2026-11-05 (20:34Z to 21:18Z) in plan 58-08 Task 2, on `SHA-R` (same head, clean tracked tree). They are re-seal rows 2 to 6. **Row 52 is red on infrastructure, not on a gate verdict** (disk full in the dry-run's verify stage); it was recorded, space was freed inside `target/` (row 53) and the chain was re-run exactly once (row 54, green) under the D-00j infrastructure exception. Nothing in the repository was changed between the two runs (`git status --porcelain --untracked-files=no` shows only this evidence file, which no gate reads). `cargo llvm-cov` is absent in this sandbox, so no coverage figure is claimed (D-00e).
+
+Rows 56-65 ran on 2026-11-05 (21:19Z to 21:35Z) in plan 58-08 Task 3: rows 56-63 are the house sweep on `SHA-R` (clean tracked tree; this evidence file and the untracked audit were the only differences, `.planning/` only); row 64 is the D-10 correction commit `SHA-R1`; row 65 re-reads re-seal rows 1 and 7 (and 8 and the API surface) on `SHA-R1`. No row is red. `make api-surface`, `make check-consumer-surface` and the CI `Coverage` job are CI-evidence entries too (D-04); the 82 percent coverage floor is CI-attributed, not measured here (`cargo llvm-cov` absent, D-00e).
 
 ---
 
@@ -361,6 +393,29 @@ M-B-48 and M-B-49 (the `setup-check` and `onboarding` CLI) reach a library consu
 `docs/src/api-reference/upgrading.md` now opens with three upgrades and carries `## Upgrading from v0.11.0 to v0.11.1` above the v0.11.0 section (orientation, three pointers into MIGRATION 11.8, its consumer subsection and 11.1; no rows
 copied); `docs/src/api-reference/migration-guide.md:4` reads "leads with the current **v0.11.1** release". Not edited, noted: the header comments of `scripts/check-migration-allowlist.sh` (line 71) and
 `tests/scripts/check-migration-allowlist_test.sh` (line 22) still call section 11.2 "open"; they are outside this plan's file list.
+
+### D-11 semver on SHA-R
+
+Plan 58-08 Task 2, re-seal row 4, read on `SHA-R` `48146bc99b6941a1d9fc50b60b5e6983c3f39dcf` (2026-11-05, 20:39Z to 20:50Z; the tree is `SHA-C3`'s outside `.planning/`).
+Command: `SEMVER_PRUNE_LOCAL_CACHE=1 make check-semver` (`SEMVER_BASELINE_VERSION` 0.11.0, `--release-type patch`, `--default-features`); tool `cargo-semver-checks 0.50.0`. Exit 0.
+
+```
+semver: paladin-ai-core: 223 checks: 223 pass, 31 skip
+semver: paladin-ports: 223 checks: 223 pass, 31 skip
+semver: paladin-herald: 223 checks: 223 pass, 31 skip
+semver: paladin-battalion: 223 checks: 223 pass, 31 skip
+semver: paladin-llm: 223 checks: 223 pass, 31 skip
+semver: paladin-memory: 223 checks: 223 pass, 31 skip
+semver: paladin-web: 223 checks: 223 pass, 31 skip
+semver: paladin-notifications: 223 checks: 223 pass, 31 skip
+semver: paladin-content: 223 checks: 223 pass, 31 skip
+semver: paladin-storage: 223 checks: 223 pass, 31 skip
+semver: paladin-eval: 223 checks: 223 pass, 31 skip
+semver: paladin-ai: 223 checks: 223 pass, 31 skip
+semver: 12 package(s) checked against 0.11.0 at --release-type patch; 0 failure(s)
+```
+
+Every package evaluated 223 checks (N > 0) against the published `0.11.0`, with the `0.11.1` manifests in place, and none failed. This is the read the MIGRATION section 11.8 consumer paragraph names (D-10, plan 58-08 Task 3); it equals the `SHA-S2` read on the pre-bump tree, so the bump moved no public item.
 
 ---
 

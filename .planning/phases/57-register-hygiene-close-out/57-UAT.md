@@ -3,16 +3,16 @@ status: testing
 phase: 57-register-hygiene-close-out
 source: 57-01-SUMMARY.md, 57-02-SUMMARY.md, 57-03-SUMMARY.md, 57-04-SUMMARY.md, 57-05-SUMMARY.md, 57-06-SUMMARY.md, 57-07-SUMMARY.md, 57-08-SUMMARY.md, 57-09-SUMMARY.md, 57-10-SUMMARY.md, 57-11-SUMMARY.md, 57-12-SUMMARY.md, 57-13-SUMMARY.md, 57-14-SUMMARY.md, 57-15-SUMMARY.md, 57-16-SUMMARY.md
 started: 2026-11-05T00:55:10Z
-updated: 2026-11-05T01:00:21Z
+updated: 2026-11-05T01:00:43Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 9
-name: Review-dispositions checker passes strict over the full archive
+number: 10
+name: Register and triage agree: every finding closed or waived
 expected: |
-  `./scripts/check-review-dispositions.sh` (strict, no --pending-ok) exits 0 and reports 0 failure(s) over 51 findings in 13 review files, deriving every WR/CR id (plus Phase 40 IN-01 and IN-04) from the archived NN-REVIEW.md headings rather than from the register. `tests/scripts/check-review-dispositions_test.sh` passes all 22 fixture cases (one firing fixture per failure class plus ok, --pending-ok and --phases cases). Each archived REVIEW.md for Phases 38-51 carries an appended "## Dispositions (Phase 57)" pointer section with nothing deleted.
+  57-REVIEW-DISPOSITIONS.md reads closed 43 / waived 8 / open 0 across all 51 findings. The "## Triage (Phase 57, 2026-11-04)" section records your option-a choice (7 fix-in-phase, 8 waive), each of the 8 waived rows names you as owner with the triage's revisit and basis text, and none of the 7 fix-in-phase items still carries a LIVE marker.
 awaiting: user response
 
 ## Tests
@@ -51,7 +51,7 @@ result: pass
 
 ### 9. Review-dispositions checker passes strict over the full archive
 expected: `./scripts/check-review-dispositions.sh` (strict, no --pending-ok) exits 0 and reports 0 failure(s) over 51 findings in 13 review files, deriving every WR/CR id (plus Phase 40 IN-01 and IN-04) from the archived NN-REVIEW.md headings rather than from the register. `tests/scripts/check-review-dispositions_test.sh` passes all 22 fixture cases (one firing fixture per failure class plus ok, --pending-ok and --phases cases). Each archived REVIEW.md for Phases 38-51 carries an appended "## Dispositions (Phase 57)" pointer section with nothing deleted.
-result: [pending]
+result: pass
 
 ### 10. Register and triage agree: every finding closed or waived
 expected: 57-REVIEW-DISPOSITIONS.md reads closed 43 / waived 8 / open 0 across all 51 findings. The "## Triage (Phase 57, 2026-11-04)" section records your option-a choice (7 fix-in-phase, 8 waive), each of the 8 waived rows names you as owner with the triage's revisit and basis text, and none of the 7 fix-in-phase items still carries a LIVE marker.
@@ -100,9 +100,9 @@ coverage_id: D4
 ## Summary
 
 total: 19
-passed: 10
+passed: 11
 issues: 0
-pending: 9
+pending: 8
 skipped: 0
 blocked: 0
 

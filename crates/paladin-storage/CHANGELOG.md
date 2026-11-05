@@ -30,6 +30,8 @@ and this project follows lockstep workspace versioning.
 
 - Every S3 error the adapter raises now carries only the HTTP status and the S3 `<Code>` (for example `HTTP 403 SignatureDoesNotMatch`), or a fixed label for a non-HTTP failure. Before, the raw response body, which can echo the access-key id and request detail, was embedded in `FileStorageError` text (45-REVIEW WR-02, WINDOWS row 91, Phase 57 plan 57-06).
 
+- `RedisQueueConfig.redis_password` (feature `redis-queue`), `RedisNodeCacheConfig.redis_password` (feature `redis-cache`), `MinioConfig.access_key` and `MinioConfig.secret_key` (feature `s3`) are no longer serialised (`#[serde(skip_serializing)]`; loading is unchanged, so `MinioConfig` still requires both keys and the Redis passwords stay optional), and `RedisQueueConfig` and `MinioConfig` now print `<redacted>` for each set secret in `Debug`, where v0.11.0 derived `Debug` and printed them. No field, type or signature changes (`MIGRATION.md` section 11.1 `M-B-51` and `M-B-52`; 56-REVIEW WR-09 and DF-07 classes, Phase 58 plan 58-16).
+
 ### Documentation
 
 - `upload_part`, `complete_multipart_upload` and `abort_multipart_upload` no longer claim `rust-s3` aborts a rejected multipart upload. It does not (its `fail-on-err` default returns the error first), so the caller must call `abort_multipart_upload` to release the stored parts (45-REVIEW WR-01, WINDOWS row 92, Phase 57 plan 57-06).

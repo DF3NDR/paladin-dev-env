@@ -323,3 +323,66 @@ Also run in the sweep, on `9eba21d9b`: `make security` exit 0 (`advisories ok, b
 (nine allowed warnings, among them RUSTSEC-2026-0221 and RUSTSEC-2026-0205, no vulnerability); `make check-gates` exit 0;
 `make test-shell-guards` `85 assertion(s) passed`; `./scripts/check-doc-models.sh` `OK: 184 file(s) scanned, 0 deprecated model literal(s)
 (allowlisted: 1)`. No key value or fragment appears in the register or in this record: rows name file and line only.
+
+---
+
+## Maintainer decisions (58-05)
+
+The Task 3 decision checkpoint (plan 58-05) was answered by the repo maintainer on 2026-11-05 (UTC), in two parts. Both are recorded verbatim.
+
+**Part 1 (the maintainer's reply, free text):**
+
+```
+DATE=2026-11-09
+FLAKE=named-rerun
+WORDING=pointer-list
+KEY=rotated:2026-11-07
+PURGE=are you asking me if the git history should be purged by you, and is this related to the already rotated key which is no longer valid?
+
+fix WR-03,WR-04,WR-09 before tag
+```
+
+**Part 2 (the maintainer's answers to the orchestrator's three clarifying questions, 2026-11-05):**
+
+- `PURGE`: `none`. Reason: the key is rotated and no longer valid; the literal in history (since `928c6d5f9`) is inert; a history rewrite would force-push `main` and invalidate every clone.
+- `KEY` date: the key was already rotated; `rotated:2026-11-07` in Part 1 was a typo for a future date; the actual rotation date is **2026-11-05**. Resolved value: `KEY=rotated:2026-11-05`.
+- `WR-03`, `WR-04` and `WR-09` (56-REVIEW) land through an inserted gap-closure plan, **58-15** (`58-15-PLAN.md`, wave 3, `gap_closure: true`), executed before plan 58-06's pre-bump sweep. Its executor flips the three register rows (R-47, R-48, R-53) to `fixed` with commit pointers and adds the changelog and MIGRATION section 11.1 entries.
+
+**Resolved decision:** `DATE=2026-11-09 FLAKE=named-rerun WORDING=pointer-list KEY=rotated:2026-11-05 PURGE=none SDK=` (`SDK` was not asked: the SDK smoke job is green on the descendant read, F-58-04, and no objection was raised).
+
+### How each answer is applied
+
+| Answer | Value | Where it lands | Read by |
+|--------|-------|----------------|---------|
+| `DATE` | `2026-11-09` | `recheck_by: 2026-11-09` on every `re-homed` row's todo (D-09); the register rows keep `date: pending 58-05 decision` until plan 58-06 writes the dated todos and rewrites the rows | 58-06 |
+| `FLAKE` | `named-rerun` | Amends D-00j, rule below | 58-06, 58-07, 58-08, 58-10, 58-12 |
+| `WORDING` | `pointer-list` | SHIP-09 paragraph for MIGRATION section 11.8, text below (flagged assumption A-58-1 confirmed) | 58-07 |
+| `KEY` | `rotated:2026-11-05` | R-84 `fixed`, owner repo maintainer; the rotation is the maintainer's statement and is not independently re-provable from the repository; the date falls before the tag | register |
+| `PURGE` | `none` | R-85 `waived`, with the maintainer's reason | register |
+| WR-03, WR-04, WR-09 | fix before the tag | D-07 amended; inserted plan 58-15; R-47, R-48, R-53 stay `re-homed` (no commit yet) and carry the order in their pointer cell | 58-15, 58-06 |
+
+### FLAKE rule (amends D-00j): `named-rerun`
+
+For the test `application::cli::commands::treasury::tests::treasury_spend_prints_one_row_per_currency` (F-58-03) only:
+
+- Exactly one re-run, and only for a failure whose test name and panic location equal F-58-03's (`src/application/cli/commands/treasury.rs`, panic text `assertion failed: rendered.contains("EUR")`; the line number is read from the failing log, not assumed to stay 496).
+- Only in pull-request or push CI. Never in `release.yml`, which is the maintainer's.
+- Both run ids and the panic line are recorded in this file.
+- Any other failure, or a second occurrence of this one, halts at a blocking checkpoint, as D-00j reads for every other red gate.
+
+### D-07 amendment
+
+D-07 read: only WR-02 is fixed in `0.11.1`; CR-01 and WR-01 are re-homed. Amended 2026-11-05 by the maintainer: the three credential-class 56-REVIEW warnings **WR-03 (setup-check echoes the raw `REDIS_URL`), WR-04 (onboarding writes `.env` with default permissions) and WR-09 (`Serialize` still emits secrets in plaintext) are fixed in `0.11.1`, not deferred to `v0.12.0`**, through plan 58-15, before the tag. The remaining Phase 52 and Phase 56 warnings of F-58-05 stay as their register rows read. Plan 58-15 adds the changelog entry and the MIGRATION section 11.1 entries; because these are behaviour changes in a published crate, the `scripts/check-semver.sh` result at `--release-type patch` must be re-read after the fix (plan 58-06 and the SHIP-09 paragraph below depend on it).
+
+### WORDING rule: `pointer-list` (SHIP-09, MIGRATION section 11.8)
+
+> A library consumer moves from `0.11.0` to `0.11.1` without changing source: no public Rust signature, type or serialized schema changed; section 11.2 has no row and the allowlist has no entry; `scripts/check-semver.sh` on `<SHA>` (`<date>`) reads `0 failure(s)` for all twelve packages at `--release-type patch`. Run-time behaviour changes that a library consumer can observe are in section 11.1: M-B-30, M-B-33, M-B-34, M-B-35, M-B-40, M-B-41, M-B-45, M-B-46, M-B-47; `get_job` is unrouted but not deprecated (section 11.7).
+
+Plan 58-15 changes what a library consumer can observe (WR-09 may change the serialized form of `Settings` and its credential-bearing members). Plan 58-07 must therefore re-read the final 58-15 result before it writes this paragraph: the "no serialized schema changed" clause and the section 11.1 id list are completed or corrected to match, not copied from this text.
+
+### State at the time of the answer (read from the files)
+
+- Register: 134 rows (R: 94, V: 40); before the answer 47 `fixed`, 36 `waived`, 51 `re-homed`; after it 48 `fixed` (R-84), 37 `waived` (R-85), 49 `re-homed`. `58-check-register.sh --draft` reads `0 failure(s)`.
+- SHA-E CI (F-58-04): all four runs on SHA-E `9166fe1fe` concluded `cancelled`; on the descendant `33cdc08e0` (zero diff over `src`, `crates`, `Cargo.lock`, `Cargo.toml`, `scripts/sdk-smoke`, `docs/schemas`) `ci.yml` run `41965173591` is `success`, SDK smoke job `127040942208` `success`, `Build & Test (cli)` job `127040405991` `success`.
+- F-58-03: one CI failure (run `41946243320`, job `126979605660`), one pass on the next head (run `41949135304`, job `126988618263`), `0/30` single and `0/10` module local failures; not reproduced.
+- Recorded defaults, unobjected: the pre-tag milestone audit is scoped to Phases 52-57 with FIXES-04 under `re_homed_requirements:`; SHIP-08/09/10 are proven by the post-tag registry read; the two stale `docs/src/api-reference` version statements are fixed in bump commit 3; the SDK smoke is a tag precondition.

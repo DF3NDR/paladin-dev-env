@@ -3,16 +3,16 @@ status: testing
 phase: 57-register-hygiene-close-out
 source: 57-01-SUMMARY.md, 57-02-SUMMARY.md, 57-03-SUMMARY.md, 57-04-SUMMARY.md, 57-05-SUMMARY.md, 57-06-SUMMARY.md, 57-07-SUMMARY.md, 57-08-SUMMARY.md, 57-09-SUMMARY.md, 57-10-SUMMARY.md, 57-11-SUMMARY.md, 57-12-SUMMARY.md, 57-13-SUMMARY.md, 57-14-SUMMARY.md, 57-15-SUMMARY.md, 57-16-SUMMARY.md
 started: 2026-11-05T00:55:10Z
-updated: 2026-11-05T00:59:44Z
+updated: 2026-11-05T01:00:03Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 7
-name: Credential-handling checklist C1-C6 re-run over the Phase 40 diff only
+number: 8
+name: Owner's bounded human read is recorded per row
 expected: |
-  57-JUDGMENT-READ.md carries six credential-handling rows (C1-C6 from security.instructions.md) scoped to the Phase 40 diff range 629ef660...be3a9030, each with fresh file:line or re-run test evidence and a Human cell reading "confirm (2026-11-04)". You, as owner, stand by those six confirms. (Coverage D2, REG-04: credential-handling review is a manual control with no tool gate, so your confirm is the verdict.)
+  All 20 prohibition rows P40-01..P40-20 in 57-JUDGMENT-READ.md have a Human cell that reads "confirm (2026-11-04)" written from your own reply, with Claude's reading kept to the verdict/evidence/note columns, and 40-VALIDATION.md's Manual-Only row points at 57-JUDGMENT-READ.md as the recorded human read. You stand by that "confirm all". (Coverage D3, REG-04: a human verdict on LLM-judge results.)
 awaiting: user response
 
 ## Tests
@@ -43,7 +43,7 @@ result: pass
 
 ### 7. Credential-handling checklist C1-C6 re-run over the Phase 40 diff only
 expected: 57-JUDGMENT-READ.md carries six credential-handling rows (C1-C6 from security.instructions.md) scoped to the Phase 40 diff range 629ef660...be3a9030, each with fresh file:line or re-run test evidence and a Human cell reading "confirm (2026-11-04)". You, as owner, stand by those six confirms. (Coverage D2, REG-04: credential-handling review is a manual control with no tool gate, so your confirm is the verdict.)
-result: [pending]
+result: pass
 
 ### 8. Owner's bounded human read is recorded per row
 expected: All 20 prohibition rows P40-01..P40-20 in 57-JUDGMENT-READ.md have a Human cell that reads "confirm (2026-11-04)" written from your own reply, with Claude's reading kept to the verdict/evidence/note columns, and 40-VALIDATION.md's Manual-Only row points at 57-JUDGMENT-READ.md as the recorded human read. You stand by that "confirm all". (Coverage D3, REG-04: a human verdict on LLM-judge results.)
@@ -100,9 +100,9 @@ coverage_id: D4
 ## Summary
 
 total: 19
-passed: 8
+passed: 9
 issues: 0
-pending: 11
+pending: 10
 skipped: 0
 blocked: 0
 

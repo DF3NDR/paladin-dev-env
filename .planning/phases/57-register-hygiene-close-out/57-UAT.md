@@ -3,16 +3,16 @@ status: testing
 phase: 57-register-hygiene-close-out
 source: 57-01-SUMMARY.md, 57-02-SUMMARY.md, 57-03-SUMMARY.md, 57-04-SUMMARY.md, 57-05-SUMMARY.md, 57-06-SUMMARY.md, 57-07-SUMMARY.md, 57-08-SUMMARY.md, 57-09-SUMMARY.md, 57-10-SUMMARY.md, 57-11-SUMMARY.md, 57-12-SUMMARY.md, 57-13-SUMMARY.md, 57-14-SUMMARY.md, 57-15-SUMMARY.md, 57-16-SUMMARY.md
 started: 2026-11-05T00:55:10Z
-updated: 2026-11-05T01:02:11Z
+updated: 2026-11-05T01:02:30Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 15
-name: Treasurer notices survive enqueue failure and client disconnect
+number: 16
+name: Cadence treats a zero provider delay as none and never loses a 429 record
 expected: |
-  If enqueueing the operator-delivery for a won once-per-window allowance notice fails, the notice is given back so the next admission in the window wins it again (no notice is lost). Treasurer::confirm and ::abandon run detached, so a client that disconnects mid-submission (or on the HTTP agent routes) does not cancel settlement, and a submission future dropped after admission still settles: confirm if the run row exists, otherwise give back. MIGRATION row M-B-44, a CHANGELOG Fixed bullet and the platform-api.md delivery-semantics sentence record this.
+  A 429 carrying Retry-After 0, a past HTTP-date, or a zero reset makes CadenceLlmAdapter::minimum_delay return None, so the port waits at least its own base back-off (escalating with streak) instead of opening a zero-length gate. note_failure records the 429 in a spawned task that the call awaits, so a caller dropped after the provider answered still leaves the record and the next call's gate reads it. paladin-llm and root CHANGELOG Fixed entries, MIGRATION rows M-B-45/M-B-46 and ADR-0058 (d)/(i) amendments exist.
 awaiting: user response
 
 ## Tests
@@ -75,7 +75,7 @@ result: pass
 
 ### 15. Treasurer notices survive enqueue failure and client disconnect
 expected: If enqueueing the operator-delivery for a won once-per-window allowance notice fails, the notice is given back so the next admission in the window wins it again (no notice is lost). Treasurer::confirm and ::abandon run detached, so a client that disconnects mid-submission (or on the HTTP agent routes) does not cancel settlement, and a submission future dropped after admission still settles: confirm if the run row exists, otherwise give back. MIGRATION row M-B-44, a CHANGELOG Fixed bullet and the platform-api.md delivery-semantics sentence record this.
-result: [pending]
+result: pass
 
 ### 16. Cadence treats a zero provider delay as none and never loses a 429 record
 expected: A 429 carrying Retry-After 0, a past HTTP-date, or a zero reset makes CadenceLlmAdapter::minimum_delay return None, so the port waits at least its own base back-off (escalating with streak) instead of opening a zero-length gate. note_failure records the 429 in a spawned task that the call awaits, so a caller dropped after the provider answered still leaves the record and the next call's gate reads it. paladin-llm and root CHANGELOG Fixed entries, MIGRATION rows M-B-45/M-B-46 and ADR-0058 (d)/(i) amendments exist.
@@ -100,9 +100,9 @@ coverage_id: D4
 ## Summary
 
 total: 19
-passed: 16
+passed: 17
 issues: 0
-pending: 3
+pending: 2
 skipped: 0
 blocked: 0
 

@@ -46,11 +46,11 @@ Your current .env has a **broken OPENAI_API_KEY** with a space:
 
 ```bash
 # Current (BROKEN):
-OPENAI_API_KEY=sk-proj-...Rbl3t bJWN3ZZpcXiHipDTXUeJMA
+OPENAI_API_KEY=sk-proj-REDACTED REDACTED
 #                               ↑ Invalid space breaks the key!
 
 # Should be (FIXED - no spaces):
-OPENAI_API_KEY=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
+OPENAI_API_KEY=sk-proj-REDACTED
 ```
 
 To fix:

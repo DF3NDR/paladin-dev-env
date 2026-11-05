@@ -637,7 +637,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 58-07-PLAN.md — bump set: commit 1 lockstep bump with the 52 gate-listed strings and `openapi.json`, commit 2 the twelve changelog stamps, commit 3 the MIGRATION §11.8 library-consumer statement (SHIP-08, SHIP-09)
+- [x] 58-07-PLAN.md — bump set: commit 1 lockstep bump with the 52 gate-listed strings and `openapi.json`, commit 2 the twelve changelog stamps, commit 3 the MIGRATION §11.8 library-consumer statement (SHIP-08, SHIP-09)
 
 **Wave 6** *(blocked on Wave 5 completion)*
 

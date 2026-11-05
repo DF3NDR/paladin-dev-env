@@ -5,15 +5,15 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 58
 current_phase_name: Crate Release
 status: executing
-stopped_at: Completed 58-16-PLAN.md; paused for CI on SHA-P2 (042df99b2)
-last_updated: "2026-11-05T18:36:49.005Z"
+stopped_at: Completed 58-07-PLAN.md
+last_updated: "2026-11-05T20:21:16.877Z"
 last_activity: 2026-11-05
 last_activity_desc: Phase 58 execution started
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 84
-  completed_plans: 76
+  completed_plans: 77
 ---
 
 # Project State
@@ -53,11 +53,11 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 ## Current Position
 
 Phase: 58 (Crate Release) — EXECUTING
-Plan: 9 of 14
+Plan: 10 of 14
 Status: Ready to execute
 Last activity: 2026-11-05 — Phase 58 execution started
 
-Progress: [█████████████████░░░] 6/7 phases (v0.11.1) — plans [████████████████████] 68/68 ([█████████░] 90%)
+Progress: [█████████████████░░░] 6/7 phases (v0.11.1) — plans [████████████████████] 68/68 ([█████████░] 92%)
 
 ## Performance Metrics
 
@@ -438,6 +438,7 @@ Progress: [█████████████████░░░] 6/7 pha
 | Phase 58 P15 | 25min | 5 tasks | 13 files |
 | Phase 58 P06 | 21min | 3 tasks | 52 files |
 | Phase 58 P16 | 32min | 5 tasks | 11 files |
+| Phase 58 P07 | 15min | 3 tasks | 54 files |
 
 ## Accumulated Context
 
@@ -866,6 +867,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 58-15: Qdrant WR-03 test pins a query-string credential because reqwest 0.12.28 already strips userinfo
 - [Phase 58]: 58-06: R-95 re-homed (v0.12.0 Phase 1, 2026-11-09) for the four same-class Serialize types left by 58-15; D-11 semver green on SHA-S fb6d50da0 (12 packages, 223 checks, 0 failures); SHA-P 35e696cc9 pushed, resume file waits on its runs
 - [Phase ?]: 58-16: R-95 config types fixed before the tag (second D-07 amendment, Fix before tag): skip_serializing on five secret fields with no serde default, redacting hand-written Debug for RedisQueueConfig and MinioConfig via a module-private RedactedSecret per file
+- [Phase 58]: plan 58-07: pointer-list consumer statement reconciled with M-B-48..M-B-52 (nine config types stop serialising credential fields); M-B-27 and M-B-36 surfaced for maintainer at 58-08; SHA-C1 96eb49d38, SHA-C2 d88c519ab, SHA-C3 ac9411ea0, STAMP 2026-11-05, nothing pushed
 
 ### Pending Todos
 
@@ -1287,9 +1289,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-11-05T18:36:48.977Z
-Stopped at: Completed 58-16-PLAN.md; paused for CI on SHA-P2 (042df99b2)
-Resume file: .planning/phases/58-crate-release/.continue-here.md
+Last session: 2026-11-05T20:21:16.850Z
+Stopped at: Completed 58-07-PLAN.md
+Resume file: None
 
 ## Operator Next Steps
 

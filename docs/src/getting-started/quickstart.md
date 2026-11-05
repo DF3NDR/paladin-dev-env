@@ -21,9 +21,9 @@ Add Paladin to `Cargo.toml`:
 
 ```toml
 [dependencies]
-paladin-ai    = "0.11.0"
-paladin-ports = "0.11.0"
-paladin-llm   = { version = "0.11.0", features = ["openai"] }
+paladin-ai    = "0.11.1"
+paladin-ports = "0.11.1"
+paladin-llm   = { version = "0.11.1", features = ["openai"] }
 tokio         = { version = "1", features = ["full"] }
 ```
 

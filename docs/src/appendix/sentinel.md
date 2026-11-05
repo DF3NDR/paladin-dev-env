@@ -63,7 +63,7 @@ Sentinel follows Paladin's hexagonal architecture:
 ```toml
 # Cargo.toml
 [dependencies]
-paladin-ai = "0.11.0"
+paladin-ai = "0.11.1"
 tokio = { version = "1", features = ["full"] }
 ```
 

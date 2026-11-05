@@ -50,20 +50,20 @@ Paladin is published as a workspace of focused crates. Add only what you need:
 ```toml
 [dependencies]
 # Core framework -- always required
-paladin-ai-core   = "0.11.0"
-paladin-ports     = "0.11.0"
+paladin-ai-core   = "0.11.1"
+paladin-ports     = "0.11.1"
 
 # LLM providers (pick one or more)
-paladin-llm       = { version = "0.11.0", features = ["openai"] }
+paladin-llm       = { version = "0.11.1", features = ["openai"] }
 
 # Multi-agent orchestration (optional)
-paladin-battalion = "0.11.0"
+paladin-battalion = "0.11.1"
 
 # Memory / Garrison (optional)
-paladin-memory    = "0.11.0"
+paladin-memory    = "0.11.1"
 
 # Storage adapters (optional)
-paladin-storage   = "0.11.0"
+paladin-storage   = "0.11.1"
 
 # Async runtime (required)
 tokio = { version = "1", features = ["full"] }
@@ -75,7 +75,7 @@ The `paladin-ai` umbrella crate re-exports everything and accepts workspace feat
 
 ```toml
 [dependencies]
-paladin-ai = { version = "0.11.0", features = ["redis-queue", "s3-storage"] }
+paladin-ai = { version = "0.11.1", features = ["redis-queue", "s3-storage"] }
 tokio      = { version = "1", features = ["full"] }
 ```
 

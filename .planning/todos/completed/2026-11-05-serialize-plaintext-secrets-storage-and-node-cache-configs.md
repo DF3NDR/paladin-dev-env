@@ -1,4 +1,5 @@
 ---
+completed: 2026-11-05
 created: 2026-11-05T00:00:00Z
 title: "Four config types still serialise a plaintext secret: NodeCacheConfig, RedisQueueConfig, MinioConfig, RedisNodeCacheConfig"
 area: config-security
@@ -48,3 +49,13 @@ Re-check by 2026-11-09 (the maintainer's `DATE`, plan 58-05, `58-CI-EVIDENCE.md`
 
 - Finding: `58-CI-EVIDENCE.md` F-58-06 "Residual same-class fields" and `58-15-SUMMARY.md`
 - Register row: R-95 in `.planning/phases/58-crate-release/58-AUDIT-DISPOSITIONS.md`
+
+## Resolved 2026-11-05 (Phase 58 plan 58-16)
+
+Fixed before the tag on the maintainer's second D-07 amendment (F-58-07). The five fields now carry
+`#[serde(skip_serializing)]` with no serde default, and `RedisQueueConfig` and `MinioConfig` print
+`<redacted>` in `Debug`.
+
+- Fix commits: `eabdfb282` (`NodeCacheConfig`), `1decd184d` (`RedisQueueConfig` and `RedisNodeCacheConfig`), `f1605c971` (`MinioConfig`).
+- Test (RED) commits: `86bc21d28`, `84a3b32a7`, `496df651e`.
+- Evidence: `58-CI-EVIDENCE.md` F-58-07. Register row R-95 is `fixed`.

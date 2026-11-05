@@ -30,6 +30,7 @@ RESEARCH.md that was not re-measured is labelled as a research figure.
 - SHA-E: 9166fe1fee4a920baf7f481d34b6e05b40b7b3de
 - SHA-S: fb6d50da0caa5980fca0f70799fe25adb4a830f0
 - SHA-P: 35e696cc9af1f817da07db9ec233d31e4e553273
+- SHA-G2: 7b06e5e6b5fcb3f2f6ceabb2ef2a25e297b2d456
 
 Machine-readable SHA lines added by plans use the exact form `- SHA-<label>: <40-hex>` on their own line.
 
@@ -60,8 +61,18 @@ after the two `docs(58-01)` commits (`2e1338a80`).
 | 15 | `pre-commit run --all-files` | `fb6d50da0` | exit 0; every hook Passed (`check toml`, `check yaml`, `check for added large files`, `check for merge conflicts`, `trim trailing whitespace`, `fix end of files`, `Detect hardcoded secrets`, `shellcheck`, `cargo fmt (check)`, `cargo clippy (workspace, -D warnings)`); tree clean after |
 | 16 | `./scripts/check-review-dispositions.sh` | `fb6d50da0` | exit 0; `checked 51 finding(s) across 13 review file(s); 0 failure(s)` |
 | 17 | `bash .planning/phases/58-crate-release/58-check-register.sh` (strict, no `--draft`) | `fb6d50da0` | exit 0; `register: checked 135 row(s) (R: 95, V: 40); fixed 51, waived 37, re-homed 47; 0 failure(s)` |
+| 18 | `cargo fmt --check` (`CARGO_INCREMENTAL=0`) | `7b06e5e6b` | exit 0, no output |
+| 19 | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | `7b06e5e6b` | exit 0; `Finished dev profile`, no warning |
+| 20 | `cargo test -p paladin-ai --features cli --lib config::` | `7b06e5e6b` | exit 0; `test result: ok. 286 passed; 0 failed` (N recorded, not a pass criterion) |
+| 21 | `cargo test -p paladin-storage --features s3,redis-queue,redis-cache --lib` | `7b06e5e6b` | exit 0; `test result: ok. 384 passed; 0 failed` |
+| 22 | `make api-surface` | `7b06e5e6b` | exit 0; `API surface extracted ... (4331 items)`; `API surface unchanged` |
+| 23 | `make check-gates` | `7b06e5e6b` | exit 0; `OK: 128 file(s) scanned, every copyable version string equals '0.11.0'`; `OK: scanned 627 file(s) (19 test-only), 0 finding(s)`; `OK: 184 file(s) scanned, 0 deprecated model literal(s) (allowlisted: 1)` |
+| 24 | `make doc-check` | `7b06e5e6b` | exit 0; `doc-check passed (ADR-0033)` |
+| 25 | `pre-commit run --all-files` | `7b06e5e6b` | exit 0; every hook Passed (`check toml` through `cargo clippy (workspace, -D warnings)`); tree clean after |
 
 Rows 9-17 ran on 2026-11-05 (17:20Z to 17:28Z) in plan 58-06, on `SHA-S` `fb6d50da0caa5980fca0f70799fe25adb4a830f0` (the head after the register-lock commit `fb6d50da0`; the working tree was clean). No row is red. The Phase 58 register moved from the draft count (fixed 51, waived 37, re-homed 46) to the locked count because plan 58-06 added R-95.
+
+Rows 18-25 ran on 2026-11-05 in plan 58-16, on `SHA-G2` `7b06e5e6b5fcb3f2f6ceabb2ef2a25e297b2d456` (the head after the changelog and MIGRATION commit `7b06e5e6b`, the last commit outside `.planning/`; the working tree was clean). No row is red. Disk free read 2.0 GB before the gates, so `target/debug/incremental` was removed (never `cargo clean`) and 3.1 GB was free afterwards; the gates then ran with `CARGO_INCREMENTAL=0`. No coverage figure is claimed here (D-00e).
 ---
 
 ## CI-run table
@@ -409,6 +420,53 @@ follows this section (D-06).
 - **`M-B-36` wording.** Its sentence that `Serialize` output is unchanged is true of the plan that wrote it (56-11) and is superseded for
   these fields by `M-B-50`, which says so; no existing line was edited.
 - **Register rows:** R-47, R-48, R-53 (fixed, this section).
+
+### 2026-11-05 — F-58-07: the four same-class Serialize types fixed in 0.11.1 (D-07 amended again)
+
+Plan 58-16 is a gap-closure plan inserted at the plan 58-06 sweep, which rowed the four types F-58-06 left unchanged as R-95 (`re-homed`, owner `v0.12.0 Phase 1`).
+On 2026-11-05 the orchestrator put R-95 to the maintainer as a choice between "Keep re-homed" and "Fix before tag", and the maintainer answered: "Fix before tag". That
+is the **second D-07 amendment** (the first is `### D-07 amendment` under `## Maintainer decisions (58-05)`): the four R-95 config types are fixed in `0.11.1` before
+the tag, through plan 58-16. Each group is a RED `test(58-16)` commit and then a GREEN `fix(58-16)` commit (D-17), then `docs(58-16)` commits.
+
+| Group | RED (test) | GREEN (fix) | Change |
+|-------|------------|-------------|--------|
+| `NodeCacheConfig` (facade) | `86bc21d28` test(58-16): NodeCacheConfig must not serialise the Redis password | `eabdfb282` fix(58-16): skip_serializing on the NodeCacheConfig Redis password | `redis_password` `skip_serializing`, no serde default; field, struct and module docs |
+| `RedisQueueConfig` and `RedisNodeCacheConfig` (`paladin-storage`, features `redis-queue`, `redis-cache`) | `84a3b32a7` test(58-16): the paladin-storage Redis configs must not serialise their password and RedisQueueConfig Debug must redact it | `1decd184d` fix(58-16): skip_serializing on the Redis queue and node-cache passwords and a redacting RedisQueueConfig Debug | two `redis_password` fields `skip_serializing`; `RedisQueueConfig` derive `Debug` replaced by a hand-written one over seven fields |
+| `MinioConfig` (`paladin-storage`, feature `s3`) | `496df651e` test(58-16): MinioConfig must not serialise or Debug-print its keys | `f1605c971` fix(58-16): skip_serializing on the MinioConfig keys and a redacting MinioConfig Debug | `access_key` and `secret_key` `skip_serializing`, no serde default; derive `Debug` replaced by a hand-written one over eleven fields |
+
+RED results: the `NodeCacheConfig` omit test failed (6 passed, 1 failed, the load pin and the five existing tests passing); the two omit tests and the queue Debug test
+failed in `paladin-storage` (5 passed, 3 failed); `minio_config_serialisation_omits_both_keys` and `minio_config_debug_redacts_both_keys` failed (12 passed, 2 failed).
+Every GREEN run passed all of them. Docs: `7b06e5e6b` docs(58-16): changelog and MIGRATION 11.1 entries (`M-B-51`, `M-B-52`); the register-row commit follows this
+section (D-06).
+
+- **Step 0 consumer gate (all four types, read-only).** One serialise-then-deserialise consumer, test-only: `test_minio_config_serialization` in
+  `crates/paladin-storage/src/minio.rs`, which deserialised its own serialised output. No production consumer exists. The other `serde_json` hits in
+  `redis.rs` are core's `QueueConfig` and `QueueItem`, those in `node_cache/redis.rs` are `CachedDelta`; every other use of the four names is a struct literal or
+  `Default::default()` (`to_minio_config` in `src/config/settings.rs`, `src/config/setup/service_runner.rs`, `examples/node_result_cache.rs`, the integration tests,
+  `crates/doc-examples/src/queue_worker.rs`). No path `{:?}`-formats one of the four outward outside a test. The fallback was not needed. The
+  `MinioConfig` test is a deviation recorded in the SUMMARY: the RED commit rewrote its body to insert the two keys itself, keeping its name and its two `contains`
+  assertions, so it passes before and after the fix.
+- **Debug decision.** `RedisQueueConfig` and `MinioConfig` derived `Debug` and so printed the secret fields, so each now has a hand-written `Debug` and a module-private
+  `RedactedSecret` in its own file (a set secret prints `<redacted>`, an empty one the empty-string form), the paladin-notifications DF-07 precedent. The facade helper and
+  `paladin_llm`'s are `pub(crate)` and not reachable from `paladin-storage`, and a shared storage helper would have needed a `lib.rs` change, which this plan's file list
+  excludes. The two node-cache types already redacted and were not edited. Two names-every-field tests (`redis_queue_config_debug_names_every_field`,
+  `minio_config_debug_names_every_field`) pin the hand-written impls against a dropped field.
+- **Load pins.** Each type still loads a value carrying its secret; `minio_config_requires_both_keys_on_load` pins that a value missing either key fails with a
+  `missing field` error naming it (no serde default).
+- **Gates on SHA-G2 `7b06e5e6b5fcb3f2f6ceabb2ef2a25e297b2d456`** (CARGO_INCREMENTAL=0), all exit 0: rows 18-25 of the Local sweep (fmt; workspace clippy with `-D warnings`;
+  `paladin-ai` `config::` 286 passed; `paladin-storage` 384 passed; `make api-surface` unchanged at 4331 items; `make check-gates`; `make doc-check`;
+  `pre-commit run --all-files`). No coverage figure is claimed from this sandbox (D-00e).
+- **`### D-11 semver on SHA-S2`** is recorded by plan 58-16 Task 5, on the head after the register commit.
+- **Consumer documentation.** `MIGRATION.md` section 11.1 `M-B-51` (the five fields are not serialised) and `M-B-52` (two `Debug` redactions) follow `M-B-50`; the root and
+  `paladin-storage` changelogs carry `[Unreleased]` Security entries. There is no 11.2 row (no field, type or signature changes) and no Operators item (no host artifact
+  to fix; `M-B-52`'s action cell carries the rotate-if-logged advice, as `M-B-48` does). F-58-06's residual same-class list (the four types) is closed by this section.
+- **Adjacent observations, unregistered and unfixed (by name only).** A read-only re-run of the field-name grep over `src` and `crates` matched 35 lines in all. Outside this
+  class, `OpenAIEmbeddingConfig.api_key` (`crates/paladin-llm/src/openai/embedding.rs`) and `MySqlConfig.database_url` (`crates/paladin-storage/src/mysql_content_repository.rs`)
+  each derive `Debug` and `Clone` and no `Serialize`, so they print their field in a `Debug` rendering and cannot be serialised; `SqliteConfig.database_url`
+  (`crates/paladin-storage/src/sqlite_content_repository.rs`) has the same derive shape. The other matched fields (the `paladin-llm` provider adapter configs,
+  `paladin-web` controller DTOs, `user_service` DTOs, the run and schedule `secret` fields) were not read in this plan. The maintainer may row, fix or waive them.
+- **Docs candidate, not edited.** `docs/src/user-guides/fault-tolerance.md` could add that `NodeCacheConfig.redis_password` is never serialised.
+- **Register rows:** R-95 (fixed, this section).
 
 ---
 

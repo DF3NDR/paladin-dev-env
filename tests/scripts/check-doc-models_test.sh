@@ -12,7 +12,8 @@
 # The gate is pointed at a case through its --root and --allowlist flags; a case
 # without an `allowlist` file gets /dev/null, so no entry is in force.
 #
-# Failing cases are asserted first ("prove it fails"), then the passing cases.
+# Failing cases are asserted first ("prove it fails"), then the passing cases,
+# and last the real repository tree.
 # Every run's final output line must match SUMMARY_RE.
 #
 # Usage:  ./tests/scripts/check-doc-models_test.sh
@@ -152,6 +153,25 @@ assert_silent prefix_lookalikes \
 
 assert_silent allowlisted "a hit on a line holding the allowlist substring is exempt and counted" \
     "OK: 1 file(s) scanned, 0 deprecated model literal(s) (allowlisted: 1)"
+
+# --- The real tree -----------------------------------------------------------
+# CI reaches this case through `make test-shell-guards`, so a deprecated model
+# id returning to README.md, docs/src or examples/ turns the existing step red.
+
+ASSERTIONS=$((ASSERTIONS + 1))
+LAST_OUTPUT="$("${GUARD}" 2>&1)"
+LAST_STATUS=$?
+if [ "${LAST_STATUS}" -ne 0 ]; then
+    echo "FAIL: expected exit 0 for the real tree (got ${LAST_STATUS})"
+    indent_output
+    FAILED=$((FAILED + 1))
+elif ! grep -qE '^OK: [1-9][0-9]* file\(s\) scanned, 0 deprecated model literal\(s\)' <<<"$(tail -n1 <<<"${LAST_OUTPUT}")"; then
+    echo "FAIL: the real-tree output does not end in an OK: line over a non-empty scan"
+    indent_output
+    FAILED=$((FAILED + 1))
+else
+    echo "PASS (silent): the real tree carries no deprecated model id"
+fi
 
 echo ""
 if [ "${FAILED}" -eq 0 ]; then

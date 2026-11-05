@@ -282,7 +282,7 @@ check-semver: ## Run cargo-semver-checks for every publishable crate against the
 	@./scripts/check-semver.sh
 
 .PHONY: check-gates
-check-gates: check-changelogs check-crate-names check-advisory-register check-workflow-suppressions check-workflow-triggers check-codeql-dismissals check-migration-allowlist check-publish-order check-dependency-allowlist check-version-strings check-no-stub-panics ## Run all offline release-gate guards
+check-gates: check-changelogs check-crate-names check-advisory-register check-workflow-suppressions check-workflow-triggers check-codeql-dismissals check-migration-allowlist check-publish-order check-dependency-allowlist check-version-strings check-no-stub-panics check-doc-models ## Run all offline release-gate guards
 
 .PHONY: test-shell-guards
 # Loops over every tests/scripts/*_test.sh rather than a hardcoded list, so

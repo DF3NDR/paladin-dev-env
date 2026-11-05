@@ -633,7 +633,7 @@ Plans:
 **Wave 4** *(blocked on Wave 3 completion)*
 
 - [x] 58-06-PLAN.md — build wave: dated re-home todos and the locked register, D-11 `check-semver` on its own head, the pre-bump sweep, pre-bump push `SHA-P` (SHIP-10, SHIP-09, SHIP-08)
-- [ ] 58-16-PLAN.md — build wave (gap closure, inserted at the 58-06 sweep): the four residual secret-bearing config types (`NodeCacheConfig`, `RedisQueueConfig`, `MinioConfig`, `RedisNodeCacheConfig`) get `skip_serializing` and redacted `Debug` RED-then-GREEN, changelog and MIGRATION §11.1 rows, R-95 to `fixed`, F-58-07, D-11 semver and the pre-bump sweep re-run on SHA-S2, pre-bump push `SHA-P2` (SHIP-10, SHIP-09)
+- [x] 58-16-PLAN.md — build wave (gap closure, inserted at the 58-06 sweep): the four residual secret-bearing config types (`NodeCacheConfig`, `RedisQueueConfig`, `MinioConfig`, `RedisNodeCacheConfig`) get `skip_serializing` and redacted `Debug` RED-then-GREEN, changelog and MIGRATION §11.1 rows, R-95 to `fixed`, F-58-07, D-11 semver and the pre-bump sweep re-run on SHA-S2, pre-bump push `SHA-P2` (SHIP-10, SHIP-09)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 

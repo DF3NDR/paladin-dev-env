@@ -305,6 +305,45 @@ All twelve are register rows (`re-homed`, `v0.12.0 Phase 1`, dates pending the T
 behaviour change in a published crate goes to the next minor). The maintainer may instead pull the credential-class ones into
 the release, which would change `0.11.1`'s MIGRATION and changelog entries; that is raised in the Task 3 decision.
 
+### 2026-11-05 — F-58-06: three credential-class 56-REVIEW warnings fixed in 0.11.1 (D-07 amended)
+
+Plan 58-15 executed the maintainer's amendment recorded under `## Maintainer decisions (58-05)` (`fix WR-03,WR-04,WR-09 before tag`).
+Each warning is a RED `test(58-15)` commit and then a GREEN `fix(58-15)` commit (D-17), then two `docs(58-15)` commits.
+
+| Warning | RED (test) | GREEN (fix) | Change |
+|---------|------------|-------------|--------|
+| WR-03 (R-47) | `ec55f7fcc` test(58-15): setup-check must not echo a Redis or Qdrant URL's credentials | `25b89618c` fix(58-15): hide the URL in setup-check Redis and Qdrant errors | fixed Redis error text; Qdrant send error formatted after `without_url()` |
+| WR-04 (R-48) | `2a38220db` test(58-15): onboarding must write .env at mode 0600 | `a61367a0d` fix(58-15): write the onboarding .env at mode 0600 | unix create 0600, narrow an existing file on the open handle before the first write; non-unix unchanged |
+| WR-09 (R-53) root types | `070864b03` test(58-15): serialised config must omit every credential field | `e88fea3b9` fix(58-15): skip_serializing on the Settings, ApiKeyConfig, queue and MinIO secret fields | five fields, no `default`; two `EXEMPT` rows, nine-path verbatim expectation |
+| WR-09 (R-53) SMTP | `b7703b9ea` test(58-15): the SMTP password must not serialise | `d06702cf4` fix(58-15): skip_serializing on the SMTP password | `EmailAdapterConfig.password`, no `default` |
+
+Docs: `f5548d4d1` docs(58-15): changelog and MIGRATION 11.1 entries (`M-B-48`, `M-B-49`, `M-B-50`, Operators item 13); the register-row commit
+follows this section (D-06).
+
+- **Observation that changed a test, not the fix (WR-03, Qdrant).** reqwest 0.12.28 already strips URL userinfo from the error text of a
+  failed request, so a `user:password@` form cannot fail RED. The leak that remains is a credential carried in the query string
+  (`?api-key=...`), which the client appends to the error. The Qdrant test pins both forms and the query form is what failed RED.
+- **Gates on SHA-G `f5548d4d1a9bf0612e05e07f927b7050e85b5f1f`** (CARGO_INCREMENTAL=0), all exit 0: `cargo fmt --check`;
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings`; `cargo test -p paladin-ai --features cli,notifications --lib`
+  (1633 passed, 0 failed, 6 ignored; the F-58-03 flake did not fire); `--test config_example_roundtrip --test cli` (14 passed in the
+  round-trip binary); `cargo test -p paladin-notifications --features email` (9 passed); `make api-surface` (`API surface unchanged`,
+  4331 items); `make check-gates`; `pre-commit run --all-files` (all hooks passed, tree clean). No coverage figure is claimed from this
+  sandbox (D-00e).
+- **WR-09 decision.** `#[serde(skip_serializing)]` with no `default` (56-REVIEW's first option), so loading is unchanged and
+  `ApiKeyConfig` without `key` still fails to deserialise (pinned by a test). The consumer gate (step 0) found no serialise-then-deserialise
+  consumer of `Settings`, `ApiKeyConfig`, `AuthConfig`, `WebHttpConfig`, `QueueConfig`, `FileStorageConfig`, `NotificationConfig` or
+  `EmailAdapterConfig`: the only hits were `tests/config_example_roundtrip.rs` (re-serialises for a key-path diff, never deserialises;
+  lines 129, 366, 420) and the `Settings::default()` key listing in `src/config/settings.rs` (line 606). The fallback was not needed.
+- **`check-semver.sh --release-type patch`.** Not run here. An attribute-only change adds no public item and `make api-surface` is
+  unchanged; the patch re-read stays with plan 58-06's `### D-11 semver on SHA-S`.
+- **Residual same-class fields, left unchanged and unregistered** (a 58-15 prohibition, P-15-4), for plan 58-06's sweep to row or waive:
+  `NodeCacheConfig.redis_password` (`src/config/node_cache.rs:64`, not reachable from `Settings`) and the `paladin-storage` configs
+  `RedisQueueConfig` (`redis.rs`), `MinioConfig` (`minio.rs`) and `RedisNodeCacheConfig` (`node_cache/redis.rs`), all deriving `Serialize`
+  with plaintext secret fields (4 types). Pre-fix `.env` files stay 0644 until rewritten or `chmod 600` (`M-B-49`).
+- **`M-B-36` wording.** Its sentence that `Serialize` output is unchanged is true of the plan that wrote it (56-11) and is superseded for
+  these fields by `M-B-50`, which says so; no existing line was edited.
+- **Register rows:** R-47, R-48, R-53 (fixed, this section).
+
 ---
 
 ## Audit sweep (D-06)

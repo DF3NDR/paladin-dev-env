@@ -5,15 +5,15 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 58
 current_phase_name: Crate Release
 status: executing
-stopped_at: Completed 58-02-PLAN.md
-last_updated: "2026-11-05T03:57:03.803Z"
+stopped_at: Completed 58-03-PLAN.md
+last_updated: "2026-11-05T04:10:12.178Z"
 last_activity: 2026-11-05
 last_activity_desc: Phase 58 execution started
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 82
-  completed_plans: 70
+  completed_plans: 71
 ---
 
 # Project State
@@ -53,11 +53,11 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 ## Current Position
 
 Phase: 58 (Crate Release) — EXECUTING
-Plan: 3 of 14
+Plan: 4 of 14
 Status: Ready to execute
 Last activity: 2026-11-05 — Phase 58 execution started
 
-Progress: [█████████████████░░░] 6/7 phases (v0.11.1) — plans [████████████████████] 68/68 ([█████████░] 85%)
+Progress: [█████████████████░░░] 6/7 phases (v0.11.1) — plans [████████████████████] 68/68 ([█████████░] 87%)
 
 ## Performance Metrics
 
@@ -432,6 +432,7 @@ Progress: [█████████████████░░░] 6/7 pha
 | Phase 57 P11 | ~2h | 3 tasks | 5 files |
 | Phase 58 P01 | 85min | 3 tasks | 7 files |
 | Phase 58 P02 | n/a | 2 tasks | 27 files |
+| Phase 58 P03 | not measured | 3 tasks | 115 files |
 
 ## Accumulated Context
 
@@ -848,6 +849,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 58-01: SDK smoke is a tag precondition (not a merge context); fixed CI-side in scripts/sdk-smoke/run.sh. treasury_spend flake is test-level, re-seal rule goes to maintainer at 58-05.
 - [Phase ?]: 58-02: no register amendment needed; tightened disposition checker reads 0 failures on the real archive
 - [Phase ?]: 58-02: key literal remains in git history since 928c6d5f9; rotation/purge is the maintainer's, put at plan 58-05
+- [Phase 58]: 58-03: check-doc-models gate lands with the DF-18 sweep; one allowlist entry (sentinel.md:877, a deliberate non-vision negative example); gpt-4o-mini default, gpt-5.4 at two docs sites
 
 ### Pending Todos
 
@@ -1269,8 +1271,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-11-05T03:57:03.777Z
-Stopped at: Completed 58-02-PLAN.md
+Last session: 2026-11-05T04:10:12.149Z
+Stopped at: Completed 58-03-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

@@ -622,7 +622,7 @@ Plans:
 **Wave 2** *(blocked on Wave 1 completion)*
 
 - [x] 58-02-PLAN.md — build wave: 57-REVIEW WR-02 checker fix with near-miss fixtures (RED then GREEN), the `sk-proj-…` scrub proven by counts only (SHIP-10)
-- [ ] 58-03-PLAN.md — build wave: the deprecated `gpt-4` model id swept from `docs/src` and `examples/` behind a new `check-doc-models` gate in `check-gates` and the harness (SHIP-10)
+- [x] 58-03-PLAN.md — build wave: the deprecated `gpt-4` model id swept from `docs/src` and `examples/` behind a new `check-doc-models` gate in `check-gates` and the harness (SHIP-10)
 - [ ] 58-04-PLAN.md — build wave: log-derived `[Unreleased]` anchors for battalion/eval/herald with a throwaway finalize proof, the Cadence muster pin, the devcontainer `cargo-llvm-cov` 0.8.7 install (SHIP-08, SHIP-09, SHIP-10)
 
 **Wave 3** *(blocked on Wave 2 completion)*

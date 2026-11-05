@@ -145,6 +145,25 @@ assert_fire no_evidence "NO_EVIDENCE: TBD, none and 'see above' are placeholders
     "FAIL NO_EVIDENCE 10 WR-01" "FAIL NO_EVIDENCE 10 CR-01" "FAIL NO_EVIDENCE 40 WR-01"
 assert_fire closed_no_pointer "CLOSED_NO_POINTER: prose with no commit, test, requirement or path" \
     "FAIL CLOSED_NO_POINTER 10 WR-01"
+# 57-REVIEW WR-02 (Phase 58, D-07): prose that merely LOOKS pointer-shaped is not
+# evidence. Each case is `closed_no_pointer` with one Evidence cell changed to a
+# near-miss token the pre-58 heuristics accepted.
+assert_fire closed_near_miss_date "CLOSED_NO_POINTER: a bare date (20261105) is not a commit id" \
+    "FAIL CLOSED_NO_POINTER 10 WR-01"
+assert_fire closed_near_miss_number "CLOSED_NO_POINTER: a bare number (1234567) is not a commit id" \
+    "FAIL CLOSED_NO_POINTER 10 WR-01"
+assert_fire closed_near_miss_adr "CLOSED_NO_POINTER: ADR-0063 is not a requirement id" \
+    "FAIL CLOSED_NO_POINTER 10 WR-01"
+assert_fire closed_near_miss_sha256 "CLOSED_NO_POINTER: SHA-256 is not a requirement id" \
+    "FAIL CLOSED_NO_POINTER 10 WR-01"
+assert_fire closed_near_miss_utf8 "CLOSED_NO_POINTER: UTF-8 is not a requirement id" \
+    "FAIL CLOSED_NO_POINTER 10 WR-01"
+assert_fire closed_near_miss_http2 "CLOSED_NO_POINTER: HTTP-2 is not a requirement id" \
+    "FAIL CLOSED_NO_POINTER 10 WR-01"
+assert_fire closed_near_miss_slashes "CLOSED_NO_POINTER: and/or/else is not a repository path" \
+    "FAIL CLOSED_NO_POINTER 10 WR-01"
+assert_fire closed_near_miss_snake "CLOSED_NO_POINTER: a bare snake_case word in prose is not a test name" \
+    "FAIL CLOSED_NO_POINTER 10 WR-01"
 assert_fire waived_no_owner "WAIVED_NO_OWNER: a waived row with an empty owner" \
     "FAIL WAIVED_NO_OWNER 10 CR-01"
 assert_fire totals "TOTALS: the Totals line disagrees with the rows" \
@@ -173,6 +192,10 @@ assert_fire zero_files_listed_phase "ZERO_FILES: --phases names a phase with no 
 assert_silent ok "ok: closed and waived rows, fenced headings ignored" \
     "checked 5 finding(s) across 2 review file(s); 0 failure(s)"
 assert_lacks "ok: the fenced WR-99 heading is never an expected id" "WR-99"
+
+# Guard: every genuine pointer form still passes the tightened heuristics.
+assert_silent closed_real_pointers "closed rows holding each genuine pointer form pass" \
+    "checked 7 finding(s) across 1 review file(s); 0 failure(s)"
 
 assert_silent open_pending_ok "--pending-ok: an open row with 'LIVE <file:line>' passes" \
     "checked 5 finding(s) across 2 review file(s); 0 failure(s)"

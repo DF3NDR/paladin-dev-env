@@ -3,16 +3,16 @@ status: testing
 phase: 57-register-hygiene-close-out
 source: 57-01-SUMMARY.md, 57-02-SUMMARY.md, 57-03-SUMMARY.md, 57-04-SUMMARY.md, 57-05-SUMMARY.md, 57-06-SUMMARY.md, 57-07-SUMMARY.md, 57-08-SUMMARY.md, 57-09-SUMMARY.md, 57-10-SUMMARY.md, 57-11-SUMMARY.md, 57-12-SUMMARY.md, 57-13-SUMMARY.md, 57-14-SUMMARY.md, 57-15-SUMMARY.md, 57-16-SUMMARY.md
 started: 2026-11-05T00:55:10Z
-updated: 2026-11-05T00:58:45Z
+updated: 2026-11-05T00:59:06Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 4
-name: Owner-run rule is documented everywhere it is read
+number: 5
+name: Failed-run errors are redacted then bounded; empty webhook secret warns at boot
 expected: |
-  openapi.json and the thread endpoint rustdoc describe ownership as the earliest attributed run. ADR-0063 is amended in place with that rule, quoting each replaced sentence. MIGRATION.md 11.1 rows M-B-24/M-B-25, section 11.6 and a new 11.8 operator step 12 (legacy mixed-tenant threads) state it, and both the root and paladin-web [Unreleased] changelogs carry a Fixed entry for the rule and the WINDOWS row 85 fix.
+  A run that fails with a provider error that embeds a response body stores (and logs in the worker's failed-persist warning) text that is redacted first and then capped at the 2048-character budget, so no secret can straddle the cut. An operator-webhook secret configured as an empty string behaves as absent, and the server logs exactly one boot warning that the operator webhook has no secret; a configured non-empty secret still produces the same signature bytes as before.
 awaiting: user response
 
 ## Tests
@@ -31,7 +31,7 @@ result: pass
 
 ### 4. Owner-run rule is documented everywhere it is read
 expected: openapi.json and the thread endpoint rustdoc describe ownership as the earliest attributed run. ADR-0063 is amended in place with that rule, quoting each replaced sentence. MIGRATION.md 11.1 rows M-B-24/M-B-25, section 11.6 and a new 11.8 operator step 12 (legacy mixed-tenant threads) state it, and both the root and paladin-web [Unreleased] changelogs carry a Fixed entry for the rule and the WINDOWS row 85 fix.
-result: [pending]
+result: pass
 
 ### 5. Failed-run errors are redacted then bounded; empty webhook secret warns at boot
 expected: A run that fails with a provider error that embeds a response body stores (and logs in the worker's failed-persist warning) text that is redacted first and then capped at the 2048-character budget, so no secret can straddle the cut. An operator-webhook secret configured as an empty string behaves as absent, and the server logs exactly one boot warning that the operator webhook has no secret; a configured non-empty secret still produces the same signature bytes as before.
@@ -100,9 +100,9 @@ coverage_id: D4
 ## Summary
 
 total: 19
-passed: 5
+passed: 6
 issues: 0
-pending: 14
+pending: 13
 skipped: 0
 blocked: 0
 

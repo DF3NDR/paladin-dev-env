@@ -637,6 +637,44 @@ mod tests {
         assert_eq!(value["http"]["auth"]["api_keys"][0]["name"], "df07-probe");
     }
 
+    /// WR-09 (56-REVIEW): the SMTP password reachable through `Settings` is never serialised.
+    #[cfg(feature = "notifications")]
+    #[test]
+    fn settings_serialisation_omits_the_smtp_password() {
+        const SMTP_PASSWORD: &str = "test-key-not-a-secret-wr09-smtp-password";
+        let email = crate::infrastructure::adapters::notifications::EmailAdapterConfig {
+            password: SMTP_PASSWORD.to_string(),
+            ..Default::default()
+        };
+        let settings = Settings {
+            notifications: Some(NotificationConfig {
+                email: Some(email),
+                ..NotificationConfig::default()
+            }),
+            ..Settings::default()
+        };
+        // Non-vacuous: the sentinel really sits in the struct we serialise.
+        assert_eq!(
+            settings
+                .notifications
+                .as_ref()
+                .and_then(|n| n.email.as_ref())
+                .map(|e| e.password.as_str()),
+            Some(SMTP_PASSWORD)
+        );
+
+        let json = serde_json::to_string(&settings).expect("Settings serialises");
+        assert!(
+            !json.contains(SMTP_PASSWORD),
+            "serialised Settings carries notifications.email.password"
+        );
+        let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        assert!(
+            value["notifications"]["email"]["smtp_host"].is_string(),
+            "the neighbouring smtp_host field is still written"
+        );
+    }
+
     #[test]
     fn settings_debug_names_every_serialized_field() {
         let value = serde_json::to_value(Settings::default()).expect("Settings serialises");

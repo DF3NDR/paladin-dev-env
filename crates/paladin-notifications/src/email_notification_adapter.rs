@@ -809,4 +809,23 @@ mod tests {
             "smtp_host missing: {text}"
         );
     }
+
+    /// WR-09 (56-REVIEW): serialising an `EmailAdapterConfig` must not write the password.
+    #[test]
+    fn email_adapter_config_serialisation_omits_the_password() {
+        let config = create_test_config();
+        assert_eq!(config.password, "password123");
+        let value = serde_json::to_value(&config).expect("EmailAdapterConfig serialises");
+        let object = value.as_object().expect("serialises as an object");
+        assert!(
+            !object.contains_key("password"),
+            "EmailAdapterConfig serialised `password`"
+        );
+        assert!(
+            !value.to_string().contains("password123"),
+            "EmailAdapterConfig serialisation carries the password value"
+        );
+        // Non-vacuous: the other fields are still written.
+        assert_eq!(object["smtp_host"], "smtp.example.com");
+    }
 }

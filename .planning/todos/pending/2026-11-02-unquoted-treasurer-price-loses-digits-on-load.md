@@ -8,6 +8,7 @@ files:
   - src/config/settings.rs
   - tests/config_example_roundtrip.rs
 owner: repo maintainer
+recheck_by: 2026-11-09
 dispositioned_by: Phase 56 plan 56-02 (DF-06)
 ---
 
@@ -42,3 +43,7 @@ that an unquoted price is read as a number and must be quoted above 15 significa
 quoted path is already pinned by `quoted_money_strings_arrive_byte_identical` and the credible
 unquoted path by `unquoted_credible_prices_keep_their_decimal_value` in
 `tests/config_example_roundtrip.rs`.
+
+## Update 2026-11-05 (Phase 58 pre-tag audit, R-64)
+
+Acknowledged and kept open by the Phase 58 pre-tag audit (`58-AUDIT-DISPOSITIONS.md` R-64). Owner: repo maintainer. Re-check by 2026-11-09, the maintainer's `DATE` recorded in `58-CI-EVIDENCE.md` `## Maintainer decisions (58-05)`.

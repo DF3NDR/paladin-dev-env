@@ -9,6 +9,7 @@ files:
   - src/application/cli/templates/env.rs
   - docs/src/appendix/cli-setup-check.md
 owner: repo maintainer
+recheck_by: 2026-11-09
 dispositioned_by: Phase 56 plan 56-06 (DF-16, DF-17)
 ---
 
@@ -42,3 +43,7 @@ Print the categories in a fixed order (a `Vec` of categories, or a `BTreeMap` ke
 a one-line "not configured" row for each skipped provider even without `--verbose`, replace `paladin`
 with `paladin-cli` in the binary's own messages, then regenerate the sample on `cli-setup-check.md`
 from a real run.
+
+## Update 2026-11-05 (Phase 58 pre-tag audit, R-63)
+
+Acknowledged and kept open by the Phase 58 pre-tag audit (`58-AUDIT-DISPOSITIONS.md` R-63). Owner: repo maintainer. Re-check by 2026-11-09, the maintainer's `DATE` recorded in `58-CI-EVIDENCE.md` `## Maintainer decisions (58-05)`.

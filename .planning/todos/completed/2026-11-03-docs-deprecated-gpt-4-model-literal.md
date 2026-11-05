@@ -1,4 +1,5 @@
 ---
+completed: 2026-11-05
 created: 2026-11-03T00:00:00Z
 title: Replace the deprecated `"gpt-4"` model literal across the docs and examples, and gate it
 area: docs
@@ -50,3 +51,10 @@ is a contained one-line edit, but fixing one of 109 would leave the root cause i
    `scripts/check-doc-config.sh` and `scripts/check-version-strings.sh`) that fails when a copyable
    OpenAI model literal in `docs/src`, `examples/` or `README.md` is not a model the seeded registry knows.
    An allowlist is needed for pages that deliberately show a deprecated id as a migration example.
+
+## Resolved 2026-11-05 (Phase 58)
+
+Plan 58-03 replaced the deprecated `"gpt-4"` literal across `docs/src` and `examples/` (commits `8cfd7ad33` docs(58-03) and
+`2bcc91263` docs(58-03)) and added the `check-doc-models` gate to `make check-gates` (commit `bf0c25ab2`). The Rust-side sweep,
+the registry-membership check for the other ids and the thirteen unflagged illustrative tokens stay open as register rows R-79,
+R-80 and R-81. Register row R-60 (`fixed`), closed by plan 58-06.

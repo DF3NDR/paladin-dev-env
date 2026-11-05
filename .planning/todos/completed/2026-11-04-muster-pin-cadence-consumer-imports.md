@@ -1,4 +1,5 @@
 ---
+completed: 2026-11-05
 created: 2026-11-04T00:00:00Z
 title: Pin the three Cadence import paths web3sec takes in tests/consumer_surface_muster.rs
 area: downstream-consumer
@@ -37,3 +38,9 @@ execution), then run `make check-consumer-surface`. It needs a compile of the fa
 `llm-deepseek`, which Phase 56 plan 56-10 did not run (docs-only plan, no cargo build, 3.3 GB free at the time).
 
 Entry condition: a milestone with room for a one-file test change. Not a release blocker.
+
+## Resolved 2026-11-05 (Phase 58)
+
+Plan 58-04 added `cadence_consumer_imports_pin` to `tests/consumer_surface_muster.rs`, pinning `build_cadence`, `with_cadence`
+and `CadenceConfig` (commit `364f08607` test(58-04)). The Consumer-Surface Muster run 127040941941 concluded `success` on
+`33cdc08e0`. Register row R-61 (`fixed`), closed by plan 58-06.

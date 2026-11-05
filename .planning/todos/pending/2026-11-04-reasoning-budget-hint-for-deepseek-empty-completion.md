@@ -8,6 +8,7 @@ files:
   - crates/paladin-llm/src/response_guards.rs
   - crates/paladin-llm/src/deepseek/adapter.rs
 owner: repo maintainer
+recheck_by: 2026-11-09
 dispositioned_by: Phase 56 plan 56-10 (DF-34)
 ---
 
@@ -40,3 +41,7 @@ string only). CONTEXT D-00d lets provider-measurement work in only when a run ha
 A later milestone that takes reasoning-model budgets, or a captured `finish_reason=length` body with
 `reasoning_tokens` from web3sec's DeepSeek runs. Start by deciding which of "warn", "refuse" or "raise" the adapter
 may do to an explicit `max_tokens`.
+
+## Update 2026-11-05 (Phase 58 pre-tag audit, R-65)
+
+Acknowledged and kept open by the Phase 58 pre-tag audit (`58-AUDIT-DISPOSITIONS.md` R-65). Owner: repo maintainer. Re-check by 2026-11-09, the maintainer's `DATE` recorded in `58-CI-EVIDENCE.md` `## Maintainer decisions (58-05)`.

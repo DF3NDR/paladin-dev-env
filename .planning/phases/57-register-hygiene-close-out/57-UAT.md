@@ -3,16 +3,16 @@ status: testing
 phase: 57-register-hygiene-close-out
 source: 57-01-SUMMARY.md, 57-02-SUMMARY.md, 57-03-SUMMARY.md, 57-04-SUMMARY.md, 57-05-SUMMARY.md, 57-06-SUMMARY.md, 57-07-SUMMARY.md, 57-08-SUMMARY.md, 57-09-SUMMARY.md, 57-10-SUMMARY.md, 57-11-SUMMARY.md, 57-12-SUMMARY.md, 57-13-SUMMARY.md, 57-14-SUMMARY.md, 57-15-SUMMARY.md, 57-16-SUMMARY.md
 started: 2026-11-05T00:55:10Z
-updated: 2026-11-05T01:01:00Z
+updated: 2026-11-05T01:01:20Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 11
-name: WINDOWS ledger is fully dispositioned
+number: 12
+name: Register evidence file ties the seal to the pushed head
 expected: |
-  `.planning/WINDOWS.md` frontmatter reads open_count 0, waived_count 53, fixed_count 55, total_count 108. Rows 85-100 (minted during this phase) are each marked fixed on a re-run test, a re-measurement or a CI job id, and waiver rows 101-108 each name the owner of record plus revisit and basis. Nothing in the ledger would block `/gsd-ship`.
+  57-REGISTER-EVIDENCE.md records the WINDOWS and review-disposition counts, the REG-01/03/04/05/06 read-backs, the phase gates, and the CI run and job ids on the pushed Phase 57 head (run 41927940508 on 4b115d511 or later), plus the orphaned-deferrals list; the head it names matches what is on origin for this branch.
 awaiting: user response
 
 ## Tests
@@ -59,7 +59,7 @@ result: pass
 
 ### 11. WINDOWS ledger is fully dispositioned
 expected: `.planning/WINDOWS.md` frontmatter reads open_count 0, waived_count 53, fixed_count 55, total_count 108. Rows 85-100 (minted during this phase) are each marked fixed on a re-run test, a re-measurement or a CI job id, and waiver rows 101-108 each name the owner of record plus revisit and basis. Nothing in the ledger would block `/gsd-ship`.
-result: [pending]
+result: pass
 
 ### 12. Register evidence file ties the seal to the pushed head
 expected: 57-REGISTER-EVIDENCE.md records the WINDOWS and review-disposition counts, the REG-01/03/04/05/06 read-backs, the phase gates, and the CI run and job ids on the pushed Phase 57 head (run 41927940508 on 4b115d511 or later), plus the orphaned-deferrals list; the head it names matches what is on origin for this branch.
@@ -100,9 +100,9 @@ coverage_id: D4
 ## Summary
 
 total: 19
-passed: 12
+passed: 13
 issues: 0
-pending: 7
+pending: 6
 skipped: 0
 blocked: 0
 

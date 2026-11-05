@@ -3,16 +3,16 @@ status: testing
 phase: 57-register-hygiene-close-out
 source: 57-01-SUMMARY.md, 57-02-SUMMARY.md, 57-03-SUMMARY.md, 57-04-SUMMARY.md, 57-05-SUMMARY.md, 57-06-SUMMARY.md, 57-07-SUMMARY.md, 57-08-SUMMARY.md, 57-09-SUMMARY.md, 57-10-SUMMARY.md, 57-11-SUMMARY.md, 57-12-SUMMARY.md, 57-13-SUMMARY.md, 57-14-SUMMARY.md, 57-15-SUMMARY.md, 57-16-SUMMARY.md
 started: 2026-11-05T00:55:10Z
-updated: 2026-11-05T01:02:30Z
+updated: 2026-11-05T01:02:50Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 16
-name: Cadence treats a zero provider delay as none and never loses a 429 record
+number: 17
+name: Node-cache fence marker never outlives its fencing counter
 expected: |
-  A 429 carrying Retry-After 0, a past HTTP-date, or a zero reset makes CadenceLlmAdapter::minimum_delay return None, so the port waits at least its own base back-off (escalating with streak) instead of opening a zero-length gate. note_failure records the 429 in a spawned task that the call awaits, so a caller dropped after the provider answered still leaves the record and the next call's gate reads it. paladin-llm and root CHANGELOG Fixed entries, MIGRATION rows M-B-45/M-B-46 and ADR-0058 (d)/(i) amendments exist.
+  The Redis node-cache fence marker TTL is clamp(2 x entry ttl, 5 min, 30 min), so for an on-time lock holder it expires no later than the Redis Cadence fencing counter that numbered it. Both TTL rules live once in the crate-private paladin-storage redis_fence module (feature-gated like redis_url) with no public item or feature-flag change. paladin-storage and root CHANGELOG Fixed entries, MIGRATION row M-B-47 and the ADR-0058 (g) amendment and (i) residual bullet exist.
 awaiting: user response
 
 ## Tests
@@ -79,7 +79,7 @@ result: pass
 
 ### 16. Cadence treats a zero provider delay as none and never loses a 429 record
 expected: A 429 carrying Retry-After 0, a past HTTP-date, or a zero reset makes CadenceLlmAdapter::minimum_delay return None, so the port waits at least its own base back-off (escalating with streak) instead of opening a zero-length gate. note_failure records the 429 in a spawned task that the call awaits, so a caller dropped after the provider answered still leaves the record and the next call's gate reads it. paladin-llm and root CHANGELOG Fixed entries, MIGRATION rows M-B-45/M-B-46 and ADR-0058 (d)/(i) amendments exist.
-result: [pending]
+result: pass
 
 ### 17. Node-cache fence marker never outlives its fencing counter
 expected: The Redis node-cache fence marker TTL is clamp(2 x entry ttl, 5 min, 30 min), so for an on-time lock holder it expires no later than the Redis Cadence fencing counter that numbered it. Both TTL rules live once in the crate-private paladin-storage redis_fence module (feature-gated like redis_url) with no public item or feature-flag change. paladin-storage and root CHANGELOG Fixed entries, MIGRATION row M-B-47 and the ADR-0058 (g) amendment and (i) residual bullet exist.
@@ -100,9 +100,9 @@ coverage_id: D4
 ## Summary
 
 total: 19
-passed: 17
+passed: 18
 issues: 0
-pending: 2
+pending: 1
 skipped: 0
 blocked: 0
 

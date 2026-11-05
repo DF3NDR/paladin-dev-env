@@ -632,7 +632,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 58-06-PLAN.md — build wave: dated re-home todos and the locked register, D-11 `check-semver` on its own head, the pre-bump sweep, pre-bump push `SHA-P` (SHIP-10, SHIP-09, SHIP-08)
+- [x] 58-06-PLAN.md — build wave: dated re-home todos and the locked register, D-11 `check-semver` on its own head, the pre-bump sweep, pre-bump push `SHA-P` (SHIP-10, SHIP-09, SHIP-08)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 

@@ -5,6 +5,11 @@ All notable changes to `paladin-herald` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows lockstep workspace versioning.
 
+## [Unreleased]
+
+Patch release carried by the workspace-wide version bump (0.11.0 -> 0.11.1).
+No source change in this crate — see the root `CHANGELOG.md`'s `[0.11.1]` section.
+
 ## [0.11.0] - 2026-10-26
 
 ### Added

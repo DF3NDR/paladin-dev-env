@@ -5,6 +5,19 @@ All notable changes to `paladin-battalion` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows lockstep workspace versioning.
 
+## [Unreleased]
+
+### Changed
+
+- Phase 52 (CIREL-02, `2d3cf119a`): the crate's `[package.metadata.cargo-semver-checks.lints]`
+  table (the `function_missing` and `module_missing` allows that switched two lints off for the
+  whole crate) is removed from `Cargo.toml`, measured against the published `0.11.0` baseline:
+  223 checks pass, 31 skip, no lint fired. No source file and no public item changed.
+- Phase 55 (TESTS-06, `79cd06bf7`): the `Commander` happy-path tests in `src/commander.rs` carry a
+  doc line pointing at their relocated error-path counterparts in
+  `tests/integration/commander_error_paths_test.rs`, in place of the four to-do comments. Test-only;
+  no public item changed.
+
 ## [0.11.0] - 2026-10-26
 
 ### Added

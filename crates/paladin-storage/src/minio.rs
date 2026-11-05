@@ -23,13 +23,42 @@ use paladin_ports::output::file_storage_port::{
 };
 use paladin_ports::output::log_port::LogPort;
 
+/// A secret as `Debug` prints it: `<redacted>`, or `""` when empty.
+///
+/// A module-private copy of the three-line rule in `paladin_llm::redaction::RedactedKey` (and
+/// paladin-ai's `config::redaction::RedactedSecret`), both `pub(crate)` there. Neither is
+/// reachable from this crate, and a shared helper here would need a `lib.rs` change, so this
+/// file carries its own (the paladin-notifications DF-07 precedent; R-95).
+struct RedactedSecret<'a>(&'a str);
+
+impl std::fmt::Debug for RedactedSecret<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0.is_empty() {
+            f.write_str("\"\"")
+        } else {
+            f.write_str("<redacted>")
+        }
+    }
+}
+
 /// Configuration for an S3-compatible store connection using rust-s3 (RustFS in
 /// dev/test/CI; MinIO, AWS S3, DigitalOcean Spaces or any SigV4 S3 endpoint in production).
+///
+/// `Debug` is implemented by hand: it prints `access_key` and `secret_key` as `<redacted>`
+/// when set (the derived `Debug` printed them), and `Serialize` omits both keys altogether.
+/// Loading is unchanged: neither key has a serde default, so a value missing either one still
+/// fails to load (R-95).
 #[doc(hidden)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct MinioConfig {
     pub endpoint: String,
+    /// Never written by `Serialize` (`skip_serializing`, no serde default) and printed as
+    /// `<redacted>` by `Debug`.
+    #[serde(skip_serializing)]
     pub access_key: String,
+    /// Never written by `Serialize` (`skip_serializing`, no serde default) and printed as
+    /// `<redacted>` by `Debug`.
+    #[serde(skip_serializing)]
     pub secret_key: String,
     pub bucket: String,
     pub region: Option<String>,
@@ -39,6 +68,24 @@ pub struct MinioConfig {
     pub request_timeout: Duration,
     pub max_retries: u32,
     pub max_idle_conns: u32,
+}
+
+impl std::fmt::Debug for MinioConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MinioConfig")
+            .field("endpoint", &self.endpoint)
+            .field("access_key", &RedactedSecret(&self.access_key))
+            .field("secret_key", &RedactedSecret(&self.secret_key))
+            .field("bucket", &self.bucket)
+            .field("region", &self.region)
+            .field("secure", &self.secure)
+            .field("path_style", &self.path_style)
+            .field("connection_timeout", &self.connection_timeout)
+            .field("request_timeout", &self.request_timeout)
+            .field("max_retries", &self.max_retries)
+            .field("max_idle_conns", &self.max_idle_conns)
+            .finish()
+    }
 }
 
 impl Default for MinioConfig {

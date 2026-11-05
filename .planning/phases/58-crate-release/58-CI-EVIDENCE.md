@@ -33,6 +33,10 @@ RESEARCH.md that was not re-measured is labelled as a research figure.
 - SHA-P2: 042df99b2c48bc249c206fdba6372e1e67b34e7d
 - SHA-G2: 7b06e5e6b5fcb3f2f6ceabb2ef2a25e297b2d456
 - SHA-S2: 0143b50d596eee90a3b185c2e9ce94ad0292a2a8
+- SHA-C1: 96eb49d385770a90271372a82376a9016ac496dc
+- SHA-C2: d88c519abb556ef32ad6def7533a4851754597f0
+- SHA-C3: ac9411ea0039eea6a4f61b3328977228cd766253
+- STAMP: 2026-11-05
 
 Machine-readable SHA lines added by plans use the exact form `- SHA-<label>: <40-hex>` on their own line.
 
@@ -80,12 +84,22 @@ after the two `docs(58-01)` commits (`2e1338a80`).
 | 32 | `pre-commit run --all-files` | `0143b50d5` | exit 0; every hook Passed (`check toml` through `cargo clippy (workspace, -D warnings)`); tree clean after |
 | 33 | `./scripts/check-review-dispositions.sh` | `0143b50d5` | exit 0; `checked 51 finding(s) across 13 review file(s); 0 failure(s)` |
 | 34 | `bash .planning/phases/58-crate-release/58-check-register.sh` (strict, no `--draft`) | `0143b50d5` | exit 0; `register: checked 135 row(s) (R: 95, V: 40); fixed 52, waived 37, re-homed 46; 0 failure(s)` |
+| 35 | `cargo release version 0.11.1 --execute --no-confirm --workspace` | `df11b61c4` | exit 0; 13 `Upgrading ... from 0.11.0 to 0.11.1`; tree modified, no commit, tag or push |
+| 36 | `./scripts/check-version-strings.sh` (after the manifest bump, red by design) | `df11b61c4` + bump | exit 1 `MISMATCH`; 52 findings: 42 class 1, 1 class 2, 8 class 3, 1 class 4 (equals the RESEARCH measure) |
+| 37 | `./scripts/check-version-strings.sh`; `make check-gates` (after the line-addressed edits and `make openapi`) | `96eb49d38` | exit 0; `OK: 128 file(s) scanned, every copyable version string equals '0.11.1' (class 1 Cargo pins: 42; class 2 Current version lines: 1; class 3 k8s labels and image tags: 8; class 4 openapi.json info.version: 1; exempt files: 1)`; `OK: scanned 627 file(s) (19 test-only), 0 finding(s)`; `OK: 184 file(s) scanned, 0 deprecated model literal(s) (allowlisted: 1)` |
+| 38 | `cargo test -p paladin-web --lib openapi_matches_committed_baseline` | `96eb49d38` | `test openapi::tests::openapi_matches_committed_baseline ... ok` |
+| 39 | `make finalize-crate-changelogs VERSION=0.11.1`; `make check-changelogs`; `make check-release-consistency RELEASE_TAG=v0.11.1` | `d88c519ab` | exit 0 each; `OK: 12 publishable package(s) checked for version '0.11.1' (date 2026-11-05)`; `OK: 12 publishable package(s) checked, all match tag version '0.11.1' with a changelog section for it` |
+| 40 | `scripts/extract-changelog-section.sh --version 0.11.1` (root) | `d88c519ab` | 16,065 characters, 16,075 bytes (limit 125,000) |
+| 41 | `make check-migration-allowlist`; `make check-gates`; `make check-doc-config` | `ac9411ea0` | exit 0 each; `Allowlist is set-equal to the MIGRATION.md §11.2 deliberate-breaking register`; `161 YAML block(s) checked, 0 failed` |
 
 Rows 9-17 ran on 2026-11-05 (17:20Z to 17:28Z) in plan 58-06, on `SHA-S` `fb6d50da0caa5980fca0f70799fe25adb4a830f0` (the head after the register-lock commit `fb6d50da0`; the working tree was clean). No row is red. The Phase 58 register moved from the draft count (fixed 51, waived 37, re-homed 46) to the locked count because plan 58-06 added R-95.
 
 Rows 18-25 ran on 2026-11-05 in plan 58-16, on `SHA-G2` `7b06e5e6b5fcb3f2f6ceabb2ef2a25e297b2d456` (the head after the changelog and MIGRATION commit `7b06e5e6b`, the last commit outside `.planning/`; the working tree was clean). No row is red. Disk free read 2.0 GB before the gates, so `target/debug/incremental` was removed (never `cargo clean`) and 3.1 GB was free afterwards; the gates then ran with `CARGO_INCREMENTAL=0`. No coverage figure is claimed here (D-00e).
 
 Rows 26-34 ran on 2026-11-05 in plan 58-16 Task 5, on `SHA-S2` `0143b50d596eee90a3b185c2e9ce94ad0292a2a8` (the head after the register commit `0143b50d5`; the working tree was clean). No row is red. `SHA-S2` and `SHA-G2` differ only under `.planning/`: `git diff --name-only SHA-G2 SHA-S2 -- . ':!.planning'` is empty. Disk free read 1.7 GB after the plan's pre-commit run recreated `target/debug/incremental` (1.4 GB), so that directory was removed again (never `cargo clean`) and 3.0 GB was free for the semver run.
+
+Rows 35-41 ran on 2026-11-05 in plan 58-07, after the pre-bump CI read: rows 35-38 on the `SHA-C1` tree, row 39-40 on `SHA-C2`, row 41 on `SHA-C3`. The pre-commit hooks also ran on each of the three bump commits and passed. No row is red.
+
 ---
 
 ## CI-run table
@@ -279,6 +293,74 @@ One read of `SHA-P`'s four runs at the same time (not waited for): `codeql.yml` 
 `pre-commit` `42075372712` completed `success`; `feature-flags.yml` `42075372714` completed `success`. The `ci.yml` concurrency group cancels an older in-flight run of the same
 event and branch, so `SHA-P`'s `ci.yml` run is superseded, and plan 58-07 reads `SHA-P2`'s runs. A `SHA-P` run that concluded `failure` rather than `cancelled` would be recorded by
 id and job and acted on by nobody (D-00j); none did.
+
+### Plan 58-07 — every run on SHA-P2 (pre-bump read, substituted for the plan's `SHA-P`)
+
+The plan text reads `SHA-P`; its runs were superseded (`ci.yml` `42075372810` and `codeql.yml` `42075372834` concluded `cancelled`), so by the orchestrator's instruction and
+`.continue-here.md` this read uses `SHA-P2` `042df99b2c48bc249c206fdba6372e1e67b34e7d` (`- SHA-P2:` in Provenance). Read once on 2026-11-05 (before the 20:17Z changelog stamp; never waited for) with
+`gh api "repos/DF3NDR/paladin-dev-env/actions/runs?head_sha=042df99b2c48bc249c206fdba6372e1e67b34e7d&per_page=100"` and, per run,
+`gh api repos/DF3NDR/paladin-dev-env/actions/runs/<id>/jobs?per_page=100`. Every run is `status: completed`; no run and no job is `failure` or `cancelled`. The F-58-03 flake rule was not needed.
+`origin/claude/laughing-dirac-e0h2ax` read `df11b61c4` (the local head), so the working tree and the remote agreed before the bump.
+
+| Workflow | Run id | Event | Conclusion | Jobs (all read) |
+|----------|--------|-------|------------|-----------------|
+| `pre-commit` | `42085634093` | push | success | `pre-commit run --all-files` `127449843673` success |
+| `feature-flags.yml` | `42085634381` | push | success | 21 jobs, all success (every `Build & Test (<feature>)` incl. `(cli)` `127449846836`, `CLI Isolation`, `LLM Registry Unit Tests`, `OTel Feature`, `Feature Matrix Summary` `127454228537`) |
+| `codeql.yml` | `42085634162` | push | success | `CodeQL Analysis (Rust)` `127449844926` success |
+| `ci.yml` | `42085634184` | push | success | 40 jobs: 38 success, 2 skipped (`Benchmark Regression Signal (Non-Blocking)` `127450275001`, `End-to-End Tests` `127466269741`); no failure |
+
+Named rows in `ci.yml` run `42085634184`, each `success`: `Code Quality` `127450272761` (carries `make test-shell-guards`), `Generated SDK Clients (Python + TypeScript) smoke` `127450272758` (the SDK-smoke job),
+`Example Muster (Feature Matrix)` `127455524399`, `Consumer-Surface Muster` `127450273352`, `Semver Checks (vs v0.11.0)` `127450273108`, `API Surface Tracking` `127450272743`, `Coverage` `127450272633`,
+`Unit Tests (stable)` `127450272858`, `Integration Tests` `127450273142`, `Docker Integration Tests` `127450273025`, `Publish Dry Run` `127456453562`, `Security Audit` `127450272873`,
+`License & Dependency Policy` `127450272816`, `Workflow Lint` `127450272582`, `E2E Platform API (PRD 06 acceptance-1 lifecycle + SHIP-02 boot proof)` `127450272785`, `Kubernetes Smoke Test` `127500214668`,
+and the live-server contract suites (Redis Cadence, Redis Run Queue, Redis Node Cache, Postgres Storage, Ollama). The pre-bump read is green, so the bump starts (D-14).
+
+### Plan 58-07 — the bump set (D-14)
+
+Marker substitutions (traceable): plan `SHA-P` -> `SHA-P2`; plan `SHA-S` / `### D-11 semver on SHA-S` -> `SHA-S2` / `### D-11 semver on SHA-S2` (`0143b50d596eee90a3b185c2e9ce94ad0292a2a8`, 2026-11-05, 12 packages, 223 checks each, 0 failures).
+The plan's literal `- SHA-S:` grep was run as the equivalent on `- SHA-S2:` (nine-character prefix `0143b50d5`).
+
+**Commit 1 `SHA-C1` (`chore(release)`).** `cargo release version 0.11.1 --execute --no-confirm --workspace` on the clean tree printed `Upgrading <pkg> from 0.11.0 to 0.11.1` for all 13 workspace packages
+(including `paladin-doc-examples`; no hand edit was needed) and `Updating ... dependency from 0.11.0 to 0.11.1` for the pins; it left the tree modified with no commit, tag or push. `cargo metadata --no-deps`: every
+package reads `0.11.1`; `crates/paladin-ports/Cargo.toml:16` reads `version = "=0.11.1"`; `Cargo.lock` has 13 `paladin-*` entries moved (`-version = "0.11.0"` x13, `+version = "0.11.1"` x13, nothing else).
+`./scripts/check-version-strings.sh` was red by design with **52 findings**, equal to the RESEARCH measure: **42 class-1 Cargo pins, 1 class-2 `Current version` line (`README.md:185`), 8 class-3 `k8s/` labels and image
+tags, 1 class-4 `openapi.json` `info.version`**. The 51 non-`openapi.json` lines each held exactly one `0.11.0` token and were edited line-addressed (`sed -i "<line>s/0.11.0/0.11.1/"`); no blanket replacement.
+`make openapi` then wrote `crates/paladin-web/openapi.json`; `git diff -U0` on it is one hunk:
+
+```
+@@ -14 +14 @@
+-    "version": "0.11.0"
++    "version": "0.11.1"
+```
+
+After the edits: gate `OK: 128 file(s) scanned, every copyable version string equals '0.11.1' (class 1 Cargo pins: 42; class 2 Current version lines: 1; class 3 k8s labels and image tags: 8; class 4 openapi.json info.version: 1; exempt files: 1)`;
+`make check-gates` exit 0; `cargo test -p paladin-web --lib openapi_matches_committed_baseline` ok; scoped zero check (no `paladin*`-named pin or `version` line at `0.11.0` in `Cargo.toml` or `crates/*/Cargo.toml`, no
+`paladin-*` `Cargo.lock` entry at `0.11.0`) empty. `git diff --quiet HEAD~1 HEAD` on `scripts/check-semver.sh`, `Makefile`, `.github/workflows/ci.yml`, `.github/rulesets/protect-main-branch.json`, `.devcontainer`,
+`.project/current-exports.txt` is clean: `SEMVER_BASELINE_VERSION="0.11.0"`, the `Semver Checks (vs v0.11.0)` job name and the ruleset context still read `0.11.0`. Commit 1 touched 28 files (`git show --stat`: 123 insertions, 123 deletions): the root `Cargo.toml` and `Cargo.lock`, the 12 member manifests, `crates/paladin-web/openapi.json`, `README.md`, 9 `docs/src` files and 3 `k8s/` files; no tracked file was deleted.
+
+**Commit 2 `SHA-C2` (`chore(release)`).** `STAMP=2026-11-05` (`date +%Y-%m-%d`, run 2026-11-05T20:17Z). `make finalize-crate-changelogs VERSION=0.11.1`:
+`OK: 12 publishable package(s) checked for version '0.11.1' (date 2026-11-05)`, all 12 `finalized`. Each of the 12 files has exactly one `## [0.11.1] - 2026-11-05`, directly below an empty `## [Unreleased]`, and the
+`[0.11.0]`-and-older text is byte-identical to `SHA-C1` (md5 compared per file). `make check-changelogs`: `11 publishable crate(s) checked, all have a CHANGELOG.md` (the 12th is the root);
+`make check-release-consistency RELEASE_TAG=v0.11.1`: `OK: 12 publishable package(s) checked, all match tag version '0.11.1' with a changelog section for it` (the D-10 CI-conclusion clause was not checked locally, as its own NOTE says).
+Root section by `scripts/extract-changelog-section.sh --version 0.11.1`: **16,065 characters (16,075 bytes)**, under the 125,000-character limit (research figure 13,488 before plans 58-15 and 58-16 added entries); not condensed.
+The commit touches only the 12 changelogs (24 insertions, 0 deletions); `Cargo.toml` and `Cargo.lock` are untouched.
+
+**Commit 3 `SHA-C3` (`docs(release)`).** `make check-migration-allowlist` OK; `make check-gates` exit 0; `make check-doc-config` `161 YAML block(s) checked, 0 failed`. MIGRATION sections 9 and 10 are byte-identical to the parent
+(`diff` empty over `# 10.` to end of file); `grep -c 'later v0.11.1' MIGRATION.md` is 0. Rewritten to the released form: the preamble ("is the newest part, released as `v0.11.1`"; "a later release adds a new part above section 11"),
+the section 11 intro, the section 11.2/11.3/11.4/11.7 sentences and the section 11.5 and 11.8 trailing lines that said later v0.11.1 work would append. The statement as committed:
+
+> A library consumer moves from `0.11.0` to `0.11.1` without changing source: no public Rust signature or type changed, and no serialized schema changed except that the credential fields of nine config types are no longer written when those types are serialised (`M-B-50`, `M-B-51`; loading is unchanged); section 11.2 has no row and `.cargo/semver-checks-allowlist.toml` has no entry; `scripts/check-semver.sh` on `0143b50d5` (`0143b50d596eee90a3b185c2e9ce94ad0292a2a8`, 2026-11-05) reads `0 failure(s)` for all twelve packages at `--release-type patch`, 223 checks each. Run-time behaviour changes that a library consumer can observe are in section 11.1: M-B-30, M-B-33, M-B-34, M-B-35, M-B-40, M-B-41, M-B-45, M-B-46, M-B-47, and the credential-class changes M-B-48 to M-B-52 (`M-B-50` supersedes the sentence in `M-B-36` that `Serialize` output is unchanged, and `M-B-52` changes the `Debug` text of two config types); `get_job` is unrouted but not deprecated (section 11.7).
+
+Reconciliation with the recorded `WORDING=pointer-list` (the 58-05 instruction to complete or correct, not copy): (1) the "no serialized schema changed" clause now carries the one exception M-B-50 and M-B-51 create (nine config types:
+`Settings`, `ApiKeyConfig`, `QueueConfig`, `FileStorageConfig`, `EmailAdapterConfig`, `NodeCacheConfig`, `RedisQueueConfig`, `RedisNodeCacheConfig`, `MinioConfig`); (2) the id list gains M-B-48 to M-B-52, as the 58-15 and 58-16 hand-offs say;
+(3) the semver head is `SHA-S2` and its date, not `SHA-S`. The maintainer's nine original ids are unchanged. Rows read in section 11.1 and **not** added (their "who is affected" cell names operators, HTTP clients or
+event-bus/trace readers, or the maintainer's list left them out): M-B-23 to M-B-26, M-B-28, M-B-29, M-B-31, M-B-32, M-B-36 to M-B-39, M-B-42 to M-B-44. Two are embedder-adjacent and are surfaced for the maintainer's call at the
+58-08 re-read rather than added by the executor: M-B-27 (embedders that build their own `RunWorkerPool` wiring) and M-B-36 (code that parses a secret out of a `Debug` string; its `Serialize` sentence is already named above).
+M-B-48 and M-B-49 (the `setup-check` and `onboarding` CLI) reach a library consumer only through the facade's `cli` feature; they are listed because the 58-16 hand-off named the credential class as a unit.
+
+`docs/src/api-reference/upgrading.md` now opens with three upgrades and carries `## Upgrading from v0.11.0 to v0.11.1` above the v0.11.0 section (orientation, three pointers into MIGRATION 11.8, its consumer subsection and 11.1; no rows
+copied); `docs/src/api-reference/migration-guide.md:4` reads "leads with the current **v0.11.1** release". Not edited, noted: the header comments of `scripts/check-migration-allowlist.sh` (line 71) and
+`tests/scripts/check-migration-allowlist_test.sh` (line 22) still call section 11.2 "open"; they are outside this plan's file list.
 
 ---
 

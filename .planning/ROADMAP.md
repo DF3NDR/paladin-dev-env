@@ -627,7 +627,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 58-05-PLAN.md — build wave: pre-tag audit sweep, `58-AUDIT-DISPOSITIONS.md` and its verifier, the maintainer's decision (recheck_by date, flake rule, SHIP-09 wording, key rotation and purge) (SHIP-10, SHIP-09, SHIP-08)
+- [x] 58-05-PLAN.md — build wave: pre-tag audit sweep, `58-AUDIT-DISPOSITIONS.md` and its verifier, the maintainer's decision (recheck_by date, flake rule, SHIP-09 wording, key rotation and purge) (SHIP-10, SHIP-09, SHIP-08)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

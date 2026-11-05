@@ -5,15 +5,15 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 58
 current_phase_name: Crate Release
 status: executing
-stopped_at: Completed 58-04-PLAN.md
-last_updated: "2026-11-05T11:23:08.520Z"
+stopped_at: Completed 58-05-PLAN.md
+last_updated: "2026-11-05T16:21:48.809Z"
 last_activity: 2026-11-05
 last_activity_desc: Phase 58 execution started
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 82
-  completed_plans: 72
+  completed_plans: 73
 ---
 
 # Project State
@@ -53,11 +53,11 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 ## Current Position
 
 Phase: 58 (Crate Release) — EXECUTING
-Plan: 5 of 14
+Plan: 6 of 14
 Status: Ready to execute
 Last activity: 2026-11-05 — Phase 58 execution started
 
-Progress: [█████████████████░░░] 6/7 phases (v0.11.1) — plans [████████████████████] 68/68 ([█████████░] 88%)
+Progress: [█████████████████░░░] 6/7 phases (v0.11.1) — plans [████████████████████] 68/68 ([█████████░] 89%)
 
 ## Performance Metrics
 
@@ -434,6 +434,7 @@ Progress: [█████████████████░░░] 6/7 pha
 | Phase 58 P02 | n/a | 2 tasks | 27 files |
 | Phase 58 P03 | not measured | 3 tasks | 115 files |
 | Phase 58 P04 | not measured | 3 tasks | 5 files |
+| Phase 58 P05 | 4h45m (incl. decision wait) | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -853,6 +854,11 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 58]: 58-03: check-doc-models gate lands with the DF-18 sweep; one allowlist entry (sentinel.md:877, a deliberate non-vision negative example); gpt-4o-mini default, gpt-5.4 at two docs sites
 - [Phase 58]: 58-04: [Unreleased] anchor entries cite their source commit and requirement id; herald carries the no-source-change line only because its v0.11.0..HEAD log is empty
 - [Phase 58]: 58-04: Dockerfile.dev pins cargo-release 1.1.2 while releases since 47-01 use 1.1.7 (finding handed to 58-05, not fixed)
+- [Phase ?]: DATE=2026-11-09: recheck_by for every re-homed row (58-05)
+- [Phase ?]: FLAKE=named-rerun amends D-00j for treasury_spend_prints_one_row_per_currency only (58-05)
+- [Phase ?]: WORDING=pointer-list for the SHIP-09 paragraph; re-read against 58-15 first (58-05)
+- [Phase ?]: Key rotated 2026-11-05, PURGE=none: R-84 fixed, R-85 waived (58-05)
+- [Phase ?]: D-07 amended: 56 WR-03, WR-04, WR-09 fixed in 0.11.1 via inserted plan 58-15 (58-05)
 
 ### Pending Todos
 
@@ -1274,8 +1280,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-11-05T11:23:08.491Z
-Stopped at: Completed 58-04-PLAN.md
+Last session: 2026-11-05T16:21:48.754Z
+Stopped at: Completed 58-05-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

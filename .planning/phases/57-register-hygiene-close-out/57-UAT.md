@@ -3,16 +3,16 @@ status: testing
 phase: 57-register-hygiene-close-out
 source: 57-01-SUMMARY.md, 57-02-SUMMARY.md, 57-03-SUMMARY.md, 57-04-SUMMARY.md, 57-05-SUMMARY.md, 57-06-SUMMARY.md, 57-07-SUMMARY.md, 57-08-SUMMARY.md, 57-09-SUMMARY.md, 57-10-SUMMARY.md, 57-11-SUMMARY.md, 57-12-SUMMARY.md, 57-13-SUMMARY.md, 57-14-SUMMARY.md, 57-15-SUMMARY.md, 57-16-SUMMARY.md
 started: 2026-11-05T00:55:10Z
-updated: 2026-11-05T00:58:26Z
+updated: 2026-11-05T00:58:45Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 3
-name: Thread ownership follows the earliest attributed run
+number: 4
+name: Owner-run rule is documented everywhere it is read
 expected: |
-  With a thread whose first attributed run belongs to tenant A, a later Admin run or scheduled run on the same thread does not move it. Tenant A still sees the thread in the tenant thread list and through the single-thread gate, and submit/fork on it is permitted for A; a different tenant gets the same not-found answer as before. The paladin-web HTTP tracer over on-disk SQLite that proves this passes, and the five owner_run_for_thread_* contract clauses pass on the in-memory, SQLite and PostgreSQL run repositories.
+  openapi.json and the thread endpoint rustdoc describe ownership as the earliest attributed run. ADR-0063 is amended in place with that rule, quoting each replaced sentence. MIGRATION.md 11.1 rows M-B-24/M-B-25, section 11.6 and a new 11.8 operator step 12 (legacy mixed-tenant threads) state it, and both the root and paladin-web [Unreleased] changelogs carry a Fixed entry for the rule and the WINDOWS row 85 fix.
 awaiting: user response
 
 ## Tests
@@ -27,7 +27,7 @@ result: pass
 
 ### 3. Thread ownership follows the earliest attributed run
 expected: With a thread whose first attributed run belongs to tenant A, a later Admin run or scheduled run on the same thread does not move it. Tenant A still sees the thread in the tenant thread list and through the single-thread gate, and submit/fork on it is permitted for A; a different tenant gets the same not-found answer as before. The paladin-web HTTP tracer over on-disk SQLite that proves this passes, and the five owner_run_for_thread_* contract clauses pass on the in-memory, SQLite and PostgreSQL run repositories.
-result: [pending]
+result: pass
 
 ### 4. Owner-run rule is documented everywhere it is read
 expected: openapi.json and the thread endpoint rustdoc describe ownership as the earliest attributed run. ADR-0063 is amended in place with that rule, quoting each replaced sentence. MIGRATION.md 11.1 rows M-B-24/M-B-25, section 11.6 and a new 11.8 operator step 12 (legacy mixed-tenant threads) state it, and both the root and paladin-web [Unreleased] changelogs carry a Fixed entry for the rule and the WINDOWS row 85 fix.
@@ -100,9 +100,9 @@ coverage_id: D4
 ## Summary
 
 total: 19
-passed: 4
+passed: 5
 issues: 0
-pending: 15
+pending: 14
 skipped: 0
 blocked: 0
 

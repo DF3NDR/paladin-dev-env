@@ -612,7 +612,25 @@ Plans:
   4. `v0.11.1` is tagged on `main` and ships through `release.yml` end to end with no manual step (no changelog condensation, no hand-run publish), and the semver job read a non-zero check count on the release pull request.
   5. All twelve publishable crates are on crates.io at `0.11.1`, unyanked and published through Trusted Publishing as read from the registry after the run, and the GitHub Release exists with its assets.
 
-**Plans**: TBD
+**Plans**: 14 plans in 12 waves (blocking maintainer checkpoints: 58-05 Task 3 decision, 58-09 Task 2 `release` label, 58-10 Task 3 tag day, 58-11 Task 2 sign-off tick, 58-12 Tasks 2-3 one-way door and merge + tag; build wave 58-01..58-06, bump 58-07, pre-merge 58-08..58-11, merge + tag 58-12, post-tag 58-13..58-14)
+
+Plans:
+
+- [ ] 58-01-PLAN.md — build wave: `58-CI-EVIDENCE.md` and the registry probe with the pre-tag baseline, the `57-VALIDATION.md` end-of-file fix for the required pre-commit context, the SDK-smoke diagnosis and CI-side fix, the `treasury_spend` flake characterised, pre-bump push `SHA-E` (SHIP-08, SHIP-10)
+- [ ] 58-02-PLAN.md — build wave: 57-REVIEW WR-02 checker fix with near-miss fixtures (RED then GREEN), the `sk-proj-…` scrub proven by counts only (SHIP-10)
+- [ ] 58-03-PLAN.md — build wave: the deprecated `gpt-4` model id swept from `docs/src` and `examples/` behind a new `check-doc-models` gate in `check-gates` and the harness (SHIP-10)
+- [ ] 58-04-PLAN.md — build wave: log-derived `[Unreleased]` anchors for battalion/eval/herald with a throwaway finalize proof, the Cadence muster pin, the devcontainer `cargo-llvm-cov` 0.8.7 install (SHIP-08, SHIP-09, SHIP-10)
+- [ ] 58-05-PLAN.md — build wave: pre-tag audit sweep, `58-AUDIT-DISPOSITIONS.md` and its verifier, the maintainer's decision (recheck_by date, flake rule, SHIP-09 wording, key rotation and purge) (SHIP-10, SHIP-09, SHIP-08)
+- [ ] 58-06-PLAN.md — build wave: dated re-home todos and the locked register, D-11 `check-semver` on its own head, the pre-bump sweep, pre-bump push `SHA-P` (SHIP-10, SHIP-09, SHIP-08)
+- [ ] 58-07-PLAN.md — bump set: commit 1 lockstep bump with the 52 gate-listed strings and `openapi.json`, commit 2 the twelve changelog stamps, commit 3 the MIGRATION §11.8 library-consumer statement (SHIP-08, SHIP-09)
+- [ ] 58-08-PLAN.md — pre-merge: the eight-row re-seal on the candidate final head, `58-ACCEPTANCE-AUDIT.md` with the unticked box, the D-10 head correction (SHIP-08, SHIP-09, SHIP-10)
+- [ ] 58-09-PLAN.md — pre-merge: push `SHA-A0`, open the release PR, the maintainer's `release` label, stop for CI (SHIP-08)
+- [ ] 58-10-PLAN.md — pre-merge: PR CI evidence (required contexts, Coverage, semver counts, E2E, SDK smoke), the scoped milestone audit `v0.11.1-MILESTONE-AUDIT.md`, the tag-day decision (SHIP-08, SHIP-10)
+- [ ] 58-11-PLAN.md — pre-merge: optional redate, push `SHA-A1`, the maintainer's tick, the tick verified on origin (SHIP-08)
+- [ ] 58-12-PLAN.md — merge + tag: checks on the tick commit, the pre-tag guard, the one-way door, the maintainer's merge and annotated tag (SHIP-08)
+- [ ] 58-13-PLAN.md — post-tag: tag equals the PR merge commit, `chore/58-close`, release run and GitHub Release read, twelve-crate registry table with Trusted Publishing, keyless scratch-crate smoke (SHIP-08)
+- [ ] 58-14-PLAN.md — post-tag: MILESTONES release record, SHIP-08/09/10 ticked on the registry table, web3sec and ready-to-close hand-offs, the documentation-only close PR (SHIP-08, SHIP-09, SHIP-10)
+
 **Scope notes**:
 
 - Suggested ordering: lockstep bump (the Phase 54 gate goes red until every string moves) → release pull request with the Phase 52 gates on → pre-tag audit of Phases 52-57 reads `passed` → tag via `release.yml` → registry read. Phase 58's own proof is the post-tag registry read, so the audit is not circular. The merge, the tag and the publish remain maintainer-gated checkpoints, as in Phase 47.

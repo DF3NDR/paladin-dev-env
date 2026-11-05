@@ -72,10 +72,11 @@ async fn check_redis_connectivity(redis_url: &str) -> CliResult<()> {
     if redis_url.starts_with("redis://") || redis_url.starts_with("rediss://") {
         Ok(())
     } else {
-        Err(CliError::configuration(format!(
-            "Invalid Redis URL format: {}",
-            redis_url
-        )))
+        // WR-03: the value is never echoed. A malformed URL may still carry a
+        // password (`redis:/:<pw>@host`), and this text reaches the terminal and CI logs.
+        Err(CliError::configuration(
+            "Invalid Redis URL format: expected a redis:// or rediss:// URL (value not shown)",
+        ))
     }
 }
 
@@ -92,7 +93,11 @@ async fn check_qdrant_connectivity(qdrant_url: &str) -> CliResult<()> {
         .get(&url)
         .send()
         .await
-        .map_err(|e| CliError::execution(format!("Qdrant connection failed: {}", e)))?;
+        // WR-03: reqwest appends the request URL to its error text, and a credential
+        // in the query string would reach the terminal and CI logs with it.
+        .map_err(|e| {
+            CliError::execution(format!("Qdrant connection failed: {}", e.without_url()))
+        })?;
 
     if response.status().is_success() {
         Ok(())

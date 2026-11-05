@@ -5,15 +5,15 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 58
 current_phase_name: Crate Release
 status: executing
-stopped_at: Phase 58 context gathered
-last_updated: "2026-11-05T03:17:34.007Z"
+stopped_at: Completed 58-01-PLAN.md
+last_updated: "2026-11-05T03:44:32.373Z"
 last_activity: 2026-11-05
 last_activity_desc: Phase 58 execution started
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 82
-  completed_plans: 68
+  completed_plans: 69
 ---
 
 # Project State
@@ -53,11 +53,11 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 ## Current Position
 
 Phase: 58 (Crate Release) — EXECUTING
-Plan: 1 of 14
-Status: Executing Phase 58
+Plan: 2 of 14
+Status: Ready to execute
 Last activity: 2026-11-05 — Phase 58 execution started
 
-Progress: [█████████████████░░░] 6/7 phases (v0.11.1) — plans [████████████████████] 68/68 ([██████████] 100%)
+Progress: [█████████████████░░░] 6/7 phases (v0.11.1) — plans [████████████████████] 68/68 ([████████░░] 84%)
 
 ## Performance Metrics
 
@@ -430,6 +430,7 @@ Progress: [█████████████████░░░] 6/7 pha
 | Phase 57 P15 | 42min | 3 tasks | 6 files |
 | Phase 57 P16 | ~60min | 3 tasks | 9 files |
 | Phase 57 P11 | ~2h | 3 tasks | 5 files |
+| Phase 58 P01 | 85min | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -843,6 +844,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 57]: PD-16-1: cap the node-cache fence marker at clamp(2 x entry ttl, 5 min, 30 min) rather than lengthen the counter; a late duplicate write of the same deterministic result is accepted after 30 minutes (43-REVIEW WR-01, ADR-0058 (g))
 - [Phase 57]: EA-57-20: a holder more than 28 minutes late (default 120 s lock) can still leave a marker outliving the counter; the wait is bounded at 30 minutes (ADR-0058 (i))
 - [Phase 57]: 57-11: WINDOWS sealed at open_count 0 (waived 53, fixed 55, total 108); the Docker-gated rows 68, 90, 93 and 100 were flipped only after CI run 41927940508 on 4b115d511 showed their named tests ok; review register closed 43 / waived 8 / open 0, strict checker 0 failure(s)
+- [Phase ?]: 58-01: SDK smoke is a tag precondition (not a merge context); fixed CI-side in scripts/sdk-smoke/run.sh. treasury_spend flake is test-level, re-seal rule goes to maintainer at 58-05.
 
 ### Pending Todos
 
@@ -1264,9 +1266,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-11-05T01:31:21.659Z
-Stopped at: Phase 58 context gathered
-Resume file: .planning/phases/58-crate-release/58-CONTEXT.md
+Last session: 2026-11-05T03:44:32.348Z
+Stopped at: Completed 58-01-PLAN.md
+Resume file: None
 
 ## Operator Next Steps
 

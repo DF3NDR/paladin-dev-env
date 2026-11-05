@@ -617,7 +617,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 58-01-PLAN.md — build wave: `58-CI-EVIDENCE.md` and the registry probe with the pre-tag baseline, the `57-VALIDATION.md` end-of-file fix for the required pre-commit context, the SDK-smoke diagnosis and CI-side fix, the `treasury_spend` flake characterised, pre-bump push `SHA-E` (SHIP-08, SHIP-10)
+- [x] 58-01-PLAN.md — build wave: `58-CI-EVIDENCE.md` and the registry probe with the pre-tag baseline, the `57-VALIDATION.md` end-of-file fix for the required pre-commit context, the SDK-smoke diagnosis and CI-side fix, the `treasury_spend` flake characterised, pre-bump push `SHA-E` (SHIP-08, SHIP-10)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

@@ -6,7 +6,7 @@ current_phase: 58
 current_phase_name: Crate Release
 status: planning
 stopped_at: Completed 57-11-PLAN.md
-last_updated: "2026-11-05T00:12:04.034Z"
+last_updated: "2026-11-05T01:06:36.000Z"
 last_activity: 2026-11-05
 last_activity_desc: Phase 57 complete, transitioned to Phase 58
 progress:
@@ -20,12 +20,14 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-11-04 after Phase 56)
+See: .planning/PROJECT.md (updated 2026-11-05 after Phase 57)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 57 — register-hygiene-close-out
+**Current focus:** Phase 58 — Crate Release (lockstep `0.11.1` bump held by `check-version-strings`,
+`MIGRATION.md` consumer statement, pre-tag milestone audit over Phases 52-57 reading `passed`, the
+`v0.11.1` tag through `release.yml` and all twelve crates on crates.io)
 52-UAT 3/3 passed; PR #61 merged to `main` as `84686acfb` on 2026-10-30)
 (carried-gaps inventory, dogfood findings log, scoping notes): 7 phases (52-58), 53/53 requirements
 mapped. Phase 52 (CI & Release Pipeline Repair) completed 2026-10-30; Phase 53 (Tenant Isolation Closure) completed 2026-10-31; Phase 54 (First-Run Usability) completed 2026-11-01; next: Phase 55. Decisions at open: OpenAI Responses API out,
@@ -438,6 +440,23 @@ Phases 22-37.1 is recorded in its own `NN-CONTEXT.md` (and the SUMMARY decision 
 `milestones/v0.10.0-phases/`; the locked ones are ADRs in `.planning/decisions/` and the
 `## Key Decisions` table in PROJECT.md. Only what a later milestone must honour is kept here:
 
+- **Phase 57 register hygiene close-out (2026-11-05, no ADR; ADR-0063 and ADR-0058 amended in place;
+  57-CONTEXT D-01…D-43)** — the registers the milestone audit reads now agree with the tree: `WINDOWS.md`
+  sealed at `open_count: 0` (108 rows, 55 fixed, 53 waived; waivers 101-108 carry owner, revisit and
+  basis), `57-REVIEW-DISPOSITIONS.md` at 43 closed / 8 waived / 0 open over all 51 Phase 38-51 findings,
+  gated by `scripts/check-review-dispositions.sh` (ids derived from the archive, manual, outside
+  `check-gates`), the three diagnosed debug sessions under `.planning/debug/resolved/`, the Phase 40
+  judgment-tier read recorded as the owner's `confirm all` (26/26, `57-JUDGMENT-READ.md`), and the four
+  `zip 3.0.0` exceptions (now incl. RUSTSEC-2026-0429) re-dated to 2027-03-31 with the lift deferred to
+  the utoipa 6 migration. Code decisions a later phase must honour: a thread's owner is its earliest
+  attributed run via the defaulted `RunRepositoryPort::owner_run_for_thread` (D-02, additive, patch
+  kept); failure text is redacted before it is bounded (2048 chars); S3 errors render status and code
+  only; an empty operator-webhook secret is absent plus one boot warn; the worker's terminal event
+  follows the commit; a won allowance notice is given back on a failed enqueue and confirm/abandon run
+  detached; a zero provider delay is no delay and a 429 record survives a dropped caller; the fence
+  marker TTL is clamp(2 × ttl, 5 min, 30 min). Owner call at UAT 2026-11-05: 17/17 checkpoints passed
+  (2 coverage entries auto-passed), no gaps.
+
 - **Phase 56 dogfood findings (2026-11-04, no ADR; 56-CONTEXT D-01…D-17, close gate OK)** — the
   findings log is append-only (P3, zero deleted lines since seed `8e02a457e`) and the only
   checker is `scripts/check-findings-log.sh`, deliberately outside `check-gates` (D-03); 36 `DF-nn`
@@ -848,6 +867,33 @@ Four pending todos were acknowledged as deferred at the v0.11.0 close (see *Defe
 
 ### Blockers/Concerns
 
+**Phase 57 close (2026-11-05, 57-VERIFICATION `passed` 5/5, 57-UAT 17/17 + 2 automated, 57-SECURITY 0 open,
+57-VALIDATION `validated`):**
+
+- **Code review non-blocking findings carried to Phase 58** (`57-REVIEW.md`, 0 blocking): CR-01 the
+  worker's nack-and-redeliver on a failed second write loses the run's outcome when only that write
+  fails; WR-01 an empty `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET` env value silently wipes a
+  YAML-configured secret; WR-02 `check-review-dispositions.sh` accepts non-evidence as a closed
+  pointer. Five info items (IN-01…05) recorded there.
+
+- **Two orphaned Phase 55 deferrals have no owner or revisit** (`57-REGISTER-EVIDENCE.md` "Orphaned
+  deferrals"): the News API key travelling in the URL with `reqwest` error text able to echo it
+  (D-52-03-01, `news_api_fetcher.rs`) and the `${...}` placeholder in the Treasurer webhook `secret`
+  not refused (Phase 54 WR-04). Neither is a WINDOWS row; Phase 58's pre-tag audit must re-home them
+  with an owner and a date or they read as `tech_debt`.
+
+- **`Generated SDK Clients` smoke is red in CI** (job 126917997570 on run 41927940508) and was red on
+  two earlier runs, green on 41246424413; pre-dates Phase 57, no WINDOWS row, cause undiagnosed.
+  `Docker Build` and `Kubernetes Smoke Test` were cancelled on that run (superseded push), not failed.
+
+- **The review-disposition checker is manual** — exercised by `make test-shell-guards` through its 22
+  fixtures but not wired into `make check-gates` or CI, by design; the Phase 58 audit runs it by hand.
+
+- **Phases 54-57 are all on `claude/laughing-dirac-e0h2ax`, not yet merged to `main`** (`main` is still
+  the PR #62 merge `8b23cb4c5`; the branch is 358 commits ahead). A PR to `main` is the maintainer's
+  step before the Phase 58 bump commit, and the Phase 56 `sk-proj-…` literal finding below is still
+  open for that pre-tag pass.
+
 **Phase 56 close (2026-11-04, 56-VERIFICATION `passed` 11/11, 56-UAT 4/4, 56-SECURITY 0 open):**
 
 - **A complete `sk-proj-…` OpenAI key literal is tracked in
@@ -936,8 +982,10 @@ Four pending todos were acknowledged as deferred at the v0.11.0 close (see *Defe
 - ~~**Phase 56 depends on external inputs**~~ — **all three arrived and were triaged in Phase 56** (DF-10..DF-26 from the walks, DF-27..DF-36 from the web3sec return). Was: (the maintainer's runs, the web3sec return, a Docker-capable machine for
   DOGF-05) that the roadmap cannot schedule; an unreturned DOGF-02 is held or re-homed with an owner and date.
 
-- **Phase 57:** `open_count: 0` also needs rows 64-66 (accepted ADR-0057 contracts) and 77 (Grok deferral) waived with a
-  reason or re-homed; no requirement names them beyond REG-02's closing clause.
+- ~~**Phase 57:** `open_count: 0` also needs rows 64-66 (accepted ADR-0057 contracts) and 77 (Grok deferral) waived with a
+  reason or re-homed; no requirement names them beyond REG-02's closing clause.~~ — **resolved in Phase 57
+  (2026-11-05)**: every open row waived or re-homed with owner and date, `WINDOWS.md` sealed at `open_count: 0` by 57-11
+  (57-VERIFICATION criterion 1).
 
 **No blockers at the v0.11.0 close (2026-10-27).** All 15 phases `passed`; audit `tech_debt`
 with 0 gaps, 8/8 seams, 8/8 flows; `WINDOWS.md` `open_count: 13` (the rows are dispositioned as
@@ -1040,7 +1088,7 @@ close notes this section carried for Phases 38-51 are archived with their phases
 
 - Phase 58: 7 crate changelogs lack an [Unreleased] anchor or [0.11.1] section before finalize; the check-version-strings gate must go green in the bump commit -- see 54-FIRST-EVIDENCE.md Carry-forward to Phase 58
 - Pre-existing, environment-specific: infrastructure::web::run_api_wiring::tests::build_run_api_persists_no_run_traces_by_default and build_run_api_persists_run_traces_when_trace_persist_is_set fail in this container (run never reached a terminal status, run_api_wiring.rs:3036; make test reports 1479 passed, 2 failed), identically on base 8b23cb4c5; cause undiagnosed, a later phase should diagnose -- see 54-FIRST-EVIDENCE.md Known residuals
-- Phase 55 carry-forward: 6 crate changelogs still lack an [Unreleased] anchor before the 0.11.1 finalize; WINDOWS row 56 can close on the recorded rustdoc measurement (Phase 57); rows 85-87 await a 56.x phase -- see 55-CORRECTNESS-EVIDENCE.md Carry-forward
+- Phase 55 carry-forward: 6 crate changelogs still lack an [Unreleased] anchor before the 0.11.1 finalize; WINDOWS row 56 can close on the recorded rustdoc measurement (Phase 57); rows 85-87 await a 56.x phase -- see 55-CORRECTNESS-EVIDENCE.md Carry-forward. **Update 2026-11-05:** row 56 and rows 85-87 closed in Phase 57 (57-02/57-03 fixes, 57-11 seal); the changelog anchors remain Phase 58's
 
 ### Quick Tasks Completed
 
@@ -1216,11 +1264,20 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-11-04T23:21:46.749Z
-Stopped at: Completed 57-11-PLAN.md
+Last session: 2026-11-05T01:06:36.000Z
+Stopped at: Phase 57 complete, ready to plan Phase 58
 Resume file: None
 
 ## Operator Next Steps
+
+- **Phase 57 is complete (2026-11-05):** verification `passed` 5/5 (6/6 requirements), UAT 17/17 human
+  checkpoints plus 2 coverage auto-passes, security 0 open, validation `validated`, no new ADR (ADR-0063 and
+  ADR-0058 amended in place). `WINDOWS.md` reads `open_count: 0` and the strict review-dispositions checker
+  reads 0 failures, so the Phase 58 pre-tag audit can read `passed`. Carried to Phase 58: 57-REVIEW CR-01,
+  WR-01, WR-02 and the two orphaned Phase 55 deferrals (see Blockers/Concerns). Phases 54-57 are on
+  `claude/laughing-dirac-e0h2ax`, 358 commits ahead of `main`; open a PR to `main` before the bump commit.
+  Next: `/clear` then `/gsd-discuss-phase 58` (Crate Release — settle the bump mechanics, the
+  `MIGRATION.md` consumer statement and the maintainer-gated tag checkpoints there).
 
 - **Phase 54 is complete (2026-11-01):** verification `passed` 5/5, UAT 3/3, security 0 open (32 threats, 3 accepted
   risks), no new ADR. The work is on `claude/laughing-dirac-e0h2ax`; open a PR to `main` before Phase 55 builds on

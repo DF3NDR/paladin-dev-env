@@ -29,6 +29,7 @@ RESEARCH.md that was not re-measured is labelled as a research figure.
 - SHA-PRE: 7832f280e0376a8b8a10e91522927e1bf4d16339
 - SHA-E: 9166fe1fee4a920baf7f481d34b6e05b40b7b3de
 - SHA-S: fb6d50da0caa5980fca0f70799fe25adb4a830f0
+- SHA-P: 35e696cc9af1f817da07db9ec233d31e4e553273
 
 Machine-readable SHA lines added by plans use the exact form `- SHA-<label>: <40-hex>` on their own line.
 
@@ -150,6 +151,28 @@ by the orchestrator at 11:30:12Z): `ci.yml` `42019466680` `queued`, `feature-fla
 push and plan 58-12 read the runs that matter for the tag.
 
 ---
+
+### Plan 58-06 — push of SHA-P (pre-bump, no label)
+
+`SHA-P` is `35e696cc9af1f817da07db9ec233d31e4e553273`, the `docs(58-06)` commit that records `### D-11 semver on SHA-S`, pushed on 2026-11-05 at about 17:30Z with a plain
+`git push origin claude/laughing-dirac-e0h2ax` (`82d82cc5e..35e696cc9`, pre-push hooks passed, no force). `main` was re-read through REST
+(`gh api repos/DF3NDR/paladin-dev-env/branches/main --jq .commit.sha`) at 2026-11-05T17:29:09Z as `8b23cb4c55a10fcf0b08fab1af595e1f184e5f2e`
+(unmoved, D-02), and again after the push. `git ls-remote origin refs/heads/claude/laughing-dirac-e0h2ax` equals `SHA-P`. No pull request
+(`pulls?head=DF3NDR:claude/laughing-dirac-e0h2ax&state=open` has length 0), no label, no `v0.11.1*` tag on the remote, no dispatch (D-03).
+`SHA-P` carries the code of `SHA-S` (only `.planning/` differs) and the 58-15 credential-class fixes, so these runs are the CI read of every build-wave
+commit before the bump.
+
+Runs queued on `SHA-P`, read once at 2026-11-05T17:31:03Z (`gh api "repos/DF3NDR/paladin-dev-env/actions/runs?head_sha=35e696cc9af1f817da07db9ec233d31e4e553273&per_page=100"`)
+and not waited for (D-00i; plan 58-07 Task 1 reads the conclusions):
+
+| Workflow | Run id | Status when listed | Event |
+|----------|--------|--------------------|-------|
+| `ci.yml` | `42075372810` | pending | push |
+| `feature-flags.yml` | `42075372714` | queued | push |
+| `pre-commit` (`pre-commit.yml`) | `42075372712` | queued | push |
+| `codeql.yml` | `42075372834` | queued | push |
+
+The evidence and resume-file commits that follow (this file, `.continue-here.md`, the plan summary) ride the next push, so `SHA-P` does not carry these notes.
 
 ### D-11 semver on SHA-S
 

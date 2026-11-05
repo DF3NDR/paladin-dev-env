@@ -529,8 +529,8 @@ mod tests {
     const MINIO_ACCESS: &str = "test-key-not-a-secret-df07-minio-access-key";
     const MINIO_SECRET: &str = "test-key-not-a-secret-df07-minio-secret-key";
 
-    #[test]
-    fn settings_debug_redacts_every_credential_it_reaches() {
+    /// A `Settings` with the five root-reachable credentials set to fake sentinels.
+    fn settings_with_every_root_credential() -> Settings {
         let mut http = WebHttpConfig::default();
         http.auth.api_keys.push(ApiKeyConfig {
             key: API_KEY.to_string(),
@@ -538,7 +538,7 @@ mod tests {
             role: UserRole::User,
             tenant: "Acme-Prod".to_string(),
         });
-        let settings = Settings {
+        Settings {
             llm_api_key: LLM_KEY.to_string(),
             http: Some(http),
             queue: Some(QueueConfig {
@@ -551,7 +551,12 @@ mod tests {
                 ..FileStorageConfig::default()
             }),
             ..Settings::default()
-        };
+        }
+    }
+
+    #[test]
+    fn settings_debug_redacts_every_credential_it_reaches() {
+        let settings = settings_with_every_root_credential();
 
         // Non-vacuous: every sentinel really sits in the config we format.
         assert_eq!(settings.llm_api_key, LLM_KEY);
@@ -599,6 +604,32 @@ mod tests {
             text.contains("llm_api_key: <redacted>"),
             "llm_api_key marker missing"
         );
+    }
+
+    /// WR-09 (56-REVIEW): serialising a loaded `Settings` must never write a credential.
+    #[test]
+    fn settings_serialisation_omits_every_credential_it_reaches() {
+        let settings = settings_with_every_root_credential();
+        assert_eq!(settings.llm_api_key, LLM_KEY);
+
+        let json = serde_json::to_string(&settings).expect("Settings serialises");
+        // Name the leaking field, never the rendered JSON.
+        for (field, value) in [
+            ("llm_api_key", LLM_KEY),
+            ("http.auth.api_keys[].key", API_KEY),
+            ("queue.redis_password", REDIS_PASSWORD),
+            ("file_storage.minio_access_key", MINIO_ACCESS),
+            ("file_storage.minio_secret_key", MINIO_SECRET),
+        ] {
+            assert!(!json.contains(value), "serialised Settings carries {field}");
+        }
+
+        // Non-vacuous: the neighbouring non-secret fields are still written.
+        let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        assert_eq!(value["llm_type"], "openai");
+        assert_eq!(value["queue"]["redis_host"], "localhost");
+        assert_eq!(value["file_storage"]["minio_bucket"], "paladin-files");
+        assert_eq!(value["http"]["auth"]["api_keys"][0]["name"], "df07-probe");
     }
 
     #[test]

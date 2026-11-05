@@ -132,4 +132,27 @@ mod tests {
             "None not shown: {unset}"
         );
     }
+
+    /// WR-09 (56-REVIEW): serialising a `QueueConfig` must not write the password.
+    #[test]
+    fn queue_config_serialisation_omits_the_redis_password() {
+        let sentinel = "test-key-not-a-secret-df07-redis-password";
+        let config = QueueConfig {
+            redis_password: Some(sentinel.to_string()),
+            ..QueueConfig::default()
+        };
+        assert_eq!(config.redis_password.as_deref(), Some(sentinel));
+        let value = serde_json::to_value(&config).expect("QueueConfig serialises");
+        let object = value.as_object().expect("serialises as an object");
+        assert!(
+            !object.contains_key("redis_password"),
+            "QueueConfig serialised `redis_password`"
+        );
+        assert!(
+            !value.to_string().contains(sentinel),
+            "QueueConfig serialisation carries the password value"
+        );
+        // Non-vacuous: the other fields are still written.
+        assert_eq!(object["redis_host"], "localhost");
+    }
 }

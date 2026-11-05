@@ -237,8 +237,9 @@ fn verbatim_example_round_trips_through_load_from_file() {
         &unexplained_paths(&missing, &[EXEMPT, KNOWN_GAPS]),
     );
 
-    // Measured on HEAD: exactly the eight provider keys. `ollama` carries none in the example.
-    let want: BTreeSet<KeyPath> = [
+    // Measured on HEAD: the eight provider keys plus `llm_api_key` (WR-09). `ollama` carries
+    // no `api_key` in the example.
+    let mut want: BTreeSet<KeyPath> = [
         "openai",
         "anthropic",
         "deepseek",
@@ -251,10 +252,11 @@ fn verbatim_example_round_trips_through_load_from_file() {
     .iter()
     .map(|p| vec!["llm".to_string(), (*p).to_string(), "api_key".to_string()])
     .collect();
+    want.insert(vec!["llm_api_key".to_string()]);
     assert_eq!(
         missing,
         want,
-        "the verbatim example must drop exactly the eight exempt api_key paths, got:\n  {}",
+        "the verbatim example must drop exactly the nine exempt secret paths, got:\n  {}",
         render_sorted(&missing)
     );
 }
@@ -403,6 +405,33 @@ fn serialised_settings_carry_no_llm_api_key_and_no_webhook_secret() {
         !output.contains(&secret),
         "serialised Settings carries {}",
         render_path(&secret)
+    );
+
+    // WR-09: the root key and every `http.auth.api_keys[*].key` are omitted too. The fixture
+    // carries both, so the absence is real and not a vacuous pass.
+    let input = input_key_paths(&full_fixture());
+    assert!(
+        input.contains(&path_of(&["llm_api_key"])),
+        "the fixture no longer carries llm_api_key, so this check is vacuous"
+    );
+    assert!(
+        input.contains(&path_of(&["http", "auth", "api_keys", "[0]", "key"])),
+        "the fixture no longer carries an api_keys key, so this check is vacuous"
+    );
+    let llm_api_key = path_of(&["llm_api_key"]);
+    assert!(
+        !output.contains(&llm_api_key),
+        "serialised Settings carries {} (WR-09)",
+        render_path(&llm_api_key)
+    );
+    let api_key_secrets: BTreeSet<&KeyPath> = output
+        .iter()
+        .filter(|p| matches(&["http", "auth", "api_keys", "*", "key"], p))
+        .collect();
+    assert!(
+        api_key_secrets.is_empty(),
+        "serialised Settings carries http.auth.api_keys[*].key paths (WR-09):\n  {}",
+        render_sorted(api_key_secrets)
     );
 }
 

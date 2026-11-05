@@ -473,6 +473,49 @@ mod tests {
         assert!(text.contains("User"), "role missing in: {text}");
     }
 
+    /// WR-09 (56-REVIEW): serialising an `ApiKeyConfig` must not write its key.
+    #[test]
+    fn api_key_config_serialisation_omits_the_key() {
+        let entry = df07_entry();
+        assert_eq!(entry.key, DF07_API_KEY_SENTINEL);
+        let value = serde_json::to_value(&entry).expect("ApiKeyConfig serialises");
+        let object = value.as_object().expect("serialises as an object");
+        assert!(!object.contains_key("key"), "ApiKeyConfig serialised `key`");
+        assert!(
+            !value.to_string().contains(DF07_API_KEY_SENTINEL),
+            "ApiKeyConfig serialisation carries the key value"
+        );
+        // Non-vacuous: the other fields are still written.
+        assert_eq!(object["name"], "df07-probe");
+        assert_eq!(object["tenant"], "Acme-Prod");
+    }
+
+    /// WR-09 (56-REVIEW): omitting `key` on output must not loosen loading. A config
+    /// without `key` still fails, so a missing secret is still a load error.
+    #[test]
+    fn api_key_config_still_requires_a_key_on_load() {
+        let without_key = serde_json::json!({
+            "name": "df07-probe",
+            "role": "user",
+            "tenant": "Acme-Prod",
+        });
+        let error = serde_json::from_value::<ApiKeyConfig>(without_key)
+            .expect_err("an ApiKeyConfig without `key` must not deserialise");
+        assert!(
+            error.to_string().contains("missing field `key`"),
+            "the load error must name the missing `key` field"
+        );
+        let with_key = serde_json::json!({
+            "key": DF07_API_KEY_SENTINEL,
+            "name": "df07-probe",
+            "role": "user",
+            "tenant": "Acme-Prod",
+        });
+        let loaded: ApiKeyConfig =
+            serde_json::from_value(with_key).expect("an ApiKeyConfig with `key` deserialises");
+        assert_eq!(loaded.key, DF07_API_KEY_SENTINEL);
+    }
+
     #[test]
     fn auth_and_web_http_config_debug_redact_the_key() {
         let auth = AuthConfig {

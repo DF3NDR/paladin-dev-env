@@ -239,4 +239,37 @@ mod tests {
         assert!(text.contains("localhost:9000"), "endpoint missing: {text}");
         assert!(text.contains("paladin-files"), "bucket missing: {text}");
     }
+
+    /// WR-09 (56-REVIEW): serialising a `FileStorageConfig` must not write either key.
+    #[test]
+    fn file_storage_config_serialisation_omits_both_minio_keys() {
+        let access = "test-key-not-a-secret-df07-minio-access-key";
+        let secret = "test-key-not-a-secret-df07-minio-secret-key";
+        let config = FileStorageConfig {
+            minio_access_key: access.to_string(),
+            minio_secret_key: secret.to_string(),
+            ..FileStorageConfig::default()
+        };
+        assert_eq!(config.minio_access_key, access);
+        assert_eq!(config.minio_secret_key, secret);
+        let value = serde_json::to_value(&config).expect("FileStorageConfig serialises");
+        let object = value.as_object().expect("serialises as an object");
+        for field in ["minio_access_key", "minio_secret_key"] {
+            assert!(
+                !object.contains_key(field),
+                "FileStorageConfig serialised `{field}`"
+            );
+        }
+        let text = value.to_string();
+        assert!(
+            !text.contains(access),
+            "serialisation carries the access key value"
+        );
+        assert!(
+            !text.contains(secret),
+            "serialisation carries the secret key value"
+        );
+        // Non-vacuous: the other fields are still written.
+        assert_eq!(object["minio_bucket"], "paladin-files");
+    }
 }

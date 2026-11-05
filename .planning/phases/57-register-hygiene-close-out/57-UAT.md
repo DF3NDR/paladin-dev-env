@@ -3,16 +3,16 @@ status: testing
 phase: 57-register-hygiene-close-out
 source: 57-01-SUMMARY.md, 57-02-SUMMARY.md, 57-03-SUMMARY.md, 57-04-SUMMARY.md, 57-05-SUMMARY.md, 57-06-SUMMARY.md, 57-07-SUMMARY.md, 57-08-SUMMARY.md, 57-09-SUMMARY.md, 57-10-SUMMARY.md, 57-11-SUMMARY.md, 57-12-SUMMARY.md, 57-13-SUMMARY.md, 57-14-SUMMARY.md, 57-15-SUMMARY.md, 57-16-SUMMARY.md
 started: 2026-11-05T00:55:10Z
-updated: 2026-11-05T01:00:43Z
+updated: 2026-11-05T01:01:00Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 10
-name: Register and triage agree: every finding closed or waived
+number: 11
+name: WINDOWS ledger is fully dispositioned
 expected: |
-  57-REVIEW-DISPOSITIONS.md reads closed 43 / waived 8 / open 0 across all 51 findings. The "## Triage (Phase 57, 2026-11-04)" section records your option-a choice (7 fix-in-phase, 8 waive), each of the 8 waived rows names you as owner with the triage's revisit and basis text, and none of the 7 fix-in-phase items still carries a LIVE marker.
+  `.planning/WINDOWS.md` frontmatter reads open_count 0, waived_count 53, fixed_count 55, total_count 108. Rows 85-100 (minted during this phase) are each marked fixed on a re-run test, a re-measurement or a CI job id, and waiver rows 101-108 each name the owner of record plus revisit and basis. Nothing in the ledger would block `/gsd-ship`.
 awaiting: user response
 
 ## Tests
@@ -55,7 +55,7 @@ result: pass
 
 ### 10. Register and triage agree: every finding closed or waived
 expected: 57-REVIEW-DISPOSITIONS.md reads closed 43 / waived 8 / open 0 across all 51 findings. The "## Triage (Phase 57, 2026-11-04)" section records your option-a choice (7 fix-in-phase, 8 waive), each of the 8 waived rows names you as owner with the triage's revisit and basis text, and none of the 7 fix-in-phase items still carries a LIVE marker.
-result: [pending]
+result: pass
 
 ### 11. WINDOWS ledger is fully dispositioned
 expected: `.planning/WINDOWS.md` frontmatter reads open_count 0, waived_count 53, fixed_count 55, total_count 108. Rows 85-100 (minted during this phase) are each marked fixed on a re-run test, a re-measurement or a CI job id, and waiver rows 101-108 each name the owner of record plus revisit and basis. Nothing in the ledger would block `/gsd-ship`.
@@ -100,9 +100,9 @@ coverage_id: D4
 ## Summary
 
 total: 19
-passed: 11
+passed: 12
 issues: 0
-pending: 8
+pending: 7
 skipped: 0
 blocked: 0
 

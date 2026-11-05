@@ -3,23 +3,23 @@ status: testing
 phase: 57-register-hygiene-close-out
 source: 57-01-SUMMARY.md, 57-02-SUMMARY.md, 57-03-SUMMARY.md, 57-04-SUMMARY.md, 57-05-SUMMARY.md, 57-06-SUMMARY.md, 57-07-SUMMARY.md, 57-08-SUMMARY.md, 57-09-SUMMARY.md, 57-10-SUMMARY.md, 57-11-SUMMARY.md, 57-12-SUMMARY.md, 57-13-SUMMARY.md, 57-14-SUMMARY.md, 57-15-SUMMARY.md, 57-16-SUMMARY.md
 started: 2026-11-05T00:55:10Z
-updated: 2026-11-05T00:55:10Z
+updated: 2026-11-05T00:57:44Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 1
-name: Security gate passes with the fourth zip exception
+number: 2
+name: Diagnosed debug sessions are archived
 expected: |
-  Run `make security` on the current head. cargo-audit and cargo-deny both exit 0. SECURITY-EXCEPTIONS.md lists four zip 3.0.0 rows (the newest is RUSTSEC-2026-0429) under the same compensating control, each re-dated per D-31 with review_date "2027-03-31 or the first planning day of the next milestone, whichever is earlier", and every advisory id in that register also appears in .cargo/audit.toml and deny.toml.
+  `.planning/debug/resolved/` holds kimi-fallback-profile-stale.md, openai-max-completion-tokens.md and vendor-token-usage-fidelity.md (moved with git mv, history intact). No diagnosed-but-already-fixed session remains at the top of `.planning/debug/`, and each archived session is closed by a fixed WINDOWS row (76, 75, 74).
 awaiting: user response
 
 ## Tests
 
 ### 1. Security gate passes with the fourth zip exception
 expected: Run `make security` on the current head. cargo-audit and cargo-deny both exit 0. SECURITY-EXCEPTIONS.md lists four zip 3.0.0 rows (the newest is RUSTSEC-2026-0429) under the same compensating control, each re-dated per D-31 with review_date "2027-03-31 or the first planning day of the next milestone, whichever is earlier", and every advisory id in that register also appears in .cargo/audit.toml and deny.toml.
-result: [pending]
+result: pass
 
 ### 2. Diagnosed debug sessions are archived
 expected: `.planning/debug/resolved/` holds kimi-fallback-profile-stale.md, openai-max-completion-tokens.md and vendor-token-usage-fidelity.md (moved with git mv, history intact). No diagnosed-but-already-fixed session remains at the top of `.planning/debug/`, and each archived session is closed by a fixed WINDOWS row (76, 75, 74).
@@ -100,9 +100,9 @@ coverage_id: D4
 ## Summary
 
 total: 19
-passed: 2
+passed: 3
 issues: 0
-pending: 17
+pending: 16
 skipped: 0
 blocked: 0
 

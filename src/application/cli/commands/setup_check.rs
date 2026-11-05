@@ -456,4 +456,63 @@ mod tests {
         let result = check_redis_connectivity("redis://localhost:6379").await;
         assert!(result.is_ok());
     }
+
+    /// WR-03 (56-REVIEW): the malformed-scheme error must carry none of the URL.
+    #[tokio::test]
+    async fn check_redis_format_error_does_not_echo_the_value() {
+        const PW: &str = "test-key-not-a-secret-wr03-redis";
+        for url in [
+            format!("redis:/:{PW}@host"),
+            format!("valkey://:{PW}@host"),
+            format!("http://u:{PW}@host"),
+        ] {
+            let err = check_redis_connectivity(&url)
+                .await
+                .expect_err("a malformed-scheme URL must be rejected");
+            let display = err.to_string();
+            let debug = format!("{err:?}");
+            assert!(
+                !display.contains(PW),
+                "the Redis format error Display must not carry the URL password"
+            );
+            assert!(
+                !debug.contains(PW),
+                "the Redis format error Debug must not carry the URL password"
+            );
+            assert!(
+                display.contains(
+                    "Invalid Redis URL format: expected a redis:// or rediss:// URL (value not shown)"
+                ),
+                "the Redis format error must use the fixed value-free text"
+            );
+        }
+    }
+
+    /// WR-03 (56-REVIEW): a failed Qdrant request must not print the URL credentials.
+    ///
+    /// reqwest strips URL userinfo from its own error text, but it still echoes a
+    /// credential carried in the query string, so both forms are pinned here.
+    #[tokio::test]
+    async fn check_qdrant_failure_does_not_echo_the_url_credentials() {
+        const PW: &str = "test-key-not-a-secret-wr03-qdrant";
+        // Loopback port 1 refuses the connection, so no external network is used.
+        for url in [
+            format!("http://user:{PW}@127.0.0.1:1"),
+            format!("http://127.0.0.1:1?api-key={PW}"),
+        ] {
+            let err = check_qdrant_connectivity(&url)
+                .await
+                .expect_err("a refused loopback connection must be an error");
+            let display = err.to_string();
+            let debug = format!("{err:?}");
+            assert!(
+                !display.contains(PW),
+                "the Qdrant failure Display must not carry the URL credentials"
+            );
+            assert!(
+                !debug.contains(PW),
+                "the Qdrant failure Debug must not carry the URL credentials"
+            );
+        }
+    }
 }

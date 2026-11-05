@@ -99,14 +99,17 @@ return 1
 /// security.instructions.md's "no config type carrying a credential is
 /// `Debug`-formatted outward"): `Debug` is implemented by hand below and
 /// renders the password as a fixed placeholder, exactly as the facade's
-/// `NodeCacheConfig` does, rather than derived.
+/// `NodeCacheConfig` does, rather than derived. `Serialize` omits the password too (R-95).
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RedisNodeCacheConfig {
     /// The Redis server hostname.
     pub redis_host: String,
     /// The Redis server port.
     pub redis_port: u16,
-    /// The Redis server password, if authentication is required.
+    /// The Redis server password, if authentication is required. Never written by
+    /// `Serialize` (`skip_serializing`, no serde default, so it is still optional on load;
+    /// R-95).
+    #[serde(skip_serializing)]
     pub redis_password: Option<String>,
     /// The Redis logical database index.
     pub redis_db: u8,

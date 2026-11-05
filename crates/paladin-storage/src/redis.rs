@@ -17,17 +17,59 @@ use paladin_ports::output::queue_port::{
 };
 use paladin_ports::output::queue_port::{QueueError, QueueStats};
 
+/// A secret as `Debug` prints it: `<redacted>`, or `""` when empty.
+///
+/// A module-private copy of the three-line rule in `paladin_llm::redaction::RedactedKey` (and
+/// paladin-ai's `config::redaction::RedactedSecret`), both `pub(crate)` there. Neither is
+/// reachable from this crate, and a shared helper here would need a `lib.rs` change, so this
+/// file carries its own (the paladin-notifications DF-07 precedent; R-95).
+struct RedactedSecret<'a>(&'a str);
+
+impl std::fmt::Debug for RedactedSecret<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0.is_empty() {
+            f.write_str("\"\"")
+        } else {
+            f.write_str("<redacted>")
+        }
+    }
+}
+
 /// Configuration for Redis connection
+///
+/// `Debug` is implemented by hand: it prints `redis_password` as `<redacted>` when one is set
+/// (the derived `Debug` printed it), and `Serialize` omits the password altogether. Loading is
+/// unchanged, so the password is still optional when a value is deserialised (R-95).
 #[doc(hidden)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct RedisQueueConfig {
     pub redis_host: String,
     pub redis_port: u16,
+    /// Never written by `Serialize` (`skip_serializing`, no serde default) and printed as
+    /// `<redacted>` by `Debug`.
+    #[serde(skip_serializing)]
     pub redis_password: Option<String>,
     pub redis_db: u8,
     pub connection_timeout: u64,
     pub key_prefix: String,
     pub max_retries: u32,
+}
+
+impl std::fmt::Debug for RedisQueueConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RedisQueueConfig")
+            .field("redis_host", &self.redis_host)
+            .field("redis_port", &self.redis_port)
+            .field(
+                "redis_password",
+                &self.redis_password.as_deref().map(RedactedSecret),
+            )
+            .field("redis_db", &self.redis_db)
+            .field("connection_timeout", &self.connection_timeout)
+            .field("key_prefix", &self.key_prefix)
+            .field("max_retries", &self.max_retries)
+            .finish()
+    }
 }
 
 impl Default for RedisQueueConfig {

@@ -3,16 +3,16 @@ status: testing
 phase: 57-register-hygiene-close-out
 source: 57-01-SUMMARY.md, 57-02-SUMMARY.md, 57-03-SUMMARY.md, 57-04-SUMMARY.md, 57-05-SUMMARY.md, 57-06-SUMMARY.md, 57-07-SUMMARY.md, 57-08-SUMMARY.md, 57-09-SUMMARY.md, 57-10-SUMMARY.md, 57-11-SUMMARY.md, 57-12-SUMMARY.md, 57-13-SUMMARY.md, 57-14-SUMMARY.md, 57-15-SUMMARY.md, 57-16-SUMMARY.md
 started: 2026-11-05T00:55:10Z
-updated: 2026-11-05T00:59:06Z
+updated: 2026-11-05T00:59:24Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 5
-name: Failed-run errors are redacted then bounded; empty webhook secret warns at boot
+number: 6
+name: S3 listing pages correctly and S3 errors never carry a response body
 expected: |
-  A run that fails with a provider error that embeds a response body stores (and logs in the worker's failed-persist warning) text that is redacted first and then capped at the 2048-character budget, so no secret can straddle the cut. An operator-webhook secret configured as an empty string behaves as absent, and the server logs exactly one boot warning that the operator webhook has no secret; a configured non-empty secret still produces the same signature bytes as before.
+  `list_files` with ListOptions.limit uses that limit as the S3 max-keys page size and walks continuation tokens, so no key is skipped across pages and has_more / continuation_token reflect the store's truncation state. Every S3 error rendered by the adapter (including retry exhaustion) reads only "HTTP <status> <code>" or a fixed label, never a body. The multipart rustdoc says a rejected part leaves the upload open and the caller must abort, and the presigned-URL integration test cannot print a signed URL.
 awaiting: user response
 
 ## Tests
@@ -35,7 +35,7 @@ result: pass
 
 ### 5. Failed-run errors are redacted then bounded; empty webhook secret warns at boot
 expected: A run that fails with a provider error that embeds a response body stores (and logs in the worker's failed-persist warning) text that is redacted first and then capped at the 2048-character budget, so no secret can straddle the cut. An operator-webhook secret configured as an empty string behaves as absent, and the server logs exactly one boot warning that the operator webhook has no secret; a configured non-empty secret still produces the same signature bytes as before.
-result: [pending]
+result: pass
 
 ### 6. S3 listing pages correctly and S3 errors never carry a response body
 expected: `list_files` with ListOptions.limit uses that limit as the S3 max-keys page size and walks continuation tokens, so no key is skipped across pages and has_more / continuation_token reflect the store's truncation state. Every S3 error rendered by the adapter (including retry exhaustion) reads only "HTTP <status> <code>" or a fixed label, never a body. The multipart rustdoc says a rejected part leaves the upload open and the caller must abort, and the presigned-URL integration test cannot print a signed URL.
@@ -100,9 +100,9 @@ coverage_id: D4
 ## Summary
 
 total: 19
-passed: 6
+passed: 7
 issues: 0
-pending: 13
+pending: 12
 skipped: 0
 blocked: 0
 

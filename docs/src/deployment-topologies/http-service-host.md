@@ -88,7 +88,7 @@ http:
 
 agents:
   - id: "researcher"
-    model: "gpt-4"
+    model: "gpt-4o-mini"
     system_prompt: "You research topics thoroughly."
     allowed_roles: ["admin", "user"]   # empty ⇒ any authenticated caller
 ```

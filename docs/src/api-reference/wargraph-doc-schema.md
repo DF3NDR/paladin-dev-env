@@ -89,7 +89,7 @@ executable fixture):
       "kind": "paladin",
       "paladin": {
         "name": "Writer",
-        "model": "gpt-4",
+        "model": "gpt-4o-mini",
         "system_prompt": "Draft a short reply about {topic}.",
         "input_template": "{topic}",
         "output_field": "draft"

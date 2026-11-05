@@ -44,7 +44,7 @@ let llm: Arc<dyn LlmPort> = Arc::new(my_adapter);
 let paladin = PaladinBuilder::new(llm.clone())
     .system_prompt("You are a concise assistant.")
     .name("MyAgent")
-    .model("gpt-4")
+    .model("gpt-4o-mini")
     .temperature(0.7)       // 0.0–2.0
     .max_loops(3)            // default: 1
     .stop_word("DONE")       // optional stop trigger

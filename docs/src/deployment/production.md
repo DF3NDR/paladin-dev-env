@@ -271,7 +271,7 @@ llm:
   default_provider: "openai"
   openai:
     api_key: "${OPENAI_API_KEY}"
-    default_model: "gpt-4"
+    default_model: "gpt-4o-mini"
     timeout_seconds: 30
     max_retries: 3
 ```

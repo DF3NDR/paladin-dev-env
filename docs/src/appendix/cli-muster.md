@@ -144,7 +144,7 @@ battalion:
 paladins:
   classifier:
     system_prompt: "Classify content into categories..."
-    model: gpt-4
+    model: gpt-4o-mini
     temperature: 0.3
   # ... additional paladins
 

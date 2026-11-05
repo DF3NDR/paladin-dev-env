@@ -98,7 +98,7 @@ kubectl create secret generic paladin-secrets \
 ```rust,ignore
 // Fix: Use valid model name
 let paladin = PaladinBuilder::new(llm_port)
-    .model("gpt-4")  // Not "gpt-4-invalid"
+    .model("gpt-4o-mini")  // Not "gpt-4-invalid"
     .build()?;
 ```
 
@@ -373,7 +373,7 @@ and `max_loops` are real fields, but on per-agent `AgentDefinition` entries unde
 # Fix: Correct YAML syntax (per-agent, under agents:)
 agents:
   - id: "my-agent"
-    model: "gpt-4"
+    model: "gpt-4o-mini"
     system_prompt: "..."
     temperature: 0.7  # Must be number
     max_loops: 3       # Must be integer

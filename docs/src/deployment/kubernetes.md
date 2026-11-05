@@ -566,7 +566,7 @@ persistence:
 # Paladin configuration
 config:
   paladin:
-    defaultModel: "gpt-4"
+    defaultModel: "gpt-4o-mini"
     defaultTemperature: 0.7
     defaultMaxLoops: 3
 

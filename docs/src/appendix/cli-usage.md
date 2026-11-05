@@ -564,7 +564,7 @@ paladin council \
   --topic "System design review" \
   --participants 4 \
   --max-rounds 3 \
-  --model gpt-4 \
+  --model gpt-4o-mini \
   --temperature 0.8 \
   --save design-review.md
 ```
@@ -812,7 +812,7 @@ system_prompt: |
   Define the Paladin's role, capabilities, and behavior here.
 
 # LLM settings
-model: "gpt-4"
+model: "gpt-4o-mini"
 temperature: 0.7
 max_loops: 3
 timeout_seconds: 300
@@ -896,7 +896,7 @@ delegates:
 cat > qa-agent.yaml << 'EOF'
 name: "QAAgent"
 system_prompt: "You are a helpful Q&A assistant."
-model: "gpt-4"
+model: "gpt-4o-mini"
 temperature: 0.7
 max_loops: 1
 provider: { type: openai }
@@ -929,7 +929,7 @@ pip install mcp-web-search
 cat > web-agent.yaml << 'EOF'
 name: "WebAgent"
 system_prompt: "You can search the web for current information."
-model: "gpt-4"
+model: "gpt-4o-mini"
 temperature: 0.7
 max_loops: 3
 provider: { type: openai }
@@ -1035,7 +1035,7 @@ export ANTHROPIC_API_KEY="sk-..."
 
 1. **Model Selection:**
    - Use `gpt-3.5-turbo` for simple tasks (faster, cheaper)
-   - Use `gpt-4` for complex reasoning
+   - Use `gpt-5.4` for complex reasoning
    - Use `deepseek-chat` for cost-effective alternative
 
 2. **Temperature:**

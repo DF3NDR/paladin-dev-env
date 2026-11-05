@@ -28,7 +28,7 @@ llm:
 
   openai:
     base_url: "https://api.openai.com/v1"
-    default_model: "gpt-4"
+    default_model: "gpt-4o-mini"
     default_temperature: 0.7
     timeout_seconds: 300
     max_retries: 3
@@ -246,7 +246,7 @@ garrison:
   # path: "./garrison.db"          # Required when garrison_type = "sqlite"
   max_entries: 100                  # Max conversation turns to retain
   max_tokens: 4000                  # Context-window token budget
-  tokenizer: "gpt-4"               # Model name for token counting
+  tokenizer: "gpt-4o-mini"               # Model name for token counting
   eviction_strategy: "importance_based"  # importance_based | fifo | sliding_window
   preserve_recent_count: 10        # Always keep at least N recent entries
 ```
@@ -761,7 +761,7 @@ export APP_CITADEL_AUTOSAVE_ENABLED=true
 llm:
   default_provider: "openai"
   openai:
-    default_model: "gpt-4"
+    default_model: "gpt-4o-mini"
     default_temperature: 0.7
 
 garrison:

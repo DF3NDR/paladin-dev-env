@@ -548,7 +548,7 @@ paladins:
 
   - name: "Reporter"
     system_prompt: "Generate analysis report"
-    model: "gpt-4"
+    model: "gpt-4o-mini"
     vision_enabled: false
 
 images:

@@ -161,7 +161,7 @@ could not be read at the boundary, or one of the run's own superstep charges cou
 to it (so the run's balance can no longer be trusted), the run halts fail-closed and `halt_reason`
 is exactly `{ "reason": "ledger_unavailable" }`. When an agent-kind run's model has no
 `treasurer.pricing` row at dispatch (the row was removed after the run was admitted), the model is
-not called and `halt_reason` is `{ "reason": "model_unpriced", "model": "gpt-4" }`; the run resumes
+not called and `halt_reason` is `{ "reason": "model_unpriced", "model": "gpt-4o-mini" }`; the run resumes
 once an operator adds the row. The object never carries another scope's figures, a tenant
 id, or an API key name or value.
 
@@ -770,8 +770,8 @@ that cannot be metered cannot be bounded:
 {
   "error": {
     "code": "model_unpriced",
-    "message": "model 'gpt-4' has no treasurer.pricing row, so its spend cannot be metered under an allowance",
-    "details": { "model": "gpt-4" }
+    "message": "model 'gpt-4o-mini' has no treasurer.pricing row, so its spend cannot be metered under an allowance",
+    "details": { "model": "gpt-4o-mini" }
   }
 }
 ```

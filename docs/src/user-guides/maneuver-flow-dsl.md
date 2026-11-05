@@ -365,7 +365,7 @@ paladins:
   - inline:
       name: "analyzer"
       system_prompt: "Analyze the input document"
-      model: "gpt-4"
+      model: "gpt-4o-mini"
       temperature: 0.7
       provider:
         type: openai
@@ -373,7 +373,7 @@ paladins:
   - inline:
       name: "summarizer"
       system_prompt: "Create a concise summary"
-      model: "gpt-4"
+      model: "gpt-4o-mini"
       temperature: 0.5
       provider:
         type: openai
@@ -381,7 +381,7 @@ paladins:
   - inline:
       name: "translator"
       system_prompt: "Translate to simple language"
-      model: "gpt-4"
+      model: "gpt-4o-mini"
       temperature: 0.5
       provider:
         type: openai
@@ -389,7 +389,7 @@ paladins:
   - inline:
       name: "reviewer"
       system_prompt: "Final review and synthesis"
-      model: "gpt-4"
+      model: "gpt-4o-mini"
       temperature: 0.6
       provider:
         type: openai

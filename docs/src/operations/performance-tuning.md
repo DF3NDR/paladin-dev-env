@@ -164,7 +164,7 @@ llm:
       max_tokens: 500
 
     complex_tasks:
-      model: "gpt-4"
+      model: "gpt-5.4"
       max_tokens: 2000
 
     classification:

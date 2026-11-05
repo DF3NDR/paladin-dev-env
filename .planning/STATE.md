@@ -4,15 +4,15 @@ milestone: v0.11.1
 milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 58
 current_phase_name: Crate Release
-status: planning
+status: executing
 stopped_at: Phase 58 context gathered
-last_updated: "2026-11-05T01:31:21.722Z"
+last_updated: "2026-11-05T03:00:26.032Z"
 last_activity: 2026-11-05
 last_activity_desc: Phase 57 complete, transitioned to Phase 58
 progress:
   total_phases: 7
   completed_phases: 6
-  total_plans: 68
+  total_plans: 82
   completed_plans: 68
 ---
 
@@ -54,7 +54,7 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 
 Phase: 58 — Crate Release
 Plan: Not started
-Status: Ready to plan
+Status: Ready to execute
 Last activity: 2026-11-05 — Phase 57 complete, transitioned to Phase 58
 
 Progress: [█████████████████░░░] 6/7 phases (v0.11.1) — plans [████████████████████] 68/68 ([██████████] 100%)

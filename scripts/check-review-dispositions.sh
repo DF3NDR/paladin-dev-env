@@ -23,11 +23,23 @@
 #   **Totals:** closed: <n>, waived: <n>, open: <n>
 #
 # Per-row rules (a row that is out of scope under --phases is ignored):
-#   closed  Evidence must hold a pointer: a 7-40 hex commit id containing a
-#           digit, a snake_case test name with two or more underscores, a
-#           requirement id such as TENANT-04 (WR-/CR-/IN- ids do not count:
-#           they point back at a finding, not at evidence), a repo path with
-#           a `/` (and a file extension or two slashes), or `WINDOWS row <n>`.
+#   closed  Evidence must hold a pointer (57-REVIEW WR-02: prose that merely
+#           looks pointer-shaped is not evidence). A pointer is one of:
+#             - a commit id: 7-40 hex characters holding at least one letter
+#               a-f AND one digit, or 7-40 digits directly after the word
+#               `commit` or `sha` (case-insensitive); a bare date or number
+#               is not a commit id;
+#             - a requirement id such as TENANT-04; the prefixes WR, CR, IN
+#               (a pointer back at a finding) and ADR, UTF, SHA, HTTP, ISO,
+#               RFC (a standard or a decision record, not evidence) do not
+#               count;
+#             - a repo path of two or more `/`-joined segments that ends in
+#               .rs .md .toml .sh .json .yml .yaml .py .ts .sql .txt or .lock,
+#               or sits inside backticks;
+#             - a snake_case test name with two or more underscores that sits
+#               inside backticks, is joined to a `::` path, or follows the
+#               word `test` or `tests`;
+#             - `WINDOWS row <n>`.
 #   waived  Evidence is the reason; the Owner cell must be filled.
 #   open    A failure (OPEN) in strict mode. With --pending-ok an open row is
 #           accepted only when its Evidence starts with `LIVE ` and names a
@@ -139,11 +151,22 @@ TOTALS_RE = re.compile(
     r"^\*\*Totals:\*\*\s*closed:\s*(\d+),\s*waived:\s*(\d+),\s*open:\s*(\d+)\s*$")
 DISPOSITIONS = ("closed", "waived", "open")
 
-COMMIT_RE = re.compile(r"\b(?=[0-9a-f]*[0-9])[0-9a-f]{7,40}\b")
+# A commit id holds a letter a-f AND a digit, so a date (20261105) or a bare
+# number (1234567) is not one; an all-digit id counts only after `commit`/`sha`.
+COMMIT_RE = re.compile(r"\b(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b")
+COMMIT_WORD_RE = re.compile(r"\b(?:commit|sha)\s*:?\s*`?[0-9]{7,40}\b", re.I)
 TEST_RE = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+){2,}\b")
+TEST_AFTER_WORD_RE = re.compile(
+    r"\btests?[\s:]+`?[a-z][a-z0-9]*(?:_[a-z0-9]+){2,}\b", re.I)
 REQ_RE = re.compile(r"\b([A-Z]{2,})-[0-9]+\b")
-FINDING_PREFIXES = ("WR", "CR", "IN")  # a pointer back at a finding is not evidence
+# A prefix that points back at a finding (WR, CR, IN), at a decision record
+# (ADR) or at a standard (UTF-8, SHA-256, HTTP-2, ISO-8601, RFC-nnnn) is not
+# evidence.
+NON_EVIDENCE_PREFIXES = ("WR", "CR", "IN", "ADR", "UTF", "SHA", "HTTP", "ISO", "RFC")
 PATH_RE = re.compile(r"[A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+")
+PATH_EXTENSIONS = (".rs", ".md", ".toml", ".sh", ".json", ".yml", ".yaml", ".py",
+                   ".ts", ".sql", ".txt", ".lock")
+BACKTICK_RE = re.compile(r"`([^`]+)`")
 WINDOWS_RE = re.compile(r"\bWINDOWS row \d+\b")
 LIVE_RE = re.compile(r"^LIVE\s+[^\s:]+:\d+")
 PLACEHOLDERS = {
@@ -171,15 +194,23 @@ def is_placeholder(text):
 
 
 def has_pointer(text):
-    if COMMIT_RE.search(text) or TEST_RE.search(text) or WINDOWS_RE.search(text):
+    spans = BACKTICK_RE.findall(text)
+    if COMMIT_RE.search(text) or COMMIT_WORD_RE.search(text) or WINDOWS_RE.search(text):
         return True
     for match in REQ_RE.finditer(text):
-        if match.group(1) not in FINDING_PREFIXES:
+        if match.group(1) not in NON_EVIDENCE_PREFIXES:
             return True
+    # A test name needs context: backticks, a `::` path, or the word `test(s)`.
+    if any(TEST_RE.search(span) for span in spans) or TEST_AFTER_WORD_RE.search(text):
+        return True
+    for match in TEST_RE.finditer(text):
+        if text.startswith("::", match.end()) or text.endswith("::", 0, match.start()):
+            return True
+    # A path needs a known extension, or backticks.
+    if any(PATH_RE.search(span) for span in spans):
+        return True
     for match in PATH_RE.finditer(text):
-        candidate = match.group(0)
-        last = candidate.rsplit("/", 1)[-1]
-        if "." in last.strip(".") or candidate.count("/") >= 2:
+        if match.group(0).rstrip(".").endswith(PATH_EXTENSIONS):
             return True
     return False
 

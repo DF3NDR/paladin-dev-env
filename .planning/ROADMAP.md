@@ -612,7 +612,7 @@ Plans:
   4. `v0.11.1` is tagged on `main` and ships through `release.yml` end to end with no manual step (no changelog condensation, no hand-run publish), and the semver job read a non-zero check count on the release pull request.
   5. All twelve publishable crates are on crates.io at `0.11.1`, unyanked and published through Trusted Publishing as read from the registry after the run, and the GitHub Release exists with its assets.
 
-**Plans**: 15 plans in 12 waves (58-15 inserted as wave-3 gap closure at the 58-05 decision; blocking maintainer checkpoints: 58-05 Task 3 decision, 58-09 Task 2 `release` label, 58-10 Task 3 tag day, 58-11 Task 2 sign-off tick, 58-12 Tasks 2-3 one-way door and merge + tag; build wave 58-01..58-06, bump 58-07, pre-merge 58-08..58-11, merge + tag 58-12, post-tag 58-13..58-14)
+**Plans**: 16 plans in 12 waves (58-15 and 58-16 inserted as gap closure at the 58-05 decision and the 58-06 sweep; blocking maintainer checkpoints: 58-05 Task 3 decision, 58-09 Task 2 `release` label, 58-10 Task 3 tag day, 58-11 Task 2 sign-off tick, 58-12 Tasks 2-3 one-way door and merge + tag; build wave 58-01..58-06, bump 58-07, pre-merge 58-08..58-11, merge + tag 58-12, post-tag 58-13..58-14)
 
 Plans:
 **Wave 1**
@@ -633,6 +633,7 @@ Plans:
 **Wave 4** *(blocked on Wave 3 completion)*
 
 - [x] 58-06-PLAN.md — build wave: dated re-home todos and the locked register, D-11 `check-semver` on its own head, the pre-bump sweep, pre-bump push `SHA-P` (SHIP-10, SHIP-09, SHIP-08)
+- [ ] 58-16-PLAN.md — build wave (gap closure, inserted at the 58-06 sweep): the four residual secret-bearing config types (`NodeCacheConfig`, `RedisQueueConfig`, `MinioConfig`, `RedisNodeCacheConfig`) get `skip_serializing` and redacted `Debug` RED-then-GREEN, changelog and MIGRATION §11.1 rows, R-95 to `fixed`, F-58-07, D-11 semver and the pre-bump sweep re-run on SHA-S2, pre-bump push `SHA-P2` (SHIP-10, SHIP-09)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 

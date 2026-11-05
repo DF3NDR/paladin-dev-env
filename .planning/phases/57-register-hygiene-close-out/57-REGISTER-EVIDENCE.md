@@ -169,7 +169,7 @@ Notes:
 - The file-storage job is named `Integration Tests` in `ci.yml`, not `File Storage` as the 57-06 SUMMARY wrote. Its step 9 is the RustFS suite.
 - The SDK smoke job is the pre-existing red job outside Phase 57's registers (research A6). It is not required by any Phase 57 row and was not touched.
 - The `pre-commit` workflow (a separate workflow, not part of `ci.yml`) is red on `4b115d511` and was red on `d0b0022ec`: its `end-of-file-fixer` hook removes a trailing blank line from `57-JUDGMENT-READ.md`. The seal commit carries that one-line fix; it is outside the required job list.
-- The `Docker Build` job (a ~60 minute job) was still `in_progress` when the Task 3 rows were closed; it is not one of the required jobs. See `## Handover` for what it read when the seal commit was pushed.
+- The `Docker Build` job `126922285397` (a ~60 minute job, started 2026-11-04T22:55:29Z) was still `in_progress`, at step `Build Docker image`, when the Task 3 rows were closed and again after 68 minutes of polling (2026-11-05T00:03Z). It is not one of the required jobs and no row cites it. The final push supersedes the run, so its eventual state is not claimed here.
 
 ## Orphaned deferrals
 

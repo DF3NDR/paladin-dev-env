@@ -30,6 +30,7 @@ RESEARCH.md that was not re-measured is labelled as a research figure.
 - SHA-E: 9166fe1fee4a920baf7f481d34b6e05b40b7b3de
 - SHA-S: fb6d50da0caa5980fca0f70799fe25adb4a830f0
 - SHA-P: 35e696cc9af1f817da07db9ec233d31e4e553273
+- SHA-P2: 042df99b2c48bc249c206fdba6372e1e67b34e7d
 - SHA-G2: 7b06e5e6b5fcb3f2f6ceabb2ef2a25e297b2d456
 - SHA-S2: 0143b50d596eee90a3b185c2e9ce94ad0292a2a8
 
@@ -253,6 +254,31 @@ show. This is the D-11 read on the head the bump builds on: the `0.11.1` patch i
 paragraph (and plan 58-08's replacement of it) read `SHA-S` (D-10).
 
 Pre-bump offline sweep on the same head: rows 26-34 of the Local sweep table, all exit 0.
+
+### Plan 58-16 — push of SHA-P2 (pre-bump, no label)
+
+`SHA-P2` is `042df99b2c48bc249c206fdba6372e1e67b34e7d`, the `docs(58-16)` commit that records `### D-11 semver on SHA-S2`, pushed on 2026-11-05 at about 18:35Z with a plain
+`git push origin claude/laughing-dirac-e0h2ax` (`f05e51006..042df99b2`, exit 0, no force, no `--no-verify`; the captured push log shows only the ref update, so the pre-push hooks printed nothing on success).
+`main` was re-read through REST (`gh api repos/DF3NDR/paladin-dev-env/branches/main --jq .commit.sha`) at 2026-11-05T18:34:52Z as `8b23cb4c55a10fcf0b08fab1af595e1f184e5f2e`
+(unmoved, D-02), and again after the push. `git ls-remote origin refs/heads/claude/laughing-dirac-e0h2ax` equals `SHA-P2`. No pull request
+(`pulls?head=DF3NDR:claude/laughing-dirac-e0h2ax&state=open` has length 0), no label, no `v0.11.1*` tag on the remote, no dispatch (D-03).
+`git diff --name-only SHA-S2 SHA-P2 -- . ':!.planning'` is empty, so `SHA-P2` carries the code of `SHA-G2` and `SHA-S2` (only `.planning/` differs). The six `(58-16)` code commits,
+the changelog and MIGRATION commit and the register commit ride this push with the earlier local `docs(58-06)` commits.
+
+Runs queued on `SHA-P2`, read once at 2026-11-05T18:35:11Z (`gh api "repos/DF3NDR/paladin-dev-env/actions/runs?head_sha=042df99b2c48bc249c206fdba6372e1e67b34e7d&per_page=100"`)
+and not waited for (D-00i; plan 58-07 Task 1 reads the conclusions of these runs, not `SHA-P`'s):
+
+| Workflow | Run id | Status when listed | Event |
+|----------|--------|--------------------|-------|
+| `pre-commit` (`pre-commit.yml`) | `42085634093` | in_progress | push |
+| `ci.yml` | `42085634184` | pending | push |
+| `codeql.yml` | `42085634162` | in_progress | push |
+| `feature-flags.yml` | `42085634381` | queued | push |
+
+One read of `SHA-P`'s four runs at the same time (not waited for): `codeql.yml` `42075372834` completed `cancelled`; `ci.yml` `42075372810` completed `cancelled`;
+`pre-commit` `42075372712` completed `success`; `feature-flags.yml` `42075372714` completed `success`. The `ci.yml` concurrency group cancels an older in-flight run of the same
+event and branch, so `SHA-P`'s `ci.yml` run is superseded, and plan 58-07 reads `SHA-P2`'s runs. A `SHA-P` run that concluded `failure` rather than `cancelled` would be recorded by
+id and job and acted on by nobody (D-00j); none did.
 
 ---
 

@@ -3,16 +3,16 @@ status: testing
 phase: 57-register-hygiene-close-out
 source: 57-01-SUMMARY.md, 57-02-SUMMARY.md, 57-03-SUMMARY.md, 57-04-SUMMARY.md, 57-05-SUMMARY.md, 57-06-SUMMARY.md, 57-07-SUMMARY.md, 57-08-SUMMARY.md, 57-09-SUMMARY.md, 57-10-SUMMARY.md, 57-11-SUMMARY.md, 57-12-SUMMARY.md, 57-13-SUMMARY.md, 57-14-SUMMARY.md, 57-15-SUMMARY.md, 57-16-SUMMARY.md
 started: 2026-11-05T00:55:10Z
-updated: 2026-11-05T01:01:53Z
+updated: 2026-11-05T01:02:11Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 14
-name: Worker emits its terminal event only after the commit, and failed attempts carry partial spend
+number: 15
+name: Treasurer notices survive enqueue failure and client disconnect
 expected: |
-  run_agent sends exactly one RunFinished wire event, and only after the exit's durable status/outcome writes and queue ack, on the completed, failed and both halt exits. A failed status or outcome write on the success path logs one warning (run id and repository error only) and nacks with a 1 s delay. When a run attempt fails after some LLM spend, the Err-arm NodeFinished event reports the spend billed before the failure. MIGRATION rows M-B-42/M-B-43 and two CHANGELOG Fixed bullets exist.
+  If enqueueing the operator-delivery for a won once-per-window allowance notice fails, the notice is given back so the next admission in the window wins it again (no notice is lost). Treasurer::confirm and ::abandon run detached, so a client that disconnects mid-submission (or on the HTTP agent routes) does not cancel settlement, and a submission future dropped after admission still settles: confirm if the run row exists, otherwise give back. MIGRATION row M-B-44, a CHANGELOG Fixed bullet and the platform-api.md delivery-semantics sentence record this.
 awaiting: user response
 
 ## Tests
@@ -71,7 +71,7 @@ result: pass
 
 ### 14. Worker emits its terminal event only after the commit, and failed attempts carry partial spend
 expected: run_agent sends exactly one RunFinished wire event, and only after the exit's durable status/outcome writes and queue ack, on the completed, failed and both halt exits. A failed status or outcome write on the success path logs one warning (run id and repository error only) and nacks with a 1 s delay. When a run attempt fails after some LLM spend, the Err-arm NodeFinished event reports the spend billed before the failure. MIGRATION rows M-B-42/M-B-43 and two CHANGELOG Fixed bullets exist.
-result: [pending]
+result: pass
 
 ### 15. Treasurer notices survive enqueue failure and client disconnect
 expected: If enqueueing the operator-delivery for a won once-per-window allowance notice fails, the notice is given back so the next admission in the window wins it again (no notice is lost). Treasurer::confirm and ::abandon run detached, so a client that disconnects mid-submission (or on the HTTP agent routes) does not cancel settlement, and a submission future dropped after admission still settles: confirm if the run row exists, otherwise give back. MIGRATION row M-B-44, a CHANGELOG Fixed bullet and the platform-api.md delivery-semantics sentence record this.
@@ -100,9 +100,9 @@ coverage_id: D4
 ## Summary
 
 total: 19
-passed: 15
+passed: 16
 issues: 0
-pending: 4
+pending: 3
 skipped: 0
 blocked: 0
 

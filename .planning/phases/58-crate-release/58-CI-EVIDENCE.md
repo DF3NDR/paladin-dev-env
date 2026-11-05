@@ -28,6 +28,7 @@ RESEARCH.md that was not re-measured is labelled as a research figure.
 
 - SHA-PRE: 7832f280e0376a8b8a10e91522927e1bf4d16339
 - SHA-E: 9166fe1fee4a920baf7f481d34b6e05b40b7b3de
+- SHA-S: fb6d50da0caa5980fca0f70799fe25adb4a830f0
 
 Machine-readable SHA lines added by plans use the exact form `- SHA-<label>: <40-hex>` on their own line.
 
@@ -49,6 +50,17 @@ after the two `docs(58-01)` commits (`2e1338a80`).
 | 7 | `pre-commit run --all-files` (first run, after the `57-VALIDATION.md` fix) | `99ccf0aa3` | `check toml` Passed; `check yaml` Passed; `check for added large files` Passed; `check for merge conflicts` Passed; **`trim trailing whitespace` Failed** (hook-modified `58-PATTERNS.md`, see F-58-01); `fix end of files` Passed; `Detect hardcoded secrets` Passed; `shellcheck` Passed; `cargo fmt (check)` Passed; `cargo clippy (workspace, -D warnings)` Passed |
 | 8 | `pre-commit run --all-files` (second run, after the `58-PATTERNS.md` trim) | `2e1338a80` | exit 0: `check toml`, `check yaml`, `check for added large files`, `check for merge conflicts`, `trim trailing whitespace`, `fix end of files`, `Detect hardcoded secrets`, `shellcheck`, `cargo fmt (check)`, `cargo clippy (workspace, -D warnings)` all **Passed** |
 
+| 9 | `SEMVER_PRUNE_LOCAL_CACHE=1 ./scripts/check-semver.sh` (cargo-semver-checks 0.50.0, 2026-11-05T17:20Z to 17:26Z) | `fb6d50da0` | exit 0; 12 packages each `223 checks: 223 pass, 31 skip`; `12 package(s) checked against 0.11.0 at --release-type patch; 0 failure(s)` (block below) |
+| 10 | `make check-gates` (includes `check-doc-models`) | `fb6d50da0` | exit 0; `OK: 128 file(s) scanned, every copyable version string equals '0.11.0'`; `OK: scanned 627 file(s) (19 test-only), 0 finding(s)`; `OK: 184 file(s) scanned, 0 deprecated model literal(s) (allowlisted: 1)` |
+| 11 | `make test-shell-guards` | `fb6d50da0` | exit 0; `85 assertion(s) passed.` |
+| 12 | `cargo fmt --check` | `fb6d50da0` | exit 0, no output |
+| 13 | `make security` (`cargo audit` then `cargo deny check`) | `fb6d50da0` | exit 0; `warning: 9 allowed warnings found`; `advisories ok, bans ok, licenses ok, sources ok` |
+| 14 | `make api-surface` | `fb6d50da0` | exit 0; `API surface extracted ... (4331 items)`; `API surface unchanged` |
+| 15 | `pre-commit run --all-files` | `fb6d50da0` | exit 0; every hook Passed (`check toml`, `check yaml`, `check for added large files`, `check for merge conflicts`, `trim trailing whitespace`, `fix end of files`, `Detect hardcoded secrets`, `shellcheck`, `cargo fmt (check)`, `cargo clippy (workspace, -D warnings)`); tree clean after |
+| 16 | `./scripts/check-review-dispositions.sh` | `fb6d50da0` | exit 0; `checked 51 finding(s) across 13 review file(s); 0 failure(s)` |
+| 17 | `bash .planning/phases/58-crate-release/58-check-register.sh` (strict, no `--draft`) | `fb6d50da0` | exit 0; `register: checked 135 row(s) (R: 95, V: 40); fixed 51, waived 37, re-homed 47; 0 failure(s)` |
+
+Rows 9-17 ran on 2026-11-05 (17:20Z to 17:28Z) in plan 58-06, on `SHA-S` `fb6d50da0caa5980fca0f70799fe25adb4a830f0` (the head after the register-lock commit `fb6d50da0`; the working tree was clean). No row is red. The Phase 58 register moved from the draft count (fixed 51, waived 37, re-homed 46) to the locked count because plan 58-06 added R-95.
 ---
 
 ## CI-run table
@@ -136,6 +148,37 @@ success, `ci.yml` `42016633728` `cancelled` (superseded by the next push). Curre
 by the orchestrator at 11:30:12Z): `ci.yml` `42019466680` `queued`, `feature-flags` `42019466754`, `pre-commit`
 `42019466691` and `codeql` `42019466758` `in_progress` when listed. Their conclusions are not claimed here; plan 58-06's
 push and plan 58-12 read the runs that matter for the tag.
+
+---
+
+### D-11 semver on SHA-S
+
+Plan 58-06 Task 2, read on `SHA-S` `fb6d50da0caa5980fca0f70799fe25adb4a830f0` (2026-11-05, 17:20Z to 17:26Z, clean tree; the code is the same as at plan 58-15's head, `make api-surface` unchanged at 4331 items).
+Command: `SEMVER_PRUNE_LOCAL_CACHE=1 ./scripts/check-semver.sh` (`SEMVER_BASELINE_VERSION` 0.11.0, `--release-type patch`, `--default-features`); tool `cargo-semver-checks 0.50.0`. Exit 0.
+
+```
+semver: paladin-ai-core: 223 checks: 223 pass, 31 skip
+semver: paladin-ports: 223 checks: 223 pass, 31 skip
+semver: paladin-herald: 223 checks: 223 pass, 31 skip
+semver: paladin-battalion: 223 checks: 223 pass, 31 skip
+semver: paladin-llm: 223 checks: 223 pass, 31 skip
+semver: paladin-memory: 223 checks: 223 pass, 31 skip
+semver: paladin-web: 223 checks: 223 pass, 31 skip
+semver: paladin-notifications: 223 checks: 223 pass, 31 skip
+semver: paladin-content: 223 checks: 223 pass, 31 skip
+semver: paladin-storage: 223 checks: 223 pass, 31 skip
+semver: paladin-eval: 223 checks: 223 pass, 31 skip
+semver: paladin-ai: 223 checks: 223 pass, 31 skip
+semver: 12 package(s) checked against 0.11.0 at --release-type patch; 0 failure(s)
+```
+
+Every package evaluated 223 checks (N > 0, so the zero-check tripwire did not fire) and none failed. This is the D-11 read on the code the bump ships:
+the `0.11.1` patch is licensed. The 58-15 change (`skip_serializing` on the secret fields, a `0600` `.env`, a redacted Redis and Qdrant error text) adds,
+removes and re-types no public item, which is what the 223 passes and the unchanged `make api-surface` show. `SHA-S` and the run date go into the MIGRATION
+section 11.8 consumer paragraph (D-10, plan 58-07 commit 3).
+
+Pre-bump offline sweep on the same head: rows 9-17 of the Local sweep table, all exit 0. The code at `SHA-S` and at the commit that records this block is
+identical: `git diff --name-only SHA-S HEAD -- . ':!.planning'` is empty (read after the evidence commit; see the plan 58-06 summary).
 
 ---
 

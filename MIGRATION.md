@@ -1,10 +1,10 @@
 # Upgrading Paladin
 
-> **Scope note:** this file is the root migration guide and has three parts, newest first. **Section 11**, "Upgrading from v0.11.0 to v0.11.1", is the open part: later v0.11.1 work appends its entries there. **Section 10**, "Upgrading from v0.10.1 to v0.11.0", carries what a consumer or operator moving from the published `v0.10.1` to `v0.11.0` needs, and **Section 9**, "Upgrading from v0.9.0 to v0.10.0", is the v0.10 record; both are frozen and kept as they shipped. The part and section numbers, the row identifiers (`M-B-NN`, `DR-NN`) and the section 10.2 register keys are cited by the CHANGELOG, the ADRs and the consumer muster, so later work appends to section 11 rather than renumbering any part.
+> **Scope note:** this file is the root migration guide and has three parts, newest first. **Section 11**, "Upgrading from v0.11.0 to v0.11.1", is the newest part, released as `v0.11.1`. **Section 10**, "Upgrading from v0.10.1 to v0.11.0", carries what a consumer or operator moving from the published `v0.10.1` to `v0.11.0` needs, and **Section 9**, "Upgrading from v0.9.0 to v0.10.0", is the v0.10 record; both are frozen and kept as they shipped. The part and section numbers, the row identifiers (`M-B-NN`, `DR-NN`) and the section 10.2 register keys are cited by the CHANGELOG, the ADRs and the consumer muster, so a later release adds a new part above section 11 rather than renumbering any part.
 
 # 11. Upgrading from v0.11.0 to v0.11.1
 
-v0.11.1 is the Dogfood Cleanup release (milestone opened 2026-10-27, Phases 52 to 58): it closes the security, correctness, release-process and first-run gaps v0.11.0 left behind, with no new features. It is a patch release: Phase 53 decided `v0.11.1` on 2026-10-31 because every change is additive (the `Semver Checks (vs v0.11.0)` script reports no failure at `--release-type patch` for all twelve published packages, section 11.2 has no row and the allowlist has no entry; see `.planning/phases/53-tenant-isolation-closure/53-VERSION-DECISION.md`). This part starts empty and records only what a consumer or operator moving from the published `v0.11.0` to `v0.11.1` must act on; each later v0.11.1 change adds its entry to the matching section below in the same commit as the change.
+v0.11.1 is the Dogfood Cleanup release (milestone opened 2026-10-27, Phases 52 to 58): it closes the security, correctness, release-process and first-run gaps v0.11.0 left behind, with no new features. It is a patch release: Phase 53 decided `v0.11.1` on 2026-10-31 because every change is additive (the `Semver Checks (vs v0.11.0)` script reports no failure at `--release-type patch` for all twelve published packages, section 11.2 has no row and the allowlist has no entry; see `.planning/phases/53-tenant-isolation-closure/53-VERSION-DECISION.md`). This part records only what a consumer or operator moving from the published `v0.11.0` to `v0.11.1` must act on, and it is the released record of that move: a change made after the `v0.11.1` tag belongs to the next release's part.
 
 ## 11.1 Behavioral changes (user-visible without code changes)
 
@@ -47,18 +47,18 @@ Columns: **Crate · Type/Trait · Change · Mitigation (`#[non_exhaustive]` / de
 
 The **Crate** cell of every row marked `Y` is the crate's **published crates.io package name** (`paladin-ai-core` for the `crates/paladin-core` directory, whose library is still imported as `paladin_core`), never the directory name: the allowlist gate compares that cell against `.cargo/semver-checks-allowlist.toml`'s `crate = "..."` keys by exact string, in both directions, and the allowlist's own schema requires the package name.
 
-This section is the v0.11.1 register. The `semver` CI gate (`scripts/check-migration-allowlist.sh`) reads only this table's `Y` rows against `.cargo/semver-checks-allowlist.toml`; the registers of sections 10.2 and 9.2 are frozen records of breaks already shipped against older baselines and are no longer read. No change is recorded since `v0.11.0`, so the table has no row. A later v0.11.1 change that breaks the public API on purpose adds a row here and an allowlist entry in the same commit.
+This section is the v0.11.1 register. The `semver` CI gate (`scripts/check-migration-allowlist.sh`) reads only this table's `Y` rows against `.cargo/semver-checks-allowlist.toml`; the registers of sections 10.2 and 9.2 are frozen records of breaks already shipped against older baselines and are no longer read. No change is recorded since `v0.11.0`, so the table has no row: a deliberate break of the public API would have added a row here and an allowlist entry in the same commit, and none was made.
 
 | Crate | Type / Trait | Change | Mitigation | Deliberate-breaking? | Req |
 |---|---|---|---|---|---|
 
 ## 11.3 Toolchain & dependencies
 
-No toolchain or dependency change is recorded since `v0.11.0`. A later v0.11.1 change of this kind adds its entry here in the same commit.
+No toolchain or dependency change is recorded since `v0.11.0`, and none is made in the released `v0.11.1`.
 
 ## 11.4 Persistence & schema migrations
 
-No persistence or schema change is recorded since `v0.11.0`. A later v0.11.1 change of this kind adds its entry here in the same commit.
+No persistence or schema change is recorded since `v0.11.0`, and none is made in the released `v0.11.1`.
 
 ## 11.5 Configuration & environment
 
@@ -69,8 +69,6 @@ No persistence or schema change is recorded since `v0.11.0`. A later v0.11.1 cha
 - **`k8s/server` delivers the server config as a Secret** (FIRST-01, FIRST-04, Phase 54 plan 54-06, D-05/D-10). The ConfigMap is retired; the whole `config.yml` is the `config.yml` key of `paladin-server-secrets` (`k8s/server/secret.yaml.example`), mounted at `/etc/paladin/config.yml` by `deployment.yaml` and `worker-deployment.yaml`. The per-caller key env injections and Secret keys are gone. Images are `paladin-server:<workspace version>`, which `make docker-build-server` now tags alongside `:latest`. A cluster still running the old manifests keeps its `${…}` keys, which now refuse to boot (`M-B-29`).
 
 - **`paladin-server` applies the documented `PALADIN_TRACE_*`, `APP_AGENT_RUNTIME_*` and `APP_WEB_SERVER_*` variables** (DF-26, Phase 56 plan 56-14, `M-B-38`). Section 9.5 lists them per field, and v0.11.0 ignored them on the server. Library code reads the same values through `Settings::get_trace_config()`, `get_agent_runtime_config()` and `get_web_server_config()`.
-
-A later v0.11.1 change of this kind adds its entry here in the same commit.
 
 ## 11.6 HTTP API
 
@@ -131,7 +129,7 @@ changes. The admission-time `422 model_unpriced` is unchanged.
 
 ## 11.7 Deprecations
 
-No item is marked `#[deprecated]` since `v0.11.0`. A later v0.11.1 deprecation adds its entry here in the same commit.
+No item is marked `#[deprecated]` since `v0.11.0`; the entry below records a function that is superseded and no longer routed, not deprecated.
 
 - **`paladin_web::agent_controller::get_job` is superseded by `get_job_scoped`** (TENANT-07, Phase 53 plan 53-05). `get_job` is unscoped (it neither reads the caller's `Principal` nor checks the agent id) and is no longer routed by `agent_openapi_router`, which now mounts `get_job_scoped` for `GET /v1/agents/{id}/jobs/{job_id}`. `get_job` keeps its signature and behavior, so a downstream router that mounts it itself still compiles; such an embedder should switch to `get_job_scoped`, which needs the `Extension<Principal>` the authentication middleware attaches and reads a job through `JobStore::get_visible`. `get_job` carries no `#[deprecated]` attribute in v0.11.1 because `cargo-semver-checks` rejects a newly deprecated function at a patch release (`function_marked_deprecated` requires a minor); the attribute lands in the next minor release.
 
@@ -155,7 +153,25 @@ No item is marked `#[deprecated]` since `v0.11.0`. A later v0.11.1 deprecation a
 
 A deployment that attaches a Treasurer through its own `RunWorkerPool` wiring must now also install the engine factory, or boot refuses (`M-B-27`, TENANT-08); `paladin-server` as shipped is unaffected.
 
-A later v0.11.1 change that needs an operator step adds it here in the same commit.
+### Library consumers: v0.11.0 → v0.11.1
+
+This subsection is for a library consumer that depends on the facade `paladin-ai` (plus
+`paladin-ports`, `paladin-memory` and the other published crates) and moves from the published
+`v0.11.0` to `v0.11.1`. The operator checklist above is separate and does not apply to a consumer
+that only links the libraries. It is a consumer-shaped index over sections 11.1, 11.2 and 11.7,
+not a new register.
+
+A library consumer moves from `0.11.0` to `0.11.1` without changing source: no public Rust
+signature or type changed, and no serialized schema changed except that the credential fields of
+nine config types are no longer written when those types are serialised (`M-B-50`, `M-B-51`;
+loading is unchanged); section 11.2 has no row and `.cargo/semver-checks-allowlist.toml` has no
+entry; `scripts/check-semver.sh` on `0143b50d5` (`0143b50d596eee90a3b185c2e9ce94ad0292a2a8`,
+2026-11-05) reads `0 failure(s)` for all twelve packages at `--release-type patch`, 223 checks
+each. Run-time behaviour changes that a library consumer can observe are in section 11.1: M-B-30,
+M-B-33, M-B-34, M-B-35, M-B-40, M-B-41, M-B-45, M-B-46, M-B-47, and the credential-class changes
+M-B-48 to M-B-52 (`M-B-50` supersedes the sentence in `M-B-36` that `Serialize` output is
+unchanged, and `M-B-52` changes the `Debug` text of two config types); `get_job` is unrouted but
+not deprecated (section 11.7).
 
 # 10. Upgrading from v0.10.1 to v0.11.0
 

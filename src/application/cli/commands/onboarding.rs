@@ -10,7 +10,7 @@ use crate::application::cli::interactive::prompts::PromptBuilder;
 use crate::application::cli::interactive::wizard::{StepResult, Wizard, WizardContext, WizardStep};
 use crate::application::cli::templates::env::EnvTemplate;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // Constants for context keys
 const KEY_SELECTED_PROVIDERS: &str = "selected_providers";
@@ -545,9 +545,17 @@ fn write_env_file(context: &WizardContext, merge: bool) -> CliResult<()> {
         .generate(&api_keys, existing_content.as_deref())
         .map_err(|e| CliError::configuration(format!("Template error: {}", e)))?;
 
-    std::fs::write(".env", content)?;
+    write_env_file_at(Path::new(".env"), &content)?;
 
     Ok(())
+}
+
+/// Write `content` to `path` as the whole `.env` file.
+///
+/// Separate from [`write_env_file`] so tests can target an explicit path instead of
+/// changing the working directory (tests run in parallel).
+fn write_env_file_at(path: &Path, content: &str) -> std::io::Result<()> {
+    std::fs::write(path, content)
 }
 
 /// Run the onboarding wizard
@@ -674,5 +682,65 @@ mod tests {
         assert_eq!(EnvFileStep.name(), "Environment File");
         assert_eq!(SampleConfigsStep.name(), "Sample Configurations");
         assert_eq!(SummaryStep.name(), "Summary");
+    }
+
+    #[cfg(unix)]
+    fn mode_of(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path)
+            .expect("the .env file must exist")
+            .permissions()
+            .mode()
+            & 0o777
+    }
+
+    /// WR-04 (56-REVIEW): a new `.env` holds provider API keys and must be owner-only.
+    #[cfg(unix)]
+    #[test]
+    fn write_env_file_at_creates_a_new_file_at_mode_0600() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join(".env");
+
+        write_env_file_at(&path, "OPENAI_API_KEY=test-key-not-a-secret-wr04\n").unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "OPENAI_API_KEY=test-key-not-a-secret-wr04\n"
+        );
+        assert_eq!(mode_of(&path), 0o600, "a new .env must be created 0600");
+    }
+
+    /// WR-04 (56-REVIEW): an existing wider file is narrowed before any key is written.
+    #[cfg(unix)]
+    #[test]
+    fn write_env_file_at_narrows_an_existing_0644_file_to_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join(".env");
+        std::fs::write(&path, "OLD_VALUE_THAT_IS_LONGER_THAN_THE_NEW_TEXT=1\n").unwrap();
+        // Explicit chmod so the umask cannot hide the defect.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(mode_of(&path), 0o644);
+
+        write_env_file_at(&path, "NEW=2\n").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "NEW=2\n");
+        assert_eq!(mode_of(&path), 0o600, "an existing .env must end 0600");
+    }
+
+    /// WR-04 (56-REVIEW): an already-private file stays private.
+    #[cfg(unix)]
+    #[test]
+    fn write_env_file_at_keeps_an_existing_0600_file_at_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join(".env");
+        std::fs::write(&path, "OLD=1\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        write_env_file_at(&path, "NEW=2\n").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "NEW=2\n");
+        assert_eq!(mode_of(&path), 0o600);
     }
 }

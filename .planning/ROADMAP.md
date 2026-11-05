@@ -641,7 +641,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 58-08-PLAN.md — pre-merge: the eight-row re-seal on the candidate final head, `58-ACCEPTANCE-AUDIT.md` with the unticked box, the D-10 head correction (SHIP-08, SHIP-09, SHIP-10)
+- [x] 58-08-PLAN.md — pre-merge: the eight-row re-seal on the candidate final head, `58-ACCEPTANCE-AUDIT.md` with the unticked box, the D-10 head correction (SHIP-08, SHIP-09, SHIP-10)
 
 **Wave 7** *(blocked on Wave 6 completion)*
 

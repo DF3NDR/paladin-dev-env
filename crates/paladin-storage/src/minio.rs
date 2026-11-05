@@ -1416,16 +1416,181 @@ mod tests {
     fn test_minio_config_serialization() {
         let config = MinioConfig::default();
 
-        // Test that serialization works (actual values would require serde_json)
+        // Test that serialization works.
         let serialized = serde_json::to_string(&config).expect("Should serialize");
         assert!(serialized.contains("localhost:9000"));
         assert!(serialized.contains("paladin-files"));
 
+        // R-95: `Serialize` omits both keys, so the round trip supplies them itself (this
+        // asserts nothing about whether the keys are present in the serialised text, which is
+        // what keeps it passing before and after the fix).
+        let mut value: serde_json::Value =
+            serde_json::from_str(&serialized).expect("Should parse as JSON");
+        let object = value.as_object_mut().expect("serialises as an object");
+        object.insert(
+            "access_key".to_string(),
+            serde_json::json!("test-key-not-a-secret-r95-minio-round-trip-access"),
+        );
+        object.insert(
+            "secret_key".to_string(),
+            serde_json::json!("test-key-not-a-secret-r95-minio-round-trip-secret"),
+        );
+
         // Test deserialization
-        let deserialized: MinioConfig =
-            serde_json::from_str(&serialized).expect("Should deserialize");
+        let deserialized: MinioConfig = serde_json::from_value(value).expect("Should deserialize");
         assert_eq!(deserialized.endpoint, config.endpoint);
         assert_eq!(deserialized.bucket, config.bucket);
+        assert_eq!(
+            deserialized.access_key,
+            "test-key-not-a-secret-r95-minio-round-trip-access"
+        );
+        assert_eq!(
+            deserialized.secret_key,
+            "test-key-not-a-secret-r95-minio-round-trip-secret"
+        );
+    }
+
+    /// R-95 (58-06 register, 56-REVIEW WR-09 class): serialising a `MinioConfig` must
+    /// write neither key.
+    #[test]
+    fn minio_config_serialisation_omits_both_keys() {
+        let access = "test-key-not-a-secret-r95-minio-access-key";
+        let secret = "test-key-not-a-secret-r95-minio-secret-key";
+        let config = MinioConfig {
+            access_key: access.to_string(),
+            secret_key: secret.to_string(),
+            ..MinioConfig::default()
+        };
+        assert_eq!(config.access_key, access);
+        assert_eq!(config.secret_key, secret);
+        let value = serde_json::to_value(&config).expect("MinioConfig serialises");
+        let object = value.as_object().expect("serialises as an object");
+        for key in ["access_key", "secret_key"] {
+            assert!(!object.contains_key(key), "MinioConfig serialised `{key}`");
+        }
+        let text = value.to_string();
+        assert!(
+            !text.contains(access),
+            "serialisation carries the access key"
+        );
+        assert!(
+            !text.contains(secret),
+            "serialisation carries the secret key"
+        );
+        // Non-vacuous: the neighbouring fields are still written.
+        assert_eq!(object["endpoint"], "localhost:9000");
+        assert_eq!(object["bucket"], "paladin-files");
+    }
+
+    /// R-95 (DF-07 class): a `Debug` rendering must carry neither key.
+    #[test]
+    fn minio_config_debug_redacts_both_keys() {
+        let access = "test-key-not-a-secret-r95-minio-access-key";
+        let secret = "test-key-not-a-secret-r95-minio-secret-key";
+        let config = MinioConfig {
+            endpoint: "files.example.internal:9000".to_string(),
+            access_key: access.to_string(),
+            secret_key: secret.to_string(),
+            ..MinioConfig::default()
+        };
+        assert_eq!(config.access_key, access);
+        assert_eq!(config.secret_key, secret);
+        let rendered = format!("{config:?}");
+        assert!(!rendered.contains(access), "access key leaked: {rendered}");
+        assert!(!rendered.contains(secret), "secret key leaked: {rendered}");
+        assert!(
+            rendered.contains("<redacted>"),
+            "marker missing: {rendered}"
+        );
+        assert!(rendered.contains("files.example.internal:9000"));
+        assert!(rendered.contains("paladin-files"));
+
+        // An empty key shows the empty-string form, not the marker.
+        let empty = MinioConfig {
+            access_key: String::new(),
+            secret_key: String::new(),
+            ..MinioConfig::default()
+        };
+        let rendered = format!("{empty:?}");
+        assert!(rendered.contains("access_key: \"\""), "{rendered}");
+        assert!(rendered.contains("secret_key: \"\""), "{rendered}");
+        assert!(!rendered.contains("<redacted>"), "{rendered}");
+    }
+
+    /// R-95 drift guard: the pretty `Debug` of a default value names every serialised
+    /// field plus both key names, so a later field cannot be dropped from the
+    /// hand-written `Debug`.
+    #[test]
+    fn minio_config_debug_names_every_field() {
+        let rendered = format!("{:#?}", MinioConfig::default());
+        let value = serde_json::to_value(MinioConfig::default()).expect("serialises");
+        let object = value.as_object().expect("serialises as an object");
+        for key in object
+            .keys()
+            .map(String::as_str)
+            .chain(["access_key", "secret_key"])
+        {
+            assert!(
+                rendered.contains(&format!("{key}:")),
+                "Debug output does not name `{key}`: {rendered}"
+            );
+        }
+    }
+
+    /// R-95 load pin: both keys stay required on load (no serde default), so a value
+    /// missing either one fails naming it, and a value with both loads.
+    #[test]
+    fn minio_config_requires_both_keys_on_load() {
+        let mut base = serde_json::to_value(MinioConfig::default()).expect("serialises");
+        let object = base.as_object_mut().expect("serialises as an object");
+        object.remove("access_key");
+        object.remove("secret_key");
+
+        let mut only_secret = base.clone();
+        only_secret.as_object_mut().expect("object").insert(
+            "secret_key".to_string(),
+            serde_json::json!("test-key-not-a-secret-r95-minio-load-secret"),
+        );
+        let err = serde_json::from_value::<MinioConfig>(only_secret)
+            .expect_err("a value without access_key must not load")
+            .to_string();
+        assert!(
+            err.contains("missing field") && err.contains("access_key"),
+            "{err}"
+        );
+
+        let mut only_access = base.clone();
+        only_access.as_object_mut().expect("object").insert(
+            "access_key".to_string(),
+            serde_json::json!("test-key-not-a-secret-r95-minio-load-access"),
+        );
+        let err = serde_json::from_value::<MinioConfig>(only_access)
+            .expect_err("a value without secret_key must not load")
+            .to_string();
+        assert!(
+            err.contains("missing field") && err.contains("secret_key"),
+            "{err}"
+        );
+
+        let mut both = base;
+        let object = both.as_object_mut().expect("object");
+        object.insert(
+            "access_key".to_string(),
+            serde_json::json!("test-key-not-a-secret-r95-minio-load-access"),
+        );
+        object.insert(
+            "secret_key".to_string(),
+            serde_json::json!("test-key-not-a-secret-r95-minio-load-secret"),
+        );
+        let loaded: MinioConfig = serde_json::from_value(both).expect("both keys load");
+        assert_eq!(
+            loaded.access_key,
+            "test-key-not-a-secret-r95-minio-load-access"
+        );
+        assert_eq!(
+            loaded.secret_key,
+            "test-key-not-a-secret-r95-minio-load-secret"
+        );
     }
 
     #[test]

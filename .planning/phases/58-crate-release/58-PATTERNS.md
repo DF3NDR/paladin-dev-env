@@ -154,7 +154,7 @@ links the libraries. ...
 ```
 
 Required content (D-10): one paragraph on measured evidence; no Rust signature, type or serialized schema
-changed; section 11.2 has no row and `.cargo/semver-checks-allowlist.toml` has no `[[entry]]`; 
+changed; section 11.2 has no row and `.cargo/semver-checks-allowlist.toml` has no `[[entry]]`;
 `scripts/check-semver.sh` on the release head reads `0 failure(s)` for 12 packages at `--release-type patch`
 (name head SHA and date); the only consumer-visible note is `get_job` unrouted-but-not-deprecated (section 11.7).
 Open Question 4 in RESEARCH: section 11.1 holds 25 behavioural rows (M-B-23 to M-B-47) that a library consumer can

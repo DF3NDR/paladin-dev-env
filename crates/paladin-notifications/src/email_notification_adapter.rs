@@ -54,7 +54,7 @@ impl std::fmt::Debug for RedactedSecret<'_> {
 
 /// Email delivery configuration
 ///
-/// `Debug` prints the SMTP `password` as `<redacted>` (DF-07).
+/// `Debug` prints the SMTP `password` as `<redacted>` (DF-07), and `Serialize` omits it (WR-09).
 #[doc(hidden)]
 #[derive(Clone, Serialize, Deserialize)]
 pub struct EmailAdapterConfig {
@@ -64,7 +64,8 @@ pub struct EmailAdapterConfig {
     pub smtp_port: u16,
     /// SMTP username
     pub username: String,
-    /// SMTP password
+    /// SMTP password (never serialised, WR-09; still required on load)
+    #[serde(skip_serializing)]
     pub password: String,
     /// From email address
     pub from_address: String,

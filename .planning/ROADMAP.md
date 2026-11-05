@@ -645,7 +645,7 @@ Plans:
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
-- [ ] 58-09-PLAN.md — pre-merge: push `SHA-A0`, open the release PR, the maintainer's `release` label, stop for CI (SHIP-08)
+- [x] 58-09-PLAN.md — pre-merge: push `SHA-A0`, open the release PR, the maintainer's `release` label, stop for CI (SHIP-08)
 
 **Wave 8** *(blocked on Wave 7 completion)*
 

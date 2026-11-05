@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-11-05
+
 ### Added
 
 - `RunWorkerPool::has_engine_factory` reports whether `with_engine_factory` was applied to the pool. It is the boot-time inspector behind the Treasurer wiring refusal below (TENANT-08).

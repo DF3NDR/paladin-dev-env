@@ -7,6 +7,8 @@ and this project follows lockstep workspace versioning.
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-11-05
+
 ### Changed
 
 - Phase 55 (FIXES-04, `f70f03deb`): the rustdoc on `RunStatusValue`, `Assertion::RunStatus` and

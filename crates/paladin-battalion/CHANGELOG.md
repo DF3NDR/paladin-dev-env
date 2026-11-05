@@ -7,6 +7,8 @@ and this project follows lockstep workspace versioning.
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-11-05
+
 ### Changed
 
 - Phase 52 (CIREL-02, `2d3cf119a`): the crate's `[package.metadata.cargo-semver-checks.lints]`

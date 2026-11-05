@@ -7,6 +7,8 @@ and this project follows lockstep workspace versioning.
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-11-05
+
 ### Added
 
 - `JobStore::create_owned` and `JobStore::get_visible` (TENANT-07, Phase 53 plan 53-05): a job's owner

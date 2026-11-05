@@ -7,6 +7,8 @@ and this project follows lockstep workspace versioning.
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-11-05
+
 ### Added
 
 - `InMemoryRunRepository`, `SqliteRunRepository` and `PostgresRunRepository` override

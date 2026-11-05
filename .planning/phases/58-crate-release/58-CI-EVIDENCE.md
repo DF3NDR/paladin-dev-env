@@ -269,3 +269,57 @@ plan 58-05. If it is still red there, the second-cycle budget in RESEARCH A1 app
 - **Classification:** not an infrastructure flake under D-00j (the CI job ran, the assertion failed), so the one-re-run
   allowance does not cover it. Its re-seal rule is the maintainer's decision at plan 58-05. Its home is a test fix under
   `src/application/cli/` in `v0.12.0` (register row in plan 58-05). No file under `src/` was edited here.
+
+### 2026-11-05 — F-58-04: every run on SHA-E concluded cancelled; SHA-E has no CI conclusion of its own
+
+Read in plan 58-05 (see `### Plan 58-05 — every run on SHA-E`). `ci.yml` `41963325950`, `feature-flags.yml` `41963325969`,
+`pre-commit` `41963325943` and `codeql.yml` `41963325916` are all `completed` and all `cancelled`: the next push (`959a98488`,
+runs created 03:48:38Z) superseded them through the branch's concurrency group, so no job on `SHA-E` reached a conclusion
+(the SDK-smoke job was cut after 4m51s). Nothing failed there. D-05's read of the SDK smoke "on `SHA-E`" is therefore taken from the
+nearest completed full run on a descendant, `33cdc08e0` (`ci.yml` `41965173591`, success; SDK-smoke job `127040942208` success;
+`Build & Test (cli)` `127040405991` success), whose diff from `SHA-E` over `src`, `crates`, `Cargo.lock`, `Cargo.toml`,
+`scripts/sdk-smoke` and `docs/schemas` is empty.
+
+- **Rule going forward:** a push made while a run is pending cancels that run. The tag-SHA `ci.yml` conclusion that
+  `check-release-consistency` clause 3 reads (plan 58-12) must be a run that was left to finish; do not push to the branch
+  between the release candidate head and the tag read.
+- **Register row:** `F-58-04` (`fixed`, this section).
+
+### 2026-11-05 — F-58-05: Phase 52 and Phase 56 review warnings were never dispositioned or fixed (12 warnings)
+
+The plan 58-05 sweep read the REVIEW file of every Phase 52-57 phase (D-06 names REVIEW as a sweep source). Phase 55's three
+warnings are fixed (`55-REVIEW-FIX.md`, `all_fixed`), Phase 53's five are fixed or accepted (rows 85-87 fixed; WR-04 and WR-05
+accepted in 53-UAT and recorded in ADR-0063), and Phase 54's were named in STATE. Two reviews were not carried anywhere:
+
+- `52-REVIEW.md` WR-01..03 (release-body write failures swallowed under `set -e`; `check-migration-allowlist.sh` passes when the
+  `## 11.2` heading is missing; the crate-wide-allow mirror cannot see `warn`, workspace metadata or non-double-quoted forms). Re-proved
+  still present in `scripts/release-body-fit.sh:274-276` and `scripts/check-migration-allowlist.sh:97,155-175`.
+- `56-REVIEW.md` WR-01..09, status `issues_found`, not mentioned in STATE, `56-VERIFICATION.md`, `56-UAT.md` or any SUMMARY. Re-proved
+  still present on the head: the findings-log checker's two false-pass holes, `setup-check` echoing a raw `REDIS_URL` (`setup_check.rs:70-79`),
+  `.env` written with default permissions (`onboarding.rs:548`), the unconditional success banner (`onboarding.rs:338`), the env-test
+  isolation gap, the round-trip test's doc claim, the nonexistent `PALADIN_REQUEST_TIMEOUT` doc step, and `Serialize` still emitting
+  secrets in plaintext (no `skip_serializing` in `settings.rs`, `agents.rs`, `queue.rs`, `file_storage.rs`). **Three are credential-class:**
+  WR-03, WR-04, WR-09.
+
+All twelve are register rows (`re-homed`, `v0.12.0 Phase 1`, dates pending the Task 3 answer). Nothing was fixed here (D-00d, D-07: a
+behaviour change in a published crate goes to the next minor). The maintainer may instead pull the credential-class ones into
+the release, which would change `0.11.1`'s MIGRATION and changelog entries; that is raised in the Task 3 decision.
+
+---
+
+## Audit sweep (D-06)
+
+Manual disposition checks, run in plan 58-05 on head `0e1435f7d9739937680274b33704444ba87e0656` at 2026-11-05T11:49Z (that head is
+`9eba21d9b` plus this plan's own first commit, which touched only `.planning/phases/58-crate-release/`; the same three
+commands also read the same result on `9eba21d9b` at 11:36Z before the register existed):
+
+| Check | Command | Result line |
+|-------|---------|-------------|
+| Review dispositions (under the WR-02-tightened rules) | `./scripts/check-review-dispositions.sh` | `checked 51 finding(s) across 13 review file(s); 0 failure(s)` |
+| Findings log | `make check-findings-log` | `✅ OK: every entry's last Disposition is a final form (parsed 36 entries from .project/v0.11.1/02-dogfood-findings-log.md)` |
+| WINDOWS ledger | `node .claude/gsd-core/bin/gsd-tools.cjs windows status` (`ledger`) | `open_count: 0 (waived 53, fixed 55, total 108)` |
+
+Also run in the sweep, on `9eba21d9b`: `make security` exit 0 (`advisories ok, bans ok, licenses ok, sources ok`); `make audit` exit 0
+(nine allowed warnings, among them RUSTSEC-2026-0221 and RUSTSEC-2026-0205, no vulnerability); `make check-gates` exit 0;
+`make test-shell-guards` `85 assertion(s) passed`; `./scripts/check-doc-models.sh` `OK: 184 file(s) scanned, 0 deprecated model literal(s)
+(allowlisted: 1)`. No key value or fragment appears in the register or in this record: rows name file and line only.

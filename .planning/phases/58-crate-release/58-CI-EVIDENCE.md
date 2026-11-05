@@ -448,6 +448,18 @@ Every package evaluated 223 checks (N > 0) against the published `0.11.0`, with 
 
 The `ci.yml` concurrency group may cancel the older push-event run in favour of the pull-request run; the `labeled` event (maintainer's act, D-03) starts a further `ci.yml` run with `End-to-End Tests`. No label applied, no merge, no tag, no dispatch.
 
+**Maintainer reply (Task 2, `checkpoint:human-action`, the `release` label), recorded verbatim, 2026-11-05T23:48Z (UTC):**
+
+```
+labelled
+```
+
+The agent applied no label and ran no merge, tag or dispatch command in this plan. Read-only confirmation (REST GET, 2026-11-05T23:48Z onward): PR 64 labels = `release`; `head.sha` still `801dd237ef8100e2208d7b1f311923861a19f120` (`SHA-A0`); the remote branch tip (`git ls-remote origin refs/heads/claude/laughing-dirac-e0h2ax`) still `801dd237ef8100e2208d7b1f311923861a19f120`.
+
+**Labelled run.** `ci.yml` run `42131869587`, event `pull_request`, created 2026-11-05T23:45:57Z (after the label), listed `in_progress` when read. This is the run started by the `labeled` event; it carries `End-to-End Tests` and is not waited for here (D-00i). The earlier nine runs on `SHA-A0` (the push and pull_request events listed above) were all `completed` with conclusion `success` when read at 2026-11-05T23:48Z; plan 58-10 Task 1 re-reads every run and job once.
+
+**Finding for plan 58-10 (D-00d), observed not acted on: the Code Scanning check-run on `SHA-A0` is `failure`.** Check-run id `127553770360`, name `CodeQL`, app `github-advanced-security`, `status` `completed`, `conclusion` `failure`, output title `8 new alerts including 8 high severity security vulnerabilities`, summary: "New alerts in code changed by this pull request — Security Alerts: 8 high. Alerts not introduced by this pull request might have been detected because the code changes were too large." The `codeql.yml` workflow runs on `SHA-A0` (push `42113280624`, pull_request `42113363710`) each concluded `success`, so the failing signal is the Code Scanning result on the PR diff, not the workflow. Per `security.instructions.md`, CodeQL is advisory-only and not a merge gate, but the eight alerts need a recorded disposition in plan 58-10 (the alert list is read through the code-scanning REST endpoint, `pr:64 tool:CodeQL is:open`). Nothing was fixed, dismissed or re-run here.
+
 ---
 
 ## Registry verification (D-00h)

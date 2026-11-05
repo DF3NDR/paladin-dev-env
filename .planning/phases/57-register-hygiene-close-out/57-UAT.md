@@ -3,16 +3,16 @@ status: testing
 phase: 57-register-hygiene-close-out
 source: 57-01-SUMMARY.md, 57-02-SUMMARY.md, 57-03-SUMMARY.md, 57-04-SUMMARY.md, 57-05-SUMMARY.md, 57-06-SUMMARY.md, 57-07-SUMMARY.md, 57-08-SUMMARY.md, 57-09-SUMMARY.md, 57-10-SUMMARY.md, 57-11-SUMMARY.md, 57-12-SUMMARY.md, 57-13-SUMMARY.md, 57-14-SUMMARY.md, 57-15-SUMMARY.md, 57-16-SUMMARY.md
 started: 2026-11-05T00:55:10Z
-updated: 2026-11-05T01:01:20Z
+updated: 2026-11-05T01:01:37Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 12
-name: Register evidence file ties the seal to the pushed head
+number: 13
+name: Reasoning-effort refusal shows a fixed label, never vendor text
 expected: |
-  57-REGISTER-EVIDENCE.md records the WINDOWS and review-disposition counts, the REG-01/03/04/05/06 read-backs, the phase gates, and the CI run and job ids on the pushed Phase 57 head (run 41927940508 on 4b115d511 or later), plus the orphaned-deferrals list; the head it names matches what is on origin for this branch.
+  When check_reasoning fails with any LlmError other than UnsupportedParameter, PaladinBuilder::effort_refusal produces a ConfigurationError whose message is the fixed per-variant label only; no provider response text appears in the error or in logs. MIGRATION.md row M-B-41 and a CHANGELOG [Unreleased] Security bullet record the change.
 awaiting: user response
 
 ## Tests
@@ -63,7 +63,7 @@ result: pass
 
 ### 12. Register evidence file ties the seal to the pushed head
 expected: 57-REGISTER-EVIDENCE.md records the WINDOWS and review-disposition counts, the REG-01/03/04/05/06 read-backs, the phase gates, and the CI run and job ids on the pushed Phase 57 head (run 41927940508 on 4b115d511 or later), plus the orphaned-deferrals list; the head it names matches what is on origin for this branch.
-result: [pending]
+result: pass
 
 ### 13. Reasoning-effort refusal shows a fixed label, never vendor text
 expected: When check_reasoning fails with any LlmError other than UnsupportedParameter, PaladinBuilder::effort_refusal produces a ConfigurationError whose message is the fixed per-variant label only; no provider response text appears in the error or in logs. MIGRATION.md row M-B-41 and a CHANGELOG [Unreleased] Security bullet record the change.
@@ -100,9 +100,9 @@ coverage_id: D4
 ## Summary
 
 total: 19
-passed: 13
+passed: 14
 issues: 0
-pending: 6
+pending: 5
 skipped: 0
 blocked: 0
 

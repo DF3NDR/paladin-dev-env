@@ -225,6 +225,10 @@ check-dependency-allowlist: ## Verify paladin-core / paladin-ports [dependencies
 check-version-strings: ## Verify every copyable version string (README, docs/src, k8s/, openapi.json) equals the workspace version (FIRST-03)
 	@./scripts/check-version-strings.sh
 
+.PHONY: check-doc-models
+check-doc-models: ## Verify docs/src, examples/ and README.md carry no deprecated model id in a copyable form (DF-18)
+	@./scripts/check-doc-models.sh
+
 .PHONY: check-no-stub-panics
 check-no-stub-panics: ## Fail on a todo!/unimplemented! reachable outside #[cfg(test)] in a published crate (FIXES-01)
 	@./scripts/check-no-stub-panics.sh

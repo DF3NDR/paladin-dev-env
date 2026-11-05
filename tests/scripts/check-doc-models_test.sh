@@ -38,6 +38,14 @@ FAILED=0
 ASSERTIONS=0
 SUMMARY_RE='^(OK|FAIL): '
 
+# indent_output -> prints $LAST_OUTPUT with a "  | " gutter for failure reports.
+indent_output() {
+    local line
+    while IFS= read -r line; do
+        printf '  | %s\n' "${line}"
+    done <<<"${LAST_OUTPUT}"
+}
+
 # run_case CASE -> sets $LAST_OUTPUT and $LAST_STATUS
 run_case() {
     local dir="${FIXTURES}/$1" allow="/dev/null"
@@ -54,7 +62,7 @@ check_summary() {
     last="$(tail -n1 <<<"${LAST_OUTPUT}")"
     if ! grep -qE "${SUMMARY_RE}" <<<"${last}"; then
         echo "FAIL: last line for '$1' is not an OK:/FAIL: summary: ${last}"
-        echo "${LAST_OUTPUT}" | sed 's/^/  | /'
+        indent_output
         FAILED=$((FAILED + 1))
         return 1
     fi
@@ -68,7 +76,7 @@ check_needles() {
     for needle in "$@"; do
         if ! grep -qF -- "${needle}" <<<"${LAST_OUTPUT}"; then
             echo "FAIL: output for '${desc}' does not contain: ${needle}"
-            echo "${LAST_OUTPUT}" | sed 's/^/  | /'
+            indent_output
             FAILED=$((FAILED + 1))
             return 1
         fi
@@ -85,7 +93,7 @@ assert_fire() {
     run_case "${case_name}"
     if [ "${LAST_STATUS}" -ne "${want}" ]; then
         echo "FAIL: expected exit ${want} for: ${desc} (got ${LAST_STATUS})"
-        echo "${LAST_OUTPUT}" | sed 's/^/  | /'
+        indent_output
         FAILED=$((FAILED + 1))
         return
     fi
@@ -103,7 +111,7 @@ assert_silent() {
     run_case "${case_name}"
     if [ "${LAST_STATUS}" -ne 0 ]; then
         echo "FAIL: expected exit 0 for: ${desc} (got ${LAST_STATUS})"
-        echo "${LAST_OUTPUT}" | sed 's/^/  | /'
+        indent_output
         FAILED=$((FAILED + 1))
         return
     fi

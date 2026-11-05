@@ -628,7 +628,7 @@ Plans:
 **Wave 3** *(blocked on Wave 2 completion)*
 
 - [x] 58-05-PLAN.md — build wave: pre-tag audit sweep, `58-AUDIT-DISPOSITIONS.md` and its verifier, the maintainer's decision (recheck_by date, flake rule, SHIP-09 wording, key rotation and purge) (SHIP-10, SHIP-09, SHIP-08)
-- [ ] 58-15-PLAN.md — build wave (gap closure, inserted at the 58-05 decision): 56-REVIEW WR-03/WR-04/WR-09 credential-class fixes RED-then-GREEN (hidden Redis URL in errors, `.env` written 0600, secrets skipped on serialize), changelog and MIGRATION §11.1 entries, register rows R-47/R-48/R-53 to `fixed`, F-58-06 (SHIP-10, SHIP-09)
+- [x] 58-15-PLAN.md — build wave (gap closure, inserted at the 58-05 decision): 56-REVIEW WR-03/WR-04/WR-09 credential-class fixes RED-then-GREEN (hidden Redis URL in errors, `.env` written 0600, secrets skipped on serialize), changelog and MIGRATION §11.1 entries, register rows R-47/R-48/R-53 to `fixed`, F-58-06 (SHIP-10, SHIP-09)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

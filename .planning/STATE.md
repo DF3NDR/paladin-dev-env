@@ -5,15 +5,15 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 58
 current_phase_name: Crate Release
 status: executing
-stopped_at: Completed 58-05-PLAN.md
-last_updated: "2026-11-05T16:21:48.809Z"
+stopped_at: Completed 58-15-PLAN.md
+last_updated: "2026-11-05T17:11:05.197Z"
 last_activity: 2026-11-05
 last_activity_desc: Phase 58 execution started
 progress:
   total_phases: 7
   completed_phases: 6
-  total_plans: 82
-  completed_plans: 73
+  total_plans: 83
+  completed_plans: 74
 ---
 
 # Project State
@@ -53,7 +53,7 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 ## Current Position
 
 Phase: 58 (Crate Release) — EXECUTING
-Plan: 6 of 14
+Plan: 7 of 14
 Status: Ready to execute
 Last activity: 2026-11-05 — Phase 58 execution started
 
@@ -435,6 +435,7 @@ Progress: [█████████████████░░░] 6/7 pha
 | Phase 58 P03 | not measured | 3 tasks | 115 files |
 | Phase 58 P04 | not measured | 3 tasks | 5 files |
 | Phase 58 P05 | 4h45m (incl. decision wait) | 3 tasks | 4 files |
+| Phase 58 P15 | 25min | 5 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -859,6 +860,8 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: WORDING=pointer-list for the SHIP-09 paragraph; re-read against 58-15 first (58-05)
 - [Phase ?]: Key rotated 2026-11-05, PURGE=none: R-84 fixed, R-85 waived (58-05)
 - [Phase ?]: D-07 amended: 56 WR-03, WR-04, WR-09 fixed in 0.11.1 via inserted plan 58-15 (58-05)
+- [Phase ?]: 58-15: WR-09 fixed with skip_serializing and no default (consumer gate found no serialise-then-deserialise consumer); M-B-50 supersedes M-B-36's 'Serialize unchanged' sentence
+- [Phase ?]: 58-15: Qdrant WR-03 test pins a query-string credential because reqwest 0.12.28 already strips userinfo
 
 ### Pending Todos
 
@@ -1280,8 +1283,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-11-05T16:21:48.754Z
-Stopped at: Completed 58-05-PLAN.md
+Last session: 2026-11-05T17:11:05.170Z
+Stopped at: Completed 58-15-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

@@ -73,6 +73,70 @@ Runs queued on `SHA-E`, listed once once and not waited for (D-00i; plan 58-05 r
 
 The two evidence commits (this file) ride the next push, so `SHA-E` carries the SDK-smoke fix but not these notes.
 
+### Plan 58-05 — every run on SHA-E
+
+Read once through REST at 2026-11-05T11:34Z (`gh api "repos/DF3NDR/paladin-dev-env/actions/runs?head_sha=<SHA-E>&per_page=100"`,
+then `.../actions/runs/<id>/jobs --paginate`), no polling. `SHA-E` is `9166fe1fee4a920baf7f481d34b6e05b40b7b3de`. All four
+runs on it are `completed`, so no resume file was needed, **but every one concluded `cancelled`**, not `success`:
+
+| Workflow | Run id | Status | Conclusion | Created | Updated |
+|----------|--------|--------|------------|---------|---------|
+| `ci.yml` | `41963325950` | completed | `cancelled` | 03:43:09Z | 03:50:21Z |
+| `feature-flags.yml` | `41963325969` | completed | `cancelled` | 03:43:09Z | |
+| `pre-commit` | `41963325943` | completed | `cancelled` | 03:43:09Z | |
+| `codeql.yml` | `41963325916` | completed | `cancelled` | 03:43:09Z | |
+
+**Cause (read, not inferred):** the next push, `959a98488` (the `docs(58-01)` completion commit, runs created 03:48:38Z), opened
+a newer run of each workflow on the same branch; every job of the `SHA-E` runs ends at 03:48:39Z-03:50:20Z, the instant the
+newer runs began (the branch's concurrency group cancels the superseded run). Nothing failed on `SHA-E`; nothing finished
+either. The jobs of interest on `SHA-E`:
+
+| Job | Job id | Conclusion on SHA-E | URL |
+|-----|--------|---------------------|-----|
+| `pre-commit run --all-files` | `127034527612` | cancelled | https://github.com/DF3NDR/paladin-dev-env/actions/runs/41963325943/job/127034527612 |
+| `Generated SDK Clients (Python + TypeScript) smoke` | `127034733658` | cancelled (started 03:43:48Z, cut at 03:48:39Z) | https://github.com/DF3NDR/paladin-dev-env/actions/runs/41963325950/job/127034733658 |
+| `Build & Test (cli)` | `127034527752` | cancelled | https://github.com/DF3NDR/paladin-dev-env/actions/runs/41963325969/job/127034527752 |
+| `Semver Checks (vs v0.11.0)` | `127034733408` | cancelled | https://github.com/DF3NDR/paladin-dev-env/actions/runs/41963325950/job/127034733408 |
+| `Coverage` | `127034733499` | cancelled | https://github.com/DF3NDR/paladin-dev-env/actions/runs/41963325950/job/127034733499 |
+| `Example Muster (Feature Matrix)` | `127036457369` | cancelled | https://github.com/DF3NDR/paladin-dev-env/actions/runs/41963325950/job/127036457369 |
+
+**Consequence for D-05:** the SDK-smoke job's conclusion on `SHA-E` is neither green nor red, so D-05's "green makes its row
+`fixed`; red puts the choice into the decision" cannot be applied to `SHA-E` itself. The nearest completed full run on a
+descendant is used instead, and is labelled as a descendant read, not as `SHA-E`:
+
+**Descendant read: `33cdc08e01087cbd47b33e56677182f567524296`** (the `docs(58-02)` completion commit; `SHA-E` is its
+ancestor). `git diff --stat 9166fe1fe 33cdc08e0 -- src crates Cargo.lock Cargo.toml scripts/sdk-smoke docs/schemas` is
+empty: the only changes between the two are `.planning/` (5 files), `.project/` (1), `scripts/check-review-dispositions.sh`
+and `tests/` fixtures (42), none of which the SDK-smoke job reads. All four workflows on `33cdc08e0` are `completed` /
+`success`:
+
+| Workflow | Run id | Conclusion |
+|----------|--------|------------|
+| `ci.yml` | `41965173591` | success (started 04:01:24Z, updated 05:42:14Z) |
+| `feature-flags.yml` | `41965173516` | success |
+| `pre-commit` | `41965173515` | success |
+| `codeql.yml` | `41965173535` | success |
+
+| Job on `33cdc08e0` | Job id | Conclusion | URL |
+|--------------------|--------|------------|-----|
+| `Generated SDK Clients (Python + TypeScript) smoke` | `127040942208` | **success** | https://github.com/DF3NDR/paladin-dev-env/actions/runs/41965173591/job/127040942208 |
+| `Build & Test (cli)` | `127040405991` | **success** | https://github.com/DF3NDR/paladin-dev-env/actions/runs/41965173516/job/127040405991 |
+| `pre-commit run --all-files` | `127040405451` | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/41965173515/job/127040405451 |
+| `Semver Checks (vs v0.11.0)` | `127040941942` | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/41965173591/job/127040941942 |
+| `Coverage` | `127040942369` | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/41965173591/job/127040942369 |
+| `Example Muster (Feature Matrix)` | `127044751024` | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/41965173591/job/127044751024 |
+| `Publish Dry Run` | `127044751111` | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/41965173591/job/127044751111 |
+
+(`Benchmark Regression Signal (Non-Blocking)` and `End-to-End Tests` were `skipped` on that run, as designed.) So F-58-02's
+proof job reads green on the descendant that carries the `ci(58-01)` fix, and F-58-03's job `Build & Test (cli)` is green
+there too (one more green sample; it does not prove the flake gone).
+
+**Later runs, read once and not waited for:** `be5f4c7ff` (`docs(58-03)`): `feature-flags`, `pre-commit` and `codeql`
+success, `ci.yml` `42016633728` `cancelled` (superseded by the next push). Current head `9eba21d9b` (`docs(58-04)`, pushed
+by the orchestrator at 11:30:12Z): `ci.yml` `42019466680` `queued`, `feature-flags` `42019466754`, `pre-commit`
+`42019466691` and `codeql` `42019466758` `in_progress` when listed. Their conclusions are not claimed here; plan 58-06's
+push and plan 58-12 read the runs that matter for the tag.
+
 ---
 
 ## Registry verification (D-00h)

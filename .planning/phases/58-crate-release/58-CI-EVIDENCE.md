@@ -27,6 +27,7 @@ RESEARCH.md that was not re-measured is labelled as a research figure.
 - **Disk (`df -h /`):** 252G size, 35G used, 4.4G available, 89% use at plan start.
 
 - SHA-PRE: 7832f280e0376a8b8a10e91522927e1bf4d16339
+- SHA-E: 9166fe1fee4a920baf7f481d34b6e05b40b7b3de
 
 Machine-readable SHA lines added by plans use the exact form `- SHA-<label>: <40-hex>` on their own line.
 
@@ -53,6 +54,24 @@ after the two `docs(58-01)` commits (`2e1338a80`).
 ## CI-run table
 
 (Rows are added by Tasks 2 and 3 of this plan and by later plans.)
+
+### Plan 58-01 — push of SHA-E (pre-bump, no label)
+
+`SHA-E` is `9166fe1fee4a920baf7f481d34b6e05b40b7b3de`, the `ci(58-01)` SDK-smoke commit and the branch tip pushed with a
+plain `git push origin claude/laughing-dirac-e0h2ax` (`adf9472ea..9166fe1fe`, pre-push hooks passed, no force).
+`main` re-read as `8b23cb4c55a10fcf0b08fab1af595e1f184e5f2e` immediately before the push (unmoved). No pull request,
+no label, no tag, no dispatch (D-03). `git ls-remote origin refs/heads/claude/laughing-dirac-e0h2ax` equals `SHA-E`;
+no `v0.11.1*` tag on the remote; `pulls?head=DF3NDR:claude/laughing-dirac-e0h2ax&state=open` is `[]`.
+Runs queued on `SHA-E`, listed once once and not waited for (D-00i; plan 58-05 reads the conclusions):
+
+| Workflow | Run id | Status when listed | Event |
+|----------|--------|--------------------|-------|
+| `ci.yml` | `41963325950` | pending | push |
+| `feature-flags.yml` | `41963325969` | queued | push |
+| `pre-commit` | `41963325943` | in_progress | push |
+| `codeql.yml` | `41963325916` | in_progress | push |
+
+The two evidence commits (this file) ride the next push, so `SHA-E` carries the SDK-smoke fix but not these notes.
 
 ---
 
@@ -118,3 +137,71 @@ Every entry below is recorded; entries are dated and appended.
 - **Result:** the second full run (Local sweep row 8) reports all ten hooks `Passed`.
 - **Rule going forward:** every new `.planning/` document in this phase must pass `pre-commit run --all-files`
   before it is pushed.
+
+### 2026-11-05 — F-58-02: SDK smoke red; not required for the merge, required for the tag
+
+**Logs read (REST `actions/jobs/<id>/logs`, all served, HTTP 200):**
+
+| Job | Run / head | Runner image | Node / npm | TypeScript half |
+|-----|------------|--------------|------------|-----------------|
+| `126917997570` (red) | `41927940508` / `4b115d511` (run concluded `cancelled`; the job itself failed) | `ubuntu-26.04`, image version `20261025.179.1` | `v20.20.2` / `10.8.2` | `npm error code 127`, path `target/sdk/typescript`, `npm error command sh -c npm run build`, `> paladin-sdk@0.11.0 build`, `> tsc && tsc -p tsconfig.esm.json`, `sh: 1: tsc: not found`; then `##[error]Process completed with exit code 127.` |
+| `127022155203` (red, newest `ci.yml` run on the branch, `41959351837` / `adf9472ea`, still `in_progress` when read) | `41959351837` | `ubuntu-26.04`, `20261025.179.1` | `v20.20.2` / `10.8.2` | identical `tsc: not found`, exit 127 |
+| `121733645764` (green baseline, `v0.11.0`) | 2026-10-26 | `ubuntu-24.04`, image version `20261012.334.1` | `v20.20.2` / `10.8.2` | `added 1 package, and audited 6 packages in 4s`, then `SDK smoke (TypeScript): all checks passed.` and `SDK smoke: both clients completed successfully.` |
+
+In every red log the Python half passes (`SDK smoke (Python): all checks passed.`) and the failure is inside the
+`npm install --no-save ../../target/sdk/typescript` step: npm runs the generated client's own `prepare` script
+(`npm run build` -> `tsc`) at link time, and `tsc` is not on the PATH of that package because its devDependencies
+are not installed. Node and npm are identical in the red and green runs; the only difference the logs show is the
+runner image (`ubuntu-latest` moved from 24.04 to 26.04). The reason the 24.04 image found a `tsc` is not visible in
+the green log (assumption A1 in RESEARCH, not reproduced). No Paladin source is involved: the failing code is the
+generated package's own npm lifecycle.
+
+**Requiredness (REST `rules/branches/main`):** 46 required status contexts; `Generated SDK Clients (Python +
+TypeScript) smoke` is not among them; `pre-commit run --all-files` is. So the job does not block the merge.
+
+**Why it still blocks the tag:** `scripts/check-release-consistency.sh` clause 3 reads the whole-run conclusion of
+`ci.yml` for the tagged SHA, and `sdk-clients` is a hard-gating job of that file, so a red SDK job makes the run
+`failure` and the tag guard fails. **Recorded decision (D-05 as reworded, Research Pitfall 2):** the option "accept a
+red non-required job" cannot carry to the tag; the remaining choices for a red job are a CI-side fix in the release
+PR or holding the tag. This plan takes the CI-side fix.
+
+**Branch taken:** the cause is visible in the log and sits in CI scripting, so `scripts/sdk-smoke/run.sh` is edited
+(commit `9166fe1fe` `ci(58-01): build the generated TypeScript client before linking it into the SDK smoke`):
+`npm install` inside `target/sdk/typescript` first (installs the client's devDependencies and runs its `prepare`
+build where `tsc` resolves), an assertion that the file named by its `package.json` `main` exists, then the existing
+link step in `scripts/sdk-smoke` with `--ignore-scripts`, still after `npm ci`. `package.json`, `package-lock.json`,
+`smoke.ts`, `smoke.py`, the Python half and the `npx tsc -p tsconfig.json` / `node dist/smoke.js` steps are
+unchanged. No file under `src/` or `crates/` is touched.
+
+**Sandbox checks:** `bash -n` and `shellcheck -x` clean (`shellcheck` without `-x` reports only the pre-existing
+SC1091 info on the unchanged `source` line, which is below the repository's `--severity=warning` gate).
+Local npm `10.9.4` (Node `v22.22.0`; CI uses npm `10.8.2` on Node 20) with a dependency-free scratch package whose
+`prepare` exits 1: the `--ignore-scripts` link form still ran `prepare` and failed (npm 10.9.4 does not honour the
+flag for a directory dependency's `prepare`), but the same package with a `prepare` that calls a binary present only
+in its own `node_modules/.bin` linked cleanly (rc 0). Consequence: `--ignore-scripts` is kept as the plan requires but
+is not what makes the fix work; the fix works because the client's own `node_modules/.bin/tsc` now exists, so a
+`prepare` re-run at link time resolves `tsc`. No package was downloaded.
+
+**Proof status:** the real proof is the `Generated SDK Clients (Python + TypeScript) smoke` job on `SHA-E`, read in
+plan 58-05. If it is still red there, the second-cycle budget in RESEARCH A1 applies.
+
+### 2026-11-05 — F-58-03: treasury_spend_prints_one_row_per_currency is a test-level flake
+
+- **CI failure:** workflow `feature-flags.yml`, run `41946243320` on `3b0d095a2`, job `126979605660` `Build & Test (cli)`
+  concluded `failure`. The log shows `test application::cli::commands::treasury::tests::treasury_spend_prints_one_row_per_currency ... FAILED`
+  and `panicked at src/application/cli/commands/treasury.rs:496:9: assertion failed: rendered.contains("EUR")`.
+- **CI pass:** run `41949135304` on `b2705d7f0`, job `126988618263` `Build & Test (cli)` concluded `success` with no change
+  to `treasury.rs` between the two heads.
+- **Local characterisation** (the job's own invocation, `cargo test --workspace --lib --no-default-features --features cli`,
+  `CARGO_INCREMENTAL=0`; the bare `cargo test --lib -p paladin-ai`-style form does not compile under these flags because the
+  `deepseek` module needs a feature that `--workspace` unification supplies in CI, so `--workspace` was kept; free space
+  4458 MiB before, 3715 MiB after the build):
+  - `single: 0/30 failed` (`--exact` on the one test, after one build run that also passed)
+  - `module: 0/10 failed` (filter `application::cli::commands::treasury`, 4 tests, default thread count)
+  - No local failure reproduced, so no failing output was captured.
+- **Mechanism (RESEARCH Pitfall 5, A2):** two settlements are written to a fresh SQLite ledger and read back through the
+  default look-back window computed from `store_now()`; a sub-second ordering between the settlement timestamps and the
+  window end is the plausible cause. **Not reproduced**, so it stays an assumption.
+- **Classification:** not an infrastructure flake under D-00j (the CI job ran, the assertion failed), so the one-re-run
+  allowance does not cover it. Its re-seal rule is the maintainer's decision at plan 58-05. Its home is a test fix under
+  `src/application/cli/` in `v0.12.0` (register row in plan 58-05). No file under `src/` was edited here.

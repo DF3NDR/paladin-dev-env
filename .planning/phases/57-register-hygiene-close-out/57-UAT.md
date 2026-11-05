@@ -3,16 +3,16 @@ status: testing
 phase: 57-register-hygiene-close-out
 source: 57-01-SUMMARY.md, 57-02-SUMMARY.md, 57-03-SUMMARY.md, 57-04-SUMMARY.md, 57-05-SUMMARY.md, 57-06-SUMMARY.md, 57-07-SUMMARY.md, 57-08-SUMMARY.md, 57-09-SUMMARY.md, 57-10-SUMMARY.md, 57-11-SUMMARY.md, 57-12-SUMMARY.md, 57-13-SUMMARY.md, 57-14-SUMMARY.md, 57-15-SUMMARY.md, 57-16-SUMMARY.md
 started: 2026-11-05T00:55:10Z
-updated: 2026-11-05T00:59:24Z
+updated: 2026-11-05T00:59:44Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 6
-name: S3 listing pages correctly and S3 errors never carry a response body
+number: 7
+name: Credential-handling checklist C1-C6 re-run over the Phase 40 diff only
 expected: |
-  `list_files` with ListOptions.limit uses that limit as the S3 max-keys page size and walks continuation tokens, so no key is skipped across pages and has_more / continuation_token reflect the store's truncation state. Every S3 error rendered by the adapter (including retry exhaustion) reads only "HTTP <status> <code>" or a fixed label, never a body. The multipart rustdoc says a rejected part leaves the upload open and the caller must abort, and the presigned-URL integration test cannot print a signed URL.
+  57-JUDGMENT-READ.md carries six credential-handling rows (C1-C6 from security.instructions.md) scoped to the Phase 40 diff range 629ef660...be3a9030, each with fresh file:line or re-run test evidence and a Human cell reading "confirm (2026-11-04)". You, as owner, stand by those six confirms. (Coverage D2, REG-04: credential-handling review is a manual control with no tool gate, so your confirm is the verdict.)
 awaiting: user response
 
 ## Tests
@@ -39,7 +39,7 @@ result: pass
 
 ### 6. S3 listing pages correctly and S3 errors never carry a response body
 expected: `list_files` with ListOptions.limit uses that limit as the S3 max-keys page size and walks continuation tokens, so no key is skipped across pages and has_more / continuation_token reflect the store's truncation state. Every S3 error rendered by the adapter (including retry exhaustion) reads only "HTTP <status> <code>" or a fixed label, never a body. The multipart rustdoc says a rejected part leaves the upload open and the caller must abort, and the presigned-URL integration test cannot print a signed URL.
-result: [pending]
+result: pass
 
 ### 7. Credential-handling checklist C1-C6 re-run over the Phase 40 diff only
 expected: 57-JUDGMENT-READ.md carries six credential-handling rows (C1-C6 from security.instructions.md) scoped to the Phase 40 diff range 629ef660...be3a9030, each with fresh file:line or re-run test evidence and a Human cell reading "confirm (2026-11-04)". You, as owner, stand by those six confirms. (Coverage D2, REG-04: credential-handling review is a manual control with no tool gate, so your confirm is the verdict.)
@@ -100,9 +100,9 @@ coverage_id: D4
 ## Summary
 
 total: 19
-passed: 7
+passed: 8
 issues: 0
-pending: 12
+pending: 11
 skipped: 0
 blocked: 0
 

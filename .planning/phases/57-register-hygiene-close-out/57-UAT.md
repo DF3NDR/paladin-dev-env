@@ -1,19 +1,14 @@
 ---
-status: testing
+status: complete
 phase: 57-register-hygiene-close-out
 source: 57-01-SUMMARY.md, 57-02-SUMMARY.md, 57-03-SUMMARY.md, 57-04-SUMMARY.md, 57-05-SUMMARY.md, 57-06-SUMMARY.md, 57-07-SUMMARY.md, 57-08-SUMMARY.md, 57-09-SUMMARY.md, 57-10-SUMMARY.md, 57-11-SUMMARY.md, 57-12-SUMMARY.md, 57-13-SUMMARY.md, 57-14-SUMMARY.md, 57-15-SUMMARY.md, 57-16-SUMMARY.md
 started: 2026-11-05T00:55:10Z
-updated: 2026-11-05T01:02:50Z
+updated: 2026-11-05T01:03:14Z
 ---
 
 ## Current Test
-<!-- OVERWRITE each test - shows where we are -->
 
-number: 17
-name: Node-cache fence marker never outlives its fencing counter
-expected: |
-  The Redis node-cache fence marker TTL is clamp(2 x entry ttl, 5 min, 30 min), so for an on-time lock holder it expires no later than the Redis Cadence fencing counter that numbered it. Both TTL rules live once in the crate-private paladin-storage redis_fence module (feature-gated like redis_url) with no public item or feature-flag change. paladin-storage and root CHANGELOG Fixed entries, MIGRATION row M-B-47 and the ADR-0058 (g) amendment and (i) residual bullet exist.
-awaiting: user response
+[testing complete]
 
 ## Tests
 
@@ -83,7 +78,7 @@ result: pass
 
 ### 17. Node-cache fence marker never outlives its fencing counter
 expected: The Redis node-cache fence marker TTL is clamp(2 x entry ttl, 5 min, 30 min), so for an on-time lock holder it expires no later than the Redis Cadence fencing counter that numbered it. Both TTL rules live once in the crate-private paladin-storage redis_fence module (feature-gated like redis_url) with no public item or feature-flag change. paladin-storage and root CHANGELOG Fixed entries, MIGRATION row M-B-47 and the ADR-0058 (g) amendment and (i) residual bullet exist.
-result: [pending]
+result: pass
 
 ### 18. Worksheet of the 20 Phase 40 judgment-tier prohibitions, each with a verbatim statement, its 40-VERIFICATION row, fresh evidence and a tier
 expected: Worksheet of the 20 Phase 40 judgment-tier prohibitions, each with a verbatim statement, its 40-VERIFICATION row, fresh evidence and a tier
@@ -100,9 +95,9 @@ coverage_id: D4
 ## Summary
 
 total: 19
-passed: 18
+passed: 19
 issues: 0
-pending: 1
+pending: 0
 skipped: 0
 blocked: 0
 

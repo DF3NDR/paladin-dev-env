@@ -30,11 +30,16 @@ use super::{
 /// `Debug` prints `llm_api_key` as `<redacted>` (DF-07); the nested `ApiKeyConfig`,
 /// `QueueConfig` and `FileStorageConfig` redact their own secrets. URL-shaped fields are printed
 /// as written (an operator-embedded userinfo would show), so prefer a summary over `{:?}` in logs.
+///
+/// `Serialize` omits every credential field (WR-09): `llm_api_key`, and the secrets of the nested
+/// `ApiKeyConfig`, `QueueConfig` and `FileStorageConfig`. Loading is unchanged, so a serialised
+/// `Settings` cannot be read back to the same values; take the secrets from their source.
 #[allow(missing_docs)]
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Settings {
     pub llm_type: String,
     pub llm_url: String,
+    #[serde(skip_serializing)]
     pub llm_api_key: String,
     pub server: ServerConfig,
     pub sources: Vec<SourceConfig>,

@@ -89,13 +89,16 @@ impl Default for RateLimitConfig {
 /// boot by [`AuthConfig::validate`]; nothing is trimmed, defaulted or clamped.
 ///
 /// `Debug` prints the key as `<redacted>` (DF-07), so no log line, panic message or test failure
-/// that formats this type, or a type holding it, carries the secret.
+/// that formats this type, or a type holding it, carries the secret. `Serialize` omits the key
+/// as well (WR-09), so no dump of a loaded config does either.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ApiKeyConfig {
     /// The secret key value presented in the `X-API-Key` header. Must be non-empty, must
     /// not contain `${` (an unexpanded placeholder; the server expands nothing here) and
     /// must be unique across `api_keys` -- a shared secret would make the key lookup
-    /// resolve an arbitrary principal, and so an arbitrary tenant.
+    /// resolve an arbitrary principal, and so an arbitrary tenant. Never serialised (WR-09),
+    /// but still required on load.
+    #[serde(skip_serializing)]
     pub key: String,
     /// The API key id: the principal id, and the `api_key_id` recorded on every run and
     /// ledger row this key submits (Phase 40, D-06). Appears in logs. Must be unique across

@@ -6,11 +6,12 @@ use serde::{Deserialize, Serialize};
 
 /// Configuration for Redis queue
 ///
-/// `Debug` prints `redis_password` as `<redacted>` (DF-07).
+/// `Debug` prints `redis_password` as `<redacted>` (DF-07), and `Serialize` omits it (WR-09).
 #[derive(Clone, Serialize, Deserialize)]
 pub struct QueueConfig {
     pub redis_host: String,
     pub redis_port: u16,
+    #[serde(skip_serializing)]
     pub redis_password: Option<String>,
     pub redis_db: u8,
     pub connection_timeout: Option<u64>,

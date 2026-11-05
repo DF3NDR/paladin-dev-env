@@ -16,8 +16,9 @@
 //! - It compares key PATHS, never values. A value comparison would trip on `f32` temperatures
 //!   re-serialising inexactly. The one value check is the money-string pair of tests.
 //! - Failure output names key paths only (P6). Nothing here formats `Settings`, its `Debug`
-//!   form or its serialised JSON, because `ApiKeyConfig.key` serialises in plaintext. Every
-//!   credential in a fixture is also an obviously fake `test-key-not-a-secret` literal.
+//!   form or its serialised JSON, as a habit: no credential field serialises (WR-04, WR-09), but a
+//!   path list is all a failure needs. Every credential in a fixture is also an obviously fake
+//!   `test-key-not-a-secret` literal.
 //! - It sets, reads and depends on no `APP_*` environment variable (D-12). An `APP_*` overlay
 //!   can only add or override values, and the diff is one-directional, so an overlay cannot
 //!   hide a dropped key.
@@ -60,6 +61,14 @@ const EXEMPT: &[Row] = &[
     Row {
         pattern: &["treasurer", "allowance", "webhook", "secret"],
         note: "secret: skip_serializing on AllowanceWebhookConfig.secret, redacted in Debug",
+    },
+    Row {
+        pattern: &["llm_api_key"],
+        note: "secret: skip_serializing on Settings.llm_api_key (WR-09)",
+    },
+    Row {
+        pattern: &["http", "auth", "api_keys", "*", "key"],
+        note: "secret: skip_serializing on ApiKeyConfig.key (WR-09)",
     },
 ];
 

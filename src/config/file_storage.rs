@@ -6,11 +6,14 @@ use serde::{Deserialize, Serialize};
 
 /// Configuration for MinIO file storage
 ///
-/// `Debug` prints `minio_access_key` and `minio_secret_key` as `<redacted>` (DF-07).
+/// `Debug` prints `minio_access_key` and `minio_secret_key` as `<redacted>` (DF-07), and
+/// `Serialize` omits both (WR-09).
 #[derive(Clone, Serialize, Deserialize)]
 pub struct FileStorageConfig {
     pub minio_endpoint: String,
+    #[serde(skip_serializing)]
     pub minio_access_key: String,
+    #[serde(skip_serializing)]
     pub minio_secret_key: String,
     pub minio_bucket: String,
     pub minio_region: Option<String>,

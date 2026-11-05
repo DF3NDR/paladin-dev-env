@@ -432,7 +432,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .start_time(Utc::now())
             .end_time(Utc::now())
             .duration_ms(1500)
-            .model_used("gpt-4".to_string())
+            .model_used("gpt-4o-mini".to_string())
             .token_usage(TokenUsage::new(42, 43))
             .build()
             .unwrap();

@@ -54,7 +54,7 @@ paladins:
         Extract ALL significant information.
 
       # Balanced temperature for analytical work
-      model: "gpt-4"
+      model: "gpt-4o-mini"
       temperature: 0.7
       max_loops: 2
       timeout_seconds: 180
@@ -91,7 +91,7 @@ paladins:
         - Make it actionable
 
       # Lower temperature for consistent summarization
-      model: "gpt-4"
+      model: "gpt-4o-mini"
       temperature: 0.5
       max_loops: 2
       timeout_seconds: 180
@@ -113,7 +113,7 @@ paladins:
   #       - Logical consistency
   #       - Completeness
   #       Provide a validation report with pass/fail and issues found.
-  #     model: "gpt-4"
+  #     model: "gpt-4o-mini"
   #     temperature: 0.3
   #     max_loops: 1
   #     timeout_seconds: 120

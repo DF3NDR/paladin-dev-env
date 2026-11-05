@@ -76,7 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let extract_paladin = PaladinBuilder::new(llm_port.clone() as Arc<dyn LlmPort>)
         .system_prompt("You are an expert at extracting key findings from research papers.")
         .name("ExtractPaladin")
-        .model("gpt-4")
+        .model("gpt-4o-mini")
         .temperature(0.5)
         .max_loops(1)
         .with_citadel(citadel.clone())

@@ -196,7 +196,7 @@ fn create_paladin(name: &str, system_prompt: &str) -> Paladin {
         system_prompt: system_prompt.to_string(),
         name: name.to_string(),
         user_name: "ReviewSystem".to_string(),
-        model: "gpt-4".to_string(),
+        model: "gpt-4o-mini".to_string(),
         temperature: 0.5, // Lower temperature for more consistent reviews
         max_loops: MaxLoops::Fixed(2),
         stop_words: vec![],

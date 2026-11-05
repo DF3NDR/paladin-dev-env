@@ -72,7 +72,7 @@ async fn multi_loop_example() -> Result<(), Box<dyn std::error::Error>> {
     let paladin = PaladinBuilder::new(llm_port.clone() as Arc<dyn LlmPort>)
         .system_prompt("You are a thoughtful problem solver")
         .name("ReasoningAgent")
-        .model("gpt-4")
+        .model("gpt-4o-mini")
         .max_loops(3) // Multiple iterations for reasoning
         .temperature(0.8)
         .build()
@@ -105,7 +105,7 @@ async fn stop_word_example() -> Result<(), Box<dyn std::error::Error>> {
     let paladin = PaladinBuilder::new(llm_port.clone() as Arc<dyn LlmPort>)
         .system_prompt("You are a concise assistant")
         .name("StopWordAgent")
-        .model("gpt-4")
+        .model("gpt-4o-mini")
         .max_loops(5) // Could run up to 5 loops
         .add_stop_word("FINAL_ANSWER") // But stops when this appears
         .add_stop_word("DONE")
@@ -138,7 +138,7 @@ async fn retry_example() -> Result<(), Box<dyn std::error::Error>> {
     let paladin = PaladinBuilder::new(llm_port.clone() as Arc<dyn LlmPort>)
         .system_prompt("You are a resilient assistant")
         .name("RetryAgent")
-        .model("gpt-4")
+        .model("gpt-4o-mini")
         .max_loops(3) // Enables retry attempts
         .retry_attempts(3) // Maximum retry attempts
         .build()

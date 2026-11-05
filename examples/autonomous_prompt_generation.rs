@@ -68,7 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let code_reviewer = PaladinBuilder::new(llm_port.clone() as Arc<dyn LlmPort>)
         .system_prompt("Expert code reviewer") // In reality, this would be auto-generated
         .name("CodeReviewer")
-        .model("gpt-4")
+        .model("gpt-4o-mini")
         .temperature(0.7)
         .max_loops(1)
         .build()
@@ -150,7 +150,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tech_writer = PaladinBuilder::new(writer_llm.clone() as Arc<dyn LlmPort>)
         .system_prompt("Technical documentation specialist")
         .name("TechnicalWriter")
-        .model("gpt-4")
+        .model("gpt-4o-mini")
         .temperature(0.5) // Lower for more consistent documentation
         .max_loops(1)
         .build()

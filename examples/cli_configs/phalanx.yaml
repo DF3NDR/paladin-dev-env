@@ -53,7 +53,7 @@ paladins:
         Provide a brief summary followed by key takeaways.
 
       # Moderate temperature for balanced summarization
-      model: "gpt-4"
+      model: "gpt-4o-mini"
       temperature: 0.5
       max_loops: 2
       timeout_seconds: 180
@@ -89,7 +89,7 @@ paladins:
         - Confidence: [high/medium/low]
 
       # Lower temperature for consistent analysis
-      model: "gpt-4"
+      model: "gpt-4o-mini"
       temperature: 0.3
       max_loops: 2
       timeout_seconds: 180
@@ -124,7 +124,7 @@ paladins:
         3. Concept Categories: [grouped terms]
 
       # Lower temperature for consistent extraction
-      model: "gpt-4"
+      model: "gpt-4o-mini"
       temperature: 0.3
       max_loops: 2
       timeout_seconds: 180
@@ -146,7 +146,7 @@ paladins:
   #       - Secondary languages if present
   #       - Language complexity level
   #       - Writing style (academic, casual, technical, etc.)
-  #     model: "gpt-4"
+  #     model: "gpt-4o-mini"
   #     temperature: 0.2
   #     max_loops: 1
   #     timeout_seconds: 120
@@ -160,7 +160,7 @@ paladins:
   #       Identify factual claims in the text and assess their verifiability.
   #       Note: You cannot actually verify facts, but can identify what would
   #       need to be verified.
-  #     model: "gpt-4"
+  #     model: "gpt-4o-mini"
   #     temperature: 0.4
   #     max_loops: 2
   #     timeout_seconds: 180

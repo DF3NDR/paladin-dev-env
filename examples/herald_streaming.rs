@@ -108,7 +108,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .start_time(Utc::now())
         .end_time(Utc::now())
         .duration_ms(2500)
-        .model_used("gpt-4".to_string())
+        .model_used("gpt-4o-mini".to_string())
         .token_usage(TokenUsage::new(62, 63))
         .build()
         .unwrap();
@@ -262,7 +262,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .start_time(Utc::now())
             .end_time(Utc::now())
             .duration_ms(8500)
-            .model_used("gpt-4".to_string())
+            .model_used("gpt-4o-mini".to_string())
             .token_usage(TokenUsage::new(225, 225))
             .build()
             .unwrap();

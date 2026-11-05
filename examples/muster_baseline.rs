@@ -69,7 +69,7 @@ async fn build_fixture_paladin(
     let paladin = PaladinBuilder::new(llm_port)
         .system_prompt("You are a measurement fixture Paladin for the muster baseline harness")
         .name(format!("MusterFixture-{index}"))
-        .model("gpt-4")
+        .model("gpt-4o-mini")
         .temperature(0.7)
         .max_loops(1)
         .build()

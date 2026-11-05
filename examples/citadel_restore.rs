@@ -61,7 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
              Provide detailed technical analysis.",
         )
         .name("ArchitectReviewer")
-        .model("gpt-4")
+        .model("gpt-4o-mini")
         .temperature(0.7)
         .max_loops(1)
         .with_citadel(citadel.clone())

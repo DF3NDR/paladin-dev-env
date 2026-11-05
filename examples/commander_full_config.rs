@@ -95,7 +95,7 @@ fn create_paladin(name: &str) -> Paladin {
             system_prompt: format!("You are {}, a specialized processor.", name),
             name: name.to_string(),
             user_name: "System".to_string(),
-            model: "gpt-4".to_string(),
+            model: "gpt-4o-mini".to_string(),
             temperature: 0.7,
             max_loops: MaxLoops::Fixed(1),
             stop_words: vec![],

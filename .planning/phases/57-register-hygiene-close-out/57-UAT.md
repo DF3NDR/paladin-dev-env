@@ -3,16 +3,16 @@ status: testing
 phase: 57-register-hygiene-close-out
 source: 57-01-SUMMARY.md, 57-02-SUMMARY.md, 57-03-SUMMARY.md, 57-04-SUMMARY.md, 57-05-SUMMARY.md, 57-06-SUMMARY.md, 57-07-SUMMARY.md, 57-08-SUMMARY.md, 57-09-SUMMARY.md, 57-10-SUMMARY.md, 57-11-SUMMARY.md, 57-12-SUMMARY.md, 57-13-SUMMARY.md, 57-14-SUMMARY.md, 57-15-SUMMARY.md, 57-16-SUMMARY.md
 started: 2026-11-05T00:55:10Z
-updated: 2026-11-05T01:00:03Z
+updated: 2026-11-05T01:00:21Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 8
-name: Owner's bounded human read is recorded per row
+number: 9
+name: Review-dispositions checker passes strict over the full archive
 expected: |
-  All 20 prohibition rows P40-01..P40-20 in 57-JUDGMENT-READ.md have a Human cell that reads "confirm (2026-11-04)" written from your own reply, with Claude's reading kept to the verdict/evidence/note columns, and 40-VALIDATION.md's Manual-Only row points at 57-JUDGMENT-READ.md as the recorded human read. You stand by that "confirm all". (Coverage D3, REG-04: a human verdict on LLM-judge results.)
+  `./scripts/check-review-dispositions.sh` (strict, no --pending-ok) exits 0 and reports 0 failure(s) over 51 findings in 13 review files, deriving every WR/CR id (plus Phase 40 IN-01 and IN-04) from the archived NN-REVIEW.md headings rather than from the register. `tests/scripts/check-review-dispositions_test.sh` passes all 22 fixture cases (one firing fixture per failure class plus ok, --pending-ok and --phases cases). Each archived REVIEW.md for Phases 38-51 carries an appended "## Dispositions (Phase 57)" pointer section with nothing deleted.
 awaiting: user response
 
 ## Tests
@@ -47,7 +47,7 @@ result: pass
 
 ### 8. Owner's bounded human read is recorded per row
 expected: All 20 prohibition rows P40-01..P40-20 in 57-JUDGMENT-READ.md have a Human cell that reads "confirm (2026-11-04)" written from your own reply, with Claude's reading kept to the verdict/evidence/note columns, and 40-VALIDATION.md's Manual-Only row points at 57-JUDGMENT-READ.md as the recorded human read. You stand by that "confirm all". (Coverage D3, REG-04: a human verdict on LLM-judge results.)
-result: [pending]
+result: pass
 
 ### 9. Review-dispositions checker passes strict over the full archive
 expected: `./scripts/check-review-dispositions.sh` (strict, no --pending-ok) exits 0 and reports 0 failure(s) over 51 findings in 13 review files, deriving every WR/CR id (plus Phase 40 IN-01 and IN-04) from the archived NN-REVIEW.md headings rather than from the register. `tests/scripts/check-review-dispositions_test.sh` passes all 22 fixture cases (one firing fixture per failure class plus ok, --pending-ok and --phases cases). Each archived REVIEW.md for Phases 38-51 carries an appended "## Dispositions (Phase 57)" pointer section with nothing deleted.
@@ -100,9 +100,9 @@ coverage_id: D4
 ## Summary
 
 total: 19
-passed: 9
+passed: 10
 issues: 0
-pending: 10
+pending: 9
 skipped: 0
 blocked: 0
 

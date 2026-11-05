@@ -3,16 +3,16 @@ status: testing
 phase: 57-register-hygiene-close-out
 source: 57-01-SUMMARY.md, 57-02-SUMMARY.md, 57-03-SUMMARY.md, 57-04-SUMMARY.md, 57-05-SUMMARY.md, 57-06-SUMMARY.md, 57-07-SUMMARY.md, 57-08-SUMMARY.md, 57-09-SUMMARY.md, 57-10-SUMMARY.md, 57-11-SUMMARY.md, 57-12-SUMMARY.md, 57-13-SUMMARY.md, 57-14-SUMMARY.md, 57-15-SUMMARY.md, 57-16-SUMMARY.md
 started: 2026-11-05T00:55:10Z
-updated: 2026-11-05T00:57:44Z
+updated: 2026-11-05T00:58:26Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 2
-name: Diagnosed debug sessions are archived
+number: 3
+name: Thread ownership follows the earliest attributed run
 expected: |
-  `.planning/debug/resolved/` holds kimi-fallback-profile-stale.md, openai-max-completion-tokens.md and vendor-token-usage-fidelity.md (moved with git mv, history intact). No diagnosed-but-already-fixed session remains at the top of `.planning/debug/`, and each archived session is closed by a fixed WINDOWS row (76, 75, 74).
+  With a thread whose first attributed run belongs to tenant A, a later Admin run or scheduled run on the same thread does not move it. Tenant A still sees the thread in the tenant thread list and through the single-thread gate, and submit/fork on it is permitted for A; a different tenant gets the same not-found answer as before. The paladin-web HTTP tracer over on-disk SQLite that proves this passes, and the five owner_run_for_thread_* contract clauses pass on the in-memory, SQLite and PostgreSQL run repositories.
 awaiting: user response
 
 ## Tests
@@ -23,7 +23,7 @@ result: pass
 
 ### 2. Diagnosed debug sessions are archived
 expected: `.planning/debug/resolved/` holds kimi-fallback-profile-stale.md, openai-max-completion-tokens.md and vendor-token-usage-fidelity.md (moved with git mv, history intact). No diagnosed-but-already-fixed session remains at the top of `.planning/debug/`, and each archived session is closed by a fixed WINDOWS row (76, 75, 74).
-result: [pending]
+result: pass
 
 ### 3. Thread ownership follows the earliest attributed run
 expected: With a thread whose first attributed run belongs to tenant A, a later Admin run or scheduled run on the same thread does not move it. Tenant A still sees the thread in the tenant thread list and through the single-thread gate, and submit/fork on it is permitted for A; a different tenant gets the same not-found answer as before. The paladin-web HTTP tracer over on-disk SQLite that proves this passes, and the five owner_run_for_thread_* contract clauses pass on the in-memory, SQLite and PostgreSQL run repositories.
@@ -100,9 +100,9 @@ coverage_id: D4
 ## Summary
 
 total: 19
-passed: 3
+passed: 4
 issues: 0
-pending: 16
+pending: 15
 skipped: 0
 blocked: 0
 

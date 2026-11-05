@@ -398,6 +398,50 @@ mod tests {
         assert_eq!(config.max_retries, 3);
     }
 
+    /// R-95 (58-06 register, 56-REVIEW WR-09 class): serialising a
+    /// `RedisNodeCacheConfig` must not write the password.
+    #[test]
+    fn redis_node_cache_config_serialisation_omits_the_redis_password() {
+        let sentinel = "test-key-not-a-secret-r95-redis-node-cache-password";
+        let config = RedisNodeCacheConfig {
+            redis_password: Some(sentinel.to_string()),
+            ..test_config()
+        };
+        assert_eq!(config.redis_password.as_deref(), Some(sentinel));
+        let value = serde_json::to_value(&config).expect("RedisNodeCacheConfig serialises");
+        let object = value.as_object().expect("serialises as an object");
+        assert!(
+            !object.contains_key("redis_password"),
+            "RedisNodeCacheConfig serialised `redis_password`"
+        );
+        assert!(
+            !value.to_string().contains(sentinel),
+            "RedisNodeCacheConfig serialisation carries the password value"
+        );
+        // Non-vacuous: the neighbouring fields are still written.
+        assert_eq!(object["redis_host"], "localhost");
+        assert_eq!(object["key_prefix"], "test-node-cache");
+    }
+
+    /// R-95 load pin: a JSON value carrying `redis_password` still loads it.
+    #[test]
+    fn redis_node_cache_config_still_loads_a_redis_password() {
+        let sentinel = "test-key-not-a-secret-r95-redis-node-cache-loaded";
+        let value = serde_json::json!({
+            "redis_host": "cache.example.internal",
+            "redis_port": 6379,
+            "redis_password": sentinel,
+            "redis_db": 1,
+            "connection_timeout": 30,
+            "key_prefix": "test-node-cache",
+            "max_retries": 3,
+        });
+        let config: RedisNodeCacheConfig =
+            serde_json::from_value(value).expect("a value with a password loads");
+        assert_eq!(config.redis_password.as_deref(), Some(sentinel));
+        assert_eq!(config.redis_host, "cache.example.internal");
+    }
+
     /// T-25-70: a `Debug` rendering of the config must never carry the
     /// password, while every other field stays readable.
     #[test]

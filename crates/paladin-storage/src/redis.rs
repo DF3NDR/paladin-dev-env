@@ -1622,6 +1622,92 @@ mod tests {
         assert_eq!(config.max_retries, 3);
     }
 
+    /// R-95 (58-06 register, 56-REVIEW WR-09 class): serialising a
+    /// `RedisQueueConfig` must not write the password.
+    #[test]
+    fn redis_queue_config_serialisation_omits_the_redis_password() {
+        let sentinel = "test-key-not-a-secret-r95-redis-queue-password";
+        let config = RedisQueueConfig {
+            redis_password: Some(sentinel.to_string()),
+            ..test_config()
+        };
+        assert_eq!(config.redis_password.as_deref(), Some(sentinel));
+        let value = serde_json::to_value(&config).expect("RedisQueueConfig serialises");
+        let object = value.as_object().expect("serialises as an object");
+        assert!(
+            !object.contains_key("redis_password"),
+            "RedisQueueConfig serialised `redis_password`"
+        );
+        assert!(
+            !value.to_string().contains(sentinel),
+            "RedisQueueConfig serialisation carries the password value"
+        );
+        // Non-vacuous: the neighbouring fields are still written.
+        assert_eq!(object["redis_host"], "localhost");
+        assert_eq!(object["key_prefix"], "test-prefix");
+    }
+
+    /// R-95 (DF-07 class): a `Debug` rendering must not carry the password.
+    #[test]
+    fn redis_queue_config_debug_redacts_the_redis_password() {
+        let sentinel = "test-key-not-a-secret-r95-redis-queue-password";
+        let config = RedisQueueConfig {
+            redis_host: "queue.example.internal".to_string(),
+            redis_password: Some(sentinel.to_string()),
+            ..test_config()
+        };
+        assert_eq!(config.redis_password.as_deref(), Some(sentinel));
+        let rendered = format!("{config:?}");
+        assert!(
+            !rendered.contains(sentinel),
+            "password leaked into Debug output: {rendered}"
+        );
+        assert!(
+            rendered.contains("<redacted>"),
+            "marker missing: {rendered}"
+        );
+        assert!(rendered.contains("queue.example.internal"));
+        assert!(rendered.contains("test-prefix"));
+
+        let unset = format!("{:?}", test_config());
+        assert!(unset.contains("redis_password: None"), "{unset}");
+    }
+
+    /// R-95 drift guard: the pretty `Debug` of a default config names every
+    /// serialised field plus `redis_password`, so a later field cannot be
+    /// dropped from (or silently left out of) the hand-written `Debug`.
+    #[test]
+    fn redis_queue_config_debug_names_every_field() {
+        let rendered = format!("{:#?}", RedisQueueConfig::default());
+        let value = serde_json::to_value(RedisQueueConfig::default()).expect("serialises");
+        let object = value.as_object().expect("serialises as an object");
+        for key in object.keys().map(String::as_str).chain(["redis_password"]) {
+            assert!(
+                rendered.contains(&format!("{key}:")),
+                "Debug output does not name `{key}`: {rendered}"
+            );
+        }
+    }
+
+    /// R-95 load pin: a JSON value carrying `redis_password` still loads it.
+    #[test]
+    fn redis_queue_config_still_loads_a_redis_password() {
+        let sentinel = "test-key-not-a-secret-r95-redis-queue-loaded";
+        let value = serde_json::json!({
+            "redis_host": "queue.example.internal",
+            "redis_port": 6379,
+            "redis_password": sentinel,
+            "redis_db": 1,
+            "connection_timeout": 30,
+            "key_prefix": "test-prefix",
+            "max_retries": 3,
+        });
+        let config: RedisQueueConfig =
+            serde_json::from_value(value).expect("a value with a password loads");
+        assert_eq!(config.redis_password.as_deref(), Some(sentinel));
+        assert_eq!(config.redis_host, "queue.example.internal");
+    }
+
     #[test]
     fn queue_key_builds_expected_literal() {
         let config = test_config();

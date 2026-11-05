@@ -3,16 +3,16 @@ status: testing
 phase: 57-register-hygiene-close-out
 source: 57-01-SUMMARY.md, 57-02-SUMMARY.md, 57-03-SUMMARY.md, 57-04-SUMMARY.md, 57-05-SUMMARY.md, 57-06-SUMMARY.md, 57-07-SUMMARY.md, 57-08-SUMMARY.md, 57-09-SUMMARY.md, 57-10-SUMMARY.md, 57-11-SUMMARY.md, 57-12-SUMMARY.md, 57-13-SUMMARY.md, 57-14-SUMMARY.md, 57-15-SUMMARY.md, 57-16-SUMMARY.md
 started: 2026-11-05T00:55:10Z
-updated: 2026-11-05T01:01:37Z
+updated: 2026-11-05T01:01:53Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 13
-name: Reasoning-effort refusal shows a fixed label, never vendor text
+number: 14
+name: Worker emits its terminal event only after the commit, and failed attempts carry partial spend
 expected: |
-  When check_reasoning fails with any LlmError other than UnsupportedParameter, PaladinBuilder::effort_refusal produces a ConfigurationError whose message is the fixed per-variant label only; no provider response text appears in the error or in logs. MIGRATION.md row M-B-41 and a CHANGELOG [Unreleased] Security bullet record the change.
+  run_agent sends exactly one RunFinished wire event, and only after the exit's durable status/outcome writes and queue ack, on the completed, failed and both halt exits. A failed status or outcome write on the success path logs one warning (run id and repository error only) and nacks with a 1 s delay. When a run attempt fails after some LLM spend, the Err-arm NodeFinished event reports the spend billed before the failure. MIGRATION rows M-B-42/M-B-43 and two CHANGELOG Fixed bullets exist.
 awaiting: user response
 
 ## Tests
@@ -67,7 +67,7 @@ result: pass
 
 ### 13. Reasoning-effort refusal shows a fixed label, never vendor text
 expected: When check_reasoning fails with any LlmError other than UnsupportedParameter, PaladinBuilder::effort_refusal produces a ConfigurationError whose message is the fixed per-variant label only; no provider response text appears in the error or in logs. MIGRATION.md row M-B-41 and a CHANGELOG [Unreleased] Security bullet record the change.
-result: [pending]
+result: pass
 
 ### 14. Worker emits its terminal event only after the commit, and failed attempts carry partial spend
 expected: run_agent sends exactly one RunFinished wire event, and only after the exit's durable status/outcome writes and queue ack, on the completed, failed and both halt exits. A failed status or outcome write on the success path logs one warning (run id and repository error only) and nacks with a 1 s delay. When a run attempt fails after some LLM spend, the Err-arm NodeFinished event reports the spend billed before the failure. MIGRATION rows M-B-42/M-B-43 and two CHANGELOG Fixed bullets exist.
@@ -100,9 +100,9 @@ coverage_id: D4
 ## Summary
 
 total: 19
-passed: 14
+passed: 15
 issues: 0
-pending: 5
+pending: 4
 skipped: 0
 blocked: 0
 

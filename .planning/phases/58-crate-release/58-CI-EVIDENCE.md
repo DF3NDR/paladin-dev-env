@@ -1765,3 +1765,26 @@ paladin-web	ABSENT
 **Verdict for Task 1 (plan 58-12).** No red required context, no red SDK job, no non-`success` `ci.yml` run, no `SHA-A2` run unfinished; D-00j did not trip and **nothing was re-run** (neither the F-58-03 named rule nor an infrastructure re-run was needed). `main`, the remote tip and the PR head are as D-02/D-04 require; the version is unclaimed on the registry and as a tag. The hand-off may be presented once the maintainer answers the one-way decision (Task 2).
 
 **What stays uncommitted.** This section and the rewritten `.continue-here.md` are working-tree changes only (plan 58-12 commits nothing; plan 58-13 commits them on `chore/58-close`). The local branch is still two commits ahead of `origin/claude/laughing-dirac-e0h2ax` (`75f36c72d`, `83af6d02d`, plan 58-11 records); they are recorded in the resume file, never pushed, never dropped.
+
+### Plan 58-14 — chore/58-close
+
+Plan 58-14 pushes the documentation-only close branch (D-00l). Read on 2026-11-06 after the two plan 58-14
+commits `e11a57f2e` (release record, `SHIP-08/09/10` ticks, `STATE.md` decision) and `5e4b029aa` (the two
+hand-offs).
+
+- **Documentation-only assertion (T-58-142):** `git fetch origin`, then `git diff --name-only origin/main...HEAD`
+  lists 11 files, and `git diff --name-only origin/main...HEAD | grep -v '^\.planning/'` prints nothing: every
+  file in the diff is under `.planning/`. `origin/main` reads `251303bcd143c5529c737afe8a2c61b05688f018`
+  (`SHA-B`), the branch's cut point.
+- **Branch state before the push:** `git ls-remote --heads origin chore/58-close` is empty (the branch is not yet
+  on the remote). The release branch `claude/laughing-dirac-e0h2ax` is not pushed, reset or checked out.
+- **Push (plain, no force):** `git push origin chore/58-close`. The push result and the head it carried are
+  recorded in the plan 58-14 summary; the final head is the plan 58-14 summary commit.
+- **Pull request, REST write:** the one attempt is
+
+  ```bash
+  gh api -X POST repos/DF3NDR/paladin-dev-env/pulls -f head=chore/58-close -f base=main -f title='docs(58): v0.11.1 release record' -F body=@<body-file>
+  ```
+
+  with the body written to a file (what lands, why a separate branch, the pointer to `58-READY-TO-CLOSE.md`, the
+  maintainer's remaining acts, the attribution lines). Its result is recorded below.

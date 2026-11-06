@@ -38,9 +38,11 @@ number fails CI.
 
 **Phase 52 batch.** The rows added by Phase 52 (alerts 30 through 81, every one of them triaged against the source line on the current tree) share the review date 2027-06-30 so one sweep re-triages them together; the six earlier rows (alerts 28, 40, 45, 46, 47 and 49) keep their own review dates.
 
-## The 37 live dismissals
+**Phase 58 batch.** The eight rows for alerts 93 through 100 (F-58-08: `rust/cleartext-logging` on the operator-webhook warning line and its unit test in `src/infrastructure/web/run_api_wiring.rs`, and on `settings_summary` in `src/main.rs`) were each triaged against the source line on the release-candidate tree and share the Phase 52 review date 2027-06-30, so one sweep re-triages them together. The platform dismissal of these eight alerts is the maintainer's act; the rows are registered ahead of it.
 
-Declared dismissals: 37
+## The 45 live dismissals
+
+Declared dismissals: 45
 
 <!-- BEGIN MACHINE-READABLE REGISTER -->
 ```toml
@@ -524,5 +526,109 @@ review_date = "2027-06-30"
 scope = "test-only code path -- the #[cfg(test)] mod tests block in crates/paladin-llm/src/config/layers.rs; never compiled into a release binary"
 compensating_control = "The assertion exists to prove that `SecretSource` and `Layered` Debug output is redacted; the flagged message prints fixture values only on failure inside a #[cfg(test)] compilation unit."
 revisit_condition = "the rust-queries heuristic stops tracing placeholder-resolved values into assertion messages, or the redaction tests move to a form that does not print the rendering -- whichever comes first"
+
+[[dismissal]]
+alert_number = 100
+rule_id = "rust/cleartext-logging"
+path = "src/infrastructure/web/run_api_wiring.rs:1377"
+why_present = "`log::warn!(\"{line}\");` at src/infrastructure/web/run_api_wiring.rs:1377, in the boot wiring after the schedule-service block, logs `line`, the `Some` of `operator_webhook_secret_warning_line(treasurer_config.allowance.webhook.as_ref())` (lines 1372-1377, 41-REVIEW WR-05, D-14). The function reads `AllowanceWebhookConfig::secret`, whose field name is what the rule's taint source keys on; the annotation reads \"This operation writes [operator_webhook_secret_warning_line(...)](1) to a log file.\""
+why_dismissed = "F-58-08. `operator_webhook_secret_warning_line` (fn at run_api_wiring.rs:828) returns `None` when the webhook secret is present and non-empty and otherwise returns a fixed string literal (\"the treasurer allowance webhook has no signing secret: set treasurer.allowance.webhook.secret (or APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET); ...\"); the only thing derived from the secret field is whether it is empty, which selects between `None` and that constant, and neither the secret value nor the webhook URL is ever read into the output (T-57-19). The rule's taint source keys on the field name `secret` and does not model that a constant reaches the sink. The one production sink is therefore a constant sentence naming a config key and an environment variable, which is operator guidance, not a credential."
+dismissed_reason = "false positive"
+owner = "DF3NDR"
+review_date = "2027-06-30"
+scope = "the single log::warn! at line 1377 of the boot wiring in src/infrastructure/web/run_api_wiring.rs (shipped server code); the tainted expression is `line`, the return of operator_webhook_secret_warning_line"
+compensating_control = "DF-07 redaction (ApiKeyConfig redacts in Debug; no config type carrying a key is logged); the T-57-19 test `operator_webhook_secret_warning_line_names_the_key_and_never_the_url` asserts the line carries the key and env-var names and never the webhook URL; CodeQL is advisory-only; the manual credential-handling review in security.instructions.md covers exactly this call site."
+revisit_condition = "the rust-queries heuristic stops treating a field named `secret` as a taint source for a value that is replaced by a constant, or `operator_webhook_secret_warning_line` starts interpolating the secret, the URL or a tenant into its sentence (a security regression this row must not outlive) -- whichever comes first"
+
+[[dismissal]]
+alert_number = 99
+rule_id = "rust/cleartext-logging"
+path = "src/infrastructure/web/run_api_wiring.rs:2945"
+why_present = "`assert!(!line.contains(\"ops.example.com\"), \"{line}\");` at src/infrastructure/web/run_api_wiring.rs:2945, the last assertion of `operator_webhook_secret_warning_line_names_the_key_and_never_the_url`; the message interpolates `line`, the warning sentence built from a fixture webhook whose url is \"https://ops.example.com/hook-sentinel-url\" and whose secret is `None` or the empty string."
+why_dismissed = "F-58-08. The `{line}` message is evaluated only when the assertion has already failed. `operator_webhook_secret_warning_line` (fn at run_api_wiring.rs:828) returns `None` when the webhook secret is present and non-empty and otherwise returns a fixed string literal (\"the treasurer allowance webhook has no signing secret: set treasurer.allowance.webhook.secret (or APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET); ...\"); the only thing derived from the secret field is whether it is empty, which selects between `None` and that constant, and neither the secret value nor the webhook URL is ever read into the output (T-57-19). The rule's taint source keys on the field name `secret` and does not model that a constant reaches the sink."
+dismissed_reason = "false positive"
+owner = "DF3NDR"
+review_date = "2027-06-30"
+scope = "test-only code path -- the #[cfg(test)] mod tests block (opening at line 1462) in src/infrastructure/web/run_api_wiring.rs; never compiled into a release binary"
+compensating_control = "The T-57-19 test `operator_webhook_secret_warning_line_names_the_key_and_never_the_url` (run_api_wiring.rs:2927-2947) asserts the line names the config key and env var and contains neither `hook-sentinel-url` nor `ops.example.com`; the flagged expression prints only on a failed assertion, inside a #[cfg(test)] compilation unit; CodeQL is advisory-only and the manual credential-handling review in security.instructions.md covers the warning call site."
+revisit_condition = "the rust-queries heuristic stops treating a field named `secret` as a taint source for a value that is replaced by a constant, or `operator_webhook_secret_warning_line` starts interpolating the secret, the URL or a tenant into its sentence (a security regression this row must not outlive) -- whichever comes first"
+
+[[dismissal]]
+alert_number = 98
+rule_id = "rust/cleartext-logging"
+path = "src/infrastructure/web/run_api_wiring.rs:2944"
+why_present = "`assert!(!line.contains(\"hook-sentinel-url\"), \"{line}\");` at src/infrastructure/web/run_api_wiring.rs:2944 in `operator_webhook_secret_warning_line_names_the_key_and_never_the_url`; the message interpolates `line`, the constant warning sentence for a fixture webhook with an absent or empty secret."
+why_dismissed = "F-58-08. The `{line}` message is evaluated only when the assertion has already failed (and a failure here means the URL leaked, which is the regression this test guards). `operator_webhook_secret_warning_line` (fn at run_api_wiring.rs:828) returns `None` when the webhook secret is present and non-empty and otherwise returns a fixed string literal (\"the treasurer allowance webhook has no signing secret: set treasurer.allowance.webhook.secret (or APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET); ...\"); the only thing derived from the secret field is whether it is empty, which selects between `None` and that constant, and neither the secret value nor the webhook URL is ever read into the output (T-57-19). The rule's taint source keys on the field name `secret` and does not model that a constant reaches the sink."
+dismissed_reason = "false positive"
+owner = "DF3NDR"
+review_date = "2027-06-30"
+scope = "test-only code path -- the #[cfg(test)] mod tests block (opening at line 1462) in src/infrastructure/web/run_api_wiring.rs; never compiled into a release binary"
+compensating_control = "The T-57-19 test `operator_webhook_secret_warning_line_names_the_key_and_never_the_url` (run_api_wiring.rs:2927-2947) asserts the line names the config key and env var and contains neither `hook-sentinel-url` nor `ops.example.com`; the flagged expression prints only on a failed assertion, inside a #[cfg(test)] compilation unit; CodeQL is advisory-only and the manual credential-handling review in security.instructions.md covers the warning call site."
+revisit_condition = "the rust-queries heuristic stops treating a field named `secret` as a taint source for a value that is replaced by a constant, or `operator_webhook_secret_warning_line` starts interpolating the secret, the URL or a tenant into its sentence (a security regression this row must not outlive) -- whichever comes first"
+
+[[dismissal]]
+alert_number = 97
+rule_id = "rust/cleartext-logging"
+path = "src/infrastructure/web/run_api_wiring.rs:2943"
+why_present = "`assert!(line.contains(\"empty key\"), \"{line}\");` at src/infrastructure/web/run_api_wiring.rs:2943 in `operator_webhook_secret_warning_line_names_the_key_and_never_the_url`; the message interpolates `line`, the constant warning sentence."
+why_dismissed = "F-58-08. The `{line}` message is evaluated only when the assertion has already failed. `operator_webhook_secret_warning_line` (fn at run_api_wiring.rs:828) returns `None` when the webhook secret is present and non-empty and otherwise returns a fixed string literal (\"the treasurer allowance webhook has no signing secret: set treasurer.allowance.webhook.secret (or APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET); ...\"); the only thing derived from the secret field is whether it is empty, which selects between `None` and that constant, and neither the secret value nor the webhook URL is ever read into the output (T-57-19). The rule's taint source keys on the field name `secret` and does not model that a constant reaches the sink."
+dismissed_reason = "false positive"
+owner = "DF3NDR"
+review_date = "2027-06-30"
+scope = "test-only code path -- the #[cfg(test)] mod tests block (opening at line 1462) in src/infrastructure/web/run_api_wiring.rs; never compiled into a release binary"
+compensating_control = "The T-57-19 test `operator_webhook_secret_warning_line_names_the_key_and_never_the_url` (run_api_wiring.rs:2927-2947) asserts the line names the config key and env var and contains neither `hook-sentinel-url` nor `ops.example.com`; the flagged expression prints only on a failed assertion, inside a #[cfg(test)] compilation unit; CodeQL is advisory-only and the manual credential-handling review in security.instructions.md covers the warning call site."
+revisit_condition = "the rust-queries heuristic stops treating a field named `secret` as a taint source for a value that is replaced by a constant, or `operator_webhook_secret_warning_line` starts interpolating the secret, the URL or a tenant into its sentence (a security regression this row must not outlive) -- whichever comes first"
+
+[[dismissal]]
+alert_number = 96
+rule_id = "rust/cleartext-logging"
+path = "src/infrastructure/web/run_api_wiring.rs:2941"
+why_present = "`\"{line}\"` as the message of `assert!(line.contains(\"APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET\"), \"{line}\")` at src/infrastructure/web/run_api_wiring.rs:2939-2942 (the annotation anchors on line 2941) in `operator_webhook_secret_warning_line_names_the_key_and_never_the_url`; it interpolates `line`, the constant warning sentence."
+why_dismissed = "F-58-08. The `{line}` message is evaluated only when the assertion has already failed. `operator_webhook_secret_warning_line` (fn at run_api_wiring.rs:828) returns `None` when the webhook secret is present and non-empty and otherwise returns a fixed string literal (\"the treasurer allowance webhook has no signing secret: set treasurer.allowance.webhook.secret (or APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET); ...\"); the only thing derived from the secret field is whether it is empty, which selects between `None` and that constant, and neither the secret value nor the webhook URL is ever read into the output (T-57-19). The rule's taint source keys on the field name `secret` and does not model that a constant reaches the sink."
+dismissed_reason = "false positive"
+owner = "DF3NDR"
+review_date = "2027-06-30"
+scope = "test-only code path -- the #[cfg(test)] mod tests block (opening at line 1462) in src/infrastructure/web/run_api_wiring.rs; never compiled into a release binary"
+compensating_control = "The T-57-19 test `operator_webhook_secret_warning_line_names_the_key_and_never_the_url` (run_api_wiring.rs:2927-2947) asserts the line names the config key and env var and contains neither `hook-sentinel-url` nor `ops.example.com`; the flagged expression prints only on a failed assertion, inside a #[cfg(test)] compilation unit; CodeQL is advisory-only and the manual credential-handling review in security.instructions.md covers the warning call site."
+revisit_condition = "the rust-queries heuristic stops treating a field named `secret` as a taint source for a value that is replaced by a constant, or `operator_webhook_secret_warning_line` starts interpolating the secret, the URL or a tenant into its sentence (a security regression this row must not outlive) -- whichever comes first"
+
+[[dismissal]]
+alert_number = 95
+rule_id = "rust/cleartext-logging"
+path = "src/infrastructure/web/run_api_wiring.rs:2937"
+why_present = "`\"{line}\"` as the message of `assert!(line.contains(\"treasurer.allowance.webhook.secret\"), \"{line}\")` at src/infrastructure/web/run_api_wiring.rs:2935-2938 (the annotation anchors on line 2937) in `operator_webhook_secret_warning_line_names_the_key_and_never_the_url`; it interpolates `line`, the constant warning sentence, which is expected to contain the config key name `treasurer.allowance.webhook.secret`."
+why_dismissed = "F-58-08. The `{line}` message is evaluated only when the assertion has already failed. The string the assertion looks for is the config KEY NAME, which is public operator documentation, not a secret value. `operator_webhook_secret_warning_line` (fn at run_api_wiring.rs:828) returns `None` when the webhook secret is present and non-empty and otherwise returns a fixed string literal (\"the treasurer allowance webhook has no signing secret: set treasurer.allowance.webhook.secret (or APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET); ...\"); the only thing derived from the secret field is whether it is empty, which selects between `None` and that constant, and neither the secret value nor the webhook URL is ever read into the output (T-57-19). The rule's taint source keys on the field name `secret` and does not model that a constant reaches the sink."
+dismissed_reason = "false positive"
+owner = "DF3NDR"
+review_date = "2027-06-30"
+scope = "test-only code path -- the #[cfg(test)] mod tests block (opening at line 1462) in src/infrastructure/web/run_api_wiring.rs; never compiled into a release binary"
+compensating_control = "The T-57-19 test `operator_webhook_secret_warning_line_names_the_key_and_never_the_url` (run_api_wiring.rs:2927-2947) asserts the line names the config key and env var and contains neither `hook-sentinel-url` nor `ops.example.com`; the flagged expression prints only on a failed assertion, inside a #[cfg(test)] compilation unit; CodeQL is advisory-only and the manual credential-handling review in security.instructions.md covers the warning call site."
+revisit_condition = "the rust-queries heuristic stops treating a field named `secret` as a taint source for a value that is replaced by a constant, or `operator_webhook_secret_warning_line` starts interpolating the secret, the URL or a tenant into its sentence (a security regression this row must not outlive) -- whichever comes first"
+
+[[dismissal]]
+alert_number = 94
+rule_id = "rust/cleartext-logging"
+path = "src/infrastructure/web/run_api_wiring.rs:2934"
+why_present = "`.unwrap_or_else(|| panic!(\"secret {secret:?} must warn\"));` at src/infrastructure/web/run_api_wiring.rs:2934 in `operator_webhook_secret_warning_line_names_the_key_and_never_the_url`; `secret` is the loop variable of `for secret in [None, Some(String::new())]` (line 2927 region), so the value formatted into the panic message is `None` or the empty string."
+why_dismissed = "F-58-08. The panic message runs only when `operator_webhook_secret_warning_line` unexpectedly returned `None` for an absent or empty secret, and the formatted value is by construction `None` or `\"\"` -- the test's whole point is that an absent or empty secret warns -- so no real secret can reach the message. The sink is a `panic!` message in a test, not a log file. The field name `secret` is what the rule keys on."
+dismissed_reason = "false positive"
+owner = "DF3NDR"
+review_date = "2027-06-30"
+scope = "test-only code path -- the #[cfg(test)] mod tests block (opening at line 1462) in src/infrastructure/web/run_api_wiring.rs; never compiled into a release binary"
+compensating_control = "The T-57-19 test `operator_webhook_secret_warning_line_names_the_key_and_never_the_url` (run_api_wiring.rs:2927-2947) asserts the line names the config key and env var and contains neither `hook-sentinel-url` nor `ops.example.com`; the flagged expression prints only on a failed assertion, inside a #[cfg(test)] compilation unit; CodeQL is advisory-only and the manual credential-handling review in security.instructions.md covers the warning call site."
+revisit_condition = "the rust-queries heuristic stops treating a field named `secret` as a taint source for a value that is replaced by a constant, or `operator_webhook_secret_warning_line` starts interpolating the secret, the URL or a tenant into its sentence (a security regression this row must not outlive) -- whichever comes first"
+
+[[dismissal]]
+alert_number = 93
+rule_id = "rust/cleartext-logging"
+path = "src/main.rs:59"
+why_present = "`info!(\"{}\", settings_summary(&config));` at src/main.rs:59 in `main`, immediately after the configuration loads, logs the String built by `settings_summary` (src/main.rs:19-36). The flagged expression is the `... .len()` in `http.auth.api_keys.len()` at line 24, which the rule treats as derived from the `api_keys` credential field; the annotation reads \"This operation writes [... .len()](1) to a log file.\""
+why_dismissed = "F-58-08. `settings_summary` was introduced by `74317f48a` (fix(56-11), DF-07) precisely to stop the whole `Settings` being logged. It renders `llm_type`, `server.host`, `server.port`, `agents.len()`, and either `http.auth.enabled` with `http.auth.api_keys.len()` -- an integer COUNT of configured keys -- or `http=none`. No key value, no `llm_api_key` and no URL is read into the line; a count of credentials is not a credential."
+dismissed_reason = "false positive"
+owner = "DF3NDR"
+review_date = "2027-06-30"
+scope = "the single info! call at line 59 of `main` in src/main.rs (shipped binary); the tainted expression is `http.auth.api_keys.len()` flowing through settings_summary"
+compensating_control = "DF-07 redaction (ApiKeyConfig redacts in Debug; the whole Settings is no longer logged); the unit tests `settings_summary_names_no_credential` and `settings_summary_names_the_shape_without_values` (src/main.rs:88-120) assert neither the `llm_api_key` sentinel nor an `http.auth.api_keys` sentinel appears in the line, that the line does not dump `Settings {`, and that only the count `http.auth.api_keys=1` is shown; CodeQL is advisory-only; the manual credential-handling review in security.instructions.md covers this call site."
+revisit_condition = "the rust-queries heuristic stops treating `.len()` of a credential collection as the collection's content, or `settings_summary` is changed to render any key, token, URL or value from `Settings` (a security regression this row must not outlive) -- whichever comes first"
 ```
 <!-- END MACHINE-READABLE REGISTER -->

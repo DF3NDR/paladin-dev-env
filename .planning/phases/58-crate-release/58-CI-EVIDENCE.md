@@ -855,6 +855,52 @@ Plan 58-13 reads, after the tag, what the release actually produced. Everything 
 re-run, re-dispatched, published by hand or yanked (P-08-1), and no credential of any kind was used (P-08-3). The
 registry is the proof of publication (P-08-2, D-00h); the workflow rows below describe how it got there.
 
+#### Registry read (D-00h, P-08-2): the sparse index and the crates.io API, per crate
+
+Probe command, run from the repository root on `chore/58-close` (script `.planning/phases/58-crate-release/58-registry-probe.sh`,
+the same one that read the pre-tag baseline):
+
+```bash
+bash .planning/phases/58-crate-release/58-registry-probe.sh --version 0.11.1 --mode present --trustpub
+```
+
+Read at 2026-11-06T22:40:13Z-22:40:17Z (about five minutes after the release run concluded), exit 0. Read-only HTTPS
+GETs to `https://index.crates.io` (sparse index) and `https://crates.io/api/v1/crates` (`trustpub_data`); the only
+header sent is the mandatory `User-Agent: paladin-release-verify (github.com/DF3NDR/paladin-dev-env)`; no
+credential of any kind, no redirect following (D-00g, P-08-3). The publishable set is derived at run time from
+`cargo metadata --no-deps` (`publish == null`): N = 12 (count > 0). Last line of the output:
+`probe: 12 crate(s), mode present, version 0.11.1: OK`.
+
+| Crate | Version | Checksum (`cksum`) | Yanked | Provider | Repository | `run_id` | `sha` |
+|---|---|---|---|---|---|---|---|
+| paladin-ai | 0.11.1 | 4527497a3260e874ee1e7f57ae9fcb7b568e6669214d9719a5405077191bdc45 | false | github | DF3NDR/paladin-dev-env | 42304251278 | 251303bcd143c5529c737afe8a2c61b05688f018 |
+| paladin-ai-core | 0.11.1 | 2214e148e0943c9d187c47e0ba0ea18075ecf0b3e86a958d7609340753aae3df | false | github | DF3NDR/paladin-dev-env | 42304251278 | 251303bcd143c5529c737afe8a2c61b05688f018 |
+| paladin-battalion | 0.11.1 | 6125217f385540b188909a8476a6a606c354e5029bf2f0cb58271e5251b20d1c | false | github | DF3NDR/paladin-dev-env | 42304251278 | 251303bcd143c5529c737afe8a2c61b05688f018 |
+| paladin-content | 0.11.1 | 85a3c3290c5b887b8b75aefeb04b6d94f90f78fab81c5491a64d2b9630c44971 | false | github | DF3NDR/paladin-dev-env | 42304251278 | 251303bcd143c5529c737afe8a2c61b05688f018 |
+| paladin-eval | 0.11.1 | 27ebb3750b506ad58168ca63cbbba1577fe3b06bac7634c0e5d5daaf4529da6b | false | github | DF3NDR/paladin-dev-env | 42304251278 | 251303bcd143c5529c737afe8a2c61b05688f018 |
+| paladin-herald | 0.11.1 | c2338c3488eee662f09994a80cb880cf4069a40d2fa37bda9fb6dedbb7f6949b | false | github | DF3NDR/paladin-dev-env | 42304251278 | 251303bcd143c5529c737afe8a2c61b05688f018 |
+| paladin-llm | 0.11.1 | a4ede054cd9ad296b6b7b86a978078fde0b4c330dd165ca5d37ac3c2d431a776 | false | github | DF3NDR/paladin-dev-env | 42304251278 | 251303bcd143c5529c737afe8a2c61b05688f018 |
+| paladin-memory | 0.11.1 | cb6e6d5f635ed8150057e60538985e5b2639fd643b01105ca794be6959fd65aa | false | github | DF3NDR/paladin-dev-env | 42304251278 | 251303bcd143c5529c737afe8a2c61b05688f018 |
+| paladin-notifications | 0.11.1 | 88e3c4c97d03640baa11ec161d67aea6653bf8c84c2aa004f17b15b277e9a765 | false | github | DF3NDR/paladin-dev-env | 42304251278 | 251303bcd143c5529c737afe8a2c61b05688f018 |
+| paladin-ports | 0.11.1 | 13607f3270eed519afc82168c0a98d6fc77488f95df7cfc43cfc2d4599ef3634 | false | github | DF3NDR/paladin-dev-env | 42304251278 | 251303bcd143c5529c737afe8a2c61b05688f018 |
+| paladin-storage | 0.11.1 | 02b9eea57452a69a7b0776024910df2b5bb8d0f94885dbcd8ff19c8cfa998ba0 | false | github | DF3NDR/paladin-dev-env | 42304251278 | 251303bcd143c5529c737afe8a2c61b05688f018 |
+| paladin-web | 0.11.1 | 459b4d2dd88b750c10956a7fcdc7fbba9c2a6dd0610fb57dc2b3b04bd76b6798 | false | github | DF3NDR/paladin-dev-env | 42304251278 | 251303bcd143c5529c737afe8a2c61b05688f018 |
+
+Assertions, each read from the table above:
+
+- rows = N = 12 (the probe fails on any mismatch or an empty derived set; it passed);
+- exactly one `0.11.1` line per crate in the sparse index (the probe fails on zero or two);
+- `yanked` is `false` in all 12 rows;
+- every checksum is 64 lowercase hex characters (the probe fails otherwise);
+- `trustpub_data` provider is `github` and repository is `DF3NDR/paladin-dev-env` in all 12 rows, so every crate
+  was published through Trusted Publishing from this repository and no long-lived token published any of them;
+- `run_id` is `42304251278` in all 12 rows, the tag-triggered release run recorded above;
+- `sha` is `251303bcd143c5529c737afe8a2c61b05688f018` (`SHA-B`, the merge commit and tag target) in all 12 rows.
+
+Comparison with the pre-tag baseline (`### Pre-tag baseline`): the baseline read 12 of 12 crates ABSENT at
+`0.11.1` with `0.11.0` newest; the present read shows `0.11.1` for all 12, and its checksums differ from the
+`0.11.0` ones, as they must. The registry, not the workflow log, is what establishes that the twelve crates are published.
+
 #### Post-merge ci.yml runs on SHA-B
 
 `gh api "repos/DF3NDR/paladin-dev-env/actions/runs?head_sha=251303bcd143c5529c737afe8a2c61b05688f018&per_page=100"`:
@@ -969,7 +1015,59 @@ condensation, no hand-run publish, no re-run. D-00s did not trip: no job is red,
 
 **Verdict for Task 2.** Every `ci.yml` run on `SHA-B` is `success`; every one of the twelve `release.yml` jobs is
 `success` with no manual step; the Release exists, is neither draft nor prerelease, and its body is 17049 characters
-with no truncation. The registry read follows.
+with no truncation.
+
+#### Keyless consumer smoke on the published 0.11.1 (D-13)
+
+A scratch crate outside the repository, built against the public registry only.
+
+- Location: `/tmp/claude-0/-home-user-paladin-dev-env/c62b0292-6a28-5efd-8101-f37a9af13e46/scratchpad/smoke-0.11.1/paladin-smoke-0-11-1/`
+  (a session scratchpad, not under `/home/user/paladin-dev-env`; `git rev-parse --show-toplevel` there fails with
+  `not a git repository`, so no workspace `Cargo.toml` is inherited). Created with `cargo new --bin
+  paladin-smoke-0-11-1 --vcs none`, then `cargo add paladin-ai@0.11.1` and `cargo add tokio --features
+  macros,rt-multi-thread`. Resulting manifest dependencies: `paladin-ai = "0.11.1"`, `tokio = { version =
+  "1.54.1", features = ["macros", "rt-multi-thread"] }`; no `[patch]`, no `path` dependency, no workspace
+  inheritance (`grep -c 'path\|patch' Cargo.toml` = 0). `CARGO_TARGET_DIR` was inside the scratchpad
+  (`.../smoke-0.11.1/target`). Toolchain: `rustc 1.97.0 (2d8144b78 2026-07-07)`, `cargo 1.97.0`.
+- Source: `src/main.rs` is the README `## Quick Example` code block taken verbatim from `README.md` at `SHA-B`
+  (`git show 251303bcd:README.md`), 32 lines: `paladin::MockLlmAdapter`, `PaladinBuilder`,
+  `PaladinExecutionService`, `CircuitBreaker`, `#[tokio::main]`.
+- Resolve: `cargo add` resolved from the crates.io index (`Updating crates.io index`, `Locking 419 packages`).
+- Build: `cargo build` (debug) finished `dev` profile in 1m 54s, exit 0, 0 warnings from the scratch crate.
+- Run: `cargo run` exit 0; the whole output is one line, the mock adapter's reply:
+
+  ```
+  Hello from Paladin!
+  ```
+
+- `Cargo.lock` proof: every `paladin-*` package in the resolved graph is `0.11.1` with
+  `source = "registry+https://github.com/rust-lang/crates.io-index"` (from `Cargo.lock` and `cargo tree --prefix none
+  --no-dedupe`):
+
+  | Package | Version | Source |
+  |---|---|---|
+  | paladin-ai | 0.11.1 | `registry+https://github.com/rust-lang/crates.io-index` |
+  | paladin-ai-core | 0.11.1 | `registry+https://github.com/rust-lang/crates.io-index` |
+  | paladin-battalion | 0.11.1 | `registry+https://github.com/rust-lang/crates.io-index` |
+  | paladin-herald | 0.11.1 | `registry+https://github.com/rust-lang/crates.io-index` |
+  | paladin-llm | 0.11.1 | `registry+https://github.com/rust-lang/crates.io-index` |
+  | paladin-memory | 0.11.1 | `registry+https://github.com/rust-lang/crates.io-index` |
+  | paladin-ports | 0.11.1 | `registry+https://github.com/rust-lang/crates.io-index` |
+  | paladin-storage | 0.11.1 | `registry+https://github.com/rust-lang/crates.io-index` |
+
+  Eight of the twelve crates are in `paladin-ai`'s default-feature dependency closure; `paladin-content`,
+  `paladin-eval`, `paladin-notifications` and `paladin-web` are not pulled in by the Quick Example's feature set,
+  and are covered by the registry table above, not by this smoke. The only non-registry package in the lock is the
+  scratch crate itself (`paladin-smoke-0-11-1 0.1.0`, a path source by construction).
+- Keyless (P-08-3): no `CARGO_REGISTRY_TOKEN`, no `~/.cargo/credentials*` file and no provider API-key variable
+  existed in the environment of this run (checked before the build); the example uses the offline mock adapter and
+  made no provider call.
+- Outcome: resolve, build and run all succeeded; nothing failed and nothing was fixed. Cleanup: the scratch
+  `target/` (2.2 GB) was deleted after recording; `df -h /` read 4.4 GB available before and 6.5 GB after.
+
+**Verdict for Task 3.** The twelve crates are on crates.io at `0.11.1`, un-yanked, with 64-hex checksums and a
+Trusted Publishing record naming this repository, run `42304251278` and `SHA-B`; a consumer with no workspace
+access resolves, builds and runs the README Quick Example against them without a key.
 
 ---
 

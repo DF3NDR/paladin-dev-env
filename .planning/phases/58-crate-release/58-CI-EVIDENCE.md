@@ -36,7 +36,7 @@ RESEARCH.md that was not re-measured is labelled as a research figure.
 - SHA-C1: 96eb49d385770a90271372a82376a9016ac496dc
 - SHA-C2: d88c519abb556ef32ad6def7533a4851754597f0
 - SHA-C3: ac9411ea0039eea6a4f61b3328977228cd766253
-- STAMP: 2026-11-05
+- STAMP: 2026-11-06 (redated from 2026-11-05 by plan 58-11, commit 1f6e639f2, D-16; twelve changelog heading lines only)
 - SHA-R: 48146bc99b6941a1d9fc50b60b5e6983c3f39dcf
 - SHA-R1: 073bdd9ce13bbdb6241f39a632712f96b6789dc2
 - SHA-A0: 801dd237ef8100e2208d7b1f311923861a19f120
@@ -1220,3 +1220,56 @@ redate:2026-11-06 CODEQL=dismiss-now AUDIT=validate-first
 - Release PR head is `d17716713` (planning-only diff from `SHA-A0`).
 - F-58-08: eight `rust/cleartext-logging` alerts, all assessed false positives; nothing dismissed by the agent.
 - Nothing pushed by plan 58-10; plan 58-11 pushes the evidence as `SHA-A1`.
+
+---
+
+## Plan 58-11 — tag day, CodeQL register and the evidence push (SHA-A1)
+
+Executed 2026-11-06 (UTC). Reads below are live REST reads from this sandbox unless marked otherwise.
+
+### Preconditions re-read
+
+- `main` (D-02): `gh api repos/DF3NDR/paladin-dev-env/branches/main --jq .commit.sha` = `8b23cb4c55a10fcf0b08fab1af595e1f184e5f2e`, unmoved; read again immediately before the push (see "Push" below).
+- PR 64: `open`, base `main`, head `d177167134df3562917d2b8c8875bcfb18c7a3ca`. The plan's literal precondition reads "the PR head still equals `- SHA-A0:`"; the head is `d17716713`, which differs from `SHA-A0` (`801dd237e`) only under `.planning/` (`git diff --name-only 801dd237e d17716713 -- . ':!.planning'` prints nothing; the planning-only commits 58-09 recorded the push, the PR and the resume file). The orchestrator pre-approved reading it that way; no code outside `.planning/` changed between `SHA-A0` and that head, and `origin/claude/laughing-dirac-e0h2ax` read `d17716713` before any 58-11 commit.
+- 58-10 reply: recorded verbatim under `## Maintainer decisions (58-10)` above: `redate:2026-11-06 CODEQL=dismiss-now AUDIT=validate-first`.
+
+### Tag-day handling (D-16 / D-00n): redate
+
+Reply `redate:2026-11-06`, `STAMP` was `2026-11-05`. Exactly one `docs(release)` commit, `1f6e639f2` (`docs(release): date the 0.11.1 changelog sections to the tag day (D-16)`), changed the twelve heading lines
+(line 10 of `CHANGELOG.md` and the eleven `crates/*/CHANGELOG.md`) from `## [0.11.1] - 2026-11-05` to `## [0.11.1] - 2026-11-06`; `git diff -U0` showed 12 insertions and 12 deletions, every one a heading line, and nothing else. `- STAMP:` in Provenance now reads `2026-11-06` with a note.
+
+Re-seal row 7 re-read on that head (results are also in row 7 of `58-ACCEPTANCE-AUDIT.md`):
+
+| Check | Result |
+|-------|--------|
+| `make check-gates` | exit 0 (every guard OK, including `128 file(s) scanned, every copyable version string equals '0.11.1'`, `627 file(s) (19 test-only), 0 finding(s)`, `184 file(s) scanned, 0 deprecated model literal(s) (allowlisted: 1)`) |
+| `make check-changelogs` | exit 0 (`11 publishable crate(s) checked, all have a CHANGELOG.md`) |
+| `make check-release-consistency RELEASE_TAG=v0.11.1` | exit 0 (`OK: 12 publishable package(s) checked, all match tag version '0.11.1' with a changelog section for it`; its own NOTE: the CI-conclusion clause was not checked locally) |
+| twelve heading greps | 12 of 12: `## [Unreleased]` count 1, `## [0.11.1] - 2026-11-06` count 1, `## [0.11.1] - 2026-11-05` count 0, the first dated `## [` heading |
+| `scripts/extract-changelog-section.sh --version 0.11.1` | exit 0; release body 16,075 characters/bytes (limit 125,000) |
+
+### CodeQL: the eight F-58-08 alerts are registered; GitHub dismissal is pending the maintainer (`CODEQL=dismiss-now`)
+
+The maintainer listed the open alerts on PR 64 (authenticated, 2026-11-06); the code-scanning endpoints answer 403 from this sandbox, so these numbers are the maintainer's, matched here to the annotation lines recorded under F-58-08:
+
+| alert_number | path:line | what is logged (re-read in this plan on the current tree) |
+|---|---|---|
+| 100 | `src/infrastructure/web/run_api_wiring.rs:1377` | `log::warn!("{line}");` over `operator_webhook_secret_warning_line(...)`, a fixed sentence naming the config key and env var |
+| 99 | `src/infrastructure/web/run_api_wiring.rs:2945` | test assertion message `"{line}"` over the same constant line |
+| 98 | `src/infrastructure/web/run_api_wiring.rs:2944` | test assertion message |
+| 97 | `src/infrastructure/web/run_api_wiring.rs:2943` | test assertion message |
+| 96 | `src/infrastructure/web/run_api_wiring.rs:2941` | test assertion message |
+| 95 | `src/infrastructure/web/run_api_wiring.rs:2937` | test assertion message |
+| 94 | `src/infrastructure/web/run_api_wiring.rs:2934` | `panic!("secret {secret:?} must warn")` over a loop variable that is `None` or the empty string |
+| 93 | `src/main.rs:59` | `info!("{}", settings_summary(&config));` -- counts only, `http.auth.api_keys.len()` an integer |
+
+All eight: rule `rust/cleartext-logging`, CodeQL 2.27.4, `security_severity_level: high`, `severity: warning`. The line numbers match the source on the head (`git diff --name-only 801dd237e HEAD -- src` is empty).
+Commit `045e1aef0` (`docs(58-11): register the eight F-58-08 CodeQL dismissals (rust/cleartext-logging false positives)`) adds eight `[[dismissal]]` entries to `CODEQL-DISMISSALS.md` (owner `DF3NDR`, `dismissed_reason = "false positive"`, review date 2027-06-30 with the Phase 52 batch, scope, compensating controls DF-07 / T-57-19 test / `settings_summary` sentinel tests / advisory-only status / manual credential-handling review),
+moves `Declared dismissals` and the heading from 37 to 45, and adds a Phase 58 batch paragraph. `make check-codeql-dismissals` exit 0: `45 governed dismissal(s) checked; schema, drift, staleness, uniqueness and reachability clauses all pass.`
+**Alerts 93-100 are registered; the GitHub dismissal is pending the maintainer** (the exact `gh api -X PATCH` loop is in the sign-off hand-off). The agent called no code-scanning write.
+
+**Observation for the maintainer, not dispositioned and not acted on (outside F-58-08):** the same listing showed **24 open alerts at `Cargo.lock:1`** (alert numbers 2 through 92), older and pre-existing, and not among the "8 new alerts" on this PR. They are recorded here only so the count is on file.
+
+### Push (D-04)
+
+`SHA-A1` is the commit this section lands in (`docs(58-11): evidence before the sign-off`), pushed plain (no force) to `claude/laughing-dirac-e0h2ax` after `main` was re-read at `8b23cb4c5`. Its hash is recorded in Provenance as `- SHA-A1:` in the **working tree only, uncommitted by design**: nothing is committed on the release branch after the push, so the maintainer's tick commit (`SHA-A2`) is its next and last commit. The same holds for this plan's push read-back and the plan 58-11 SUMMARY; they land on `chore/58-close` (plan 58-13).

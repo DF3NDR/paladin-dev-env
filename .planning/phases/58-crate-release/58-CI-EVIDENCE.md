@@ -1195,3 +1195,28 @@ Plan 58-15 changes what a library consumer can observe (WR-09 may change the ser
 - SHA-E CI (F-58-04): all four runs on SHA-E `9166fe1fe` concluded `cancelled`; on the descendant `33cdc08e0` (zero diff over `src`, `crates`, `Cargo.lock`, `Cargo.toml`, `scripts/sdk-smoke`, `docs/schemas`) `ci.yml` run `41965173591` is `success`, SDK smoke job `127040942208` `success`, `Build & Test (cli)` job `127040405991` `success`.
 - F-58-03: one CI failure (run `41946243320`, job `126979605660`), one pass on the next head (run `41949135304`, job `126988618263`), `0/30` single and `0/10` module local failures; not reproduced.
 - Recorded defaults, unobjected: the pre-tag milestone audit is scoped to Phases 52-57 with FIXES-04 under `re_homed_requirements:`; SHIP-08/09/10 are proven by the post-tag registry read; the two stale `docs/src/api-reference` version statements are fixed in bump commit 3; the SDK smoke is a tag precondition.
+
+## Maintainer decisions (58-10)
+
+The Task 3 decision checkpoint (plan 58-10, tag day) was answered by the repo maintainer on 2026-11-06 (UTC). The reply is recorded verbatim:
+
+```
+redate:2026-11-06 CODEQL=dismiss-now AUDIT=validate-first
+```
+
+**Resolved decision:** `TAGDAY=2026-11-06 (redate from STAMP 2026-11-05) CODEQL=dismiss-now AUDIT=validate-first`.
+
+### How each answer is applied
+
+| Answer | Value | Where it lands | Read by |
+|--------|-------|----------------|---------|
+| tag day | `redate:2026-11-06` (`STAMP` is `2026-11-05`) | Plan 58-11 redates the twelve `## [0.11.1] - 2026-11-05` changelog headings to `2026-11-06` in one `docs(release)` commit (D-00n: heading date equals tag date) and re-reads re-seal row 7 on that head | 58-11 |
+| `CODEQL` | `dismiss-now` | The maintainer dismisses the eight F-58-08 alerts on GitHub as false positives (a GitHub write; the agent performs none). Plan 58-11 adds the eight governed rows (owner, review date, scope, compensating control) to `CODEQL-DISMISSALS.md` and runs `make check-codeql-dismissals` green | 58-11 |
+| `AUDIT` | `validate-first` | Done in this plan before the audit was re-read: Phases 54 and 56 validated by the planning-only nyquist audit (commit `47fd13d53`, both `status: validated`, `nyquist_compliant: true`, no code or test file changed); the milestone audit was then re-read against that head (see `.planning/v0.11.1-MILESTONE-AUDIT.md`) | 58-10 |
+
+### State at the time of the answer (read from the files)
+
+- `SHA-A0` `801dd237ef8100e2208d7b1f311923861a19f120`; labelled `ci.yml` run `42131869587` `success` (39 jobs); 46 of 46 required contexts `success`; `Coverage` 92.86 % against the 82 % floor; semver 12 packages x 223 checks, 0 failures; `End-to-End Tests`, `Publish Dry Run`, the SDK smoke and the MSRV job `success` (all in `### Plan 58-10 — every run on SHA-A0 (labelled)`).
+- Release PR head is `d17716713` (planning-only diff from `SHA-A0`).
+- F-58-08: eight `rust/cleartext-logging` alerts, all assessed false positives; nothing dismissed by the agent.
+- Nothing pushed by plan 58-10; plan 58-11 pushes the evidence as `SHA-A1`.

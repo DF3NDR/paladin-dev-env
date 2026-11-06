@@ -848,6 +848,129 @@ Run at 2026-11-05T03:18:52Z (`absent`) and 03:18:58Z (`baseline`), HTTP 200 for 
 Pre-tag expectation met: rows = 12 = N; every newest line is `0.11.0` with `yanked` `false`; no `0.11.1` line
 exists for any crate. The `cksum` values equal those Phase 47 recorded for the published `0.11.0`.
 
+### Post-publish verification
+
+Plan 58-13 reads, after the tag, what the release actually produced. Everything below was read on 2026-11-06 (after
+22:35Z, the release run's completion) with unauthenticated REST GETs on this public repository; nothing was
+re-run, re-dispatched, published by hand or yanked (P-08-1), and no credential of any kind was used (P-08-3). The
+registry is the proof of publication (P-08-2, D-00h); the workflow rows below describe how it got there.
+
+#### Post-merge ci.yml runs on SHA-B
+
+`gh api "repos/DF3NDR/paladin-dev-env/actions/runs?head_sha=251303bcd143c5529c737afe8a2c61b05688f018&per_page=100"`:
+`total_count` 6 (the five push-to-`main` runs from the merge plus the tag-triggered `release.yml` run). Exactly one
+of them is `ci.yml`, so the run `check-release-consistency` treats as deciding is this one and it is `success`
+(E3 backstop: every `ci.yml` run on `SHA-B` read, not only the first listed).
+
+| Workflow | Run id | Event | Branch | Conclusion | Created | Updated |
+|----------|--------|-------|--------|------------|---------|---------|
+| `ci.yml` | [`42272241102`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42272241102) | push | `main` | success (`run_attempt` 1) | 2026-11-06T18:36:29Z | 2026-11-06T20:05:33Z |
+| `codeql.yml` | [`42272241068`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42272241068) | push | `main` | success | 2026-11-06T18:36:29Z | 2026-11-06T18:54:12Z |
+| `feature-flags.yml` | [`42272241351`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42272241351) | push | `main` | success | 2026-11-06T18:36:29Z | 2026-11-06T18:52:23Z |
+| `Docs` | [`42272241496`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42272241496) | push | `main` | success | 2026-11-06T18:36:29Z | 2026-11-06T18:42:51Z |
+| `pre-commit` | [`42272241069`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42272241069) | push | `main` | success | 2026-11-06T18:36:29Z | 2026-11-06T18:42:41Z |
+
+Jobs of `ci.yml` run `42272241102` (`gh api .../actions/runs/42272241102/jobs?per_page=100&page=1,2`): 39 jobs, 38
+`success`, 1 `skipped` (`Benchmark Regression Signal (Non-Blocking)`, non-blocking by design), 0 red. The
+`Generated SDK Clients (Python + TypeScript) smoke` job
+([`128079464448`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42272241102/job/128079464448)) is `success`.
+
+#### The tag-triggered release.yml run, per job
+
+Run [`42304251278`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42304251278): workflow `Release`
+(`.github/workflows/release.yml`), event `push`, `head_branch` `v0.11.1`, `head_sha` `SHA-B`
+(`251303bcd143c5529c737afe8a2c61b05688f018`), `run_attempt` 1 (never re-run), created 2026-11-06T22:22:45Z (six
+seconds after the tag), `status: completed`, `conclusion: success` at 2026-11-06T22:35:11Z. 12 jobs, all
+`success`:
+
+| `release.yml` job | Job name | Conclusion | Job id and URL |
+|-------------------|----------|------------|----------------|
+| `verify-tag-source` | Verify Tag From Main | success | [`128189466796`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42304251278/job/128189466796) |
+| `check-release-consistency` | Pre-Publish Consistency Gate | success | [`128189540098`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42304251278/job/128189540098) |
+| `create-release` | Create Release | success | [`128189540127`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42304251278/job/128189540127) |
+| `test` | Test Suite | success | [`128189540148`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42304251278/job/128189540148) |
+| `sbom` | Generate SBOM | success | [`128189620139`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42304251278/job/128189620139) |
+| `build-binaries` | Build Binaries (ubuntu-latest, aarch64-unknown-linux-gnu, paladin-linux-arm64) | success | [`128189620230`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42304251278/job/128189620230) |
+| `build-binaries` | Build Binaries (macos-latest, aarch64-apple-darwin, paladin-macos-arm64) | success | [`128189620269`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42304251278/job/128189620269) |
+| `build-binaries` | Build Binaries (macos-latest, x86_64-apple-darwin, paladin-macos-amd64) | success | [`128189620280`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42304251278/job/128189620280) |
+| `build-binaries` | Build Binaries (ubuntu-latest, x86_64-unknown-linux-gnu, paladin-linux-amd64) | success | [`128189620400`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42304251278/job/128189620400) |
+| `build-docker` | Build and Push Docker Images | success | [`128189620342`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42304251278/job/128189620342) |
+| `publish-crates` | Publish to crates.io | success | [`128191963842`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42304251278/job/128191963842) |
+| `finalize-release-body` | Finalize Release Body | success | [`128194658510`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42304251278/job/128194658510) |
+
+Log reads (the job logs were readable through `gh api repos/DF3NDR/paladin-dev-env/actions/jobs/<id>/logs`):
+
+- `verify-tag-source`: `Release commit 251303bcd143c5529c737afe8a2c61b05688f018 is contained in origin/main.`
+- `check-release-consistency`: `OK: 12 publishable package(s) checked, all match tag version '0.11.1' with a changelog section for it.`
+- `publish-crates`: step `Authenticate with crates.io` (`rust-lang/crates-io-auth-action@v1`) printed `Retrieved JWT token
+  successfully` / `Retrieved token successfully` (an OIDC-minted Trusted Publishing token, masked as `***`); step
+  `Publish crates in dependency order` ran `./scripts/publish-crates.sh --version v0.11.1` with `PUBLISH_DRY_RUN:
+  false`; post-job cleanup printed `Revoking trusted publishing token ... Token revoked successfully`. The
+  `publish-crates.sh` outcome table, from the job's own log:
+
+  | Crate | Outcome |
+  |---|---|
+  | paladin-ai-core | published-now |
+  | paladin-ports | published-now |
+  | paladin-herald | published-now |
+  | paladin-battalion | published-now |
+  | paladin-llm | published-now |
+  | paladin-memory | published-now |
+  | paladin-web | published-now |
+  | paladin-notifications | published-now |
+  | paladin-content | published-now |
+  | paladin-storage | published-now |
+  | paladin-eval | published-now |
+  | paladin-ai | published-now |
+
+  Twelve rows, all `published-now`; no `already-at-this-version`, `skipped` or `failed`. The log is the workflow's
+  own account and is NOT taken as proof of publication; the sparse-index table below is (P-08-2).
+
+**Manual steps between the tag and the publish: none.** The run is the tag push's own (event `push`, `run_attempt` 1,
+no `workflow_dispatch`, `DRY_RUN_INPUT` empty), started six seconds after the tag at 22:22:45Z; `publish-crates`
+started at 22:28:41Z once `test`, `create-release` and `check-release-consistency` had passed. No changelog
+condensation, no hand-run publish, no re-run. D-00s did not trip: no job is red, nothing was diagnosed or recovered.
+
+#### The GitHub Release v0.11.1 (D-00r, the release-body guard's first live run)
+
+`gh api repos/DF3NDR/paladin-dev-env/releases/tags/v0.11.1`:
+
+- name `Release v0.11.1`; `draft` `false`; `prerelease` `false`; `tag_name` `v0.11.1`; created 2026-11-06T22:22:39Z,
+  published 2026-11-06T22:23:05Z; author `github-actions[bot]`;
+  <https://github.com/DF3NDR/paladin-dev-env/releases/tags/v0.11.1>.
+- body length: 17049 characters (`wc -m` under a UTF-8 locale; `jq '.body | length'` also 17049) and 17059 bytes
+  (`wc -c`), against the 125,000-character limit GitHub enforces (13.6 % of it). The body carries no carriage
+  returns.
+- Truncation sentinel `<!-- paladin:release-truncated -->`: **absent** (0 occurrences). `release-body-fit.sh` had
+  nothing to cut, so no truncation footer was written and the guard's no-op path is what ran live.
+- Artifact block: the `<!-- paladin:release-artifacts -->` marker occurs exactly once (the block was rebuilt, not
+  stacked), followed by `## Release Artifacts` with `### Container image`
+  (`docker pull ghcr.io/df3ndr/paladin-dev-env@sha256:1fcf5a4aa7ecf0d232912ea6489cd772445265c400c48b027e950a050aac7672`,
+  pushed tag `ghcr.io/df3ndr/paladin-dev-env:0.11.1`), `### Downloads and verification`, `### SBOM` and
+  `### Image size`. The footer line `finalize-release-body.sh` writes is the last line of the body:
+  `Measured image size: 33 MB -- within target (500 MB target, advisory only).`
+- Assets: **10**, all `state: uploaded`:
+
+  | Asset | Size (bytes) |
+  |-------|--------------|
+  | `paladin-linux-amd64.tar.gz` | 21292222 |
+  | `paladin-linux-amd64.tar.gz.sha256` | 93 |
+  | `paladin-linux-arm64.tar.gz` | 23432629 |
+  | `paladin-linux-arm64.tar.gz.sha256` | 93 |
+  | `paladin-macos-amd64.tar.gz` | 20023607 |
+  | `paladin-macos-amd64.tar.gz.sha256` | 93 |
+  | `paladin-macos-arm64.tar.gz` | 18540324 |
+  | `paladin-macos-arm64.tar.gz.sha256` | 93 |
+  | `paladin-v0.11.1.cdx.json` | 499438 |
+  | `SHA256SUMS` | 372 |
+
+  Four binary tarballs, four `.sha256` files, the CycloneDX SBOM and the aggregate `SHA256SUMS`; the body's
+  "Downloads and verification" list names the same ten.
+
+**Verdict for Task 2.** Every `ci.yml` run on `SHA-B` is `success`; every one of the twelve `release.yml` jobs is
+`success` with no manual step; the Release exists, is neither draft nor prerelease, and its body is 17049 characters
+with no truncation. The registry read follows.
+
 ---
 
 ## Findings carried forward (D-00d)

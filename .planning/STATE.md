@@ -6,7 +6,7 @@ current_phase: 58
 current_phase_name: Crate Release
 status: executing
 stopped_at: "Completed 58-13-PLAN.md; next: plan 58-14 Task 1 on chore/58-close (local, unpushed)"
-last_updated: "2026-11-06T22:44:46.404Z"
+last_updated: "2026-11-06T22:47:30.257Z"
 last_activity: 2026-11-05
 last_activity_desc: Phase 58 execution started
 progress:
@@ -878,6 +878,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 58]: 58-10: tag day redated to 2026-11-06 (STAMP 2026-11-05); CODEQL=dismiss-now (eight F-58-08 alerts, governed rows in 58-11); AUDIT=validate-first (Phases 54 and 56 validated, milestone audit re-read as passed)
 - [Phase 58]: [58-11] Tag day 2026-11-06 applied; maintainer's tick dffa996fa (SHA-A2) verified read-only on origin as a one-token change on SHA-A1 and the PR 64 head; CodeQL dismissal of 93-100 taken on the maintainer's word (403 from sandbox)
 - [Phase 58]: [58-12] Maintainer `proceed` at the one-way door; PR 64 merged with a merge commit (SHA-B 251303bcd); annotated tag v0.11.1 (65b13ed08) on SHA-B on 2026-11-06, equal to merge_commit_sha; release.yml run 42304251278 in progress; nothing committed (58-13 carries it)
+- [Phase 58]: v0.11.1 released: tag `v0.11.1` on merge commit `251303bcd143c5529c737afe8a2c61b05688f018`, release run `42304251278`, 12/12 crates registry-verified at `0.11.1`, Trusted Publishing; milestone audit over Phases 52-57 `passed` — Ticked on the sparse-index table and the keyless smoke, not on the merge
 
 ### Pending Todos
 

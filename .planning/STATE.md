@@ -5,15 +5,15 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 58
 current_phase_name: Crate Release
 status: executing
-stopped_at: "Completed 58-12-PLAN.md; tag v0.11.1 pushed on SHA-B 251303bcd; release.yml run 42304251278 in progress (next: plan 58-13 Task 1 after it concludes)"
-last_updated: "2026-11-06T22:30:00.000Z"
+stopped_at: "Completed 58-13-PLAN.md; next: plan 58-14 Task 1 on chore/58-close (local, unpushed)"
+last_updated: "2026-11-06T22:44:46.404Z"
 last_activity: 2026-11-05
 last_activity_desc: Phase 58 execution started
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 84
-  completed_plans: 82
+  completed_plans: 83
 ---
 
 # Project State
@@ -53,11 +53,11 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 ## Current Position
 
 Phase: 58 (Crate Release) — EXECUTING
-Plan: 13 of 14
+Plan: 14 of 14
 Status: Ready to execute
 Last activity: 2026-11-05 — Phase 58 execution started
 
-Progress: [█████████████████░░░] 6/7 phases (v0.11.1) — plans [████████████████████] 68/68 ([██████████] 98%)
+Progress: [█████████████████░░░] 6/7 phases (v0.11.1) — plans [████████████████████] 68/68 ([██████████] 99%)
 
 ## Performance Metrics
 
@@ -444,6 +444,7 @@ Progress: [█████████████████░░░] 6/7 pha
 | Phase 58 P10 | 1h | 3 tasks | 6 files |
 | Phase 58 P11 | about 1h50m incl. checkpoint pause | 3 tasks | 17 files |
 | Phase 58 P12 | about 5h20m incl. checkpoint pauses | 3 tasks | 0 files committed (plan forbids commits) |
+| Phase 58 P13 | 10min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1298,8 +1299,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-11-06T22:30:00.000Z
-Stopped at: Completed 58-12-PLAN.md; tag v0.11.1 pushed on SHA-B 251303bcd; release.yml run 42304251278 in progress (next: plan 58-13 Task 1 after it concludes)
+Last session: 2026-11-06T22:44:46.376Z
+Stopped at: Completed 58-13-PLAN.md; next: plan 58-14 Task 1 on chore/58-close (local, unpushed)
 Resume file: .planning/phases/58-crate-release/.continue-here.md
 
 ## Operator Next Steps

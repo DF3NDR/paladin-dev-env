@@ -661,7 +661,7 @@ Plans:
 
 **Wave 11** *(blocked on Wave 10 completion)*
 
-- [ ] 58-13-PLAN.md — post-tag: tag equals the PR merge commit, `chore/58-close`, release run and GitHub Release read, twelve-crate registry table with Trusted Publishing, keyless scratch-crate smoke (SHIP-08)
+- [x] 58-13-PLAN.md — post-tag: tag equals the PR merge commit, `chore/58-close`, release run and GitHub Release read, twelve-crate registry table with Trusted Publishing, keyless scratch-crate smoke (SHIP-08)
 
 **Wave 12** *(blocked on Wave 11 completion)*
 

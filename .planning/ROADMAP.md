@@ -665,7 +665,7 @@ Plans:
 
 **Wave 12** *(blocked on Wave 11 completion)*
 
-- [ ] 58-14-PLAN.md — post-tag: MILESTONES release record, SHIP-08/09/10 ticked on the registry table, web3sec and ready-to-close hand-offs, the documentation-only close PR (SHIP-08, SHIP-09, SHIP-10)
+- [x] 58-14-PLAN.md — post-tag: MILESTONES release record, SHIP-08/09/10 ticked on the registry table, web3sec and ready-to-close hand-offs, the documentation-only close PR (SHIP-08, SHIP-09, SHIP-10)
 
 **Scope notes**:
 

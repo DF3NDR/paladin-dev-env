@@ -1788,3 +1788,14 @@ hand-offs).
 
   with the body written to a file (what lands, why a separate branch, the pointer to `58-READY-TO-CLOSE.md`, the
   maintainer's remaining acts, the attribution lines). Its result is recorded below.
+
+**Push and pull request, as read back (2026-11-06T22:50Z).** `git push origin chore/58-close` (plain, no force)
+created the branch on the remote at `2fb4c4332710a7f12b80e99bf7327b1264690874` (`git ls-remote --heads origin
+chore/58-close` equals `git rev-parse HEAD` at that moment). The single REST write above returned the pull request
+object: [#65](https://github.com/DF3NDR/paladin-dev-env/pull/65), `docs(58): v0.11.1 release record`,
+`chore/58-close` into `main`, `state: open`, `draft: false`, head `2fb4c4332710a7f12b80e99bf7327b1264690874`,
+base `main` at `251303bcd143c5529c737afe8a2c61b05688f018`, 7 commits, 11 changed files (the same 11 as the
+documentation-only assertion). No label, reviewer, auto-merge or merge was set by the agent (P-08-1). The body as
+stored ends with a harness-appended attribution footer in place of the two attribution lines the plan names; it is
+recorded here as read, not edited. Commits added after the open (this record, the plan summary and the tracking
+files) ride the same branch and are pushed before the plan returns.

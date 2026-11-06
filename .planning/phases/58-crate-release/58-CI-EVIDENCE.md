@@ -462,6 +462,345 @@ The agent applied no label and ran no merge, tag or dispatch command in this pla
 
 ---
 
+### Plan 58-10 — every run on SHA-A0 (labelled)
+
+**Substitutions recorded (orchestrator instruction).** Where the plan reads `SHA-P` the pre-bump head is `SHA-P2` `042df99b2c48bc249c206fdba6372e1e67b34e7d`; where it reads `SHA-S`, `SHA-S2` `0143b50d596eee90a3b185c2e9ce94ad0292a2a8`.
+
+**Step 1 re-check (read-only, 2026-11-06T00:59Z).** `gh api repos/DF3NDR/paladin-dev-env/branches/main --jq .commit.sha` printed `8b23cb4c55a10fcf0b08fab1af595e1f184e5f2e` (D-02, unmoved). **The PR head is not `SHA-A0` any more**: `gh api repos/DF3NDR/paladin-dev-env/pulls/64` reads `head.sha` `d177167134df3562917d2b8c8875bcfb18c7a3ca` (labels `release`, state open, `mergeable_state` `blocked`), the local head and the remote tip. It is `SHA-A0` plus the three `docs(58-09)` commits `30068e4b4`, `829c7afc2`, `d17716713`, pushed by the orchestrator at about 2026-11-06T00:57Z, after the labelled run had been created (`.continue-here.md` had said no push until this read; the push was made on the orchestrator's instruction and is recorded here, not hidden). `git diff --name-only 801dd237e d17716713` prints exactly five files, all under `.planning/`: `ROADMAP.md`, `STATE.md`, `phases/58-crate-release/.continue-here.md`, `58-09-SUMMARY.md`, `58-CI-EVIDENCE.md`; `git diff --name-only 801dd237e d17716713 -- src` is empty, so the code and every manifest are `SHA-A0`'s. The push started a second set of runs on `d17716713` (push: `ci.yml` `42140546464`, `codeql.yml` `42140546533`, `feature-flags.yml` `42140546470`, `pre-commit` `42140546468`; pull_request: `ci.yml` `42140554168`, `codeql.yml` `42140554252`, `feature-flags.yml` `42140554092`, `pre-commit` `42140554155`, `Docs` `42140554075`), all `queued` or `in_progress` when listed and **not waited for** (D-00i). This plan records `SHA-A0` as its plan text and the orchestrator's instruction define; the merge-time read of the required contexts on the final head is plan 58-12's, on `SHA-A2` (D-04).
+
+**Read.** Once, on 2026-11-06 between 00:59Z and 01:10Z, with `gh api "repos/DF3NDR/paladin-dev-env/actions/runs?head_sha=801dd237ef8100e2208d7b1f311923861a19f120&per_page=100"`, then per run `gh api "repos/DF3NDR/paladin-dev-env/actions/runs/<id>/jobs?per_page=100&page=N"` (163 jobs; page 2 empty for the two `ci.yml` runs) and `commits/801dd237ef8100e2208d7b1f311923861a19f120/check-runs?per_page=100&page=1..2` (167 check runs). Every run is `status: completed`; no run and no job is `failure` or `cancelled`; the F-58-03 flake rule and the infrastructure re-run were not needed and **nothing was re-run**.
+
+| Workflow | Run id | Event | Conclusion | Jobs |
+|----------|--------|-------|------------|------|
+
+| `ci.yml` (**the labelled run**: event `pull_request`, after the `release` label, created 2026-11-05T23:45:57Z) | [`42131869587`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587) | pull_request | success | 39: 39 success |
+| `pre-commit` | [`42113363630`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363630) | pull_request | success | 1: 1 success |
+| `Docs` | [`42113364040`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364040) | pull_request | success | 2: 1 success, 1 skipped |
+| `codeql.yml` | [`42113363710`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363710) | pull_request | success | 1: 1 success |
+| `feature-flags.yml` | [`42113363679`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679) | pull_request | success | 20: 20 success |
+| `ci.yml` | [`42113364279`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279) | pull_request | success | 39: 38 success, 1 skipped |
+| `codeql.yml` | [`42113280624`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280624) | push | success | 1: 1 success |
+| `pre-commit` | [`42113280716`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280716) | push | success | 1: 1 success |
+| `feature-flags.yml` | [`42113280630`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280630) | push | success | 20: 20 success |
+| `ci.yml` | [`42113280622`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622) | push | success | 39: 37 success, 2 skipped |
+
+The only non-success jobs are four `skipped` ones, none of them a required context's deciding run: `End-to-End Tests` on the two runs that were not started by the `labeled` event (`127568473510`, `127566138899`; it ran and passed on the labelled run), `Benchmark Regression Signal (Non-Blocking)` `127546308127` (push run; it ran and passed on the labelled run) and `Deploy to GitHub Pages` `127551421017` (`Docs`, not a PR deploy). The feature-flags runs each have 20 jobs; the 58-07 section's "21 jobs" for the `SHA-P2` run was a miscount (the job-name sets of the `SHA-P2` and `SHA-A0` feature-flags runs are identical, 20 names).
+
+**Outside the workflow runs, one check run is not green.** The Code Scanning check run `CodeQL` (id `127553770360`, app `github-advanced-security`) concluded `failure` while both `codeql.yml` runs concluded `success`; it is recorded as **F-58-08** below. The other three check runs that belong to no workflow job (`Socket Security: Project Report` `127546466163`, `Socket Security: Pull Request Alerts` `127546566442`, `osv-scanner` `127551339455`) are `success`. Totals over the 167 check runs on `SHA-A0`: 162 success, 4 skipped (the four above), 1 failure (`CodeQL`).
+
+#### Jobs of `ci.yml`, labelled run `42131869587`
+
+| Job | Conclusion | URL |
+|-----|------------|-----|
+| Semver Checks (vs v0.11.0) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217425 |
+| Redis Node Cache Contract Suite (live server) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217684 |
+| Postgres Storage Contract Suites (live server) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217730 |
+| MSRV (Rust 1.88) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217740 |
+| Generated SDK Clients (Python + TypeScript) smoke | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217747 |
+| License & Dependency Policy | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217763 |
+| Redis Cadence Contract Suite (live server) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217813 |
+| Crate Isolation (paladin-ports) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217817 |
+| Workflow Lint | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217847 |
+| Integration Tests | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217868 |
+| CLI Snapshot Tests | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217877 |
+| Coverage | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217880 |
+| Benchmark Compile Check | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217886 |
+| API Surface Tracking | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217889 |
+| E2E Platform API (PRD 06 acceptance-1 lifecycle + SHIP-02 boot proof) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217895 |
+| Security Audit | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217897 |
+| Unit Tests (beta) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217946 |
+| Redis Run Queue Contract Suite (live server) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217974 |
+| Code Quality | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217980 |
+| Docker Integration Tests | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610218061 |
+| Unit Tests (stable) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610218062 |
+| Crate Isolation (paladin-notifications) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610218179 |
+| Crate Isolation (paladin-llm) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610218232 |
+| Crate Isolation (paladin-battalion) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610218247 |
+| Crate Isolation (paladin-ai) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610218253 |
+| Crate Isolation (paladin-web) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610218259 |
+| Benchmark Regression Signal (Non-Blocking) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610218266 |
+| Ollama Integration Tests (live server) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610218270 |
+| Crate Isolation (paladin-content) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610218312 |
+| Crate Isolation (paladin-ai-core) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610218317 |
+| Crate Isolation (paladin-storage) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610218349 |
+| Consumer-Surface Muster | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610218479 |
+| OSV Scanner | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610218571 |
+| Crate Isolation (paladin-memory) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610218725 |
+| Example Muster (Feature Matrix) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127612947486 |
+| Docker Build | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127613034581 |
+| Publish Dry Run | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127613034679 |
+| End-to-End Tests | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127617989806 |
+| Kubernetes Smoke Test | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127632201425 |
+
+#### Jobs of `ci.yml`, pull_request run `42113364279`
+
+| Job | Conclusion | URL |
+|-----|------------|-----|
+| Security Audit | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546456046 |
+| Code Quality | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546456254 |
+| API Surface Tracking | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546456338 |
+| Crate Isolation (paladin-ai) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546456344 |
+| Crate Isolation (paladin-llm) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546456374 |
+| Crate Isolation (paladin-storage) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546456381 |
+| OSV Scanner | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546456401 |
+| Crate Isolation (paladin-battalion) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546456405 |
+| License & Dependency Policy | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546456408 |
+| MSRV (Rust 1.88) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546456416 |
+| Crate Isolation (paladin-ports) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546456455 |
+| Generated SDK Clients (Python + TypeScript) smoke | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546456459 |
+| Benchmark Compile Check | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546456474 |
+| Crate Isolation (paladin-content) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546456489 |
+| Workflow Lint | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546456509 |
+| Crate Isolation (paladin-notifications) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546456515 |
+| Crate Isolation (paladin-memory) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546456542 |
+| Semver Checks (vs v0.11.0) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546456565 |
+| Crate Isolation (paladin-web) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546456571 |
+| Redis Cadence Contract Suite (live server) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546456582 |
+| Integration Tests | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546456592 |
+| Coverage | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546456616 |
+| Postgres Storage Contract Suites (live server) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546456620 |
+| Consumer-Surface Muster | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546456625 |
+| Redis Run Queue Contract Suite (live server) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546456659 |
+| Crate Isolation (paladin-ai-core) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546456704 |
+| Ollama Integration Tests (live server) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546456743 |
+| Unit Tests (stable) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546456777 |
+| Unit Tests (beta) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546456806 |
+| CLI Snapshot Tests | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546456817 |
+| Docker Integration Tests | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546456932 |
+| Benchmark Regression Signal (Non-Blocking) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546457043 |
+| Redis Node Cache Contract Suite (live server) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546457064 |
+| E2E Platform API (PRD 06 acceptance-1 lifecycle + SHIP-02 boot proof) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127546457308 |
+| Example Muster (Feature Matrix) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127553136098 |
+| Docker Build | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127560627648 |
+| Publish Dry Run | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127560627784 |
+| End-to-End Tests | skipped | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127568473510 |
+| Kubernetes Smoke Test | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364279/job/127591566039 |
+
+#### Jobs of `ci.yml`, push run `42113280622`
+
+| Job | Conclusion | URL |
+|-----|------------|-----|
+| Code Quality | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546305299 |
+| Security Audit | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546305737 |
+| Unit Tests (beta) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546305755 |
+| Integration Tests | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546305834 |
+| Crate Isolation (paladin-ai-core) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546305874 |
+| Crate Isolation (paladin-battalion) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546305877 |
+| Unit Tests (stable) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546305926 |
+| Crate Isolation (paladin-llm) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546305959 |
+| Workflow Lint | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546305965 |
+| Crate Isolation (paladin-ai) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546305972 |
+| API Surface Tracking | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546305982 |
+| OSV Scanner | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546305986 |
+| Crate Isolation (paladin-notifications) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546305996 |
+| Semver Checks (vs v0.11.0) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546306045 |
+| Crate Isolation (paladin-memory) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546306048 |
+| Crate Isolation (paladin-storage) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546306058 |
+| Ollama Integration Tests (live server) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546306098 |
+| Crate Isolation (paladin-web) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546306109 |
+| License & Dependency Policy | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546306131 |
+| Postgres Storage Contract Suites (live server) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546306177 |
+| Redis Run Queue Contract Suite (live server) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546306179 |
+| MSRV (Rust 1.88) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546306199 |
+| Benchmark Compile Check | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546306245 |
+| Consumer-Surface Muster | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546306330 |
+| Crate Isolation (paladin-ports) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546306382 |
+| Docker Integration Tests | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546306450 |
+| Coverage | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546306453 |
+| CLI Snapshot Tests | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546306459 |
+| Generated SDK Clients (Python + TypeScript) smoke | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546306475 |
+| Redis Node Cache Contract Suite (live server) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546306512 |
+| Redis Cadence Contract Suite (live server) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546306516 |
+| E2E Platform API (PRD 06 acceptance-1 lifecycle + SHIP-02 boot proof) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546306588 |
+| Crate Isolation (paladin-content) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546307040 |
+| Benchmark Regression Signal (Non-Blocking) | skipped | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127546308127 |
+| Example Muster (Feature Matrix) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127551000414 |
+| Docker Build | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127555326613 |
+| Publish Dry Run | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127555326762 |
+| End-to-End Tests | skipped | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127566138899 |
+| Kubernetes Smoke Test | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280622/job/127588895300 |
+
+#### Jobs of `feature-flags.yml`, pull_request run `42113363679`
+
+| Job | Conclusion | URL |
+|-----|------------|-----|
+| OTel Feature (otel) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546452317 |
+| LLM Registry Unit Tests (llm-all) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546452688 |
+| CLI Isolation (library without cli feature) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546452935 |
+| Build & Test (llm-anthropic) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546453141 |
+| Build & Test (llm-deepseek) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546453147 |
+| Build & Test (cli) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546453188 |
+| Build & Test (default) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546453203 |
+| Build & Test (full) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546453213 |
+| Build & Test (web-server) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546453267 |
+| Build & Test (all-features) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546453291 |
+| Build & Test (vision) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546453293 |
+| Build & Test (notifications) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546453295 |
+| Build & Test (no-default-features) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546453297 |
+| Build & Test (dev-ui) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546453324 |
+| Build & Test (llm-openai) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546453385 |
+| Build & Test (s3-storage) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546453445 |
+| Build & Test (redis-queue) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546453566 |
+| Build & Test (llm-all) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546453598 |
+| Build & Test (content-processing) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546453611 |
+| Feature Matrix Summary | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127558576696 |
+
+#### Jobs of `feature-flags.yml`, push run `42113280630`
+
+| Job | Conclusion | URL |
+|-----|------------|-----|
+| CLI Isolation (library without cli feature) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280630/job/127546170665 |
+| Build & Test (full) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280630/job/127546171114 |
+| Build & Test (all-features) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280630/job/127546171192 |
+| LLM Registry Unit Tests (llm-all) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280630/job/127546171230 |
+| Build & Test (vision) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280630/job/127546171266 |
+| Build & Test (web-server) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280630/job/127546171278 |
+| Build & Test (default) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280630/job/127546171281 |
+| Build & Test (llm-deepseek) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280630/job/127546171322 |
+| Build & Test (llm-anthropic) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280630/job/127546171328 |
+| Build & Test (cli) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280630/job/127546171332 |
+| Build & Test (dev-ui) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280630/job/127546171341 |
+| Build & Test (no-default-features) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280630/job/127546171349 |
+| Build & Test (content-processing) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280630/job/127546171358 |
+| Build & Test (s3-storage) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280630/job/127546171383 |
+| OTel Feature (otel) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280630/job/127546171392 |
+| Build & Test (redis-queue) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280630/job/127546171507 |
+| Build & Test (notifications) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280630/job/127546171527 |
+| Build & Test (llm-all) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280630/job/127546171536 |
+| Build & Test (llm-openai) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280630/job/127546171543 |
+| Feature Matrix Summary | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280630/job/127551538987 |
+
+#### Jobs of `pre-commit`, pull_request run `42113363630`
+
+| Job | Conclusion | URL |
+|-----|------------|-----|
+| pre-commit run --all-files | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363630/job/127546451556 |
+
+#### Jobs of `pre-commit`, push run `42113280716`
+
+| Job | Conclusion | URL |
+|-----|------------|-----|
+| pre-commit run --all-files | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280716/job/127546169870 |
+
+#### Jobs of `codeql.yml`, pull_request run `42113363710`
+
+| Job | Conclusion | URL |
+|-----|------------|-----|
+| CodeQL Analysis (Rust) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363710/job/127546452189 |
+
+#### Jobs of `codeql.yml`, push run `42113280624`
+
+| Job | Conclusion | URL |
+|-----|------------|-----|
+| CodeQL Analysis (Rust) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280624/job/127546172204 |
+
+#### Jobs of `Docs`, pull_request run `42113364040`
+
+| Job | Conclusion | URL |
+|-----|------------|-----|
+| Build MDBook | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364040/job/127546453450 |
+| Deploy to GitHub Pages | skipped | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364040/job/127551421017 |
+
+#### Required-context tally (D-04)
+
+The live ruleset (`gh api repos/DF3NDR/paladin-dev-env/rules/branches/main`, read 2026-11-06) carries four rules: `deletion`, `non_fast_forward`, `pull_request` and `required_status_checks`. The last lists **46 contexts**. Each is matched by name against `commits/801dd237e.../check-runs`; the deciding run is the newest check run of that name (where one name has several, all are shown). **46 of 46 contexts have a concluded check run on `SHA-A0`; 46 of 46 deciding runs are `success`; 0 missing, 0 red.**
+
+| # | Required context | Deciding conclusion | Deciding job URL | All check runs of that name |
+|---|------------------|---------------------|------------------|-----------------------------|
+| 1 | API Surface Tracking | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217889 | success (42131869587), success (42113364279), success (42113280622) |
+| 2 | Benchmark Compile Check | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217886 | success (42131869587), success (42113364279), success (42113280622) |
+| 3 | Build & Test (all-features) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546453291 | success (42113363679), success (42113280630) |
+| 4 | Build & Test (cli) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546453188 | success (42113363679), success (42113280630) |
+| 5 | Build & Test (content-processing) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546453611 | success (42113363679), success (42113280630) |
+| 6 | Build & Test (default) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546453203 | success (42113363679), success (42113280630) |
+| 7 | Build & Test (full) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546453213 | success (42113363679), success (42113280630) |
+| 8 | Build & Test (llm-all) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546453598 | success (42113363679), success (42113280630) |
+| 9 | Build & Test (llm-anthropic) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546453141 | success (42113363679), success (42113280630) |
+| 10 | Build & Test (llm-deepseek) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546453147 | success (42113363679), success (42113280630) |
+| 11 | Build & Test (llm-openai) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546453385 | success (42113363679), success (42113280630) |
+| 12 | Build & Test (no-default-features) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546453297 | success (42113363679), success (42113280630) |
+| 13 | Build & Test (notifications) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546453295 | success (42113363679), success (42113280630) |
+| 14 | Build & Test (redis-queue) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546453566 | success (42113363679), success (42113280630) |
+| 15 | Build & Test (s3-storage) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546453445 | success (42113363679), success (42113280630) |
+| 16 | Build & Test (vision) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546453293 | success (42113363679), success (42113280630) |
+| 17 | Build & Test (web-server) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546453267 | success (42113363679), success (42113280630) |
+| 18 | Build MDBook | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113364040/job/127546453450 | success (42113364040) |
+| 19 | CLI Isolation (library without cli feature) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127546452935 | success (42113363679), success (42113280630) |
+| 20 | CLI Snapshot Tests | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217877 | success (42131869587), success (42113364279), success (42113280622) |
+| 21 | Code Quality | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217980 | success (42131869587), success (42113280622), success (42113364279) |
+| 22 | Coverage | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217880 | success (42131869587), success (42113280622), success (42113364279) |
+| 23 | Crate Isolation (paladin-ai) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610218253 | success (42131869587), success (42113280622), success (42113364279) |
+| 24 | Crate Isolation (paladin-ai-core) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610218317 | success (42131869587), success (42113364279), success (42113280622) |
+| 25 | Crate Isolation (paladin-battalion) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610218247 | success (42131869587), success (42113280622), success (42113364279) |
+| 26 | Crate Isolation (paladin-content) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610218312 | success (42131869587), success (42113280622), success (42113364279) |
+| 27 | Crate Isolation (paladin-llm) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610218232 | success (42131869587), success (42113280622), success (42113364279) |
+| 28 | Crate Isolation (paladin-memory) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610218725 | success (42131869587), success (42113364279), success (42113280622) |
+| 29 | Crate Isolation (paladin-notifications) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610218179 | success (42131869587), success (42113364279), success (42113280622) |
+| 30 | Crate Isolation (paladin-ports) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217817 | success (42131869587), success (42113280622), success (42113364279) |
+| 31 | Crate Isolation (paladin-storage) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610218349 | success (42131869587), success (42113280622), success (42113364279) |
+| 32 | Crate Isolation (paladin-web) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610218259 | success (42131869587), success (42113364279), success (42113280622) |
+| 33 | Docker Integration Tests | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610218061 | success (42131869587), success (42113364279), success (42113280622) |
+| 34 | End-to-End Tests | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127617989806 | success (42131869587), skipped (42113364279), skipped (42113280622) |
+| 35 | Example Muster (Feature Matrix) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127612947486 | success (42131869587), success (42113364279), success (42113280622) |
+| 36 | Feature Matrix Summary | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363679/job/127558576696 | success (42113363679), success (42113280630) |
+| 37 | Integration Tests | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217868 | success (42131869587), success (42113280622), success (42113364279) |
+| 38 | License & Dependency Policy | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217763 | success (42131869587), success (42113280622), success (42113364279) |
+| 39 | OSV Scanner | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610218571 | success (42131869587), success (42113280622), success (42113364279) |
+| 40 | Publish Dry Run | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127613034679 | success (42131869587), success (42113364279), success (42113280622) |
+| 41 | Security Audit | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217897 | success (42131869587), success (42113364279), success (42113280622) |
+| 42 | Semver Checks (vs v0.11.0) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217425 | success (42131869587), success (42113364279), success (42113280622) |
+| 43 | Unit Tests (beta) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217946 | success (42131869587), success (42113364279), success (42113280622) |
+| 44 | Unit Tests (stable) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610218062 | success (42131869587), success (42113364279), success (42113280622) |
+| 45 | Workflow Lint | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217847 | success (42131869587), success (42113364279), success (42113280622) |
+| 46 | pre-commit run --all-files | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363630/job/127546451556 | success (42113363630), success (42113280716) |
+
+#### The reads the plan names (labelled run `42131869587`, `SHA-A0`)
+
+**Coverage (D-00e, ADR-0006 floor 82 %).** Job `Coverage` [`127610217880`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217880), `success`. `scripts/coverage.sh` printed `coverage: redis=localhost:6380 minio=localhost:9010 floor=82%` and ran `cargo llvm-cov ... --fail-under-lines 82` (`cargo-llvm-cov 0.8.7`); that step passed, so the floor held, and the job's own summary step read the figure back from `lcov.info`:
+
+```
+Scope: --workspace --features integration-tests,llm-all (the gated measurement)
+Lines:     172380/185625 = 92.86%
+Functions: 17810/20598 = 86.46%
+```
+
+**Coverage line figure: 92.86 % (172380 of 185625 lines) against the 82 % floor, 10.86 points above it.** Read from the job log (`gh api repos/DF3NDR/paladin-dev-env/actions/jobs/127610217880/logs`). The `Coverage` jobs of the other two `ci.yml` runs (`127546456616`, `127546306453`) also concluded `success`; their figures were not read (the labelled run carries the acceptance read).
+
+**Semver (success criterion 4).** Job `Semver Checks (vs v0.11.0)` [`127610217425`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217425), `success`, on the PR event. Its `Semver check counts (vs 0.11.0, patch)` annotation (`gh api repos/DF3NDR/paladin-dev-env/check-runs/127610217425/annotations`, level `notice`) and the job log carry one `N checks` line per derived package, every N > 0, and the verdict `semver: 12 package(s) checked against 0.11.0 at --release-type patch; 0 failure(s)`:
+
+```
+semver: paladin-ai-core: 223 checks: 223 pass, 31 skip
+semver: paladin-ports: 223 checks: 223 pass, 31 skip
+semver: paladin-herald: 223 checks: 223 pass, 31 skip
+semver: paladin-battalion: 223 checks: 223 pass, 31 skip
+semver: paladin-llm: 223 checks: 223 pass, 31 skip
+semver: paladin-memory: 223 checks: 223 pass, 31 skip
+semver: paladin-web: 223 checks: 223 pass, 31 skip
+semver: paladin-notifications: 223 checks: 223 pass, 31 skip
+semver: paladin-content: 223 checks: 223 pass, 31 skip
+semver: paladin-storage: 223 checks: 223 pass, 31 skip
+semver: paladin-eval: 223 checks: 223 pass, 31 skip
+semver: paladin-ai: 223 checks: 223 pass, 31 skip
+```
+
+`semver: 12 package(s) checked against 0.11.0 at --release-type patch; 0 failure(s)` (job log line 721). The twelve CI counts equal the twelve local counts of Local sweep row 51 and `### D-11 semver on SHA-R`; the zero-check tripwire did not fire.
+
+**End-to-End Tests (D-00r, D-03).** [`127617989806`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127617989806), `success` (not `skipped`) on the labelled run: 11 steps, only `Collect logs` and `Upload logs` skipped (they run on failure); the test step printed `running 12 tests` and `test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 765 filtered out; finished in 25.58s`. It ran 2026-11-06T00:04:54Z to 00:18:42Z.
+
+**Publish Dry Run (D-00r).** [`127613034679`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127613034679), `success`, all 8 steps `success` (it ran on this labelled pull-request run; the earlier 58-08 note that it runs only on `main` pushes is superseded by this read).
+
+**SDK smoke (D-05 as reworded).** `Generated SDK Clients (Python + TypeScript) smoke` [`127610217747`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217747), `success`, all 17 steps `success`.
+
+**MSRV (acceptance-audit row 5).** `MSRV (Rust 1.88)` [`127610217740`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587/job/127610217740), `success`, all 8 steps `success`: the Rust 1.88 floor is read from CI, since the 1.88 toolchain is absent locally.
+
+**`pre-commit run --all-files`.** [`127546451556`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113363630/job/127546451556) (pull_request) and [`127546169870`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42113280716/job/127546169870) (push), both `success`.
+
+**The labelled `ci.yml` run's own conclusion.** [`42131869587`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42131869587): `status: completed`, `conclusion: success`, `run_attempt` 1 (never re-run), event `pull_request`, `head_sha` `801dd237ef8100e2208d7b1f311923861a19f120`, 39 jobs all `success`.
+
+**Verdict for Task 1.** No red required context, no red SDK job, `ci.yml` is `success` on all three of its runs on `SHA-A0`; D-00j did not trip and no job was re-run. The one red signal is the non-required, non-run-attached Code Scanning check run (F-58-08).
+
+---
+
 ## Registry verification (D-00h)
 
 ### Pre-tag baseline
@@ -713,6 +1052,67 @@ section (D-06).
   `paladin-web` controller DTOs, `user_service` DTOs, the run and schedule `secret` fields) were not read in this plan. The maintainer may row, fix or waive them.
 - **Docs candidate, not edited.** `docs/src/user-guides/fault-tolerance.md` could add that `NodeCacheConfig.redis_password` is never serialised.
 - **Register rows:** R-95 (fixed, this section).
+
+### 2026-11-06 — F-58-08: Code Scanning check run `CodeQL` on SHA-A0 is `failure` (8 high `rust/cleartext-logging` alerts), assessed as false positives
+
+**Observed (first recorded in `### Plan 58-09`, read here, plan 58-10).** Check run id `127553770360` (https://github.com/DF3NDR/paladin-dev-env/runs/127553770360),
+name `CodeQL`, app `github-advanced-security`, `status` `completed`, `conclusion` `failure`, completed 2026-11-05T21:45:17Z, on `SHA-A0`
+`801dd237ef8100e2208d7b1f311923861a19f120`. Verbatim output title: `8 new alerts including 8 high severity security vulnerabilities`. Verbatim summary:
+
+```
+### New alerts in code changed by this pull request
+
+Security Alerts:
+ * 8 high
+
+
+_Alerts not introduced by this pull request might have been detected because the code changes were too large._
+
+See annotations below for details.
+
+[View all branch alerts](/DF3NDR/paladin-dev-env/security/code-scanning?query=pr%3A64+tool%3ACodeQL+is%3Aopen).
+```
+
+Both `codeql.yml` workflow runs on `SHA-A0` (push `42113280624`, pull_request `42113363710`) concluded `success`, so the failing signal is the Code Scanning
+result on the PR diff, not the workflow. The check run is **not** a required context (none of the 46 contexts in the live ruleset is `CodeQL`), it is not attached to
+any `ci.yml` job (so the tag precondition `check-release-consistency` clause 3, which reads the `ci.yml` run, does not see it), and CodeQL is recorded advisory-only
+(`security.instructions.md` "Known gap: no Rust SAST"; `CODEQL-DISMISSALS.md` "Adoption context"). The annotations
+(`gh api repos/DF3NDR/paladin-dev-env/check-runs/127553770360/annotations`) are eight, every one rule `rust/cleartext-logging`, title `Cleartext logging of sensitive information`,
+level `failure`. The code-scanning alerts endpoint answers 403 from this sandbox, so **alert numbers are not readable here**; they are listed by the maintainer (see the question below).
+
+| # | Path:line (annotation) | Annotation message (verbatim) | Source line on `SHA-A0` (re-read in this plan) | Verdict |
+|---|------------------------|-------------------------------|-----------------------------------------------|---------|
+| 1 | `src/infrastructure/web/run_api_wiring.rs:1377` | `This operation writes [operator_webhook_secret_warning_line(...)](1) to a log file.` | `log::warn!("{line}");` -- `line` is the `Some` of `operator_webhook_secret_warning_line(treasurer_config.allowance.webhook.as_ref())` (lines 1372-1377) | **false positive** |
+| 2 | `src/infrastructure/web/run_api_wiring.rs:2934` | `This operation writes [secret](1) to a log file.` | `.unwrap_or_else(\|\| panic!("secret {secret:?} must warn"));` -- inside `#[cfg(test)]`; `secret` is the loop variable over `[None, Some(String::new())]`, i.e. never a real secret (the test's whole point is that an absent or empty secret warns); a `panic!` message, not a log | **false positive** |
+| 3 | `src/infrastructure/web/run_api_wiring.rs:2937` | `This operation writes [operator_webhook_secret_warning_line(...)](1) to a log file.` | `"{line}"` as the message of `assert!(line.contains("treasurer.allowance.webhook.secret"), "{line}")` -- test assertion text | **false positive** |
+| 4 | `src/infrastructure/web/run_api_wiring.rs:2941` | same | `"{line}"` as the message of `assert!(line.contains("APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET"), "{line}")` | **false positive** |
+| 5 | `src/infrastructure/web/run_api_wiring.rs:2943` | same | `assert!(line.contains("empty key"), "{line}");` | **false positive** |
+| 6 | `src/infrastructure/web/run_api_wiring.rs:2944` | same | `assert!(!line.contains("hook-sentinel-url"), "{line}");` | **false positive** |
+| 7 | `src/infrastructure/web/run_api_wiring.rs:2945` | same | `assert!(!line.contains("ops.example.com"), "{line}");` | **false positive** |
+| 8 | `src/main.rs:59` | `This operation writes [... .len()](1) to a log file.` | `info!("{}", settings_summary(&config));` -- `settings_summary` (`src/main.rs:19-36`) renders `llm_type`, `server.host`, `server.port`, `agents.len()`, and either `http.auth.enabled` with `http.auth.api_keys.len()` (a count) or `http=none` | **false positive** |
+
+**Re-read reasoning (each line read in this plan on `SHA-A0`; `git diff --name-only 801dd237e d17716713 -- src` is empty, so the head's `src` is the same).**
+`operator_webhook_secret_warning_line` (`run_api_wiring.rs:828`) takes `Option<&AllowanceWebhookConfig>`, returns `None` when the secret is present and non-empty, and otherwise
+returns a **fixed string literal** (`"the treasurer allowance webhook has no signing secret: set treasurer.allowance.webhook.secret (or APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET); ..."`).
+The only thing derived from the secret field is whether it is empty, which selects between `None` and that constant; the secret's value is never read into the output, and neither
+is the webhook URL (the doc comment and the test `operator_webhook_secret_warning_line_names_the_key_and_never_the_url` at `:2927-2947` pin "never the webhook URL", T-57-19). CodeQL's taint rule treats the field named `secret` as a sensitive
+source and the log macro as a sink, and does not model that the value that reaches the sink is a constant. Alerts 2-7 are the same function's unit test: a `{line}` interpolation in an
+assertion failure message, and a `panic!` message that formats a loop variable that is `None` or the empty string. Alert 8: `settings_summary` was introduced by `74317f48a`
+(`fix(56-11)`, DF-07) precisely to stop the whole `Settings` being logged; the flagged `... .len()` is the number of configured API keys, an integer, and the unit tests
+`settings_summary_names_no_credential` and `settings_summary_names_the_shape_without_values` (`src/main.rs:89-120`) assert that neither the `llm_api_key` sentinel nor an
+`http.auth.api_keys` sentinel appears in the line and that the line does not dump `Settings {`. Alerts 1-7 were introduced by `d26c871d8` (`fix(57-05)`, Phase 57, 41-REVIEW WR-05, D-14);
+alert 8 by `74317f48a` (Phase 56, plan 56-11). The unit-test jobs (`Unit Tests (stable)` `127610218062`, `Unit Tests (beta)` `127610217946`, which run `cargo test --workspace --lib --bins`, so both the library and the binary tests) concluded `success` on the labelled run.
+
+**Disposition (F-58-08, milestone-audit item).** `waived`, as false positives, with these compensating controls: (1) DF-07 redaction (`ApiKeyConfig` redacted in `Debug`, the
+whole `Settings` no longer logged, `settings_summary` counts only); (2) the T-57-19 test, which asserts the warning line contains the config key and env-var names and not the URL;
+(3) the `main.rs` sentinel tests above; (4) advisory-only status of CodeQL (not a required context; `check-release-consistency` reads the `ci.yml` run); (5) the manual
+credential-handling review of `security.instructions.md`, which covers exactly these two call sites. No source line was changed in this plan and **nothing was dismissed, re-run or
+pushed by the agent.** Dismissing a code-scanning alert is a GitHub write the maintainer performs; `CODEQL-DISMISSALS.md` requires a governed row (owner, review date, scope,
+compensating control) per dismissed alert and `make check-codeql-dismissals` green. Remaining on the maintainer: the question `CODEQL=dismiss-now|leave-open` in Task 3's decision,
+recorded under `## Maintainer decisions (58-10)` after the answer.
+
+**Residual noted, not dispositioned here:** if the maintainer wants the check green
+before the merge, `dismiss-now` is the route; `leave-open` leaves the PR's rollup showing one failing, non-required check.
 
 ---
 

@@ -221,6 +221,18 @@ check-publish-order: ## Verify every versioned workspace dependency (normal, bui
 check-dependency-allowlist: ## Verify paladin-core / paladin-ports [dependencies] match ADR-0015's measured sets (D-21)
 	@./scripts/check-dependency-allowlist.sh
 
+.PHONY: check-version-strings
+check-version-strings: ## Verify every copyable version string (README, docs/src, k8s/, openapi.json) equals the workspace version (FIRST-03)
+	@./scripts/check-version-strings.sh
+
+.PHONY: check-doc-models
+check-doc-models: ## Verify docs/src, examples/ and README.md carry no deprecated model id in a copyable form (DF-18)
+	@./scripts/check-doc-models.sh
+
+.PHONY: check-no-stub-panics
+check-no-stub-panics: ## Fail on a todo!/unimplemented! reachable outside #[cfg(test)] in a published crate (FIXES-01)
+	@./scripts/check-no-stub-panics.sh
+
 .PHONY: check-release-consistency
 # Deliberately NOT part of check-gates: every sibling guard above is a
 # no-argument offline check runnable against the current tree as-is: this
@@ -235,8 +247,17 @@ check-release-consistency: ## Verify a release tag's version matches every publi
 	fi
 	@./scripts/check-release-consistency.sh --tag "$(RELEASE_TAG)"
 
+.PHONY: check-findings-log
+# Deliberately NOT part of check-gates: the v0.11.1 findings log legitimately
+# holds `open` entries for as long as a finding is being worked, so folding this
+# check into the no-argument composite (and so into CI) would turn every new
+# finding into a red build for unrelated PRs. It runs at phase verification and
+# at Phase 58 SHIP-10, where "none reads open" is the actual question (D-03).
+check-findings-log: ## Verify every DF-nn entry in the v0.11.1 findings log carries a final disposition (DOGF-01; phase verification and SHIP-10, not check-gates)
+	@./scripts/check-findings-log.sh
+
 .PHONY: check-consumer-surface
-# Deliberately NOT part of check-gates: the nine members of check-gates are
+# Deliberately NOT part of check-gates: the members of check-gates are
 # offline script guards that finish in about a second, while this target
 # compiles the facade crate. `make check` and `make lint` (so `make clean-code`)
 # and CI's clippy, all-targets check and integration-test steps already compile
@@ -261,7 +282,7 @@ check-semver: ## Run cargo-semver-checks for every publishable crate against the
 	@./scripts/check-semver.sh
 
 .PHONY: check-gates
-check-gates: check-changelogs check-crate-names check-advisory-register check-workflow-suppressions check-workflow-triggers check-codeql-dismissals check-migration-allowlist check-publish-order check-dependency-allowlist ## Run all offline release-gate guards
+check-gates: check-changelogs check-crate-names check-advisory-register check-workflow-suppressions check-workflow-triggers check-codeql-dismissals check-migration-allowlist check-publish-order check-dependency-allowlist check-version-strings check-no-stub-panics check-doc-models ## Run all offline release-gate guards
 
 .PHONY: test-shell-guards
 # Loops over every tests/scripts/*_test.sh rather than a hardcoded list, so
@@ -372,7 +393,7 @@ coverage: ## Measure workspace coverage (mirrors CI's `coverage` job — require
 .PHONY: coverage-html
 coverage-html: ## Generate an HTML coverage report at target/coverage
 	@echo "$(CYAN)Generating HTML coverage report...$(NC)"
-	@$(CARGO) llvm-cov --workspace --features integration-tests --html --output-dir target/coverage
+	@$(CARGO) llvm-cov --workspace --features integration-tests,llm-all --html --output-dir target/coverage
 	@echo "Report at target/coverage/html/index.html"
 
 ##@ Code Quality
@@ -518,10 +539,16 @@ build-docker: ## Build Docker image
 	@echo "$(CYAN)Building Docker image...$(NC)"
 	@$(DOCKER) build -f Dockerfile -t $(PROJECT_NAME):latest .
 
+# The workspace version, read offline from the root Cargo.toml, is the tag the k8s/server manifests
+# pull (FIRST-04, D-10); `make release` moves it with the version bump. Not named VERSION: that is
+# the user parameter of `make release`.
+WORKSPACE_VERSION = $(shell python3 -c "import tomllib; print(tomllib.load(open('Cargo.toml','rb'))['package']['version'])")
+
 .PHONY: docker-build-server
-docker-build-server: ## Build the paladin-server HTTP API image (Dockerfile.server)
+docker-build-server: ## Build the paladin-server HTTP API image (Dockerfile.server), tagged :latest and :<workspace version>
 	@echo "$(CYAN)Building paladin-server image...$(NC)"
-	@$(DOCKER) build -f Dockerfile.server -t paladin-server:latest .
+	@test -n "$(WORKSPACE_VERSION)" || { echo "$(RED)❌ could not read [package].version from Cargo.toml (python3 with tomllib is required)$(NC)"; exit 1; }
+	@$(DOCKER) build -f Dockerfile.server -t paladin-server:latest -t paladin-server:$(WORKSPACE_VERSION) .
 
 ##@ Docker Services
 

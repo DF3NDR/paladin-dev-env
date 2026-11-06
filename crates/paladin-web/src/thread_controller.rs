@@ -34,8 +34,10 @@
 //!
 //! ## Authorization (tenant visibility, ADR-0063)
 //!
-//! A thread carries no tenant of its own; it belongs to the tenant of its **latest run**
-//! -- the newest by `submitted_at`, with `run_id` as the tiebreak. Every
+//! A thread carries no tenant of its own; it belongs to the tenant of its **owner run**:
+//! the **earliest attributed run** (earliest by `submitted_at`, with `run_id` as the
+//! tiebreak, among the runs that carry an attribution). A later run -- an Admin's, a
+//! schedule's or another tenant's -- never moves it. Every
 //! `/v1/threads/{id}*` route (`get_thread`, `get_thread_state`, `get_thread_history`,
 //! `resume_thread`, `fork_thread`, `delete_thread`) enters through one private gate,
 //! `load_visible_thread`, which applies
@@ -44,9 +46,10 @@
 //! body):
 //!
 //! - an **Admin** sees every thread and the gate performs no run lookup;
-//! - a **user-role principal** sees a thread only when its latest run is attributed to
-//!   the principal's tenant;
-//! - a thread with **no run** has no owner and is visible to an Admin only;
+//! - a **user-role principal** sees a thread only when its owner run (its earliest
+//!   attributed run) is attributed to the principal's tenant;
+//! - a thread with **no run**, or only unattributed runs, has no owner and is visible to
+//!   an Admin only;
 //! - with **no run store wired** ([`ThreadApiState::runs`] is `None`) ownership cannot be
 //!   established, so the gate fails closed: a non-admin sees no thread, an Admin is
 //!   unaffected (D-07);
@@ -62,20 +65,22 @@
 //! Store failures never echo backend text: a waypoint-store failure renders the fixed
 //! `500 "thread store error"` and a run-store failure the fixed `500 "run store error"`
 //! (detail to the server log only). A Waypoint or run row the store cannot read
-//! (`Serialization`, or an unsupported Waypoint schema version) is an existence signal, so
-//! for a non-admin it is the same missing-thread `404`; an Admin gets the fixed `500`.
+//! (`Serialization`, or an unsupported Waypoint or owner-run schema version) is an
+//! existence signal, so for a non-admin it is the same missing-thread `404`; an Admin gets
+//! the fixed `500`. (`GET /v1/runs/{id}` keeps its recorded newer-schema `500` residual.)
 //!
 //! The route-enumerating test `every_thread_id_route_hides_foreign_threads_behind_the_missing_thread_404`
 //! reads the `/v1/threads/{id}*` operations from this router's own OpenAPI document and
 //! fails if any is missing from its table, so a future route cannot skip the gate unnoticed.
 //!
 //! Known limitation (D-14): thread ids are not tenant-namespaced, so two tenants that pick
-//! the same id share one thread, and its latest run decides who sees it.
+//! the same id share one thread, and its owner run (the earliest attributed run) decides
+//! who sees it.
 //!
 //! `GET /threads` (the list route) addresses no single thread, so it does not enter
 //! `load_visible_thread`; it applies the same rule per thread instead. An Admin keeps the
 //! single newest-first fetch and performs no owner lookup. For a user-role principal,
-//! `visible_thread_page` walks the store in batches, resolves each examined thread's latest
+//! `visible_thread_page` walks the store in batches, resolves each examined thread's owner
 //! run exactly as the gate does, keeps the threads `permits_thread` admits, and examines at
 //! most `MAX_EXAMINED_THREADS` per request -- so a page may hold fewer than `limit` items
 //! while `next_cursor` still advances, and a client follows `next_cursor` until it is
@@ -93,11 +98,10 @@ use serde::{Deserialize, Serialize};
 
 use paladin_core::platform::container::parley::{ParleyKind, ParleyRequest, ParleyResponse};
 use paladin_core::platform::container::principal::RunReadScope;
-use paladin_core::platform::container::run::Run;
 use paladin_core::platform::container::waypoint::{ThreadId, Waypoint, WaypointId, WaypointStatus};
 use paladin_ports::input::parley_port::{ParleyError, ParleyPort};
 use paladin_ports::input::run_submission_port::{ForkRun, RunSubmissionPort};
-use paladin_ports::output::run_repository_port::{RunQuery, RunRepositoryError, RunRepositoryPort};
+use paladin_ports::output::run_repository_port::{RunRepositoryError, RunRepositoryPort};
 use paladin_ports::output::waypoint_port::{
     ThreadSummary, WaypointError, WaypointPort, WaypointSummary,
 };
@@ -110,8 +114,8 @@ use crate::agent_controller::{JsonValue, ok_body};
 use crate::error::{ApiError, ApiErrorBody};
 use crate::pagination::{decode_cursor, encode_cursor, resolve_limit};
 use crate::run_controller::{
-    RunWebhookRequestDto, map_submission_error, redact_store_error_for_scope,
-    run_repo_error_for_scope, to_run_webhook_spec,
+    RUN_STORE_ERROR_MESSAGE, RunWebhookRequestDto, map_submission_error,
+    redact_store_error_for_scope, run_repo_error_for_scope, to_run_webhook_spec,
 };
 
 /// Shared state for the thread routes.
@@ -245,7 +249,7 @@ const THREAD_STORE_ERROR_MESSAGE: &str = "thread store error";
 
 /// The most threads one tenant-scoped `GET /threads` request examines (D-04, T-53-21).
 ///
-/// Each examined thread costs one latest-run lookup, so this bounds a request to
+/// Each examined thread costs one owner-run lookup, so this bounds a request to
 /// `MAX_EXAMINED_THREADS` run-repository reads and
 /// `MAX_EXAMINED_THREADS / THREAD_SCAN_BATCH` waypoint-store list calls however large the
 /// store is or however few of its threads the caller may see. A walk that reaches the cap
@@ -730,32 +734,45 @@ fn waypoint_error_for_scope(
     )
 }
 
-/// The newest run on `thread` by `submitted_at` (`run_id` as the tiebreak), or `None`
-/// when the thread has no run row.
+/// Classify a [`RunRepositoryError`] raised by the thread **owner lookup** (the gate's read
+/// of [`RunRepositoryPort::owner_run_for_thread`]).
 ///
-/// An internal authorization read: the query keeps the default `All` scope so the owner
-/// is found regardless of who is asking -- the caller's scope is applied afterwards by
-/// [`RunReadScope::permits_thread`], never pushed into this query.
-async fn latest_run_for_thread(
-    runs: &Arc<dyn RunRepositoryPort>,
-    thread: &ThreadId,
-) -> Result<Option<Run>, RunRepositoryError> {
-    let page = runs
-        .list(RunQuery {
-            thread_id: Some(thread.clone()),
-            limit: 1,
-            ..Default::default()
-        })
-        .await?;
-    Ok(page.items.into_iter().next())
+/// The owner row decides whether a thread exists *for the caller*, so an owner row the
+/// store cannot decode is an existence signal: `Serialization` (an unreadable row) and
+/// `UnknownSchemaVersion` (a row written by a newer build) are both hideable, and a
+/// `Tenant` scope gets `hidden()` (the missing-thread `404`) instead of a `500` that would
+/// confirm the thread exists (WINDOWS row 85, T-57-10). Any other error is an outage or a
+/// state error and renders the fixed `run store error` `500` for every role; an `All`
+/// (Admin) scope always does.
+///
+/// Deliberately **not** [`run_repo_error_for_scope`]: that classifier also serves
+/// `GET /v1/runs/{id}`, where a newer-schema `500` is the recorded residual (T-53-10).
+fn thread_owner_error_for_scope(
+    scope: &RunReadScope,
+    context: &str,
+    err: RunRepositoryError,
+    hidden: impl FnOnce() -> ApiError,
+) -> ApiError {
+    let hideable = matches!(
+        err,
+        RunRepositoryError::Serialization { .. } | RunRepositoryError::UnknownSchemaVersion { .. }
+    );
+    redact_store_error_for_scope(
+        scope,
+        context,
+        &err,
+        hideable,
+        RUN_STORE_ERROR_MESSAGE,
+        hidden,
+    )
 }
 
 /// Collect up to `limit` threads `scope` may see, walking the waypoint store newest
 /// activity first (TENANT-03, D-04) -- the `GET /threads` counterpart of
 /// `load_visible_thread`.
 ///
-/// A thread's owner is its latest run, so each examined thread costs one
-/// [`latest_run_for_thread`] lookup (the same read the single-thread gate performs, with
+/// A thread's owner is its earliest attributed run, so each examined thread costs one
+/// [`RunRepositoryPort::owner_run_for_thread`] lookup (the same read the single-thread gate performs, with
 /// the `All` scope) and is kept when [`RunReadScope::permits_thread`] admits it. The walk
 /// pages the store in [`THREAD_SCAN_BATCH`]-sized `list_threads` calls and stops as soon
 /// as `limit` threads are kept, the store is exhausted, or [`MAX_EXAMINED_THREADS`]
@@ -769,10 +786,11 @@ async fn latest_run_for_thread(
 /// itself documents, two threads with an identical `last_updated_at` straddling a page
 /// boundary can be skipped; this is a keyset walk, not a snapshot.
 ///
-/// A lookup that fails with [`RunRepositoryError::Serialization`] means that one thread's
-/// run row is unreadable. For a `Tenant` scope the thread is skipped (it is hidden, never
-/// shown) and the error logged, so one tenant's corrupt row cannot fail another tenant's
-/// list. Any other run-repository error, and every waypoint-store error, answers the fixed
+/// A lookup that fails with [`RunRepositoryError::Serialization`] or
+/// [`RunRepositoryError::UnknownSchemaVersion`] means that one thread's owner row is
+/// unreadable or was written by a newer build. For a `Tenant` scope the thread is skipped
+/// (it is hidden, never shown) and the error logged, so one such row cannot fail another
+/// tenant's list (WINDOWS row 85). Any other run-repository error, and every waypoint-store error, answers the fixed
 /// `500` for every role -- a list has no single object to hide (D-09).
 async fn visible_thread_page(
     waypoints: &Arc<dyn WaypointPort>,
@@ -797,19 +815,20 @@ async fn visible_thread_page(
         for summary in batch {
             examined += 1;
             cursor = Some(summary.last_updated_at);
-            match latest_run_for_thread(runs, &summary.thread_id).await {
-                Ok(latest) => {
-                    if scope.permits_thread(latest.as_ref()) {
+            match runs.owner_run_for_thread(&summary.thread_id).await {
+                Ok(owner) => {
+                    if scope.permits_thread(owner.as_ref()) {
                         visible.push(summary);
                     }
                 }
-                Err(RunRepositoryError::Serialization { message })
-                    if !matches!(scope, RunReadScope::All) =>
-                {
-                    // Hidden, not shown: an unreadable row has no attributable owner.
+                Err(
+                    e @ (RunRepositoryError::Serialization { .. }
+                    | RunRepositoryError::UnknownSchemaVersion { .. }),
+                ) if !matches!(scope, RunReadScope::All) => {
+                    // Hidden, not shown: an unreadable or newer-schema row has no
+                    // attributable owner. Logs only the error's own `Display` (P-03-3).
                     log::error!(
-                        "thread API list owner lookup failed: run serialization error: \
-                         {message} (thread skipped as not visible)"
+                        "thread API list owner lookup failed: {e} (thread skipped as not visible)"
                     );
                 }
                 Err(other) => {
@@ -836,8 +855,9 @@ async fn visible_thread_page(
 /// Load a thread's latest Waypoint and check the caller may see the thread -- the single
 /// entry every `/v1/threads/{id}*` route passes through (TENANT-03, D-05).
 ///
-/// A thread carries no tenant of its own: it belongs to the tenant of its **latest run**
-/// (newest by `submitted_at`, `run_id` as the tiebreak), applied through
+/// A thread carries no tenant of its own: it belongs to the tenant of its **owner run**
+/// (the earliest attributed run: earliest by `submitted_at`, `run_id` as the tiebreak,
+/// among the runs that carry an attribution), applied through
 /// [`RunReadScope::permits_thread`]. In order:
 ///
 /// 1. no waypoint backend -> `501` (same as every thread route);
@@ -846,17 +866,19 @@ async fn visible_thread_page(
 ///    outage cannot turn an Admin read into a failure;
 /// 4. no run store wired -> `hidden()` for every non-admin (D-07, fail closed: ownership
 ///    cannot be established, so nothing is shown);
-/// 5. the latest run is read and `permits_thread` applied; a thread with no run is
-///    `hidden()` (Admin-only), as is a thread whose latest run is another tenant's.
+/// 5. the owner run is read and `permits_thread` applied; a thread with no run is
+///    `hidden()` (Admin-only), as is a thread whose owner run is another tenant's. A
+///    later run never changes the owner.
 ///
 /// `hidden()` builds the exact `404 unknown thread '<id>'` a genuinely missing thread
 /// gets, so a hidden thread is indistinguishable from a missing one by status, code,
 /// headers and body (ADR-0054 rule 5, ADR-0063). Store failures go through the shared
-/// role-aware redaction: an unreadable Waypoint or run row is the same `404` for a
-/// `Tenant` scope and a fixed `500` for an Admin.
+/// role-aware redaction: an unreadable Waypoint, or an unreadable or newer-schema owner
+/// run row (`thread_owner_error_for_scope`), is the same `404` for a `Tenant` scope and a
+/// fixed `500` for an Admin.
 ///
 /// Known limitation (D-14): thread ids are not tenant-namespaced, so two tenants that
-/// choose the same id share one thread; the latest run decides who sees it.
+/// choose the same id share one thread; the owner run decides who sees it.
 async fn load_visible_thread(
     state: &ThreadApiState,
     principal: &Principal,
@@ -888,10 +910,10 @@ async fn load_visible_thread(
     let Some(runs) = state.runs.as_ref() else {
         return Err(hidden());
     };
-    let latest = match latest_run_for_thread(runs, thread).await {
-        Ok(latest) => latest,
+    let owner = match runs.owner_run_for_thread(thread).await {
+        Ok(owner) => owner,
         Err(e) => {
-            return Err(run_repo_error_for_scope(
+            return Err(thread_owner_error_for_scope(
                 &scope,
                 "thread API thread owner lookup",
                 e,
@@ -899,7 +921,7 @@ async fn load_visible_thread(
             ));
         }
     };
-    if !scope.permits_thread(latest.as_ref()) {
+    if !scope.permits_thread(owner.as_ref()) {
         return Err(hidden());
     }
     Ok(waypoint)
@@ -911,7 +933,8 @@ async fn load_visible_thread(
 /// parleys/responses when suspended.
 ///
 /// Authenticated, any role, tenant-scoped through `load_visible_thread`: a user-role
-/// principal sees only a thread whose latest run belongs to its tenant, an Admin sees
+/// principal sees only a thread whose owner run (its earliest attributed run) belongs to its
+/// tenant, an Admin sees
 /// every thread, and a thread the caller may not see answers the same `404` as a missing
 /// one (ADR-0063).
 ///
@@ -926,7 +949,7 @@ async fn load_visible_thread(
     tag = "threads",
     params(("id" = String, Path, description = "Thread id")),
     responses(
-        (status = 200, description = "Thread state. Tenant-scoped: a user-role principal can read only a thread whose latest run belongs to its tenant; an admin-role principal can read every thread.", body = ThreadStateResponse),
+        (status = 200, description = "Thread state. Tenant-scoped: a user-role principal can read only a thread whose owner (its earliest attributed run) belongs to its tenant; a later Admin or schedule run never moves it; an admin-role principal can read every thread.", body = ThreadStateResponse),
         (status = 400, description = "Invalid thread id", body = ApiErrorBody),
         (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
         (status = 404, description = "Unknown thread (also returned for a thread the caller may not see)", body = ApiErrorBody),
@@ -1050,7 +1073,7 @@ pub async fn resume_thread(
         ("cursor" = Option<String>, Query, description = "Opaque pagination cursor from a previous page's next_cursor"),
     ),
     responses(
-        (status = 200, description = "A page of waypoint summaries. Tenant-scoped: a user-role principal can read only a thread whose latest run belongs to its tenant; an admin-role principal can read every thread.", body = HistoryResponse),
+        (status = 200, description = "A page of waypoint summaries. Tenant-scoped: a user-role principal can read only a thread whose owner (its earliest attributed run) belongs to its tenant; a later Admin or schedule run never moves it; an admin-role principal can read every thread.", body = HistoryResponse),
         (status = 400, description = "limit exceeds 100, or cursor is not a valid waypoint id", body = ApiErrorBody),
         (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
         (status = 404, description = "Unknown thread (also returned for a thread the caller may not see)", body = ApiErrorBody),
@@ -1139,8 +1162,8 @@ async fn thread_summary_dto(state: &ThreadApiState, summary: &ThreadSummary) -> 
 /// D-47). Authenticated, any role, tenant-scoped (TENANT-03, ADR-0063).
 ///
 /// An Admin lists every thread. A user-role principal lists only the threads
-/// whose latest run is attributed to its own tenant; a thread with no run is
-/// Admin-only, and with no run store wired a non-admin lists nothing. Because
+/// whose owner run (its earliest attributed run) is attributed to its own tenant; a
+/// thread with no run is Admin-only, and with no run store wired a non-admin lists nothing. Because
 /// the other tenants' threads are filtered out of a page after it is read, a
 /// page may hold fewer than `limit` items (even none) while `next_cursor` is
 /// still non-null: keep following `next_cursor` until it is `null`. A request
@@ -1192,7 +1215,7 @@ pub async fn list_threads(
         .map(decode_cursor::<DateTime<Utc>>)
         .transpose()?;
 
-    // A non-admin sees only threads whose latest run is its tenant's (TENANT-03, D-04).
+    // A non-admin sees only threads whose owner run is its tenant's (TENANT-03, D-04).
     let scope = principal.read_scope();
     if !matches!(scope, RunReadScope::All) {
         // No run store: ownership cannot be established, so nothing is visible (D-07).
@@ -1260,7 +1283,7 @@ pub async fn list_threads(
     tag = "threads",
     params(("id" = String, Path, description = "Thread id")),
     responses(
-        (status = 200, description = "Thread summary. Tenant-scoped: a user-role principal can read only a thread whose latest run belongs to its tenant; an admin-role principal can read every thread.", body = ThreadResponse),
+        (status = 200, description = "Thread summary. Tenant-scoped: a user-role principal can read only a thread whose owner (its earliest attributed run) belongs to its tenant; a later Admin or schedule run never moves it; an admin-role principal can read every thread.", body = ThreadResponse),
         (status = 400, description = "Invalid thread id", body = ApiErrorBody),
         (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
         (status = 404, description = "Unknown thread (also returned for a thread the caller may not see)", body = ApiErrorBody),
@@ -2266,7 +2289,7 @@ mod tests {
     async fn get_thread_state_with_non_admin_role_is_200_not_403() {
         // Reads stay authenticated-any-role (D-24); only `resume` is
         // narrowed to admin by CR-01. The user-role key owns `scoped-thread`
-        // (its tenant has the latest run), so the read is 200, not 403.
+        // (its tenant holds the owner run), so the read is 200, not 403.
         let parley_id = ParleyId::new();
         let app = authed_thread_app(parley_id);
 
@@ -2391,31 +2414,35 @@ mod tests {
         /// When set, `get`, `list` and `active_run_for_thread` fail with a
         /// `Serialization` error carrying this text (Phase 53 thread gate tests).
         fail_reads_with: Mutex<Option<String>>,
-        /// Number of `list` calls made (the thread list walk's owner lookups).
-        list_calls: std::sync::atomic::AtomicUsize,
-        /// When set, `list` fails for queries on this one thread id (Phase 53 list walk).
+        /// Number of `owner_run_for_thread` calls made (the thread gate's and list walk's
+        /// owner lookups -- the cost the bounded-walk assertions count).
+        owner_calls: std::sync::atomic::AtomicUsize,
+        /// When set, `owner_run_for_thread` fails for this one thread id (Phase 53 list
+        /// walk; Phase 57 row 85).
         fail_thread: Mutex<Option<(String, ThreadRunFailure)>>,
     }
 
-    /// The run-repository error a thread-scoped `list` failure builds (a
+    /// The run-repository error a thread-scoped owner lookup failure builds (a
     /// `RunRepositoryError` is not `Clone`, so the seam stores which variant to build).
     #[derive(Clone, Copy)]
     enum ThreadRunFailure {
         /// `RunRepositoryError::Serialization` (an unreadable row).
         Serialization,
+        /// `RunRepositoryError::UnknownSchemaVersion` (a row written by a newer build).
+        UnknownSchemaVersion,
         /// `RunRepositoryError::Backend` (an outage).
         Backend,
     }
 
     impl MockRunRepository {
-        /// Make `list` fail for queries scoped to `thread` only.
+        /// Make `owner_run_for_thread` fail for `thread` only.
         fn fail_on_thread(&self, thread: &str, failure: ThreadRunFailure) {
             *self.fail_thread.lock().unwrap() = Some((thread.to_string(), failure));
         }
 
-        /// How many `list` calls have been made.
-        fn list_call_count(&self) -> usize {
-            self.list_calls.load(std::sync::atomic::Ordering::SeqCst)
+        /// How many `owner_run_for_thread` calls have been made.
+        fn owner_call_count(&self) -> usize {
+            self.owner_calls.load(std::sync::atomic::Ordering::SeqCst)
         }
 
         fn seed_run(&self, run: Run) {
@@ -2489,26 +2516,6 @@ mod tests {
             paladin_ports::output::run_repository_port::RunPage,
             paladin_ports::output::run_repository_port::RunRepositoryError,
         > {
-            self.list_calls
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            if let (Some(wanted), Some((failing, failure))) = (
-                query.thread_id.as_ref(),
-                self.fail_thread.lock().unwrap().as_ref(),
-            ) && wanted.as_str() == failing
-            {
-                return Err(match failure {
-                    ThreadRunFailure::Serialization => {
-                        paladin_ports::output::run_repository_port::RunRepositoryError::Serialization {
-                            message: INJECTED_TEXT.to_string(),
-                        }
-                    }
-                    ThreadRunFailure::Backend => {
-                        paladin_ports::output::run_repository_port::RunRepositoryError::Backend {
-                            source: INJECTED_TEXT.into(),
-                        }
-                    }
-                });
-            }
             self.read_failure()?;
             let mut items: Vec<Run> = self
                 .runs
@@ -2536,6 +2543,55 @@ mod tests {
                 items,
                 next_cursor: None,
             })
+        }
+
+        /// The thread's owner run with the same ordering as the real adapters (attributed
+        /// first, then `submitted_at` ascending, then `run_id` ascending), counting every
+        /// call and honouring the per-thread and global failure seams.
+        async fn owner_run_for_thread(
+            &self,
+            thread_id: &ThreadId,
+        ) -> Result<Option<Run>, paladin_ports::output::run_repository_port::RunRepositoryError>
+        {
+            self.owner_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if let Some((failing, failure)) = self.fail_thread.lock().unwrap().as_ref()
+                && thread_id.as_str() == failing
+            {
+                return Err(match failure {
+                    ThreadRunFailure::Serialization => {
+                        paladin_ports::output::run_repository_port::RunRepositoryError::Serialization {
+                            message: INJECTED_TEXT.to_string(),
+                        }
+                    }
+                    ThreadRunFailure::UnknownSchemaVersion => {
+                        paladin_ports::output::run_repository_port::RunRepositoryError::UnknownSchemaVersion {
+                            found: INJECTED_TEXT.to_string(),
+                        }
+                    }
+                    ThreadRunFailure::Backend => {
+                        paladin_ports::output::run_repository_port::RunRepositoryError::Backend {
+                            source: INJECTED_TEXT.into(),
+                        }
+                    }
+                });
+            }
+            self.read_failure()?;
+            Ok(self
+                .runs
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|run| &run.thread_id == thread_id)
+                .min_by(|a, b| {
+                    // `false < true`, so an attributed run sorts before an unattributed one.
+                    a.submitted_by
+                        .is_none()
+                        .cmp(&b.submitted_by.is_none())
+                        .then_with(|| a.submitted_at.cmp(&b.submitted_at))
+                        .then_with(|| a.run_id.to_string().cmp(&b.run_id.to_string()))
+                })
+                .cloned())
         }
 
         async fn active_run_for_thread(
@@ -2883,8 +2939,11 @@ mod tests {
         }
     }
 
+    /// D-02 (WINDOWS rows 86/87): a thread belongs to the tenant of its **earliest attributed
+    /// run**. A later run from another tenant -- however many -- never moves it. (Before Phase
+    /// 57 the newest run owned the thread, and this test pinned the opposite outcome.)
     #[tokio::test]
-    async fn mixed_tenant_thread_belongs_to_the_latest_runs_tenant() {
+    async fn mixed_tenant_thread_belongs_to_the_earliest_attributed_runs_tenant() {
         let fixture = ThreadFixture::new();
         let t = fixture.waypoint("legacy-thread");
         let t0 = Utc::now();
@@ -2912,16 +2971,17 @@ mod tests {
             }
         };
 
-        // The newest run is globex's: globex and Admin see the thread, acme does not.
-        assert_eq!(status_for("foreign-key").await, StatusCode::OK);
+        // The earliest attributed run is acme's: acme and Admin see the thread, globex does
+        // not, although globex's run is the newest.
+        assert_eq!(status_for("owner-key").await, StatusCode::OK);
         assert_eq!(status_for("admin-key").await, StatusCode::OK);
-        assert_eq!(status_for("owner-key").await, StatusCode::NOT_FOUND);
+        assert_eq!(status_for("foreign-key").await, StatusCode::NOT_FOUND);
 
-        // A still newer acme run moves the thread back to acme.
+        // A further globex run changes nothing.
         fixture.runs.seed_run(run_on(
             &t,
-            "acme",
-            "svc-a",
+            "globex",
+            "svc-b",
             t0 + chrono::Duration::seconds(2),
         ));
         assert_eq!(status_for("owner-key").await, StatusCode::OK);
@@ -3631,7 +3691,7 @@ mod tests {
         let (status, first) = list_as(&app, "owner-key", "?limit=20").await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(
-            fixture.runs.list_call_count(),
+            fixture.runs.owner_call_count(),
             MAX_EXAMINED_THREADS,
             "exactly the cap's worth of owner lookups on the first request"
         );
@@ -3759,6 +3819,168 @@ mod tests {
         assert_eq!(listed_ids(&admin), ["acme-2", "globex-bad", "acme-1"]);
     }
 
+    /// Row 85 (53-REVIEW WR-01), list walk: one thread whose owner row has a newer schema
+    /// version is skipped for a tenant, exactly as an unreadable (`Serialization`) row is,
+    /// so a single newer-schema row cannot turn every non-admin `GET /v1/threads` into a
+    /// `500`. The injected text never reaches the response (P-03-3).
+    #[tokio::test]
+    async fn list_threads_skips_a_newer_schema_thread_for_a_tenant() {
+        install_capture_logger();
+        let fixture = ThreadFixture::new();
+        fixture.listed_thread("acme-3", 3, Some("acme"));
+        fixture.listed_thread("acme-newer-schema", 2, Some("acme"));
+        fixture.listed_thread("acme-1", 1, Some("acme"));
+        fixture
+            .runs
+            .fail_on_thread("acme-newer-schema", ThreadRunFailure::UnknownSchemaVersion);
+        let app = thread_router(fixture.state(true));
+
+        let response = send_thread_request(
+            &app,
+            "GET",
+            "/v1/threads?limit=10".to_string(),
+            "owner-key",
+            None,
+            &[],
+        )
+        .await;
+        let (status, _headers, body) = response_parts(response).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(
+            !body.contains(INJECTED_TEXT) && !body.contains("acme-newer-schema"),
+            "the newer-schema thread is hidden and its error text never reaches a body: {body}"
+        );
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(listed_ids(&json), ["acme-3", "acme-1"]);
+        assert!(json["next_cursor"].is_null());
+        let logged = CAPTURED_LOGS.lock().unwrap().clone();
+        assert!(
+            logged.iter().any(|line| line.starts_with("ERROR")
+                && line.contains("thread API list owner lookup failed")
+                && line.contains("unsupported run schema version")
+                && line.contains("thread skipped as not visible")),
+            "the skip is logged at error level server-side: {logged:?}"
+        );
+
+        // An Admin performs no owner lookup, so the newer-schema row does not touch its list.
+        let (status, admin) = list_as(&app, "admin-key", "?limit=10").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            listed_ids(&admin),
+            ["acme-3", "acme-newer-schema", "acme-1"]
+        );
+    }
+
+    /// Row 85, single object: a newer-schema owner row is an existence signal, so a tenant
+    /// gets the exact missing-thread `404` (not a `500`), byte-identical to an unknown id
+    /// once the id text is normalised. An Admin performs no owner lookup and reads it.
+    #[tokio::test]
+    async fn newer_schema_owner_row_hides_the_thread_from_a_tenant() {
+        let fixture = ThreadFixture::new();
+        let t = fixture.waypoint("acme-thread-1");
+        fixture
+            .runs
+            .seed_run(run_on(&t, "acme", "svc-a", Utc::now()));
+        fixture
+            .runs
+            .fail_on_thread("acme-thread-1", ThreadRunFailure::UnknownSchemaVersion);
+        let app = thread_router(fixture.state(true));
+        let get = |id: &'static str, key: &'static str| {
+            let app = app.clone();
+            async move {
+                response_parts(
+                    send_thread_request(&app, "GET", format!("/v1/threads/{id}"), key, None, &[])
+                        .await,
+                )
+                .await
+            }
+        };
+
+        for key in ["owner-key", "foreign-key"] {
+            let (status, headers, body) = get("acme-thread-1", key).await;
+            let (m_status, m_headers, m_body) = get("no-such-9f3a", key).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{key}: {body}");
+            assert_eq!(m_status, StatusCode::NOT_FOUND, "{key}: {m_body}");
+            assert!(!body.contains(INJECTED_TEXT), "{key}: {body}");
+            assert_eq!(headers, m_headers, "{key}: headers match a missing thread");
+            assert_eq!(
+                body.replace("acme-thread-1", "no-such-9f3a"),
+                m_body,
+                "{key}: body matches a missing thread"
+            );
+        }
+        let (status, _, body) = get("acme-thread-1", "admin-key").await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            fixture.runs.owner_call_count(),
+            2,
+            "one owner lookup per tenant request; the Admin read performs none"
+        );
+    }
+
+    /// Row 87 (D-02): a run an Admin adds under another tenant's attribution never moves a
+    /// thread. acme's thread stays acme's; globex still cannot see it.
+    #[tokio::test]
+    async fn admin_run_on_a_tenant_thread_does_not_move_its_owner() {
+        let fixture = ThreadFixture::new();
+        let t = fixture.waypoint("acme-thread-1");
+        let t0 = Utc::now();
+        fixture.runs.seed_run(run_on(&t, "acme", "svc-a", t0));
+        fixture.runs.seed_run(run_on(
+            &t,
+            "ops-tenant",
+            "ops",
+            t0 + chrono::Duration::seconds(1),
+        ));
+        let app = thread_router(fixture.state(true));
+        for (key, expected) in [
+            ("owner-key", StatusCode::OK),
+            ("admin-key", StatusCode::OK),
+            ("foreign-key", StatusCode::NOT_FOUND),
+        ] {
+            let response = send_thread_request(
+                &app,
+                "GET",
+                "/v1/threads/acme-thread-1".to_string(),
+                key,
+                None,
+                &[],
+            )
+            .await;
+            assert_eq!(response.status(), expected, "{key}");
+        }
+    }
+
+    /// Row 87 (D-02): an unattributed run (a schedule, `submitted_by: None`) added later
+    /// never moves a thread either.
+    #[tokio::test]
+    async fn unattributed_run_on_a_tenant_thread_does_not_move_its_owner() {
+        let fixture = ThreadFixture::new();
+        let t = fixture.waypoint("acme-thread-1");
+        let t0 = Utc::now();
+        fixture.runs.seed_run(run_on(&t, "acme", "svc-a", t0));
+        let mut scheduled = sample_run_for(&t);
+        scheduled.submitted_at = t0 + chrono::Duration::seconds(1);
+        fixture.runs.seed_run(scheduled);
+        let app = thread_router(fixture.state(true));
+        for (key, expected) in [
+            ("owner-key", StatusCode::OK),
+            ("admin-key", StatusCode::OK),
+            ("foreign-key", StatusCode::NOT_FOUND),
+        ] {
+            let response = send_thread_request(
+                &app,
+                "GET",
+                "/v1/threads/acme-thread-1".to_string(),
+                key,
+                None,
+                &[],
+            )
+            .await;
+            assert_eq!(response.status(), expected, "{key}");
+        }
+    }
+
     #[tokio::test]
     async fn list_threads_fails_closed_for_non_admin_without_a_run_store() {
         let fixture = ThreadFixture::new();
@@ -3797,7 +4019,7 @@ mod tests {
         assert_eq!(listed_ids(&body), ["globex-1", "zero-1"]);
         assert!(!body["next_cursor"].is_null(), "a third thread exists");
         assert_eq!(
-            fixture.runs.list_call_count(),
+            fixture.runs.owner_call_count(),
             0,
             "the Admin path never reads the run store for ownership"
         );

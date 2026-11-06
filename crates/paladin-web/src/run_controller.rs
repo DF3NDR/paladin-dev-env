@@ -91,7 +91,8 @@
 //!
 //! The single-thread routes (`/threads/{id}`, `.../state`, `.../history`, `.../resume`,
 //! `.../fork`, `DELETE /threads/{id}`) apply the same `RunReadScope` rule to a thread's
-//! latest run through `thread_controller`'s `load_visible_thread` gate (ADR-0063).
+//! owner run (its earliest attributed run) through `thread_controller`'s
+//! `load_visible_thread` gate (ADR-0063).
 
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -445,7 +446,9 @@ pub struct RunResponse {
     /// tagged by `reason` -- `"allowance_exhausted"` with the halted ceiling's own `scope`,
     /// `kind`, `balance`, `ceiling`, `window_start` and `window_end` (identical to the `details`
     /// of the Phase 41 `429 allowance_exhausted`), or `"ledger_unavailable"` with no other key
-    /// when the ledger could not be read and the run halted fail-closed. `null` for every run
+    /// when the ledger could not be read and the run halted fail-closed, or `"model_unpriced"`
+    /// with a `model` key naming the model, when the run's model had no `treasurer.pricing` row
+    /// at dispatch and the LLM was not called. `null` for every run
     /// that did not halt on spend. A halt is a resume point, not a failure: `error` stays
     /// `null` beside it. Built only by `HaltReason::wire_json`; never carries another scope's
     /// figures, a tenant id or an API key name or value. Always serialised, mirroring `cost`.
@@ -682,7 +685,7 @@ fn parse_run_status(raw: &str) -> Result<RunStatus, ApiError> {
 /// routes renders (WR-03/WR-04). The detail -- which can carry connection strings,
 /// schema names, or (for a half-attributed or corrupt row) another tenant's data
 /// shape -- goes to the server log only.
-const RUN_STORE_ERROR_MESSAGE: &str = "run store error";
+pub(crate) const RUN_STORE_ERROR_MESSAGE: &str = "run store error";
 
 /// Log a repository/backend failure server-side and return the generic `500`.
 ///

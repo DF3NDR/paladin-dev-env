@@ -1,7 +1,7 @@
 //! Generalized OpenAI-compatible wire types, private to the crate.
 //!
 //! Derived from `deepseek/adapter.rs`'s private `DeepSeek*` structs
-//! (`:104-187`), generalized so every preset built on [`super::engine`]
+//! (`:104-187`), generalized so every preset built on `super::engine`
 //! shares one definition of the wire shape rather than one copy per
 //! provider.
 

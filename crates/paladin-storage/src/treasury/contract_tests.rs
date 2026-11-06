@@ -8,7 +8,7 @@
 //! `crate::run::contract_tests`'s house pattern. Named per clause (not a declarative macro) so
 //! a failure names the violated contract clause rather than a line number.
 //!
-//! Every clause isolates itself with a unique tenant id (via [`contract_scope`]) or unique run
+//! Every clause isolates itself with a unique tenant id (via [`contract_scope`](crate::treasury::contract_tests::contract_scope)) or unique run
 //! ids, and every `spend` call inside a clause filters by that clause's own tenant id or run
 //! ids — a shared database (the Postgres suite, 39-03) never leaks rows between clauses.
 

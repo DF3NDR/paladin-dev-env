@@ -256,10 +256,10 @@ Phase artifacts: `milestones/v0.11.0-phases/`
 
 - [x] **Phase 52: CI & Release Pipeline Repair** - Re-pin the semver gate to the published `0.11.0` baseline so it checks something, drop the crate-wide allows, run the migration-allowlist, end-to-end and publish-dry-run gates before merge, fix the release-body argv cap, and clear the CodeQL, issue #41 and publish-order carry-overs (completed 2026-10-30)
 - [x] **Phase 53: Tenant Isolation Closure** - One visibility gate for every `/v1/threads/*` route, run submission and fork refusing a foreign tenant's thread, tenant-checked job reads and cancel, redacted run-row errors, and a boot-time refusal when a configured Treasurer is not attached to the worker pool (the only S1 cluster; records the patch-versus-`v0.12.0` decision) (completed 2026-10-31)
-- [ ] **Phase 54: First-Run Usability** - Refuse unexpanded `${VAR}` HTTP auth keys at boot and make the examples honest, bring every install snippet, version line and `k8s/` label to the current release behind a `check-version-strings` gate, and fix the changelog, ADR, count and API-surface-snapshot nits a new user trips on
-- [ ] **Phase 55: Correctness Fixes, Test Hygiene & Lint Bar** - No `todo!()` reachable in a published crate (held by a grep guard), the unfinished content/base-layer items each given a keep/fence/remove decision, the Failed-vs-Halted, `Cancelled`, `claude-opus-4-8` seed and unpriced-model-warning fixes, hermetic and non-flaky tests, and a warning-free lint and rustdoc bar with the eight crate-level rustdoc allows removed
-- [ ] **Phase 56: Dogfood Findings** - Triage the maintainer's runs, the web3sec return and two deliberate walk-throughs into the findings log, disposition every `DF-nn`, and fix every promoted S1/S2 finding before the tag (detailed scope is unknown today and is filled from `.project/v0.11.1/02-dogfood-findings-log.md`)
-- [ ] **Phase 57: Register Hygiene Close-Out** - `WINDOWS.md` at `open_count: 0`, zero undispositioned review warnings across Phases 38-51, SUMMARY frontmatter and debug sessions reconciled, the Phase 40 judgment-tier read recorded, and the three `zip` RustSec exceptions re-checked, so the audit can read `passed`
+- [x] **Phase 54: First-Run Usability** - Refuse unexpanded `${VAR}` HTTP auth keys at boot and make the examples honest, bring every install snippet, version line and `k8s/` label to the current release behind a `check-version-strings` gate, and fix the changelog, ADR, count and API-surface-snapshot nits a new user trips on (completed 2026-11-01)
+- [x] **Phase 55: Correctness Fixes, Test Hygiene & Lint Bar** - No `todo!()` reachable in a published crate (held by a grep guard), the unfinished content/base-layer items each given a keep/fence/remove decision, the Failed-vs-Halted, `Cancelled`, `claude-opus-4-8` seed and unpriced-model-warning fixes, hermetic and non-flaky tests, and a warning-free lint and rustdoc bar with the eight crate-level rustdoc allows removed (completed 2026-11-02)
+- [x] **Phase 56: Dogfood Findings** - Triage the maintainer's runs, the web3sec return and two deliberate walk-throughs into the findings log, disposition every `DF-nn`, and fix every promoted S1/S2 finding before the tag (detailed scope is unknown today and is filled from `.project/v0.11.1/02-dogfood-findings-log.md`) (completed 2026-11-04)
+- [x] **Phase 57: Register Hygiene Close-Out** - `WINDOWS.md` at `open_count: 0`, zero undispositioned review warnings across Phases 38-51, SUMMARY frontmatter and debug sessions reconciled, the Phase 40 judgment-tier read recorded, and the three `zip` RustSec exceptions re-checked, so the audit can read `passed` (completed 2026-11-05)
 - [ ] **Phase 58: Crate Release** - Lockstep version bump held by the gate, `MIGRATION.md` consumer statement, a pre-tag milestone audit that reads `passed`, and the `v0.11.1` tag through `release.yml` with no manual step and all twelve crates on crates.io
 
 **v0.11.1 exit criteria (the milestone's definition of done — carried by Phase 58 and re-read at the tag):**
@@ -402,9 +402,32 @@ Plans:
   2. Every install snippet and version line a user copies from reads the workspace's current version: `README.md` (the `"0.5"` pin and `Current version`), `docs/src/appendix/sentinel.md`, `crate-map.md`, `feature-flags.md`, and the `version:` labels in `k8s/server/deployment.yaml` and `worker-deployment.yaml`; historical rows inside the migration guide are exempt.
   3. `make check-gates` and CI fail when any user-facing version string (README, `docs/src`, `k8s/`, `openapi.json`) lags the workspace version, shown by a deliberately stale string turning the gate red.
   4. The `[0.11.1]` entries of the `paladin-memory` and `paladin-content` changelogs correct the `[0.11.0]` "No functional change" wording with the one-way `paladin.node` → `paladin.data` persisted-key change; ADR-0056 and the treasurer tests' doc comment cite ADR-0057 (check-only) rather than a reservation; and the stale "ten crates" counts, the `cargo-release` version line and the dangling `[Unreleased]` link at `CHANGELOG.md:3396` are corrected.
-  5. `.project/current-exports.txt` is regenerated by `make api-surface` on the pinned nightly and carries the `UnsupportedParameter` / `check_reasoning` rows; the node-cache guide states that the server attaches no node cache (the PACE-04 stampede lock is a library builder only) and documents the cache-key version and the `key_prefix` rotation for a provider-level default-effort change.
+  5. `.project/current-exports.txt` is regenerated by `make api-surface` on the pinned nightly and carries the `UnsupportedParameter` / `check_reasoning` rows; the node-cache guide states that the server attaches no node cache (the PACE-04 stampede lock is a library builder only) and documents the cache-key version and the `key_prefix` rotation for a provider-level default-effort change. *(Reconciled 2026-11-01, Phase 54, D-18: the snapshot is current -- make api-surface reports it unchanged on nightly-2026-09-20. LlmError::UnsupportedParameter and LlmPort::check_reasoning live in paladin-ports, which this facade-only snapshot does not re-export, so no regeneration can list them; that crate's surface is guarded by make check-semver. Precedent: WINDOWS row 59. Evidence: 54-FIRST-EVIDENCE.md "API surface (FIRST-08)".)*
 
-**Plans**: TBD
+**Plans**: 9 plans
+
+Plans:
+**Wave 1**
+
+- [x] 54-01-PLAN.md — `AuthConfig::validate` refuses any `http.auth.api_keys[].key` containing `${` (boot test before bind); `config.example.yml` ships `api_keys: []` with commented `key: ""` entries; MIGRATION `M-B-29` and CHANGELOG (FIRST-01)
+- [x] 54-02-PLAN.md — Docker first run mounts a literal-key `config.yml` (compose, `Dockerfile.server` header, `http-service-host.md`); explicit k8s apply sequence (FIRST-01)
+- [x] 54-03-PLAN.md — README, Quickstart, Installation, crate map, feature flags and Sentinel pins and `Current version` at the workspace version; README literal-key first run (FIRST-02, FIRST-01)
+- [x] 54-04-PLAN.md — User-guide and contributor pins at the workspace version; present-tense "current v0.10.0" banners and the deployment guides' image tags made version-free (FIRST-02)
+- [x] 54-05-PLAN.md — memory/content `[Unreleased]` corrections of "No functional change"; ADR-0056 amended to cite ADR-0057; node-cache guide: no cache on the server, `k1` key version, `key_prefix` rotation (FIRST-05, FIRST-06, FIRST-09)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 54-06-PLAN.md — `k8s/server` config delivered as a Secret (`configmap.yaml` retired), labels and image tags at the workspace version, `make docker-build-server` tags it; README quick start, CHANGELOG, MIGRATION (FIRST-01, FIRST-04)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 54-07-PLAN.md — `check-version-strings` gate (four classes, one exemption, named vacuity failures) in `make check-gates` and CI, with its harness; count-free gate comments (FIRST-03, FIRST-02, FIRST-04, FIRST-07)
+- [x] 54-08-PLAN.md — Dangling `[Unreleased]` footer link deleted; count-free release comments; `release.toml` records `cargo-release 1.1.7` (FIRST-07)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 54-09-PLAN.md — `54-FIRST-EVIDENCE.md` (prove-then-lock, process-level boot refusal, gate red run, API surface), FIRST-08 wording reconciled, WINDOWS row 62 closed, Phase 58 carry-forward, phase-head gates and credential review (FIRST-08, all FIRST)
+
 **Scope notes**:
 
 - Version strings are held to the workspace manifest version: they read `0.11.0` while the manifest does, and the same gate is what forces the lockstep bump to `0.11.1` in Phase 58, where a stale string is a red gate rather than a missed sweep.
@@ -419,12 +442,39 @@ Plans:
 **Success Criteria** (what must be TRUE):
 
   1. No `todo!()` or `unimplemented!()` is reachable outside `#[cfg(test)]` in any published crate (doc-comment examples excepted), held by a grep guard in the gates that fails on a planted one; the previously panicking stubs return a typed error or are gone, and every kept-but-unfinished content / general-data base-layer or content-processing item (`Field`, `Collection`, `element`, the two versioning services, `planning_service.rs:417`, `file_content_fetcher.rs`) has a recorded keep / fence / remove decision and refuses cleanly with rustdoc saying it is unfinished.
-  2. A `DispatchBudget::Unpriced` outcome on an agent-kind run records `Halted`, not `Failed` (or the Treasurer guide documents why the mapping is not a local change); an eval scenario can assert `run_status: cancelled`; the `claude-opus-4-8` seeded `reasoning` flag matches the Phase 50.1 probe record; and server boot warns once per model reachable by a metered principal that has no `treasurer.pricing` row, without refusing workflow assistants.
+  2. A `DispatchBudget::Unpriced` outcome on an agent-kind run records `Halted`, not `Failed` (or the Treasurer guide documents why the mapping is not a local change); an eval scenario can assert `run_status: cancelled`; the `claude-opus-4-8` seeded `reasoning` flag matches the Phase 50.1 probe record; and server boot warns once per model reachable by a metered principal that has no `treasurer.pricing` row, without refusing workflow assistants. *(Reconciled 2026-11-01, Phase 55, D-05: the run_status: cancelled clause is re-homed to the next minor -- RunStatusValue and Assertion are exhaustive public enums of paladin-eval, so the variant is a major change at the patch gate; see REQUIREMENTS.md v2 "Eval harness" FIXES-04 and the phase deferred-items.md.)*
   3. `cargo test` passes in a sandbox with no network, including the two `run_api_wiring::tests::build_run_api_persists_*` tests against a scripted port; `cancel_tests::local_cancel_signals_token` waits on a dispatch-registration signal rather than a fixed sleep and survives repeated runs under parallel load; and WINDOWS row 73 is dispositioned.
   4. Single-feature `cargo clippy --tests` on `paladin-llm` is warning-free, the Phase 51 lint leftovers are cleared, and `cargo doc` is warning-free under both CI bars with the eight crate-level `#![allow(rustdoc::…)]` lines removed and `doc-coverage-report.md` regenerated.
   5. The self-hosted provider pair (`ollama`, `openai-compatible`) is defined once, or 51 IN-01 is closed as not-reproducing with the evidence recorded, and the `commander.rs` "TODO: Enhance MockPaladinPort" stubs are deleted or point at `tests/integration/commander_error_paths_test.rs`.
 
-**Plans**: TBD
+**Plans**: 13 plans
+
+Plans:
+**Wave 1**
+
+- [x] 55-01-PLAN.md — offline zero-exemption stub-panic guard (`scripts/check-no-stub-panics.sh` + harness, red run 26 lines) in `make check-gates` and CI; the twenty `ContentListRepository` stubs return a typed `QueryError`; the uncompiled `content_filtering_service.rs` deleted (FIXES-01)
+- [x] 55-02-PLAN.md — `HaltReason::ModelUnpriced { model }`; an unpriced model at dispatch halts the run (row, SSE, webhook) instead of failing it; OpenAPI description, Platform API, Treasurer guide and an ADR-0057 dated note (FIXES-03)
+- [x] 55-03-PLAN.md — `local_cancel_signals_token` waits on a `#[cfg(test)]` `LocalRunTokens::is_registered` inspector (20 full-binary runs); the four `commander.rs` to-do stubs point at their relocated error-path tests (TESTS-02, TESTS-06)
+- [x] 55-04-PLAN.md — `paladin-llm` single-feature clippy clean over all 13 feature combinations with cfg gates, no suppression; TESTS-04's closed sites proven; one `SELF_HOSTED_PROVIDERS`; the `claude-opus-4-8` seed comment cites its probes and stays `reasoning: false` (TESTS-03, TESTS-04, TESTS-05, FIXES-05)
+- [x] 55-05-PLAN.md — base-layer fences: an unversioned field's history is `EntityNotFound`, collection count changes carry a documented nil sentinel; rustdoc on `Field`, `CollectionType`/`Item`, `element` and `base/mod.rs` (FIXES-02)
+- [x] 55-06-PLAN.md — `FileContentFetcher::ingest_content` refuses instead of a no-op `Ok`; planned subtasks carry no fabricated expected output and the prompt omits the empty line (FIXES-02)
+- [x] 55-07-PLAN.md — FIXES-04 re-homed to the next minor with its reason: rustdoc and schema descriptions, eval guide, REQUIREMENTS v2 entry and traceability, SC2 note, inventory B5 pointer, phase `deferred-items.md` (FIXES-04)
+- [x] 55-08-PLAN.md — `paladin-ports` rustdoc links fixed at the source and its two crate-level suppressions removed, green under both bars (CIREL-08)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 55-09-PLAN.md — crate-private `build_run_api_with_engine_port` seam making the two `build_run_api_persists_*` tests hermetic; boot warns once per unpriced model a metered principal can reach (code registry + stored agent-kind assistants), never refusing; guide paragraphs (TESTS-01, FIXES-06)
+- [x] 55-10-PLAN.md — `paladin-llm`, `paladin-storage`, `paladin-notifications` rustdoc fixed and unsuppressed, one green commit each (CIREL-08)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 55-11-PLAN.md — the facade's rustdoc fixed and its three suppressions removed, `make doc-check` green with all eight gone; ADR-0033 amended in place; `doc-coverage-report.md` regenerated as a dated measurement (CIREL-08)
+- [x] 55-12-PLAN.md — CHANGELOG `[Unreleased]` entries (new `paladin-storage` anchor) and `MIGRATION.md` `M-B-30`..`M-B-35`, §11.6, §11.8; `55-BASE-LAYER-REVIEW.md`; the 2026-10-13 todo closed (FIXES-01, FIXES-02, FIXES-03, FIXES-06)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 55-13-PLAN.md — `55-CORRECTNESS-EVIDENCE.md` (prove-then-lock, red runs, hermetic and flake proofs, lint and rustdoc bars, FIXES-05 verification), twelve-line semver record, API surface, WINDOWS rows 73 fixed / 67 waived, phase-head gates, credential review, carry-forward (all)
+
 **Scope notes**:
 
 - **FIXES-01 reachability (measured at roadmap time).** The file the requirement names, `crates/paladin-content/src/services/content_filtering_service.rs`, is commented out of `services/mod.rs` (`// pub mod content_filtering_service;`) and is not valid Rust (`content..contains(keyword)`), so that `ContentFilter` panic is not reachable today. The compiled, reachable stubs are the twenty `todo!()` bodies in `impl ContentListRepository` for `SqliteStore` (`crates/paladin-storage/src/sqlite_content_repository.rs`, feature `sqlite`) and `MySqlContentRepository` (`mysql_content_repository.rs`, feature `mysql`); all return `Result<_, RepositoryError>`, so a typed `Err` is a body-only change. The grep guard is the real bar; plan-phase re-measures (feature-gated sites included) before sizing.
@@ -445,7 +495,50 @@ Plans:
   4. The first-run path is walked on the published `0.11.0` crates (README Quick Example → `cargo add` → `basic_paladin`, then `paladin-cli onboarding` and `setup-check` against one real provider key) and every stumble is logged as a finding; the maintainer's local `make coverage` walk of `docs/src/contributing/testing-guide.md` on a Docker-capable machine closes todo `2026-08-13-verify-local-coverage-reproduction` with the measured figure.
   5. Every finding promoted to `in v0.11.1` at severity S1 or S2 is fixed and verified before this phase closes, in plans here or in decimal phases (`56.1`+) inserted once the findings are known; none remains open.
 
-**Plans**: TBD
+**Plans**: 14 plans (Stages A and B: 56-01…56-10; Stage C fix plans 56-11…56-14 added by the `--gaps` replans of 2026-11-03 from the log)
+
+Plans:
+**Wave 1**
+
+- [x] 56-01-PLAN.md — offline findings-log checker `scripts/check-findings-log.sh` + fixture harness (in `make test-shell-guards`) and `make check-findings-log`, deliberately outside `check-gates`; red run names DF-01…DF-04 OPEN (DOGF-01)
+- [x] 56-02-PLAN.md — `config.example.yml` round-trip through `Settings::load_from_file` and `Settings::new` by key-path diff, full fixture + Redis-cadence fixture, drift guard, claimed-complete sections (lead L5), price precision probe (DOGF-03)
+- [x] 56-03-PLAN.md — Stage B runbooks: coverage walk (proven LF/LH snippet), keyed first-run walk, web3sec relay and triage (DOGF-02, DOGF-04, DOGF-05)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 56-04-PLAN.md — DF-01…DF-04 re-checked on HEAD and closed `in v0.11.1` with pointers to FIRST-01, FIRST-02/03, FIXES-01, TENANT-03..05/07 (DOGF-01)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 56-05-PLAN.md — leads L3 (`paladin` binary logs `Settings` with plaintext API keys), L6 (`Settings::validate()` uncalled at boot) and L4 (dev-UI key unread) reproduced on HEAD and logged; S1/S2 promoted to Stage C (DOGF-01, DOGF-06)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 56-06-PLAN.md — keyless first-run walk on crates.io `0.11.0` (Quick Example → `cargo add` → `basic_paladin` → Quickstart missing-key → CLI install → `setup-check` / `onboarding`), every stumble logged (DOGF-04)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [x] 56-07-PLAN.md — contained S3/S4 docs fixes from the walk (L1 feature name, L2 install line, `paladin-cli` naming, default features, crates.io example note) with proofs (DOGF-04, DOGF-01)
+
+**Wave 6** *(blocked on Wave 5 completion; human-gated)*
+
+- [x] 56-08-PLAN.md — maintainer's keyed walk (one real OpenAI key) checkpoint, secret scan, triage (DOGF-04)
+
+**Wave 7** *(blocked on Wave 6 completion; human-gated)*
+
+- [x] 56-09-PLAN.md — maintainer's local `make coverage` walk on Docker, same-commit CI comparison, todo `2026-08-13-verify-local-coverage-reproduction` closed or updated (DOGF-05)
+
+**Stage C** *(gap closure from the log, `gap_closure: true`; waves 4, 5, 7 and 8 so they run before 56-10 resumes; chained because each edits `CHANGELOG.md` and the log)*
+
+- [x] 56-11-PLAN.md — DF-07 (S1): the `paladin` binary stops logging the whole `Settings`; redacting `Debug` for `ApiKeyConfig`, `Settings.llm_api_key`, `QueueConfig`, `FileStorageConfig`, `EmailAdapterConfig`; binary re-probe, `M-B-36` + rotation step (DOGF-06, DOGF-01)
+- [x] 56-12-PLAN.md — DF-08 (S2): `paladin-server` calls `Settings::validate()` at boot through `load_settings`, refusing invalid `trace` / `agent_runtime` values naming the key; binary boot probe, `M-B-37` (DOGF-06, DOGF-01)
+- [x] 56-13-PLAN.md — DF-19 (S2): one shared provider-key probe for `setup-check` and `onboarding`, Anthropic model from the adapter's seeded default, failure names the model with a redacted reply, no redirects; maintainer real-key re-check (DOGF-06, DOGF-01)
+- [x] 56-14-PLAN.md — DF-26 (S2): `paladin-server` applies the `PALADIN_TRACE_*` / `APP_AGENT_RUNTIME_*` / `APP_WEB_SERVER_*` overlays in `load_settings` before `Settings::validate()`, through new additive `Settings::get_trace_config` / `get_agent_runtime_config` / `get_web_server_config`; env boot probe (`PALADIN_TRACE_CHANNEL_CAPACITY=0` refused), `M-B-38`; wave 8, after 56-13 (DOGF-06, DOGF-01)
+
+**Wave 9** *(blocked on Wave 8 and on Stage C; human-gated)*
+
+- [x] 56-10-PLAN.md — web3sec §6 return triaged if relayed; maintainer `checkpoint:decision` (confirm / hold / re-home with owner + date) after Stage C; phase close gate (DOGF-02, DOGF-06, DOGF-01)
+
 **Scope notes**:
 
 - **Detailed scope is unknown today.** This phase is a fixed frame around unknown content: its plans are written from `.project/v0.11.1/02-dogfood-findings-log.md` once the maintainer's runs and the web3sec return have arrived. Today the log holds only DF-01…DF-04, all pre-seeded from reading the tree and all already owned by earlier phases (DF-01 → FIRST-01, DF-02 → FIRST-02/03, DF-03 → FIXES-01, DF-04 → TENANT-03…05 and TENANT-07), so they are dispositioned here `in v0.11.1` with a pointer to that owner.
@@ -458,6 +551,7 @@ Plans:
 **Goal**: Every register the milestone audit reads agrees with the tree: no open `WINDOWS.md` row, no undispositioned review warning, no stale frontmatter or diagnosed-but-fixed debug session, and no unchecked advisory exception, so the audit can read `passed` rather than `tech_debt`.
 **Depends on**: Phase 56 (dogfood findings and fixes can mint or close `WINDOWS.md` rows) and Phase 53 (the Phase 40 warnings close on its evidence)
 **Requirements**: REG-01, REG-02, REG-03, REG-04, REG-05, REG-06
+**UI hint**: no
 **Success Criteria** (what must be TRUE):
 
   1. `windows status` reports `open_count: 0`: rows 56, 68, 69 and 79 are dispositioned with their superseding evidence, rows 58, 62, 63, 67 and 73 are closed on the evidence of Phases 53-55 or waived with a reason, every other open row is waived with a reason or re-homed with an owner and a date, and any row minted by Phases 52-56 is included.
@@ -466,7 +560,40 @@ Plans:
   4. A bounded human read of the Phase 40 judgment-tier prohibitions that carry LLM-judge verdicts is recorded in that phase's register, and the Phase 42 subset is recorded as accepted as-is.
   5. The three `zip 3.0.0` RustSec exceptions in `SECURITY-EXCEPTIONS.md` are re-checked against the current `utoipa-swagger-ui` release and either lifted or re-dated with the check recorded, with `make security` green.
 
-**Plans**: TBD
+**Plans**: 16 plans (three blocking owner checkpoints: 57-02 Task 1, 57-07 Task 3, 57-10 Task 3; gap closure plans 57-12…57-16 added by the `--gaps` replan of 2026-11-04 for the seven fix-in-phase items of the 57-10 triage, before 57-11)
+
+Plans:
+**Wave 1**
+
+- [x] 57-01-PLAN.md — four `zip 3.0.0` exception rows (new RUSTSEC-2026-0429) re-dated per D-31 so `make security` is green; STORE-02 / REASON-02/03/05/06 `requirements-completed`; three debug sessions archived to `.planning/debug/resolved/` (REG-06, REG-01, REG-03)
+- [x] 57-02-PLAN.md — owner checkpoint on the thread-ownership door, then defaulted `RunRepositoryPort::owner_run_for_thread` (earliest attributed run, one row) on in-memory/SQLite/Postgres with five contract clauses and `permits_thread(owner)` (REG-02 rows 86, 87)
+- [x] 57-05-PLAN.md — live review findings 45 WR-05 (redact-then-bound run failure text) and 41 WR-05 (empty operator-webhook secret is absent, boot warning), WINDOWS rows minted first (REG-05, REG-02)
+- [x] 57-07-PLAN.md — Phase 40 judgment-tier worksheet (20 prohibitions + credential checklist over `629ef660...be3a9030`) with the owner's per-row read; Phase 42 subset accepted as-is (REG-04)
+- [x] 57-08-PLAN.md — never-vacuous `scripts/check-review-dispositions.sh` + regression test; register rows for Phases 40, 42, 46, 48, 50, 50.1 (REG-05)
+
+**Wave 2**
+
+- [x] 57-03-PLAN.md — thread gate, list walk and submit guard read the owner run (HTTP tracer over SQLite); newer-schema owner row skipped and hidden for a tenant; `openapi.json` descriptions (REG-02 rows 85-87)
+- [x] 57-06-PLAN.md — live review findings 45 CR-01 (`list_files` limit as delimiter), WR-01, WR-02 (`s3_err_summary`), WR-03 (`without_url`), WINDOWS rows minted first (REG-05, REG-02)
+- [x] 57-09-PLAN.md — register rows for Phases 38 (incl. CR-01), 44, 47, 51 on hunted evidence (REG-05)
+
+**Wave 3**
+
+- [x] 57-04-PLAN.md — ADR-0063 amended for the earliest-attributed-run rule; guides, MIGRATION 11.1/11.6/11.8 and `[Unreleased]` changelogs (REG-02)
+- [x] 57-10-PLAN.md — register rows for Phases 41, 43, 45 (register complete at 51 findings); owner triage of every live finding and reject (REG-05)
+
+**Gap closure** *(fix-in-phase from the 57-10 triage, `gap_closure: true`; waves 4-8, chained because each mints a WINDOWS row and appends `MIGRATION.md` 11.1 `M-B` rows and `[Unreleased]` changelog entries; all run before 57-11)*
+
+- [x] 57-12-PLAN.md — 51 WR-01 (security): `effort_refusal` renders a fixed per-variant `LlmError` label, never vendor text, directly and through `FallbackLlmAdapter`; planted-secret tests, credential review, WINDOWS row minted first; wave 4 (REG-05, REG-02)
+- [x] 57-13-PLAN.md — 45 WR-04 and 45 WR-06: `run_agent` emits its terminal `RunFinished` only after the durable write and ack on every exit (completed, failed, halted); a failed agent run reports its billed spend through the existing `ATTEMPT_SPEND` scope; wave 5 (REG-05, REG-02)
+- [x] 57-14-PLAN.md — 41 WR-01: a failed operator-notice enqueue gives the notice back; `confirm`/`abandon` survive a dropped caller; a dropped submission settles its admission through a drop guard; wave 6 (REG-05, REG-02)
+- [x] 57-15-PLAN.md — 43 WR-05 and 43 WR-04: a zero provider delay never opens a zero-length Cadence gate; a 429 is recorded in a spawned, awaited task so a dropped caller cannot lose it; ADR-0058 amended; wave 7 (REG-05, REG-02)
+- [x] 57-16-PLAN.md — 43 WR-01: the node-cache fence marker is capped below the fencing counter's floor, both TTLs in one crate-private `redis_fence` module; pure invariant test plus a Docker-gated live Redis case read from CI; wave 8 (REG-05, REG-02)
+
+**Wave 9** *(blocked on the gap closure plans)*
+
+- [x] 57-11-PLAN.md — close-out: every WINDOWS row dispositioned on re-measured evidence, `57-REGISTER-EVIDENCE.md`, strict checker, 40-VALIDATION recording, gates, push and CI read, `open_count: 0` (REG-02, REG-04, REG-05)
+
 **Scope notes**:
 
 - Mostly planning-register work with little code. Inventory F1 (nine phases NOT-VALIDATED) was found already closed at the milestone open (all fifteen Phase 38-51 `VALIDATION.md` files read `status: validated`) and is not a requirement.
@@ -485,7 +612,61 @@ Plans:
   4. `v0.11.1` is tagged on `main` and ships through `release.yml` end to end with no manual step (no changelog condensation, no hand-run publish), and the semver job read a non-zero check count on the release pull request.
   5. All twelve publishable crates are on crates.io at `0.11.1`, unyanked and published through Trusted Publishing as read from the registry after the run, and the GitHub Release exists with its assets.
 
-**Plans**: TBD
+**Plans**: 16 plans in 12 waves (58-15 and 58-16 inserted as gap closure at the 58-05 decision and the 58-06 sweep; blocking maintainer checkpoints: 58-05 Task 3 decision, 58-09 Task 2 `release` label, 58-10 Task 3 tag day, 58-11 Task 2 sign-off tick, 58-12 Tasks 2-3 one-way door and merge + tag; build wave 58-01..58-06, bump 58-07, pre-merge 58-08..58-11, merge + tag 58-12, post-tag 58-13..58-14)
+
+Plans:
+**Wave 1**
+
+- [x] 58-01-PLAN.md — build wave: `58-CI-EVIDENCE.md` and the registry probe with the pre-tag baseline, the `57-VALIDATION.md` end-of-file fix for the required pre-commit context, the SDK-smoke diagnosis and CI-side fix, the `treasury_spend` flake characterised, pre-bump push `SHA-E` (SHIP-08, SHIP-10)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 58-02-PLAN.md — build wave: 57-REVIEW WR-02 checker fix with near-miss fixtures (RED then GREEN), the `sk-proj-…` scrub proven by counts only (SHIP-10)
+- [x] 58-03-PLAN.md — build wave: the deprecated `gpt-4` model id swept from `docs/src` and `examples/` behind a new `check-doc-models` gate in `check-gates` and the harness (SHIP-10)
+- [x] 58-04-PLAN.md — build wave: log-derived `[Unreleased]` anchors for battalion/eval/herald with a throwaway finalize proof, the Cadence muster pin, the devcontainer `cargo-llvm-cov` 0.8.7 install (SHIP-08, SHIP-09, SHIP-10)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 58-05-PLAN.md — build wave: pre-tag audit sweep, `58-AUDIT-DISPOSITIONS.md` and its verifier, the maintainer's decision (recheck_by date, flake rule, SHIP-09 wording, key rotation and purge) (SHIP-10, SHIP-09, SHIP-08)
+- [x] 58-15-PLAN.md — build wave (gap closure, inserted at the 58-05 decision): 56-REVIEW WR-03/WR-04/WR-09 credential-class fixes RED-then-GREEN (hidden Redis URL in errors, `.env` written 0600, secrets skipped on serialize), changelog and MIGRATION §11.1 entries, register rows R-47/R-48/R-53 to `fixed`, F-58-06 (SHIP-10, SHIP-09)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 58-06-PLAN.md — build wave: dated re-home todos and the locked register, D-11 `check-semver` on its own head, the pre-bump sweep, pre-bump push `SHA-P` (SHIP-10, SHIP-09, SHIP-08)
+- [x] 58-16-PLAN.md — build wave (gap closure, inserted at the 58-06 sweep): the four residual secret-bearing config types (`NodeCacheConfig`, `RedisQueueConfig`, `MinioConfig`, `RedisNodeCacheConfig`) get `skip_serializing` and redacted `Debug` RED-then-GREEN, changelog and MIGRATION §11.1 rows, R-95 to `fixed`, F-58-07, D-11 semver and the pre-bump sweep re-run on SHA-S2, pre-bump push `SHA-P2` (SHIP-10, SHIP-09)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [x] 58-07-PLAN.md — bump set: commit 1 lockstep bump with the 52 gate-listed strings and `openapi.json`, commit 2 the twelve changelog stamps, commit 3 the MIGRATION §11.8 library-consumer statement (SHIP-08, SHIP-09)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [x] 58-08-PLAN.md — pre-merge: the eight-row re-seal on the candidate final head, `58-ACCEPTANCE-AUDIT.md` with the unticked box, the D-10 head correction (SHIP-08, SHIP-09, SHIP-10)
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [x] 58-09-PLAN.md — pre-merge: push `SHA-A0`, open the release PR, the maintainer's `release` label, stop for CI (SHIP-08)
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
+- [x] 58-10-PLAN.md — pre-merge: PR CI evidence (required contexts, Coverage, semver counts, E2E, SDK smoke), the scoped milestone audit `v0.11.1-MILESTONE-AUDIT.md`, the tag-day decision (SHIP-08, SHIP-10)
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
+- [ ] 58-11-PLAN.md — pre-merge: optional redate, push `SHA-A1`, the maintainer's tick, the tick verified on origin (SHIP-08)
+
+**Wave 10** *(blocked on Wave 9 completion)*
+
+- [ ] 58-12-PLAN.md — merge + tag: checks on the tick commit, the pre-tag guard, the one-way door, the maintainer's merge and annotated tag (SHIP-08)
+
+**Wave 11** *(blocked on Wave 10 completion)*
+
+- [ ] 58-13-PLAN.md — post-tag: tag equals the PR merge commit, `chore/58-close`, release run and GitHub Release read, twelve-crate registry table with Trusted Publishing, keyless scratch-crate smoke (SHIP-08)
+
+**Wave 12** *(blocked on Wave 11 completion)*
+
+- [ ] 58-14-PLAN.md — post-tag: MILESTONES release record, SHIP-08/09/10 ticked on the registry table, web3sec and ready-to-close hand-offs, the documentation-only close PR (SHIP-08, SHIP-09, SHIP-10)
+
 **Scope notes**:
 
 - Suggested ordering: lockstep bump (the Phase 54 gate goes red until every string moves) → release pull request with the Phase 52 gates on → pre-tag audit of Phases 52-57 reads `passed` → tag via `release.yml` → registry read. Phase 58's own proof is the post-tag registry read, so the audit is not circular. The merge, the tag and the publish remain maintainer-gated checkpoints, as in Phase 47.
@@ -515,10 +696,10 @@ Plans:
 | 38-51 | v0.11.0 | 174/174 | ✅ Shipped | 2026-10-27 |
 | 52. CI & Release Pipeline Repair | v0.11.1 | 8/8 | Complete    | 2026-10-30 |
 | 53. Tenant Isolation Closure | v0.11.1 | 8/8 | Complete    | 2026-10-31 |
-| 54. First-Run Usability | v0.11.1 | 0/TBD | Not started | - |
-| 55. Correctness Fixes, Test Hygiene & Lint Bar | v0.11.1 | 0/TBD | Not started | - |
-| 56. Dogfood Findings | v0.11.1 | 0/TBD | Not started | - |
-| 57. Register Hygiene Close-Out | v0.11.1 | 0/TBD | Not started | - |
+| 54. First-Run Usability | v0.11.1 | 9/9 | Complete    | 2026-11-01 |
+| 55. Correctness Fixes, Test Hygiene & Lint Bar | v0.11.1 | 13/13 | Complete    | 2026-11-02 |
+| 56. Dogfood Findings | v0.11.1 | 14/14 | Complete    | 2026-11-04 |
+| 57. Register Hygiene Close-Out | v0.11.1 | 16/16 | Complete    | 2026-11-05 |
 | 58. Crate Release | v0.11.1 | 0/TBD | Not started | - |
 
 **v0.8.0 shipped 2026-08-24:** 14 phases, 149 plans, 65/65 requirements, 1,014 commits

@@ -98,7 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db_expert = PaladinBuilder::new(db_llm.clone() as Arc<dyn LlmPort>)
         .system_prompt("You are a database architecture expert")
         .name("DatabaseExpert")
-        .model("gpt-4")
+        .model("gpt-4o-mini")
         .temperature(0.3)
         .max_loops(1)
         .build()
@@ -120,7 +120,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let security_expert = PaladinBuilder::new(security_llm.clone() as Arc<dyn LlmPort>)
         .system_prompt("You are a cybersecurity expert")
         .name("SecurityExpert")
-        .model("gpt-4")
+        .model("gpt-4o-mini")
         .temperature(0.2)
         .max_loops(1)
         .build()
@@ -142,7 +142,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let perf_expert = PaladinBuilder::new(perf_llm.clone() as Arc<dyn LlmPort>)
         .system_prompt("You are a performance optimization expert")
         .name("PerformanceExpert")
-        .model("gpt-4")
+        .model("gpt-4o-mini")
         .temperature(0.3)
         .max_loops(1)
         .build()
@@ -231,7 +231,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let architect = PaladinBuilder::new(architect_llm.clone() as Arc<dyn LlmPort>)
         .system_prompt("Default prompt (will be auto-generated)")
         .name("SeniorArchitect")
-        .model("gpt-4")
+        .model("gpt-4o-mini")
         .temperature(0.5) // Will be adjusted dynamically
         .max_loops(5) // Note: Would use MaxLoops::Auto in fully integrated version
         .enable_planning(true) // Enables autonomous planning
@@ -398,7 +398,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("```yaml");
     println!("paladin:");
     println!("  name: SeniorArchitect");
-    println!("  model: gpt-4");
+    println!("  model: gpt-4o-mini");
     println!("  temperature: 0.5");
     println!("  max_loops: auto");
     println!();

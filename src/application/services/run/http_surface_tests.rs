@@ -1658,6 +1658,245 @@ async fn cross_tenant_submit_on_a_thread_is_the_unknown_thread_404() {
     .expect("cross_tenant_submit_on_a_thread_is_the_unknown_thread_404 did not hang");
 }
 
+/// Phase 57's WINDOWS rows 86 and 87 over real storage (D-02, T-57-09): a thread belongs to the
+/// tenant of its **earliest attributed run**, whoever adds runs to it later. Over an on-disk
+/// `SqliteRunRepository` and `SqliteWaypointStore`, thread T holds one saved Waypoint and three
+/// terminal runs -- acme at t0, an unattributed (schedule) run at t0+1s, and an `ops-tenant`
+/// Admin run at t0+2s -- so the **newest** run is another tenant's. Through the real
+/// `thread_router` and `run_router` (merged, as the shipped server mounts them) acme's user key
+/// reads the thread (`200`), lists it, and may submit onto it (`202`); globex's user key gets the
+/// missing-thread `404` on the read (byte-identical to a never-used id once the id text is
+/// normalised) and the `unknown thread` `404` on the submit, which inserts no run; the Admin key
+/// reads it (`200`).
+#[tokio::test(flavor = "multi_thread")]
+async fn thread_owner_is_the_earliest_attributed_run_over_sqlite() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        use paladin_core::platform::container::waypoint::ThreadId;
+        use paladin_storage::run::contract_tests::{
+            contract_timestamp, sample_attributed_run, sample_run,
+        };
+        use paladin_storage::waypoint::contract_tests::sample_waypoint;
+        use paladin_storage::waypoint::sqlite::SqliteWaypointStore;
+
+        let (repo_path, repo_url) = temp_sqlite_url("thread-owner-runs");
+        let (wp_path, wp_url) = temp_sqlite_url("thread-owner-waypoints");
+        let repository: Arc<dyn RunRepositoryPort> =
+            Arc::new(SqliteRunRepository::new(&repo_url).await.unwrap());
+        let waypoints: Arc<dyn WaypointPort> =
+            Arc::new(SqliteWaypointStore::new(&wp_url).await.unwrap());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let resolver: Arc<dyn AssistantResolver> =
+            Arc::new(CodeWorkflowResolver::new().register("owner-wf", build_chain_graph(1)));
+        let submission: Arc<dyn RunSubmissionPort> = Arc::new(RunSubmissionService::new(
+            repository.clone(),
+            queue.clone(),
+            resolver.clone(),
+        ));
+
+        // Seed through the repository: acme first, then a schedule run, then an Admin run
+        // under another tenant. Each is made terminal so the next insert is not `ThreadBusy`.
+        let thread = ThreadId::new(format!("owner-thread-{}", uuid::Uuid::new_v4())).unwrap();
+        let acme = TenantId::new("acme").unwrap();
+        let ops = TenantId::new("ops-tenant").unwrap();
+        let t0 = contract_timestamp();
+        let seeded = [
+            sample_attributed_run(&thread, "owner-wf", t0, &acme, "svc-a"),
+            sample_run(&thread, "owner-wf", t0 + chrono::Duration::seconds(1)),
+            sample_attributed_run(
+                &thread,
+                "owner-wf",
+                t0 + chrono::Duration::seconds(2),
+                &ops,
+                "ops",
+            ),
+        ];
+        for run in &seeded {
+            repository.insert(run).await.unwrap();
+            repository
+                .update_status(
+                    &run.run_id,
+                    RunStatus::Queued,
+                    RunStatus::Running,
+                    contract_timestamp(),
+                )
+                .await
+                .unwrap();
+            repository
+                .update_status(
+                    &run.run_id,
+                    RunStatus::Running,
+                    RunStatus::Completed,
+                    contract_timestamp(),
+                )
+                .await
+                .unwrap();
+        }
+        waypoints.save(&sample_waypoint(&thread, 1)).await.unwrap();
+
+        let mut api_keys = HashMap::new();
+        api_keys.insert(
+            "thread-key-a".to_string(),
+            Principal::new("svc-a", UserRole::User, acme.clone()),
+        );
+        api_keys.insert(
+            "thread-key-b".to_string(),
+            Principal::new("svc-b", UserRole::User, TenantId::new("globex").unwrap()),
+        );
+        api_keys.insert(
+            "thread-key-ops".to_string(),
+            Principal::new("ops", UserRole::Admin, ops.clone()),
+        );
+        let auth = AgentAuthConfig {
+            enabled: true,
+            api_keys,
+            token_verifier: None,
+            bearer_tenant: None,
+        };
+        let app = run_router(
+            RunApiState::new()
+                .with_submission(submission.clone())
+                .with_repository(repository.clone())
+                .with_auth(auth.clone()),
+        )
+        .merge(thread_router(
+            ThreadApiState::new()
+                .with_waypoints(waypoints.clone())
+                .with_runs(repository.clone())
+                .with_run_submission(submission)
+                .with_auth(auth),
+        ));
+
+        async fn get(app: &axum::Router, key: &str, uri: &str) -> (StatusCode, String) {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(uri)
+                        .header("x-api-key", key)
+                        .body(Body::empty())
+                        .expect("request builds"),
+                )
+                .await
+                .expect("router responds");
+            let status = response.status();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("read body");
+            (
+                status,
+                String::from_utf8(bytes.to_vec()).expect("utf8 body"),
+            )
+        }
+
+        async fn submit_on(app: &axum::Router, key: &str, thread: &str) -> (StatusCode, String) {
+            let body = serde_json::to_vec(&serde_json::json!({
+                "assistant_id": "owner-wf",
+                "thread_id": thread,
+                "input": {}
+            }))
+            .unwrap();
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/runs")
+                        .header("content-type", "application/json")
+                        .header("x-api-key", key)
+                        .body(Body::from(body))
+                        .expect("request builds"),
+                )
+                .await
+                .expect("router responds");
+            let status = response.status();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("read body");
+            (
+                status,
+                String::from_utf8(bytes.to_vec()).expect("utf8 body"),
+            )
+        }
+
+        async fn run_count(repository: &Arc<dyn RunRepositoryPort>) -> usize {
+            repository
+                .list(RunQuery {
+                    limit: 50,
+                    ..Default::default()
+                })
+                .await
+                .expect("repository list succeeds")
+                .items
+                .len()
+        }
+
+        let id = thread.to_string();
+        let uri = format!("/v1/threads/{id}");
+
+        // acme owns the thread, although the newest run is the Admin's.
+        let (status, body) = get(&app, "thread-key-a", &uri).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "the owner tenant must read its thread: {body}"
+        );
+        let (status, listing) = get(&app, "thread-key-a", "/v1/threads").await;
+        assert_eq!(status, StatusCode::OK, "owner list: {listing}");
+        assert!(
+            listing.contains(&id),
+            "the owner tenant's list must include the thread: {listing}"
+        );
+
+        // globex: byte-identical to a never-used id (modulo the id text itself).
+        let (status, hidden) = get(&app, "thread-key-b", &uri).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "foreign read: {hidden}");
+        let unused = format!("owner-thread-unused-{}", uuid::Uuid::new_v4());
+        let (status, missing) = get(&app, "thread-key-b", &format!("/v1/threads/{unused}")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "missing read: {missing}");
+        assert_eq!(
+            hidden.replace(&id, "<id>"),
+            missing.replace(&unused, "<id>"),
+            "a hidden thread must be indistinguishable from a missing one"
+        );
+        let (_, foreign_list) = get(&app, "thread-key-b", "/v1/threads").await;
+        assert!(
+            !foreign_list.contains(&id),
+            "the foreign tenant's list must not include the thread: {foreign_list}"
+        );
+
+        // The Admin reads it.
+        let (status, body) = get(&app, "thread-key-ops", &uri).await;
+        assert_eq!(status, StatusCode::OK, "admin read: {body}");
+
+        // Submit: globex is refused with the unknown-thread 404 and inserts nothing; acme is
+        // admitted. Order matters -- the refusal is checked first, against three terminal runs.
+        assert_eq!(run_count(&repository).await, 3);
+        let (status, body) = submit_on(&app, "thread-key-b", &id).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "foreign submit: {body}");
+        assert!(
+            body.contains(&format!("unknown thread '{id}'")),
+            "foreign submit message: {body}"
+        );
+        assert_eq!(
+            run_count(&repository).await,
+            3,
+            "a refused foreign submit must insert no run"
+        );
+        let (status, body) = submit_on(&app, "thread-key-a", &id).await;
+        assert_eq!(
+            status,
+            StatusCode::ACCEPTED,
+            "the owner tenant may submit onto its thread: {body}"
+        );
+        assert_eq!(run_count(&repository).await, 4);
+
+        cleanup(&repo_path);
+        cleanup(&wp_path);
+    })
+    .await
+    .expect("thread_owner_is_the_earliest_attributed_run_over_sqlite did not hang");
+}
+
 /// Phase 53's TENANT-04 HTTP-level lock for the fork route (D-00d prove-then-lock, T-53-01,
 /// T-53-02, T-53-06): `POST /v1/threads/{id}/fork` through `thread_router` over the real
 /// `RunSubmissionService` answers another tenant's user key with the `unknown thread` 404 and

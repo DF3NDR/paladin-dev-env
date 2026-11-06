@@ -338,7 +338,7 @@ are needed — a backend on the engine and a policy on the node:
 the node id, the node's *input* (a Paladin node's rendered `InputMapping` string; a Function
 node's full Battlefield snapshot, or the `Fields(..)` subset), the mustered `task_key` and payload
 when present, and the Paladin's own configuration fingerprint (model, system prompt, temperature,
-`max_loops`, stop words). Change the prompt, the model, the graph shape or the input and the key
+`max_loops`, stop words and, when the agent sets them, its reasoning effort and effort fallback). Change the prompt, the model, the graph shape or the input and the key
 changes — a stale hit is impossible by construction, not by convention. `CacheKeySpec::Fields`
 naming an undeclared field is a validation error (`CacheKeyFieldUndeclared`), because a typo would
 otherwise silently narrow the key.
@@ -377,6 +377,35 @@ cursor-based scan. Both run the same contract suite. Operators configure the bac
 
 The per-node *policies* (retry, timeout, handlers, cache TTL and key) are code, never
 configuration — there is no `APP_AEGIS_*` variable, on purpose.
+
+### Node cache on the shipped server
+
+`paladin-server` attaches no node cache. `NodeCacheConfig` and the `APP_NODE_CACHE_*` variables above
+take effect only in a library composition root that builds a backend and passes it to
+`WarEngine::with_node_cache`; nothing in the shipped server reads them, so setting `enabled: true` in
+a server config has no effect.
+
+The cache stampede lock (PACE-04) is likewise a library builder, not a server feature:
+`WarEngine::with_cadence` engages it only for a cached node on an engine that also has
+`with_node_cache`, and its lifetime is `treasurer.cadence.lock_ttl_secs` (see the
+[configuration guide](../getting-started/configuration.md)). It is not the
+`FacadeProvisioner::with_cadence` rate pacing that the server does use.
+
+### Cache key version and rotation
+
+Every key begins with the version tag `NODE_CACHE_KEY_VERSION`, currently `k1`
+(`crates/paladin-battalion/src/engine/cache_key.rs`), and renders as
+`k1:{graph fingerprint}:{node id length}:{node id}:{digest}`. `RedisNodeCache` stores it under
+`{key_prefix}:{key}` (default prefix `paladin:node_cache`).
+
+The tag changes only with the key's byte layout, so an entry written under an older layout is a miss,
+never a wrong hit. It stays `k1`: an agent's own reasoning effort and fallback enter the digest only
+when set, so keys composed before they existed are unchanged.
+
+A provider-level default (`llm.<provider>.reasoning_effort`) is not part of the key. After changing
+one, start a fresh namespace by changing `key_prefix` (`APP_NODE_CACHE_KEY_PREFIX`), or clear the
+cache: restart the process for `InMemoryNodeCache`, or delete the old prefix's keys for
+`RedisNodeCache`. Otherwise entries computed at the old effort keep being served until their TTL.
 
 ## The Node-Kind Support Matrix
 

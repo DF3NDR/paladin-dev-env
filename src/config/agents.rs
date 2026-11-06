@@ -16,6 +16,8 @@ use paladin_core::platform::container::reasoning::{ReasoningEffort, ReasoningFal
 use paladin_core::platform::container::user::UserRole;
 use serde::{Deserialize, Serialize};
 
+use crate::config::redaction::RedactedSecret;
+
 /// Server-wide execution timeout configuration for the HTTP service host.
 ///
 /// Maps onto `paladin_web::TimeoutPolicy`. Absent fields fall back to the defaults
@@ -81,14 +83,22 @@ impl Default for RateLimitConfig {
 
 /// One static API key mapped to a principal (`name` + `role` + `tenant`).
 ///
-/// The `key` should come from an environment variable / secret in practice, not be
-/// committed in plaintext. Every field is checked fail-closed at boot by
-/// [`AuthConfig::validate`]; nothing is trimmed, defaulted or clamped.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// The `key` is the literal secret. The server does not expand `${VAR}` here and refuses a
+/// value containing `${` at boot (FIRST-01); keep a config that holds it out of version
+/// control (a Kubernetes Secret or a mounted file). Every field is checked fail-closed at
+/// boot by [`AuthConfig::validate`]; nothing is trimmed, defaulted or clamped.
+///
+/// `Debug` prints the key as `<redacted>` (DF-07), so no log line, panic message or test failure
+/// that formats this type, or a type holding it, carries the secret. `Serialize` omits the key
+/// as well (WR-09), so no dump of a loaded config does either.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ApiKeyConfig {
-    /// The secret key value presented in the `X-API-Key` header. Must be non-empty and
-    /// unique across `api_keys` -- a shared secret would make the key lookup resolve an
-    /// arbitrary principal, and so an arbitrary tenant.
+    /// The secret key value presented in the `X-API-Key` header. Must be non-empty, must
+    /// not contain `${` (an unexpanded placeholder; the server expands nothing here) and
+    /// must be unique across `api_keys` -- a shared secret would make the key lookup
+    /// resolve an arbitrary principal, and so an arbitrary tenant. Never serialised (WR-09),
+    /// but still required on load.
+    #[serde(skip_serializing)]
     pub key: String,
     /// The API key id: the principal id, and the `api_key_id` recorded on every run and
     /// ledger row this key submits (Phase 40, D-06). Appears in logs. Must be unique across
@@ -102,6 +112,17 @@ pub struct ApiKeyConfig {
     /// bytes.
     #[serde(default)]
     pub tenant: String,
+}
+
+impl std::fmt::Debug for ApiKeyConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ApiKeyConfig")
+            .field("key", &RedactedSecret(&self.key))
+            .field("name", &self.name)
+            .field("role", &self.role)
+            .field("tenant", &self.tenant)
+            .finish()
+    }
 }
 
 /// Opaque server-issued bearer-token settings for the agent API.
@@ -157,7 +178,9 @@ impl AuthConfig {
     /// `http.auth.bearer_token` -- and never a key value.
     ///
     /// Per `api_keys` entry, in order: `key` must be non-empty; `name` must be a valid
-    /// identifier (the rules of [`TenantId`]); `tenant` must be present and a valid
+    /// identifier (the rules of [`TenantId`]); `key` must not contain `${` (an unexpanded
+    /// placeholder; the server does not expand environment variables in
+    /// `http.auth.api_keys`); `tenant` must be present and a valid
     /// [`TenantId`] (there is no implicit default tenant); `name` must not repeat an earlier
     /// entry's; `key` must not repeat an earlier entry's value. Then, only when
     /// `bearer_token.enabled` is `true`, `bearer_token.tenant` must be present and valid.
@@ -209,6 +232,16 @@ impl AuthConfig {
                     "http.auth.api_keys[#{index}]: 'name' is the reserved literal '{name}' -- \
                      open-access, unattributed and anonymous name the open-access and \
                      unattributed principals and cannot be configured"
+                ));
+            }
+            // FIRST-01, D-01/D-02: any '${' marks an unexpanded placeholder -- the server
+            // expands nothing in http.auth.api_keys. The message names the entry and never
+            // the value or the variable.
+            if entry.key.contains("${") {
+                return Err(format!(
+                    "http.auth.api_keys[{name}]: 'key' is an unexpanded '${{…}}' placeholder -- \
+                     the server does not expand environment variables in http.auth.api_keys; \
+                     set the literal key value"
                 ));
             }
 
@@ -413,6 +446,106 @@ pub struct AgentDefinition {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- Phase 56 Plan 11 (DF-07): Debug never prints an API key ---
+
+    const DF07_API_KEY_SENTINEL: &str = "test-key-not-a-secret-df07-api-key";
+
+    fn df07_entry() -> ApiKeyConfig {
+        ApiKeyConfig {
+            key: DF07_API_KEY_SENTINEL.to_string(),
+            name: "df07-probe".to_string(),
+            role: UserRole::User,
+            tenant: "Acme-Prod".to_string(),
+        }
+    }
+
+    #[test]
+    fn api_key_config_debug_redacts_the_key() {
+        let entry = df07_entry();
+        // Non-vacuous: the field really holds the sentinel before we format it.
+        assert_eq!(entry.key, DF07_API_KEY_SENTINEL);
+        let text = format!("{entry:?}");
+        assert!(
+            !text.contains(DF07_API_KEY_SENTINEL),
+            "ApiKeyConfig Debug leaked the key: {text}"
+        );
+        assert!(text.contains("key: <redacted>"), "no marker in: {text}");
+        assert!(text.contains("df07-probe"), "name missing in: {text}");
+        assert!(text.contains("Acme-Prod"), "tenant missing in: {text}");
+        assert!(text.contains("User"), "role missing in: {text}");
+    }
+
+    /// WR-09 (56-REVIEW): serialising an `ApiKeyConfig` must not write its key.
+    #[test]
+    fn api_key_config_serialisation_omits_the_key() {
+        let entry = df07_entry();
+        assert_eq!(entry.key, DF07_API_KEY_SENTINEL);
+        let value = serde_json::to_value(&entry).expect("ApiKeyConfig serialises");
+        let object = value.as_object().expect("serialises as an object");
+        assert!(!object.contains_key("key"), "ApiKeyConfig serialised `key`");
+        assert!(
+            !value.to_string().contains(DF07_API_KEY_SENTINEL),
+            "ApiKeyConfig serialisation carries the key value"
+        );
+        // Non-vacuous: the other fields are still written.
+        assert_eq!(object["name"], "df07-probe");
+        assert_eq!(object["tenant"], "Acme-Prod");
+    }
+
+    /// WR-09 (56-REVIEW): omitting `key` on output must not loosen loading. A config
+    /// without `key` still fails, so a missing secret is still a load error.
+    #[test]
+    fn api_key_config_still_requires_a_key_on_load() {
+        let without_key = serde_json::json!({
+            "name": "df07-probe",
+            "role": "user",
+            "tenant": "Acme-Prod",
+        });
+        let error = serde_json::from_value::<ApiKeyConfig>(without_key)
+            .expect_err("an ApiKeyConfig without `key` must not deserialise");
+        assert!(
+            error.to_string().contains("missing field `key`"),
+            "the load error must name the missing `key` field"
+        );
+        let with_key = serde_json::json!({
+            "key": DF07_API_KEY_SENTINEL,
+            "name": "df07-probe",
+            "role": "user",
+            "tenant": "Acme-Prod",
+        });
+        let loaded: ApiKeyConfig =
+            serde_json::from_value(with_key).expect("an ApiKeyConfig with `key` deserialises");
+        assert_eq!(loaded.key, DF07_API_KEY_SENTINEL);
+    }
+
+    #[test]
+    fn auth_and_web_http_config_debug_redact_the_key() {
+        let auth = AuthConfig {
+            enabled: true,
+            api_keys: vec![df07_entry()],
+            bearer_token: BearerTokenAuthConfig::default(),
+        };
+        assert_eq!(auth.api_keys[0].key, DF07_API_KEY_SENTINEL);
+        let auth_text = format!("{auth:?}");
+        assert!(
+            !auth_text.contains(DF07_API_KEY_SENTINEL),
+            "AuthConfig Debug leaked the key: {auth_text}"
+        );
+        assert!(auth_text.contains("<redacted>"), "no marker: {auth_text}");
+
+        let http = WebHttpConfig {
+            auth,
+            ..WebHttpConfig::default()
+        };
+        assert_eq!(http.auth.api_keys[0].key, DF07_API_KEY_SENTINEL);
+        let http_text = format!("{http:?}");
+        assert!(
+            !http_text.contains(DF07_API_KEY_SENTINEL),
+            "WebHttpConfig Debug leaked the key: {http_text}"
+        );
+        assert!(http_text.contains("<redacted>"), "no marker: {http_text}");
+    }
 
     #[test]
     fn deserializes_full_definition() {
@@ -961,5 +1094,191 @@ mod tests {
         );
         assert!(RESERVED_PRINCIPAL_LITERALS.contains(&TenantId::OPEN_ACCESS));
         assert!(RESERVED_PRINCIPAL_LITERALS.contains(&LedgerScope::UNATTRIBUTED));
+    }
+
+    // --- Phase 54 (FIRST-01, D-01..D-03): unexpanded placeholder keys ---
+
+    /// The message prefix every placeholder refusal starts with for the entry `name`.
+    fn placeholder_prefix(name: &str) -> String {
+        format!("http.auth.api_keys[{name}]: 'key' is an unexpanded")
+    }
+
+    /// Asserts a refusal names the entry and leaks neither the key value nor a variable name.
+    fn assert_placeholder_refusal(err: &str, name: &str, key_value: &str) {
+        assert!(
+            err.starts_with(&placeholder_prefix(name)),
+            "expected the placeholder refusal for {name:?}, got: {err}"
+        );
+        assert!(
+            !err.contains(key_value),
+            "the refusal must never print the key value: {err}"
+        );
+        assert!(
+            !err.contains("SK_PLACEHOLDER_VAR"),
+            "the refusal must never print the variable name: {err}"
+        );
+    }
+
+    /// D-01: any `${` in a key is an unexpanded placeholder -- exact, embedded and
+    /// unterminated shapes alike.
+    #[test]
+    fn validate_refuses_an_unexpanded_placeholder_key() {
+        for key in [
+            "${SK_PLACEHOLDER_VAR}",
+            "pre${SK_PLACEHOLDER_VAR}post",
+            "${SK_PLACEHOLDER_VAR",
+        ] {
+            let cfg = auth_with_keys(vec![api_key("ci-runner", key, "platform-ops")]);
+            let err = validation_error(&cfg);
+            assert_placeholder_refusal(&err, "ci-runner", key);
+            assert!(
+                err.contains("does not expand environment variables"),
+                "the message says why and what to do: {err}"
+            );
+        }
+    }
+
+    /// D-01: a bare `$` (no `{` after it) is a legitimate key character.
+    #[test]
+    fn validate_accepts_a_bare_dollar_in_a_key() {
+        for key in ["$SK_PLACEHOLDER_VAR", "sk-$abc"] {
+            let cfg = auth_with_keys(vec![api_key("ci-runner", key, "platform-ops")]);
+            assert_eq!(cfg.validate(), Ok(()), "{key} has no `${{`");
+        }
+    }
+
+    /// D-02: the refusal does not depend on `enabled` -- a disabled section's keys take
+    /// effect the moment auth is re-enabled.
+    #[test]
+    fn validate_refuses_a_placeholder_key_while_auth_is_disabled() {
+        let key = "${SK_PLACEHOLDER_VAR}";
+        let mut cfg = auth_with_keys(vec![api_key("ci-runner", key, "platform-ops")]);
+        cfg.enabled = false;
+        let err = validation_error(&cfg);
+        assert_placeholder_refusal(&err, "ci-runner", key);
+    }
+
+    /// D-02: a later entry is named by its name, never by its list position.
+    #[test]
+    fn validate_names_a_later_entry_whose_key_is_a_placeholder() {
+        let key = "${SK_PLACEHOLDER_VAR}";
+        let cfg = auth_with_keys(vec![
+            api_key("ci-runner", "sk-ci", "platform-ops"),
+            api_key("frontend", key, "web-app"),
+        ]);
+        let err = validation_error(&cfg);
+        assert_placeholder_refusal(&err, "frontend", key);
+        assert!(!err.contains("#1"), "named by name, not by index: {err}");
+    }
+
+    /// D-02: the placeholder is reported before the tenant and duplicate-key checks.
+    #[test]
+    fn validate_reports_a_placeholder_key_before_tenant_and_duplicate_checks() {
+        let key = "${SK_PLACEHOLDER_VAR}";
+
+        // Two identical placeholder keys: the first entry is refused as a placeholder, not
+        // as a duplicate 'key'.
+        let cfg = auth_with_keys(vec![
+            api_key("first", key, "acme"),
+            api_key("second", key, "acme"),
+        ]);
+        let err = validation_error(&cfg);
+        assert_placeholder_refusal(&err, "first", key);
+        assert!(!err.contains("duplicate"), "not a duplicate report: {err}");
+
+        // A placeholder key with an empty tenant: the placeholder wins over the tenant check.
+        let cfg = auth_with_keys(vec![api_key("ci-runner", key, "")]);
+        let err = validation_error(&cfg);
+        assert_placeholder_refusal(&err, "ci-runner", key);
+        assert!(
+            !err.contains("'tenant' is required"),
+            "not a missing-tenant report: {err}"
+        );
+    }
+
+    // --- Phase 54 (FIRST-01, D-03/D-04): the shipped example never loads a placeholder ---
+
+    /// Wrapper over the one section these tests read, so unrelated schema drift elsewhere in
+    /// `config.example.yml` cannot mask the pinned behaviour (the `web_server.rs` precedent).
+    #[derive(Debug, serde::Deserialize)]
+    struct Example {
+        #[serde(default)]
+        http: WebHttpConfig,
+    }
+
+    /// D-04: the shipped `http` section keeps auth enabled, configures no key, and passes
+    /// `AuthConfig::validate` with zero keys.
+    #[test]
+    fn shipped_example_http_auth_validates_and_configures_no_key() {
+        let example: Example = config::Config::builder()
+            .add_source(config::File::new(
+                "config.example.yml",
+                config::FileFormat::Yaml,
+            ))
+            .build()
+            .unwrap_or_else(|e| panic!("config.example.yml should build: {e}"))
+            .try_deserialize()
+            .unwrap_or_else(|e| panic!("config.example.yml's http section should parse: {e}"));
+
+        assert!(example.http.auth.enabled, "auth stays enabled by default");
+        assert!(
+            example.http.auth.api_keys.is_empty(),
+            "the shipped example configures no API key"
+        );
+        assert_eq!(example.http.auth.validate(), Ok(()));
+    }
+
+    /// D-04: uncommenting the example entries without editing them fails closed -- the `key`
+    /// is `""`, so the existing empty-key refusal fires, and the text holds no placeholder.
+    /// The example's own text is the fixture: only the `api_keys: []` line and the commented
+    /// entry lines between it and `bearer_token:` are rewritten.
+    #[test]
+    fn shipped_example_api_key_entries_uncommented_are_refused_as_empty() {
+        let text = std::fs::read_to_string("config.example.yml")
+            .unwrap_or_else(|e| panic!("config.example.yml should be readable: {e}"));
+
+        let mut in_entries = false;
+        let mut rewritten = Vec::new();
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed == "api_keys: []" {
+                in_entries = true;
+                rewritten.push(line.replacen("api_keys: []", "api_keys:", 1));
+            } else if in_entries && trimmed.starts_with("bearer_token:") {
+                in_entries = false;
+                rewritten.push(line.to_string());
+            } else if in_entries
+                && line.starts_with("    # ")
+                && (trimmed.starts_with("# - key:")
+                    || ["name:", "role:", "tenant:"]
+                        .iter()
+                        .any(|f| trimmed.starts_with(&format!("#   {f}"))))
+            {
+                // Drop only the leading `# `, keeping the entry's own indentation.
+                rewritten.push(line.replacen("# ", "", 1));
+            } else {
+                rewritten.push(line.to_string());
+            }
+        }
+        let rewritten = rewritten.join("\n");
+
+        let example: Example = config::Config::builder()
+            .add_source(config::File::from_str(&rewritten, config::FileFormat::Yaml))
+            .build()
+            .unwrap_or_else(|e| panic!("the uncommented example should build: {e}"))
+            .try_deserialize()
+            .unwrap_or_else(|e| panic!("the uncommented example should parse: {e}"));
+
+        let keys = &example.http.auth.api_keys;
+        assert_eq!(keys.len(), 2, "both commented example entries came back");
+        assert!(
+            keys.iter().all(|k| !k.key.contains("${")),
+            "no example entry carries a placeholder"
+        );
+        let err = validation_error(&example.http.auth);
+        assert!(
+            err.starts_with("http.auth.api_keys[#0]: 'key' must not be empty"),
+            "an unedited uncomment is refused as empty: {err}"
+        );
     }
 }

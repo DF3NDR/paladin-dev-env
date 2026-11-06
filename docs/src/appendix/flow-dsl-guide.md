@@ -881,31 +881,31 @@ paladins:
   - inline:
       name: "intake"
       system_prompt: "Validate and prepare the document for processing."
-      model: "gpt-4"
+      model: "gpt-4o-mini"
       temperature: 0.3
 
   - inline:
       name: "analyze"
       system_prompt: "Extract key information and structure from the document."
-      model: "gpt-4"
+      model: "gpt-4o-mini"
       temperature: 0.5
 
   - inline:
       name: "summarize"
       system_prompt: "Create a concise summary of the analysis."
-      model: "gpt-4"
+      model: "gpt-4o-mini"
       temperature: 0.4
 
   - inline:
       name: "translate"
       system_prompt: "Translate the analysis to Spanish."
-      model: "gpt-4"
+      model: "gpt-4o-mini"
       temperature: 0.3
 
   - inline:
       name: "output"
       system_prompt: "Combine summary and translation into final report."
-      model: "gpt-4"
+      model: "gpt-4o-mini"
       temperature: 0.4
 
 visualize: "ascii"

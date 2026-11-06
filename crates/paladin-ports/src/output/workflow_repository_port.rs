@@ -5,7 +5,7 @@
 //! resume incomplete workflows after a restart or crash.
 //!
 //! The port deliberately exposes only a coarse-grained persistence status
-//! ([`WorkflowPersistenceStatus`]) plus the set of already-completed job ids.
+//! ([`WorkflowPersistenceStatus`](crate::output::workflow_repository_port::WorkflowPersistenceStatus)) plus the set of already-completed job ids.
 //! The orchestrator's fine-grained internal execution state stays private; this
 //! DTO carries just enough to recover without re-running completed work.
 

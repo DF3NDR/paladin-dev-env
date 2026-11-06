@@ -28,7 +28,7 @@ llm:
 
   openai:
     base_url: "https://api.openai.com/v1"
-    default_model: "gpt-4"
+    default_model: "gpt-4o-mini"
     default_temperature: 0.7
     timeout_seconds: 300
     max_retries: 3
@@ -246,7 +246,7 @@ garrison:
   # path: "./garrison.db"          # Required when garrison_type = "sqlite"
   max_entries: 100                  # Max conversation turns to retain
   max_tokens: 4000                  # Context-window token budget
-  tokenizer: "gpt-4"               # Model name for token counting
+  tokenizer: "gpt-4o-mini"               # Model name for token counting
   eviction_strategy: "importance_based"  # importance_based | fifo | sliding_window
   preserve_recent_count: 10        # Always keep at least N recent entries
 ```
@@ -480,6 +480,12 @@ no price is ever invented. What that means depends on the path:
 - A call made by a WarGraph node on an unpriced model settles nothing, so an allowance cannot
   bound it: the spend is not metered and does not reach the ledger. This is a known, open gap
   (`.planning/WINDOWS.md` row 67), not a guarantee; give every model a graph can reach a row.
+- At boot, when an allowance is configured, the server logs one warning under `paladin::pricing`
+  for every code-registered agent model and every stored agent-kind assistant model that has no
+  row, and boot continues. Every stored version of each agent-kind assistant present at boot is
+  checked, including pinned older ones. The warning does not check workflow graph-node models,
+  agents provisioned at runtime, or agent-kind assistants or versions created after boot, and it
+  does not refuse workflow assistants; see the [Treasurer guide](../architecture/treasurer.md#pricing-as-the-cost-source).
 
 ### Treasurer allowances
 
@@ -668,8 +674,9 @@ rollout and outage behaviour.
 - **`lock_ttl_secs`:** the lifetime of the cache stampede lock a library-built `WarEngine` takes
   around a cached node (`WarEngine::with_cadence`, shipped in the same release). Choose a value
   above the p99 duration of a cached node including its retries: the lock is not renewed, and a
-  waiter that outlasts it runs the node itself. `paladin-server` attaches no node cache, so the key
-  has no effect on the shipped server today.
+  waiter that outlasts it runs the node itself. `paladin-server` attaches no node cache
+  ([Node cache on the shipped server](../user-guides/fault-tolerance.md#node-cache-on-the-shipped-server)),
+  so the key has no effect on the shipped server today.
 
 `backend` has no environment override: the Redis URL travels only through the variable
 `url_env` names, so it never appears in a config file, a serialised config or a log line. A
@@ -754,7 +761,7 @@ export APP_CITADEL_AUTOSAVE_ENABLED=true
 llm:
   default_provider: "openai"
   openai:
-    default_model: "gpt-4"
+    default_model: "gpt-4o-mini"
     default_temperature: 0.7
 
 garrison:

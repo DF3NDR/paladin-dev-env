@@ -562,10 +562,17 @@ impl<'de> Deserialize<'de> for Times {
 
 /// The vocabulary [`Assertion::RunStatus`] compares against.
 ///
-/// Mirrors `paladin_core::platform::container::trace::RunFinishStatus` field-for-field.
+/// Mirrors every status of `paladin_core::platform::container::trace::RunFinishStatus`
+/// except `Cancelled`.
 /// That core type carries no `schemars::JsonSchema` derive (ADR-0015: `paladin-core`
 /// does not take the `schemars` dependency), so this crate mirrors the vocabulary
 /// locally -- exactly the pattern `WarGraphDoc`'s `NodeKindDoc` uses for `NodeSpec`.
+///
+/// A run that finished `cancelled` matches no `run_status` value until the next minor,
+/// which adds `Cancelled` together with a schema refresh. A variant cannot be added in
+/// v0.11.1, because this enum and [`Assertion`] are exhaustive public enums of a
+/// published crate and the patch-level semver gate treats either change as major
+/// (FIXES-04, re-homed).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RunStatusValue {
@@ -641,7 +648,8 @@ pub enum Assertion {
     /// `route_taken`: the sequence of node ids in `NodeStarted` order contains this
     /// list as a subsequence.
     RouteTaken(Vec<String>),
-    /// `run_status`: the run's terminal status equals this value.
+    /// `run_status`: the run's terminal status equals this value. A cancelled run matches
+    /// no value (see [`RunStatusValue`]).
     RunStatus(RunStatusValue),
     /// `total_tokens_max`: the run's total token usage does not exceed this bound.
     TotalTokensMax(u64),

@@ -253,8 +253,14 @@ pub(crate) fn level_spelling(effort: ReasoningEffort) -> Option<&'static str> {
     }
 }
 
-/// The providers whose wire form the operator can choose with `llm.<provider>.reasoning_wire`.
-const SELF_HOSTED_PROVIDERS: [&str; 2] = ["ollama", "openai-compatible"];
+/// The self-hosted endpoints: the providers whose effort wire only the operator can know.
+///
+/// This is the one place the pair is defined (Phase 51, D-10; Phase 55, TESTS-05). It is the set
+/// that may declare `llm.<provider>.reasoning_wire` (`config::layers` refuses the key for every
+/// other provider), and the set whose wire-unsupported refusal names that operator setting; a
+/// named vendor changes its wire only through a Paladin release, so its refusal says no
+/// configuration unlocks it.
+pub(crate) const SELF_HOSTED_PROVIDERS: [&str; 2] = ["ollama", "openai-compatible"];
 
 /// One line naming what a profile's effort data admits, for a refusal message.
 fn describe_admitted(support: &EffortSupport) -> String {
@@ -693,11 +699,14 @@ mod tests {
         }
     }
 
+    /// D-10, TESTS-05 (51 IN-01): the wire-unsupported refusal names `llm.<provider>.reasoning_wire`
+    /// for every provider in [`SELF_HOSTED_PROVIDERS`] (the same constant `config::layers` gates
+    /// the `reasoning_wire` key on) and for no other provider.
     #[test]
-    fn wire_unsupported_names_reasoning_wire_only_on_self_hosted_providers() {
+    fn wire_refusal_points_self_hosted_providers_at_reasoning_wire() {
         let log = SubstitutionLog::new();
         let wire_unsupported = ModelProfile::new().with_effort(EffortSupport::WireUnsupported);
-        for provider in ["ollama", "openai-compatible"] {
+        for provider in SELF_HOSTED_PROVIDERS {
             let reason = reason_of(
                 admit(
                     provider,

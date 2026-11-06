@@ -1,6 +1,6 @@
 //! The Treasurer's admission slice (ALLOW-01, ALLOW-02, Phase 41).
 //!
-//! [`Treasurer`] is the facade service that answers [`AllowanceAdmissionPort`]: before a run (or
+//! [`Treasurer`](crate::application::services::treasurer::Treasurer) is the facade service that answers [`AllowanceAdmissionPort`](paladin_ports::input::allowance_admission_port::AllowanceAdmissionPort): before a run (or
 //! an agent call) is accepted it reads the ledger's balance for each allowance ceiling that
 //! applies to the caller and refuses when a balance has reached its ceiling.
 //!
@@ -10,33 +10,42 @@
 //!   process's own clock.
 //! - **Fail closed** (D-10): a principal with a configured ceiling whose balance cannot be read
 //!   is not admitted. A principal with no configured allowance never reaches the ledger.
-//! - **Identity only** (D-09): the Treasurer takes a [`RunAttribution`] -- tenant and API key
+//! - **Identity only** (D-09): the Treasurer takes a [`RunAttribution`](paladin_core::platform::container::principal::RunAttribution) -- tenant and API key
 //!   name, never a role -- so no role bypasses an allowance.
 //! - **A notice observes, never gates** (ALLOW-04, D-15, D-16): on the admitted path, every
 //!   ceiling whose pre-admission balance has reached its `warn_at` percent claims one durable
-//!   once-per-window notice from the [`TreasuryNoticePort`] (when one is attached with
-//!   [`Treasurer::with_notices`]). The claim is store-enforced across replicas; a notice-store
+//!   once-per-window notice from the [`TreasuryNoticePort`](paladin_ports::output::treasury_notice_port::TreasuryNoticePort) (when one is attached with
+//!   [`Treasurer::with_notices`](crate::application::services::treasurer::Treasurer::with_notices)). The claim is store-enforced across replicas; a notice-store
 //!   failure is logged and the run is still admitted. A claim is made BEFORE the run row is
-//!   inserted, so `abandon` gives an admitted-but-never-persisted run's notices back (a crash in
-//!   between can lose a window's notice but never duplicate it).
+//!   inserted, so `abandon` gives an admitted-but-never-persisted run's notices back. A won
+//!   notice is delivered or given back on every path but two (41-REVIEW WR-01): a failed
+//!   operator enqueue gives the notice back, so the next admission in the window wins it again;
+//!   `confirm` and `abandon` run in a detached task, so a dropped caller does not cancel them;
+//!   and a dropped run submission settles its admission through a drop guard (`confirm` when
+//!   the run row exists, otherwise give back). Only a process crash between claim and
+//!   settlement, or a drop inside `admit` itself before it returns the `Admission`, can still
+//!   lose a window's notice; a guard whose run-row read fails gives the notice back, so that
+//!   window can notify twice rather than never. Mid-run guard notices (`notify_operator`,
+//!   called by `TreasurerSpendGuard`) keep log-and-swallow: the warning is also the run's trace
+//!   event and herald line, and giving it back would re-emit it in another run.
 //! - **The operator webhook rides the durable queue** (ALLOW-04, D-17): when an
-//!   [`OperatorNoticeTarget`] is attached ([`Treasurer::with_operator_webhook`]), `confirm`
+//!   [`OperatorNoticeTarget`](crate::application::services::treasurer::OperatorNoticeTarget) is attached ([`Treasurer::with_operator_webhook`](crate::application::services::treasurer::Treasurer::with_operator_webhook)), `confirm`
 //!   enqueues one `webhook_deliveries` row (event `allowance_warning`) per notice the
 //!   admission won, delivered later by the existing signed, SSRF-guarded, no-redirect
 //!   `WebhookDeliveryService`. This module never builds an HTTP client and never holds the
 //!   signing secret -- the delivery service does (C3).
 //!
 //! - **One evaluation, two callers** (ALLOW-03, Phase 42 D-17): admission and the per-boundary
-//!   [`TreasurerSpendGuard`] share one ceiling evaluation (`Treasurer::evaluate`): the same
+//!   [`TreasurerSpendGuard`](crate::application::services::treasurer::TreasurerSpendGuard) share one ceiling evaluation (`Treasurer::evaluate`): the same
 //!   ceiling order, the same single truncated store-clock read, the same `balance >= ceiling`
 //!   predicate, and the same stop at the first exhausted ceiling. The guard is how an allowance
 //!   exhausted mid-run halts the run at its next superstep boundary.
 //!
 //! - **A derived budget for the agent loop** (ALLOW-05, Phase 42 D-09, D-10): with a price table
-//!   attached ([`Treasurer::with_pricing`]), [`Treasurer::derive_budget`] and the model-aware
-//!   admission ([`AllowanceAdmissionPort::admit_for_model`]) turn the remaining allowance into a
+//!   attached ([`Treasurer::with_pricing`](crate::application::services::treasurer::Treasurer::with_pricing)), [`Treasurer::derive_budget`](crate::application::services::treasurer::Treasurer::derive_budget) and the model-aware
+//!   admission ([`AllowanceAdmissionPort::admit_for_model`](paladin_ports::input::allowance_admission_port::AllowanceAdmissionPort::admit_for_model)) turn the remaining allowance into a
 //!   per-run token budget at the model's dearest price, refuse an unpriced model
-//!   ([`AdmissionError::ModelUnpriced`]) and a zero budget, and read through the same shared
+//!   ([`AdmissionError::ModelUnpriced`](paladin_ports::input::allowance_admission_port::AdmissionError::ModelUnpriced)) and a zero budget, and read through the same shared
 //!   evaluation. See `derive.rs`.
 //!
 //! This module imports `paladin_core` and `paladin_ports` only, never a storage adapter
@@ -248,11 +257,15 @@ impl Treasurer {
     /// Enqueue one operator delivery for a won notice. Best-effort: every failure is logged
     /// at `error` (scope kind, tenant id, error -- never a key value or the secret) and
     /// swallowed, because the run is already admitted and the notice row already exists.
+    ///
+    /// Returns `true` when the delivery was enqueued and `false` after any of the three
+    /// failures (payload serialization, notice thread id, queue `enqueue`), so the caller can
+    /// give the notice back (41-REVIEW WR-01). It reads no `self` field, which lets a detached
+    /// task run it from owned clones.
     async fn enqueue_operator_delivery(
-        &self,
         target: &OperatorNoticeTarget,
         notice: &AllowanceNotice,
-    ) {
+    ) -> bool {
         let scope = notice.warning.scope_kind.as_str();
         let payload = match serde_json::to_string(&AllowanceWarningPayload::from_notice(notice)) {
             Ok(payload) => payload,
@@ -262,7 +275,7 @@ impl Treasurer {
                      payload serialization failed: {error}",
                     notice.tenant_id
                 );
-                return;
+                return false;
             }
         };
         let thread_id = match ThreadId::new(OPERATOR_NOTICE_THREAD_ID) {
@@ -273,7 +286,7 @@ impl Treasurer {
                      invalid notice thread id: {error}",
                     notice.tenant_id
                 );
-                return;
+                return false;
             }
         };
         // A fresh correlation run id that no run owns (C3 Option A): the row can never be
@@ -293,6 +306,69 @@ impl Treasurer {
                 "operator allowance notice not enqueued ({scope} scope, tenant {}): {error}",
                 notice.tenant_id
             );
+            return false;
+        }
+        true
+    }
+
+    /// Enqueue the operator delivery of each notice an admission won and give back the ones
+    /// whose enqueue failed (41-REVIEW WR-01), so the next admission in the same window wins
+    /// them again and enqueues them.
+    ///
+    /// With no `target` attached nothing is enqueued and nothing is given back (only the
+    /// webhook leg is off; the durable notice row stays). A give-back failure is logged at
+    /// `error` with the notice count only and never propagated: a notice observes the run, it
+    /// never gates it (D-15).
+    async fn deliver_or_give_back(
+        store: Option<&Arc<dyn TreasuryNoticePort>>,
+        target: Option<&OperatorNoticeTarget>,
+        notices: &[AllowanceNotice],
+    ) {
+        let Some(target) = target else {
+            return;
+        };
+        let mut failed: Vec<String> = Vec::new();
+        for notice in notices {
+            if !Self::enqueue_operator_delivery(target, notice).await {
+                failed.push(notice.notice_id.clone());
+            }
+        }
+        if failed.is_empty() {
+            return;
+        }
+        let Some(store) = store else {
+            return;
+        };
+        if let Err(error) = store.discard(&failed).await {
+            log::error!(
+                "allowance notice give-back failed after a failed operator enqueue \
+                 ({} notice(s)): {error}",
+                failed.len()
+            );
+        }
+    }
+
+    /// Run `work` to completion even if the caller awaiting it is dropped (41-REVIEW WR-01).
+    ///
+    /// `confirm` and `abandon` are awaited inline by the run submission path and by the HTTP
+    /// agent routes, both of which a client disconnect can drop at any await. The work owns
+    /// everything it needs, so it runs in a task spawned on the current runtime and the caller
+    /// merely awaits its `JoinHandle`: dropping the caller drops the handle, not the task. A
+    /// `JoinError` (a panic inside the work) is logged with the notice count only and never
+    /// propagated. With no runtime handle (a caller outside tokio) the work runs inline.
+    async fn run_detached<F>(what: &'static str, notice_count: usize, work: F)
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                if let Err(error) = handle.spawn(work).await {
+                    log::error!(
+                        "allowance notice {what} task ended abnormally ({notice_count} notice(s)): {error}"
+                    );
+                }
+            }
+            Err(_) => work.await,
         }
     }
 
@@ -400,7 +476,8 @@ impl Treasurer {
     /// Best-effort, exactly like `confirm`: a failure is logged at `error` and swallowed.
     pub(crate) async fn notify_operator(&self, notice: &AllowanceNotice) {
         if let Some(target) = &self.operator_webhook {
-            self.enqueue_operator_delivery(target, notice).await;
+            // A mid-run guard notice keeps log-and-swallow (PD-14-1): the result is dropped.
+            let _delivered = Self::enqueue_operator_delivery(target, notice).await;
         }
     }
 }
@@ -553,20 +630,34 @@ impl AllowanceAdmissionPort for Treasurer {
     /// per won notice through the durable webhook queue. The durable notice row already exists
     /// from `admit`; this adds only the webhook leg.
     ///
-    /// Best-effort: a serialization, thread-id or enqueue failure is logged at `error` and not
-    /// retried, and `confirm` never fails or blocks the run. With no target attached nothing
-    /// is enqueued.
+    /// Best-effort, and never lost silently (41-REVIEW WR-01): a serialization, thread-id or
+    /// enqueue failure is logged at `error`, and the notice whose delivery failed is given
+    /// back (`TreasuryNoticePort::discard`), so the next admission in the same window wins it
+    /// again and enqueues it. `confirm` never fails or blocks the run. With no target attached
+    /// nothing is enqueued and nothing is given back.
+    ///
+    /// The work runs in a detached task that owns clones of the notice store, the operator
+    /// target and the admission's notices, so a dropped caller (a client disconnect) does not
+    /// cancel it (41-REVIEW WR-01).
     async fn confirm(&self, admission: &Admission) {
-        for notice in admission.notices() {
-            self.notify_operator(notice).await;
-        }
+        let store = self.notices.clone();
+        let target = self.operator_webhook.clone();
+        let notices = admission.notices().to_vec();
+        let count = notices.len();
+        Self::run_detached("confirm", count, async move {
+            Self::deliver_or_give_back(store.as_ref(), target.as_ref(), &notices).await;
+        })
+        .await;
     }
 
     /// Give back the notices this admission won (RESEARCH Pattern 3): the run was admitted but
     /// never persisted or enqueued, so the next admission in the same window must win them
     /// again. A discard failure is logged at `error` and never propagated.
+    ///
+    /// Like `confirm`, the discard runs in a detached task that owns its inputs, so a dropped
+    /// caller does not cancel it (41-REVIEW WR-01).
     async fn abandon(&self, admission: &Admission) {
-        let Some(notices) = &self.notices else {
+        let Some(notices) = self.notices.clone() else {
             return;
         };
         if admission.is_empty() {
@@ -577,12 +668,16 @@ impl AllowanceAdmissionPort for Treasurer {
             .iter()
             .map(|notice| notice.notice_id.clone())
             .collect();
-        if let Err(error) = notices.discard(&ids).await {
-            log::error!(
-                "allowance notice discard failed for an abandoned admission ({} notice(s)): {error}",
-                ids.len()
-            );
-        }
+        let count = ids.len();
+        Self::run_detached("abandon", count, async move {
+            if let Err(error) = notices.discard(&ids).await {
+                log::error!(
+                    "allowance notice discard failed for an abandoned admission ({} notice(s)): {error}",
+                    ids.len()
+                );
+            }
+        })
+        .await;
     }
 }
 

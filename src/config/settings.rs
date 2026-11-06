@@ -3,6 +3,7 @@
 
 use crate::config::agent_runtime::AgentRuntimeConfig;
 use crate::config::env_utils::EnvOverridable;
+use crate::config::redaction::RedactedSecret;
 use crate::config::trace::TraceConfig;
 use crate::config::treasurer::TreasurerConfig;
 #[cfg(feature = "s3-storage")]
@@ -25,11 +26,20 @@ use super::{
 ///
 /// Load from YAML/TOML config files and environment variable overrides via
 /// [`Settings::new`] or [`Settings::load_from_file`].
+///
+/// `Debug` prints `llm_api_key` as `<redacted>` (DF-07); the nested `ApiKeyConfig`,
+/// `QueueConfig` and `FileStorageConfig` redact their own secrets. URL-shaped fields are printed
+/// as written (an operator-embedded userinfo would show), so prefer a summary over `{:?}` in logs.
+///
+/// `Serialize` omits every credential field (WR-09): `llm_api_key`, and the secrets of the nested
+/// `ApiKeyConfig`, `QueueConfig` and `FileStorageConfig`. Loading is unchanged, so a serialised
+/// `Settings` cannot be read back to the same values; take the secrets from their source.
 #[allow(missing_docs)]
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Settings {
     pub llm_type: String,
     pub llm_url: String,
+    #[serde(skip_serializing)]
     pub llm_api_key: String,
     pub server: ServerConfig,
     pub sources: Vec<SourceConfig>,
@@ -83,6 +93,44 @@ pub struct Settings {
     /// no `treasurer:` section.
     #[serde(default)]
     pub treasurer: TreasurerConfig,
+}
+
+// Hand-written so `llm_api_key` is redacted (DF-07). One `.field` per struct field, in
+// declaration order; `settings_debug_names_every_serialized_field` fails if a serialised field
+// is ever missing here.
+impl std::fmt::Debug for Settings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut s = f.debug_struct("Settings");
+        s.field("llm_type", &self.llm_type);
+        s.field("llm_url", &self.llm_url);
+        s.field("llm_api_key", &RedactedSecret(&self.llm_api_key));
+        s.field("server", &self.server);
+        s.field("sources", &self.sources);
+        s.field("max_file_size", &self.max_file_size);
+        s.field("message_service", &self.message_service);
+        s.field("queue", &self.queue);
+        s.field("file_storage", &self.file_storage);
+        #[cfg(feature = "notifications")]
+        s.field("notifications", &self.notifications);
+        s.field("garrison", &self.garrison);
+        s.field("sanctum", &self.sanctum);
+        s.field("rag", &self.rag);
+        s.field("memory_extraction", &self.memory_extraction);
+        s.field("arsenal", &self.arsenal);
+        s.field("citadel", &self.citadel);
+        s.field("llm", &self.llm);
+        s.field("herald", &self.herald);
+        s.field("vision", &self.vision);
+        s.field("scheduler", &self.scheduler);
+        s.field("agents", &self.agents);
+        s.field("timeouts", &self.timeouts);
+        s.field("http", &self.http);
+        s.field("agent_runtime", &self.agent_runtime);
+        s.field("trace", &self.trace);
+        s.field("web_server", &self.web_server);
+        s.field("treasurer", &self.treasurer);
+        s.finish()
+    }
 }
 
 impl Settings {
@@ -250,6 +298,72 @@ impl Settings {
         cfg
     }
 
+    /// Get trace configuration with environment variable overrides.
+    ///
+    /// Applies the `PALADIN_TRACE_*` variables (MIGRATION.md section 9.5) to a copy of the
+    /// `trace` section and leaves `self` unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin::config::settings::Settings;
+    ///
+    /// let settings = Settings::default();
+    /// let trace = settings.get_trace_config();
+    /// // `otel.headers` is config-file only (no environment variable), so it is empty here
+    /// // whatever the environment holds.
+    /// assert!(trace.otel.headers.is_empty());
+    /// ```
+    pub fn get_trace_config(&self) -> TraceConfig {
+        let mut cfg = self.trace.clone();
+        cfg.apply_env_overrides();
+        cfg
+    }
+
+    /// Get agent runtime configuration with environment variable overrides.
+    ///
+    /// Applies the `APP_AGENT_RUNTIME_<SECTION>_<FIELD>` variables (MIGRATION.md section 9.5) to
+    /// a copy of the `agent_runtime` section and leaves `self` unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin::config::settings::Settings;
+    ///
+    /// let settings = Settings::default();
+    /// let agent_runtime = settings.get_agent_runtime_config();
+    /// // `guardrail.rules` is config-file only (no environment variable), so it is empty here
+    /// // whatever the environment holds.
+    /// assert!(agent_runtime.guardrail.rules.is_empty());
+    /// ```
+    pub fn get_agent_runtime_config(&self) -> AgentRuntimeConfig {
+        let mut cfg = self.agent_runtime.clone();
+        cfg.apply_env_overrides();
+        cfg
+    }
+
+    /// Get web server configuration with environment variable overrides.
+    ///
+    /// Applies the `APP_WEB_SERVER_*` variables (MIGRATION.md section 9.5) to a copy of the
+    /// `web_server` section and leaves `self` unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin::config::settings::Settings;
+    ///
+    /// let settings = Settings::default();
+    /// let before = settings.web_server.clone();
+    /// let _overlaid = settings.get_web_server_config();
+    /// // The accessor works on a copy: the section on `settings` is unchanged.
+    /// assert_eq!(settings.web_server, before);
+    /// ```
+    pub fn get_web_server_config(&self) -> WebServerConfig {
+        let mut cfg = self.web_server.clone();
+        cfg.apply_env_overrides();
+        cfg
+    }
+
     /// Create a default [`Herald`](crate::core::platform::container::herald::Herald) instance
     /// from the current herald configuration.
     ///
@@ -404,5 +518,218 @@ impl Default for Settings {
             web_server: WebServerConfig::default(),
             treasurer: TreasurerConfig::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{ApiKeyConfig, WebHttpConfig};
+    use paladin_core::platform::container::user::UserRole;
+    use serial_test::serial;
+
+    const LLM_KEY: &str = "test-key-not-a-secret-df07-llm-api-key";
+    const API_KEY: &str = "test-key-not-a-secret-df07-api-key";
+    const REDIS_PASSWORD: &str = "test-key-not-a-secret-df07-redis-password";
+    const MINIO_ACCESS: &str = "test-key-not-a-secret-df07-minio-access-key";
+    const MINIO_SECRET: &str = "test-key-not-a-secret-df07-minio-secret-key";
+
+    /// A `Settings` with the five root-reachable credentials set to fake sentinels.
+    fn settings_with_every_root_credential() -> Settings {
+        let mut http = WebHttpConfig::default();
+        http.auth.api_keys.push(ApiKeyConfig {
+            key: API_KEY.to_string(),
+            name: "df07-probe".to_string(),
+            role: UserRole::User,
+            tenant: "Acme-Prod".to_string(),
+        });
+        Settings {
+            llm_api_key: LLM_KEY.to_string(),
+            http: Some(http),
+            queue: Some(QueueConfig {
+                redis_password: Some(REDIS_PASSWORD.to_string()),
+                ..QueueConfig::default()
+            }),
+            file_storage: Some(FileStorageConfig {
+                minio_access_key: MINIO_ACCESS.to_string(),
+                minio_secret_key: MINIO_SECRET.to_string(),
+                ..FileStorageConfig::default()
+            }),
+            ..Settings::default()
+        }
+    }
+
+    #[test]
+    fn settings_debug_redacts_every_credential_it_reaches() {
+        let settings = settings_with_every_root_credential();
+
+        // Non-vacuous: every sentinel really sits in the config we format.
+        assert_eq!(settings.llm_api_key, LLM_KEY);
+        assert_eq!(
+            settings
+                .http
+                .as_ref()
+                .map(|h| h.auth.api_keys[0].key.as_str()),
+            Some(API_KEY)
+        );
+        assert_eq!(
+            settings
+                .queue
+                .as_ref()
+                .and_then(|q| q.redis_password.as_deref()),
+            Some(REDIS_PASSWORD)
+        );
+        assert_eq!(
+            settings
+                .file_storage
+                .as_ref()
+                .map(|f| f.minio_access_key.as_str()),
+            Some(MINIO_ACCESS)
+        );
+        assert_eq!(
+            settings
+                .file_storage
+                .as_ref()
+                .map(|f| f.minio_secret_key.as_str()),
+            Some(MINIO_SECRET)
+        );
+
+        let text = format!("{settings:?}");
+        // Name the leaking field, never the ~6 KB rendered text.
+        for (field, value) in [
+            ("llm_api_key", LLM_KEY),
+            ("http.auth.api_keys[].key", API_KEY),
+            ("queue.redis_password", REDIS_PASSWORD),
+            ("file_storage.minio_access_key", MINIO_ACCESS),
+            ("file_storage.minio_secret_key", MINIO_SECRET),
+        ] {
+            assert!(!text.contains(value), "Settings Debug leaked {field}");
+        }
+        assert!(
+            text.contains("llm_api_key: <redacted>"),
+            "llm_api_key marker missing"
+        );
+    }
+
+    /// WR-09 (56-REVIEW): serialising a loaded `Settings` must never write a credential.
+    #[test]
+    fn settings_serialisation_omits_every_credential_it_reaches() {
+        let settings = settings_with_every_root_credential();
+        assert_eq!(settings.llm_api_key, LLM_KEY);
+
+        let json = serde_json::to_string(&settings).expect("Settings serialises");
+        // Name the leaking field, never the rendered JSON.
+        for (field, value) in [
+            ("llm_api_key", LLM_KEY),
+            ("http.auth.api_keys[].key", API_KEY),
+            ("queue.redis_password", REDIS_PASSWORD),
+            ("file_storage.minio_access_key", MINIO_ACCESS),
+            ("file_storage.minio_secret_key", MINIO_SECRET),
+        ] {
+            assert!(!json.contains(value), "serialised Settings carries {field}");
+        }
+
+        // Non-vacuous: the neighbouring non-secret fields are still written.
+        let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        assert_eq!(value["llm_type"], "openai");
+        assert_eq!(value["queue"]["redis_host"], "localhost");
+        assert_eq!(value["file_storage"]["minio_bucket"], "paladin-files");
+        assert_eq!(value["http"]["auth"]["api_keys"][0]["name"], "df07-probe");
+    }
+
+    /// WR-09 (56-REVIEW): the SMTP password reachable through `Settings` is never serialised.
+    #[cfg(feature = "notifications")]
+    #[test]
+    fn settings_serialisation_omits_the_smtp_password() {
+        const SMTP_PASSWORD: &str = "test-key-not-a-secret-wr09-smtp-password";
+        let email = crate::infrastructure::adapters::notifications::EmailAdapterConfig {
+            password: SMTP_PASSWORD.to_string(),
+            ..Default::default()
+        };
+        let settings = Settings {
+            notifications: Some(NotificationConfig {
+                email: Some(email),
+                ..NotificationConfig::default()
+            }),
+            ..Settings::default()
+        };
+        // Non-vacuous: the sentinel really sits in the struct we serialise.
+        assert_eq!(
+            settings
+                .notifications
+                .as_ref()
+                .and_then(|n| n.email.as_ref())
+                .map(|e| e.password.as_str()),
+            Some(SMTP_PASSWORD)
+        );
+
+        let json = serde_json::to_string(&settings).expect("Settings serialises");
+        assert!(
+            !json.contains(SMTP_PASSWORD),
+            "serialised Settings carries notifications.email.password"
+        );
+        let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        assert!(
+            value["notifications"]["email"]["smtp_host"].is_string(),
+            "the neighbouring smtp_host field is still written"
+        );
+    }
+
+    #[test]
+    fn settings_debug_names_every_serialized_field() {
+        let value = serde_json::to_value(Settings::default()).expect("Settings serialises");
+        let object = value.as_object().expect("Settings serialises as an object");
+        assert!(!object.is_empty(), "no serialised fields to compare");
+        // Pretty Debug puts each top-level field on its own line at four spaces of
+        // indent, so nested field names cannot satisfy this by accident.
+        let text = format!("{:#?}", Settings::default());
+        for key in object.keys() {
+            assert!(
+                text.contains(&format!("\n    {key}: ")),
+                "Settings Debug does not name the serialised field `{key}`"
+            );
+        }
+    }
+
+    /// DF-26: the three section accessors return an overlaid COPY and never mutate `self`.
+    ///
+    /// Set -> compute -> remove -> assert, so no assertion can fire while a variable is set and
+    /// leak it into another test.
+    #[test]
+    #[serial]
+    fn section_wrappers_return_an_overlaid_copy_and_leave_settings_untouched() {
+        let vars = [
+            ("PALADIN_TRACE_PERSIST", "true"),
+            ("APP_AGENT_RUNTIME_TOKEN_BUDGET_ENABLED", "true"),
+            (
+                "APP_WEB_SERVER_DEV_UI_MERMAID_URL",
+                "/static/mermaid.esm.min.mjs",
+            ),
+        ];
+        for (name, value) in vars {
+            // SAFETY: `#[serial]` keeps every test that sets or reads these variables from
+            // running concurrently, as the house pattern in `src/config/trace.rs` does.
+            unsafe { std::env::set_var(name, value) };
+        }
+        let settings = Settings::default();
+        let trace = settings.get_trace_config();
+        let agent_runtime = settings.get_agent_runtime_config();
+        let web_server = settings.get_web_server_config();
+        for (name, _) in vars {
+            // SAFETY: as above.
+            unsafe { std::env::remove_var(name) };
+        }
+
+        assert!(trace.persist, "PALADIN_TRACE_PERSIST was not overlaid");
+        assert!(
+            agent_runtime.token_budget.enabled,
+            "APP_AGENT_RUNTIME_TOKEN_BUDGET_ENABLED was not overlaid"
+        );
+        assert_eq!(web_server.dev_ui.mermaid_url, "/static/mermaid.esm.min.mjs");
+
+        let defaults = Settings::default();
+        assert_eq!(settings.trace, defaults.trace);
+        assert_eq!(settings.agent_runtime, defaults.agent_runtime);
+        assert_eq!(settings.web_server, defaults.web_server);
     }
 }

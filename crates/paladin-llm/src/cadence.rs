@@ -1,6 +1,6 @@
 //! Cadence decorator -- `CadenceLlmAdapter` (PACE-02, D-01, D-07, D-08; Phase 43)
 //!
-//! [`CadenceLlmAdapter`] is a stateless `Arc<dyn LlmPort>` decorator that paces calls to one
+//! [`CadenceLlmAdapter`](crate::cadence::CadenceLlmAdapter) is a stateless `Arc<dyn LlmPort>` decorator that paces calls to one
 //! provider and model after that provider answered `429 Too Many Requests`. It holds no pacing
 //! state of its own: the gate lives behind the shared
 //! [`CadencePort`](paladin_ports::output::cadence_port::CadencePort), so the same provider
@@ -11,8 +11,8 @@
 //! `Pricing(Cadence(provider))`. Pricing stays outermost so it still prices the response that was
 //! actually served (ADR-0052); Cadence sits directly on each provider so its key is that
 //! provider's own name. A [`FallbackLlmAdapter`](crate::fallback::FallbackLlmAdapter) chain is
-//! paced per hop (plan 43-06), so [`with_cadence`] passes a port reporting
-//! [`FALLBACK_PROVIDER_NAME`] through unchanged -- gating the chain under `("fallback", model)`
+//! paced per hop (plan 43-06), so [`with_cadence`](crate::cadence::with_cadence) passes a port reporting
+//! [`FALLBACK_PROVIDER_NAME`](crate::fallback::FALLBACK_PROVIDER_NAME) through unchanged -- gating the chain under `("fallback", model)`
 //! would double-gate it.
 //!
 //! ## Gate, never retry (D-01)
@@ -29,26 +29,26 @@
 //!
 //! ## The provider's delay is a minimum (PACE-02, D-01, D-04)
 //!
-//! When a 429 carries a delay ([`LlmError::retry_after`]) the decorator hands it to the port as
+//! When a 429 carries a delay ([`LlmError::retry_after`](paladin_ports::output::llm_port::LlmError::retry_after)) the decorator hands it to the port as
 //! the *minimum* before the next send to that provider and model. The port adds nothing
 //! subtractive: jitter may lengthen a gate, never shorten one below the provider's own number.
 //! An explicit `Retry-After` / `retry-after-ms` value is passed through unreduced. A delay whose
-//! source is [`RetryDelaySource::ResetHeader`] is different in kind -- it is derived from a
+//! source is [`RetryDelaySource::ResetHeader`](paladin_ports::output::rate_limit_hints::RetryDelaySource::ResetHeader) is different in kind -- it is derived from a
 //! quota's full-replenishment time, which over-estimates the minimum -- so it is clamped to
-//! [`CadenceSettings::max_backoff`] before it reaches the port.
+//! [`CadenceSettings::max_backoff`](crate::cadence::CadenceSettings::max_backoff) before it reaches the port.
 //!
 //! ## A gate beyond `max_wait` is surfaced, not slept (D-06)
 //!
-//! A gate no longer than [`CadenceSettings::max_wait`] is waited out. A longer one makes the call
-//! return [`LlmError::RateLimitExceeded`] at once, carrying the remaining gate as its
-//! [`retry_after`](LlmError::retry_after), without calling the provider and without recording a
+//! A gate no longer than [`CadenceSettings::max_wait`](crate::cadence::CadenceSettings::max_wait) is waited out. A longer one makes the call
+//! return [`LlmError::RateLimitExceeded`](paladin_ports::output::llm_port::LlmError::RateLimitExceeded) at once, carrying the remaining gate as its
+//! [`retry_after`](paladin_ports::output::llm_port::LlmError::retry_after), without calling the provider and without recording a
 //! new 429 on the port: the refusal is the decorator's own typed error, so `RetryPolicy` exhausts
 //! or the run halts with an actionable message instead of a worker lease sitting idle for an
 //! hour, and a self-generated refusal can never escalate the shared streak.
 //!
 //! ## Streaming is paced like a buffered call (D-01)
 //!
-//! [`generate_stream`](LlmPort::generate_stream) runs the same gate loop (including the D-06
+//! [`generate_stream`](paladin_ports::output::llm_port::LlmPort::generate_stream) runs the same gate loop (including the D-06
 //! refusal) before it delegates. A 429 answered by the call itself is recorded and returned
 //! unchanged. Otherwise the stream's FIRST item is peeked, exactly as `FallbackLlmAdapter` does,
 //! and re-attached in front of the remainder so the consumer sees every item the provider
@@ -67,7 +67,7 @@
 //!
 //! ## Bookkeeping never fails a call
 //!
-//! A port error is logged under [`CADENCE_LOG_TARGET`] at `warn` (once per call) and the call
+//! A port error is logged under [`CADENCE_LOG_TARGET`](paladin_ports::output::cadence_port::CADENCE_LOG_TARGET) at `warn` (once per call) and the call
 //! proceeds: the decorator never fails a request because of its own bookkeeping.
 //!
 //! Log lines carry the provider name, model and durations only -- never request bodies,
@@ -272,19 +272,61 @@ impl CadenceLlmAdapter {
 
     /// A call failed: a 429 is recorded with the provider's own delay as the minimum; any other
     /// error opens no gate.
+    ///
+    /// The 429 is recorded in a task spawned on the current tokio runtime, so a caller dropped
+    /// after the provider's response (an outer timeout, a run cancel, a grace-deadline abort)
+    /// cannot cancel the record mid-round-trip and leave the fleet unaware of the limit
+    /// (43-REVIEW WR-04). The caller still awaits the task, so a call that completes returns only
+    /// after the 429 is recorded and the next call's gate read sees it. The task owns the port,
+    /// the key and the minimum. With no runtime handle (a foreign executor) the record runs
+    /// inline, as it always did; a port error or a `JoinError` is logged and never fails or
+    /// alters the call (ADR-0058 (e)).
+    ///
+    /// A drop BEFORE the task is spawned, or a process exit while it runs, can still lose the
+    /// record -- both are narrower than the window this closes (ADR-0058 (i)).
     async fn note_failure(&self, key: &CadenceKey, err: &LlmError, warned: &mut bool) {
-        if matches!(err, LlmError::RateLimitExceeded { .. }) {
-            let minimum = self.minimum_delay(err);
+        if !matches!(err, LlmError::RateLimitExceeded { .. }) {
+            return;
+        }
+        let minimum = self.minimum_delay(err);
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             if let Err(err) = self.wiring.port().record_rate_limited(key, minimum).await {
                 Self::warn_port_error("record_rate_limited", key, &err, warned);
             }
+            return;
+        };
+        let port = Arc::clone(self.wiring.port());
+        let task_key = key.clone();
+        let already_warned = *warned;
+        let recording = runtime.spawn(async move {
+            let mut task_warned = already_warned;
+            if let Err(err) = port.record_rate_limited(&task_key, minimum).await {
+                Self::warn_port_error("record_rate_limited", &task_key, &err, &mut task_warned);
+            }
+            task_warned
+        });
+        match recording.await {
+            Ok(task_warned) => *warned = task_warned,
+            Err(join_err) => log::warn!(
+                target: CADENCE_LOG_TARGET,
+                "cadence record_rate_limited task for provider {} model {} did not complete: \
+                 {join_err}; continuing without pacing for this call",
+                key.provider(),
+                key.model()
+            ),
         }
     }
 
     /// The provider's own delay for `err`, as the minimum the port must honour.
     ///
-    /// An explicit `Retry-After` / `retry-after-ms` delay is returned unchanged: it is the
-    /// provider's stated minimum and is never reduced. A delay derived from a reset header
+    /// A zero delay (`Retry-After: 0`, a past HTTP-date, a zero reset) is not a provider
+    /// minimum: it is treated as none, so the port takes its own back-off branch and the gate is
+    /// at least the base delay with the streak escalating. Passing the zero through would open a
+    /// zero-length gate, and a gateway answering every 429 with `Retry-After: 0` would disable
+    /// pacing (43-REVIEW WR-05).
+    ///
+    /// A non-zero explicit `Retry-After` / `retry-after-ms` delay is returned unchanged: it is
+    /// the provider's stated minimum and is never reduced. A delay derived from a reset header
     /// ([`RetryDelaySource::ResetHeader`]) is clamped to `max_backoff`, because a quota's
     /// full-replenishment time over-estimates how long the provider needs before the next
     /// request is admitted. `None` when the provider gave nothing -- no delay is invented.
@@ -293,7 +335,9 @@ impl CadenceLlmAdapter {
             .rate_limit_hints()
             .and_then(|hints| hints.effective_retry_after())
             .is_some_and(|(_, source)| source == RetryDelaySource::ResetHeader);
-        let delay = err.retry_after()?;
+        // A zero delay is no provider delay (43-REVIEW WR-05): filtered before the clamp so the
+        // port's back-off, not an instantly-clear gate, paces the next call.
+        let delay = err.retry_after().filter(|delay| !delay.is_zero())?;
         Some(if reset_derived {
             delay.min(self.wiring.settings().max_backoff())
         } else {
@@ -355,10 +399,13 @@ thread_local! {
 }
 
 /// Restores the random spread when dropped.
-#[cfg(test)]
+///
+/// Compiled with the `mock` feature only: every user (the pacing tests here and in `fallback`)
+/// is a mock-driven test, so a build without `mock` would carry it unused.
+#[cfg(all(test, feature = "mock"))]
 pub(crate) struct PinnedSpread;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "mock"))]
 impl Drop for PinnedSpread {
     fn drop(&mut self) {
         PINNED_SPREAD.with(|pinned| pinned.set(None));
@@ -368,7 +415,7 @@ impl Drop for PinnedSpread {
 /// Test seam: pin the waiter-spread fraction on the current thread so a paused-clock test can
 /// assert exact send times (a fraction of `0.0` removes the spread). The returned guard restores
 /// the random draw. Thread-local on purpose: `#[tokio::test]` runs the whole test on one thread.
-#[cfg(test)]
+#[cfg(all(test, feature = "mock"))]
 pub(crate) fn pin_waiter_spread(fraction: f64) -> PinnedSpread {
     PINNED_SPREAD.with(|pinned| pinned.set(Some(fraction)));
     PinnedSpread
@@ -686,6 +733,112 @@ mod tests {
             waited >= CadenceSettings::default().max_backoff(),
             "the estimate is used, only bounded; waited {waited:?}"
         );
+    }
+
+    /// The gate reading the port holds for `gpt-x` on the `openai` mock provider.
+    async fn reading_for_gpt_x(wiring: &CadenceWiring) -> GateReading {
+        let key = CadenceKey::new("openai", "gpt-x");
+        wiring.port().gate(&key).await.expect("gate")
+    }
+
+    /// Drives one 429 carrying `error` through a paced `generate` and returns the reading the
+    /// port holds afterwards. The call itself must hand the provider's 429 back unchanged.
+    async fn gate_after_one_429(error: LlmError) -> GateReading {
+        let wiring = wiring();
+        let paced = with_cadence(error_then_ok(error), Some(&wiring));
+
+        let result = paced.generate(request("gpt-x")).await;
+
+        assert!(
+            matches!(result, Err(LlmError::RateLimitExceeded { .. })),
+            "the provider's 429 is returned unchanged"
+        );
+        reading_for_gpt_x(&wiring).await
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_zero_retry_after_gates_at_least_the_base_delay() {
+        let reading = gate_after_one_429(LlmError::rate_limited(Some(Duration::ZERO))).await;
+
+        assert!(
+            reading.wait() >= BASE,
+            "a zero Retry-After is no provider delay; the gate was {:?}",
+            reading.wait()
+        );
+        assert_eq!(reading.streak(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_past_http_date_retry_after_gates_at_least_the_base_delay() {
+        let parsed = crate::rate_limit_headers::parse_retry_after(
+            "Wed, 21 Oct 2015 07:28:00 GMT",
+            std::time::SystemTime::now(),
+            None,
+        );
+        assert_eq!(parsed, Some(Duration::ZERO), "a past date parses to zero");
+
+        let reading = gate_after_one_429(LlmError::rate_limited(parsed)).await;
+
+        assert!(
+            reading.wait() >= BASE,
+            "a past HTTP-date is no provider delay; the gate was {:?}",
+            reading.wait()
+        );
+        assert_eq!(reading.streak(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_zero_reset_gates_at_least_the_base_delay() {
+        let error = LlmError::rate_limited_with_hints(exhausted_requests_hint(Duration::ZERO));
+        assert_eq!(error.retry_after(), Some(Duration::ZERO));
+
+        let reading = gate_after_one_429(error).await;
+
+        assert!(
+            reading.wait() >= BASE,
+            "a zero reset is no provider delay; the gate was {:?}",
+            reading.wait()
+        );
+        assert_eq!(reading.streak(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn repeated_zero_delay_429s_escalate_the_streak() {
+        let wiring = wiring();
+        let inner = Arc::new(
+            MockLlmAdapter::new()
+                .with_provider_name("openai")
+                .with_script(vec![
+                    MockScriptEntry::Error(LlmError::rate_limited(Some(Duration::ZERO))),
+                    MockScriptEntry::Error(LlmError::rate_limited(Some(Duration::ZERO))),
+                    MockScriptEntry::Text("ok".to_string()),
+                ]),
+        );
+        let paced = with_cadence(inner.clone(), Some(&wiring));
+
+        assert!(paced.generate(request("gpt-x")).await.is_err());
+        // Let the first gate lapse so the second call is sent rather than gated.
+        tokio::time::advance(Duration::from_secs(5)).await;
+        assert!(paced.generate(request("gpt-x")).await.is_err());
+
+        let reading = reading_for_gpt_x(&wiring).await;
+        assert_eq!(inner.call_count(), 2);
+        assert_eq!(reading.streak(), 2, "repeated zero-delay 429s escalate");
+        assert!(reading.wait() >= BASE, "the gate was {:?}", reading.wait());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_nonzero_retry_after_below_base_is_still_honoured_exactly() {
+        let reading =
+            gate_after_one_429(LlmError::rate_limited(Some(Duration::from_millis(10)))).await;
+
+        let ten = Duration::from_millis(10);
+        assert!(
+            reading.wait() >= ten && reading.wait() <= ten + TIMER_ROUNDING,
+            "a non-zero provider delay below base is the minimum as given; the gate was {:?}",
+            reading.wait()
+        );
+        assert_eq!(reading.streak(), 1);
     }
 
     #[tokio::test(start_paused = true)]
@@ -1135,6 +1288,122 @@ mod tests {
                 .is_clear(),
             "no state leaked to another key"
         );
+    }
+
+    // --- 43-REVIEW WR-04: a 429 is recorded even when the caller's future is dropped ------------
+
+    /// A port whose `record_rate_limited` parks mid-record: it signals `entered`, waits for
+    /// `release`, then delegates to an in-memory port and sets `recorded`. Everything else
+    /// delegates untouched, so the wiring is otherwise a real in-memory Cadence.
+    struct ParkedRecordPort {
+        inner: InMemoryCadence,
+        entered: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        recorded: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl ParkedRecordPort {
+        fn new() -> Self {
+            let policy = CadencePolicy::new(BASE, Duration::from_secs(30)).expect("policy");
+            Self {
+                inner: InMemoryCadence::new(policy).with_jitter(|| 0.999),
+                entered: Arc::new(tokio::sync::Notify::new()),
+                release: Arc::new(tokio::sync::Notify::new()),
+                recorded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl CadencePort for ParkedRecordPort {
+        async fn gate(&self, key: &CadenceKey) -> Result<GateReading, CadenceError> {
+            self.inner.gate(key).await
+        }
+        async fn record_rate_limited(
+            &self,
+            key: &CadenceKey,
+            retry_after: Option<Duration>,
+        ) -> Result<GateReading, CadenceError> {
+            self.entered.notify_one();
+            // `notify_one` stores a permit, so a release sent before this wait still wakes it.
+            self.release.notified().await;
+            let reading = self.inner.record_rate_limited(key, retry_after).await;
+            self.recorded
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            reading
+        }
+        async fn record_success(&self, key: &CadenceKey) -> Result<(), CadenceError> {
+            self.inner.record_success(key).await
+        }
+        async fn try_lock(
+            &self,
+            key: &LockKey,
+            ttl: Duration,
+        ) -> Result<Option<FencingToken>, CadenceError> {
+            self.inner.try_lock(key, ttl).await
+        }
+        async fn unlock(&self, key: &LockKey, token: &FencingToken) -> Result<bool, CadenceError> {
+            self.inner.unlock(key, token).await
+        }
+    }
+
+    /// Yield (bounded) until the parked port has finished recording.
+    async fn wait_until_recorded(port: &ParkedRecordPort) -> bool {
+        for _ in 0..100 {
+            if port.recorded.load(std::sync::atomic::Ordering::SeqCst) {
+                return true;
+            }
+            tokio::task::yield_now().await;
+        }
+        port.recorded.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_429_is_recorded_when_the_generate_future_is_dropped_mid_record() {
+        let port = Arc::new(ParkedRecordPort::new());
+        let wiring = CadenceWiring::new(port.clone(), CadenceSettings::default());
+        let paced = with_cadence(rate_limited_then_ok(), Some(&wiring));
+
+        let call = tokio::spawn(async move { paced.generate(request("gpt-x")).await });
+        port.entered.notified().await;
+        // The caller gives up in the record's round trip (outer timeout, run cancel, abort).
+        call.abort();
+        assert!(call.await.expect_err("the call was aborted").is_cancelled());
+        port.release.notify_one();
+
+        assert!(
+            wait_until_recorded(&port).await,
+            "the 429 was lost: the record died with the dropped caller"
+        );
+        let reading = port
+            .gate(&CadenceKey::new("openai", "gpt-x"))
+            .await
+            .expect("gate");
+        assert_eq!(reading.streak(), 1, "the dropped call's 429 is recorded");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_429_is_recorded_when_the_stream_future_is_dropped_mid_record() {
+        let port = Arc::new(ParkedRecordPort::new());
+        let wiring = CadenceWiring::new(port.clone(), CadenceSettings::default());
+        let paced = with_cadence(rate_limited_then_ok(), Some(&wiring));
+
+        let call =
+            tokio::spawn(async move { paced.generate_stream(request("gpt-x")).await.map(drop) });
+        port.entered.notified().await;
+        call.abort();
+        assert!(call.await.expect_err("the call was aborted").is_cancelled());
+        port.release.notify_one();
+
+        assert!(
+            wait_until_recorded(&port).await,
+            "the stream's 429 was lost: the record died with the dropped caller"
+        );
+        let reading = port
+            .gate(&CadenceKey::new("openai", "gpt-x"))
+            .await
+            .expect("gate");
+        assert_eq!(reading.streak(), 1, "the dropped stream's 429 is recorded");
     }
 
     #[test]

@@ -279,19 +279,23 @@ impl RunReadScope {
         }
     }
 
-    /// Whether this scope permits seeing a thread whose latest run is `latest` -- the
-    /// thread-visibility rule of ADR-0054 as amended by ADR-0063.
+    /// Whether this scope permits seeing a thread whose owner run is `owner` -- the
+    /// thread-visibility rule of ADR-0054 as amended by ADR-0063 and Phase 57 D-02.
     ///
-    /// A thread carries no tenant of its own; it belongs to the tenant of its **latest
-    /// run**, the newest by `submitted_at` with `run_id` as the tiebreak (the order every
-    /// run repository's `list` returns). `All` permits every thread. A `Tenant` scope
-    /// permits a thread only when `latest` is `Some` and [`RunReadScope::permits`] holds
-    /// for it; a thread with no run has no owner, so `(Tenant, None)` is `false` and only
-    /// `All` sees it.
+    /// A thread carries no tenant of its own; it belongs to the tenant of its **owner run**:
+    /// the earliest run that carries `submitted_by`, ordered `submitted_at` then `run_id`
+    /// ascending. When no run on the thread is attributed, the owner run is the earliest run
+    /// overall, which is unattributed, so only `All` sees that thread. The port's
+    /// `owner_run_for_thread` is the one read that produces this run. A run added later (an
+    /// Admin fork, a schedule-fired run, another tenant's) never changes the owner.
+    ///
+    /// `All` permits every thread. A `Tenant` scope permits a thread only when `owner` is
+    /// `Some` and [`RunReadScope::permits`] holds for it; a thread with no run has no owner,
+    /// so `(Tenant, None)` is `false` and only `All` sees it.
     ///
     /// Callers that must admit a brand-new thread id (submit and fork, where the first run
     /// creates the thread) decide that before asking -- they call this only with
-    /// `Some(latest)`.
+    /// `Some(owner)`.
     ///
     /// # Examples
     ///
@@ -311,19 +315,19 @@ impl RunReadScope {
     /// }
     ///
     /// fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let acme_run = run_of("acme")?;
+    ///     let owner_run = run_of("acme")?;
     ///     let acme = RunReadScope::Tenant(TenantId::new("acme")?);
     ///     let globex = RunReadScope::Tenant(TenantId::new("globex")?);
     ///
     ///     assert!(RunReadScope::All.permits_thread(None));
-    ///     assert!(acme.permits_thread(Some(&acme_run)));
-    ///     assert!(!globex.permits_thread(Some(&acme_run)));
+    ///     assert!(acme.permits_thread(Some(&owner_run)));
+    ///     assert!(!globex.permits_thread(Some(&owner_run)));
     ///     assert!(!acme.permits_thread(None));
     ///     Ok(())
     /// }
     /// ```
-    pub fn permits_thread(&self, latest: Option<&Run>) -> bool {
-        match (self, latest) {
+    pub fn permits_thread(&self, owner: Option<&Run>) -> bool {
+        match (self, owner) {
             (Self::All, _) => true,
             (Self::Tenant(_), None) => false,
             (Self::Tenant(_), Some(run)) => self.permits(run),
@@ -427,6 +431,9 @@ mod tests {
         assert!(RunReadScope::All.permits(&run));
     }
 
+    /// The name predates Phase 57 D-02 and is cited by the append-only dogfood log, so it
+    /// stays; since D-02 the argument is the thread's OWNER run (earliest attributed), not its
+    /// latest run. The predicate itself did not change.
     #[test]
     fn permits_thread_admits_all_and_only_the_latest_runs_tenant() {
         let mut acme_run = bare_run();

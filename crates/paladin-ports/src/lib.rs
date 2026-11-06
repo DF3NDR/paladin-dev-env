@@ -4,7 +4,7 @@
 //!
 //! This crate sits at the **application boundary** of the hexagonal architecture,
 //! defining the abstract contracts (ports) that connect the core domain to external
-//! infrastructure. It depends only on [`paladin-core`] and standard utility crates —
+//! infrastructure. It depends only on `paladin-core` and standard utility crates —
 //! never on infrastructure SDKs, database drivers, or LLM provider libraries.
 //!
 //! ## Hexagonal Architecture Position
@@ -44,12 +44,11 @@
 //! implement these port traits.
 
 #![warn(missing_docs)]
-// Some port files contain cross-crate doc links (e.g. `crate::infrastructure::…`)
-// that resolved in the original `paladin` crate but are unavailable in this
-// isolated crate.  Downgrade from deny → warn so `cargo doc` still succeeds.
+// Broken intra-doc links are reported at `warn` and nothing in this crate suppresses
+// them: both ADR-0033 bars (`make doc-check`) fail on any diagnostic, so a link to a
+// higher layer is written as a plain code span and a link to `paladin-core` carries
+// its explicit path.
 #![warn(rustdoc::broken_intra_doc_links)]
-#![allow(rustdoc::broken_intra_doc_links)]
-#![allow(rustdoc::redundant_explicit_links)]
 
 /// Input port traits — defines how external stimuli enter the application.
 pub mod input;

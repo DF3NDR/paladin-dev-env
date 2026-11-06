@@ -2,7 +2,7 @@
 //!
 //! `ProviderCapabilities::max_context_tokens` (`paladin_ports::output::llm_port`) is
 //! declared by every LLM adapter shipped in this crate, yet before this module existed
-//! [`TokenCounterPort`] (`paladin_ports::output::token_counter_port`) — the infallible,
+//! [`TokenCounterPort`](paladin_ports::output::token_counter_port::TokenCounterPort) (`paladin_ports::output::token_counter_port`) — the infallible,
 //! v0.10.0-native counting seam — had zero production readers. This module applies the
 //! same fail-loud stance `PaladinBuilder` already takes on the neighbouring
 //! `temperature_range` field (ADR-0004: error rather than silently clamp) to the INPUT
@@ -10,13 +10,13 @@
 //!
 //! Two responsibilities, kept deliberately separate:
 //!
-//! - [`Commissary::verify_fits`] — a pre-flight GUARD. It measures an already-assembled
+//! - [`Commissary::verify_fits`](crate::services::commissary::Commissary::verify_fits) — a pre-flight GUARD. It measures an already-assembled
 //!   prompt against the provider's declared window (minus the caller's reserved
 //!   completion budget) and returns an error naming the measured tokens, the allowance,
 //!   and the provider when it would overflow. It never trims.
-//! - [`Commissary::dispense`] — a bounded ALLOCATOR. Given FIXED (non-sheddable)
-//!   material and a [`Consignment`] of caller-prioritised, shed-or-truncate-able
-//!   material, it returns a [`Stockpile`]: every retained item clamped to a per-item
+//! - [`Commissary::dispense`](crate::services::commissary::Commissary::dispense) — a bounded ALLOCATOR. Given FIXED (non-sheddable)
+//!   material and a [`Consignment`](crate::services::commissary::Consignment) of caller-prioritised, shed-or-truncate-able
+//!   material, it returns a [`Stockpile`](crate::services::commissary::Stockpile): every retained item clamped to a per-item
 //!   share (with a visible truncation marker when a cut was needed) and every shed item
 //!   recorded with its label, priority, and original size. Nothing is dropped silently
 //!   — the anti-pattern this module was built to replace was the RAG retrieval
@@ -26,14 +26,14 @@
 //!
 //! **Framework owns measurement and enforcement; callers own policy.** The Commissary
 //! never decides WHICH material matters more — that is the caller-supplied `priority`
-//! on each [`ConsignmentItem`]. No audit-specific (or any other application-specific)
+//! on each [`ConsignmentItem`](crate::services::commissary::ConsignmentItem). No audit-specific (or any other application-specific)
 //! policy crosses into this crate.
 //!
 //! **Honesty clause.** Not every model has an exact tokenizer available offline
 //! (`claude-*`, `deepseek-*`). Exactness is declared by the injected
-//! [`TokenCounterPort`] itself, through [`TokenCounterPort::is_exact`] — one source of
+//! [`TokenCounterPort`](paladin_ports::output::token_counter_port::TokenCounterPort) itself, through [`TokenCounterPort::is_exact`](paladin_ports::output::token_counter_port::TokenCounterPort::is_exact) — one source of
 //! truth, with no cached duplicate on `Commissary`. `Commissary` reads
-//! `self.counter.is_exact()` live where [`Stockpile::exact_tally`] is set, so a caller
+//! `self.counter.is_exact()` live where [`Stockpile::exact_tally`](crate::services::commissary::Stockpile::exact_tally) is set, so a caller
 //! reading a `Commissary`-produced stockpile can always tell an exact tally from a
 //! deliberately over-counting estimate and budget its own margin accordingly.
 

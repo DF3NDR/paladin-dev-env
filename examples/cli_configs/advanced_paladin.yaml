@@ -40,7 +40,7 @@ system_prompt: |
 
 # Model selection - choose based on complexity and cost requirements
 # Options: gpt-4, gpt-4-turbo, gpt-3.5-turbo, deepseek-chat, claude-3-opus
-model: "gpt-4"
+model: "gpt-4o-mini"
 
 # Temperature controls randomness (0.0 = deterministic, 1.0 = creative)
 # Lower for factual tasks, higher for creative work

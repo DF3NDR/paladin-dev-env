@@ -1,16 +1,14 @@
-/*
-Collection
-
-A Collection is a generic type that can be used to store a collection of Data Items.
-*/
-
 use serde::{Deserialize, Serialize};
-// DataItem type is a generic type that can be used to store any type of data.
-// The data_points field is a vector of DataPoint instances
 use uuid::Uuid;
 
+/// One member of a [`CollectionType`], wrapping a payload of type `T`.
+///
+/// Unfinished scaffolding of the content / general-data orchestration system, retained
+/// pending the ADR-0060 (g) review; the decision is recorded in `55-BASE-LAYER-REVIEW.md`
+/// (keep).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Item<T> {
+    /// The payload of this item.
     pub item: T,
 }
 
@@ -20,9 +18,17 @@ impl<T> Item<T> {
     }
 }
 
+/// A generic collection of [`Item`]s, identified by a `uuid`.
+///
+/// Unfinished scaffolding of the content / general-data orchestration system, retained
+/// pending the ADR-0060 (g) review; the decision is recorded in `55-BASE-LAYER-REVIEW.md`
+/// (keep). The only user is
+/// [`CollectionVersionService`](crate::base::service::collection_versioning_service::CollectionVersionService).
 #[derive(Debug, Clone, PartialEq)]
 pub struct CollectionType<T> {
+    /// The id of this collection.
     pub uuid: Uuid,
+    /// The items it holds, in order.
     pub items: Vec<Item<T>>,
 }
 

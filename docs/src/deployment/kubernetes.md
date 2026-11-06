@@ -203,7 +203,7 @@ spec:
 
       containers:
       - name: paladin
-        image: ghcr.io/your-org/paladin:v0.8.0
+        image: ghcr.io/your-org/paladin:X.Y.Z
         imagePullPolicy: IfNotPresent
 
         ports:
@@ -515,7 +515,7 @@ replicaCount: 3
 
 image:
   repository: ghcr.io/your-org/paladin
-  tag: "v0.8.0"
+  tag: "X.Y.Z"
   pullPolicy: IfNotPresent
 
 serviceAccount:
@@ -566,7 +566,7 @@ persistence:
 # Paladin configuration
 config:
   paladin:
-    defaultModel: "gpt-4"
+    defaultModel: "gpt-4o-mini"
     defaultTemperature: 0.7
     defaultMaxLoops: 3
 

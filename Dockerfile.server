@@ -4,9 +4,13 @@
 # OpenAPI docs, auth) and runs it from a minimal Debian runtime. Health checking is left
 # to the orchestrator's probes (see k8s/server/) — `debian:12-slim` has no curl.
 #
-#   docker build -f Dockerfile.server -t paladin-server:0.6.0 .
-#   docker run --rm -p 8080:8080 \
-#     -e PALADIN_API_KEY_CI=sk-... -e OPENAI_API_KEY=sk-... paladin-server:0.6.0
+#   docker build -f Dockerfile.server -t paladin-server:latest .   (or: make docker-build-server)
+#   docker run --rm -p 8080:8080 -v "$PWD/config.yml:/etc/paladin/config.yml:ro" \
+#     -e OPENAI_API_KEY=sk-... paladin-server:latest
+#
+# The image bakes `config.example.yml`, which ships `http.auth.api_keys: []` with auth
+# enabled, so the container refuses to start until a config holding a literal key is
+# mounted (or `http.auth.enabled: false` is set for development).
 
 # =============================================================================
 # Stage 1: Builder — compiles `paladin-server` with the `web-server` feature.

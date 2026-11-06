@@ -38,13 +38,13 @@ push = false
 # heading, so the bump is driven by `cargo release version` (versions only) and
 # the changelog/commit/tag/push are orchestrated by the Makefile.
 #
-# The same rationale extends to the ten per-crate CHANGELOG.md files
+# The same rationale extends to every per-crate CHANGELOG.md file
 # (crates/*/CHANGELOG.md): they are finalized by
 # scripts/finalize-crate-changelogs.sh, invoked from the `release` target
 # alongside the root changelog step above, not by a `pre-release-replacements`
 # entry here. `pre-release-replacements` is documented as package-scoped
 # configuration, not something expressible once at the workspace root for a
-# list of ten distinct target files -- a single entry here would either be
-# ignored or applied to the wrong file rather than once per crate. Observed
-# locally: `cargo release --version` reports `cargo-release 1.1.2` (recorded
-# in 20-04-SUMMARY.md per D-09's "verify, don't assume" instruction).
+# list of distinct target files, one per crate -- a single entry here would either be
+# ignored or applied to the wrong file rather than once per crate. The v0.11.0
+# lockstep bump ran on `cargo-release 1.1.7`, installed with `--locked` in plan
+# 47-01 (47-CI-EVIDENCE.md, Local sweep rows 13-14).

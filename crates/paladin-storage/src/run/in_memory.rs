@@ -212,6 +212,37 @@ impl RunRepositoryPort for InMemoryRunRepository {
             .cloned())
     }
 
+    async fn owner_run_for_thread(
+        &self,
+        thread_id: &ThreadId,
+    ) -> Result<Option<Run>, RunRepositoryError> {
+        let runs = self.runs.read().await;
+        // Phase 57 D-02: the earliest attributed run, else the earliest run. The key is the
+        // same one the port's default body and the SQL overrides' `ORDER BY` apply:
+        // attributed first, then `submitted_at` ascending, then `run_id` ascending.
+        let owner = runs
+            .values()
+            .filter(|r| &r.thread_id == thread_id)
+            .min_by(|a, b| {
+                (a.submitted_by.is_none(), a.submitted_at, a.run_id.as_str()).cmp(&(
+                    b.submitted_by.is_none(),
+                    b.submitted_at,
+                    b.run_id.as_str(),
+                ))
+            })
+            .cloned();
+        match owner {
+            // X-04, as in `get`: only the CHOSEN row is schema-checked, so a newer-schema
+            // row that is not the owner never fails the lookup.
+            Some(run) if run.schema_version != RUN_SCHEMA_VERSION => {
+                Err(RunRepositoryError::UnknownSchemaVersion {
+                    found: run.schema_version,
+                })
+            }
+            other => Ok(other),
+        }
+    }
+
     async fn request_cancel(&self, run_id: &RunId) -> Result<RunStatus, RunRepositoryError> {
         let mut runs = self.runs.write().await;
         let run = runs
@@ -690,5 +721,42 @@ mod contract_suite {
     async fn list_scoped_pagination_has_no_gap_or_overlap() {
         contract_tests::list_scoped_pagination_has_no_gap_or_overlap(&InMemoryRunRepository::new())
             .await;
+    }
+
+    #[tokio::test]
+    async fn owner_run_for_thread_ignores_later_admin_and_unattributed_runs() {
+        contract_tests::owner_run_for_thread_ignores_later_admin_and_unattributed_runs(
+            &InMemoryRunRepository::new(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn owner_run_for_thread_returns_the_earliest_attributed_run() {
+        contract_tests::owner_run_for_thread_returns_the_earliest_attributed_run(
+            &InMemoryRunRepository::new(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn owner_run_for_thread_falls_back_to_the_earliest_run_when_none_is_attributed() {
+        contract_tests::owner_run_for_thread_falls_back_to_the_earliest_run_when_none_is_attributed(&InMemoryRunRepository::new()).await;
+    }
+
+    #[tokio::test]
+    async fn owner_run_for_thread_is_none_for_a_thread_with_no_runs() {
+        contract_tests::owner_run_for_thread_is_none_for_a_thread_with_no_runs(
+            &InMemoryRunRepository::new(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn owner_run_for_thread_decodes_only_the_owner_row() {
+        contract_tests::owner_run_for_thread_decodes_only_the_owner_row(
+            &InMemoryRunRepository::new(),
+        )
+        .await;
     }
 }

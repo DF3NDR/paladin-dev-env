@@ -12,12 +12,12 @@
 //! | LLM providers (OpenAI, Anthropic, DeepSeek, mock) | [`paladin_llm`] (facade keeps only `adapters::llm::config_bridge`) |
 //! | Garrison / Sanctum memory | [`paladin_memory`] (re-exported via `adapters::garrison`, `adapters::sanctum`) |
 //! | Citadel state persistence | [`paladin_memory`]`::citadel` (re-exported via `adapters::citadel`) |
-//! | Repositories (SQLite/MySQL) | [`paladin_storage`] (re-exported via [`repositories`]) |
+//! | Repositories (SQLite/MySQL) | [`paladin_storage`] (re-exported via [`repositories`](crate::infrastructure::repositories)) |
 //! | MinIO/S3 file storage (`s3-storage`) | [`paladin_storage`]`::minio` (re-exported via `adapters::file_storage`) |
 //! | Redis queue (`redis-queue`) | [`paladin_storage`]`::redis` (re-exported via `adapters::queue`) |
-//! | Content ingestion / documents | [`paladin_content`] (re-exported via `adapters::input`, `adapters::document`) |
-//! | Notifications (`notifications`) | [`paladin_notifications`] (re-exported via `adapters::notifications`) |
-//! | Web / API (`web-server`) | [`paladin_web`] (re-exported via [`web`]) |
+//! | Content ingestion / documents | `paladin_content` (re-exported via `adapters::input`, `adapters::document`) |
+//! | Notifications (`notifications`) | `paladin_notifications` (re-exported via `adapters::notifications`) |
+//! | Web / API (`web-server`) | `paladin_web` (re-exported via `web`) |
 //! | Herald output formatters | [`paladin_herald`] (re-exported via `adapters::herald`) |
 //!
 //! # Facade-resident adapters
@@ -27,8 +27,8 @@
 //! - **`adapters::auth`** — in-memory token auth adapter.
 //! - **`adapters::logs`** — system log adapter ([`LogPort`](paladin_ports::output::log_port::LogPort)).
 //! - **`adapters::scheduling`** — Tokio-based cron scheduler.
-//! - [`resilience`] — circuit breaker and related fault-tolerance utilities.
-//! - [`security`] — encryption, audit, and TLS-verification helpers (cross-cutting).
+//! - [`resilience`](crate::infrastructure::resilience) — circuit breaker and related fault-tolerance utilities.
+//! - [`security`](crate::infrastructure::security) — encryption, audit, and TLS-verification helpers (cross-cutting).
 //!
 //! # Feature flags
 //!

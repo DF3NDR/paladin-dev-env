@@ -6,11 +6,11 @@
 //! - LLM provider connectivity (OpenAI, Anthropic, DeepSeek)
 //! - Optional service connectivity (Redis, Qdrant)
 
+use super::provider_probe::{validate_anthropic_key, validate_deepseek_key, validate_openai_key};
 use crate::application::cli::error::{CliError, CliResult};
 use crate::application::cli::formatters::output::OutputFormatter;
 use crate::application::cli::formatters::progress::Spinner;
 use reqwest::Client;
-use serde_json::json;
 use std::collections::HashMap;
 use std::env;
 use std::path::Path;
@@ -63,91 +63,7 @@ impl CheckResult {
     }
 }
 
-// API Validation Functions (reused from onboarding)
-
-/// Validate OpenAI API key by calling the models endpoint
-async fn validate_openai_key(api_key: &str) -> CliResult<()> {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|e| CliError::execution(format!("Failed to create HTTP client: {}", e)))?;
-
-    let response = client
-        .get("https://api.openai.com/v1/models")
-        .header("Authorization", format!("Bearer {}", api_key))
-        .send()
-        .await
-        .map_err(|e| CliError::execution(format!("API request failed: {}", e)))?;
-
-    if response.status().is_success() {
-        Ok(())
-    } else {
-        let status = response.status();
-        Err(CliError::execution(format!(
-            "OpenAI API validation failed ({})",
-            status
-        )))
-    }
-}
-
-/// Validate Anthropic API key by making a minimal request
-async fn validate_anthropic_key(api_key: &str) -> CliResult<()> {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|e| CliError::execution(format!("Failed to create HTTP client: {}", e)))?;
-
-    let body = json!({
-        "model": "claude-3-haiku-20240307",
-        "max_tokens": 1,
-        "messages": [{"role": "user", "content": "test"}]
-    });
-
-    let response = client
-        .post("https://api.anthropic.com/v1/messages")
-        .header("x-api-key", api_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| CliError::execution(format!("API request failed: {}", e)))?;
-
-    if response.status().is_success() {
-        Ok(())
-    } else {
-        let status = response.status();
-        Err(CliError::execution(format!(
-            "Anthropic API validation failed ({})",
-            status
-        )))
-    }
-}
-
-/// Validate DeepSeek API key by calling the models endpoint
-async fn validate_deepseek_key(api_key: &str) -> CliResult<()> {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|e| CliError::execution(format!("Failed to create HTTP client: {}", e)))?;
-
-    let response = client
-        .get("https://api.deepseek.com/v1/models")
-        .header("Authorization", format!("Bearer {}", api_key))
-        .send()
-        .await
-        .map_err(|e| CliError::execution(format!("API request failed: {}", e)))?;
-
-    if response.status().is_success() {
-        Ok(())
-    } else {
-        let status = response.status();
-        Err(CliError::execution(format!(
-            "DeepSeek API validation failed ({})",
-            status
-        )))
-    }
-}
+// API key validation lives in the shared `provider_probe` module (DF-19).
 
 /// Check Redis connectivity
 async fn check_redis_connectivity(redis_url: &str) -> CliResult<()> {
@@ -156,10 +72,11 @@ async fn check_redis_connectivity(redis_url: &str) -> CliResult<()> {
     if redis_url.starts_with("redis://") || redis_url.starts_with("rediss://") {
         Ok(())
     } else {
-        Err(CliError::configuration(format!(
-            "Invalid Redis URL format: {}",
-            redis_url
-        )))
+        // WR-03: the value is never echoed. A malformed URL may still carry a
+        // password (`redis:/:<pw>@host`), and this text reaches the terminal and CI logs.
+        Err(CliError::configuration(
+            "Invalid Redis URL format: expected a redis:// or rediss:// URL (value not shown)",
+        ))
     }
 }
 
@@ -176,7 +93,11 @@ async fn check_qdrant_connectivity(qdrant_url: &str) -> CliResult<()> {
         .get(&url)
         .send()
         .await
-        .map_err(|e| CliError::execution(format!("Qdrant connection failed: {}", e)))?;
+        // WR-03: reqwest appends the request URL to its error text, and a credential
+        // in the query string would reach the terminal and CI logs with it.
+        .map_err(|e| {
+            CliError::execution(format!("Qdrant connection failed: {}", e.without_url()))
+        })?;
 
     if response.status().is_success() {
         Ok(())
@@ -539,5 +460,64 @@ mod tests {
     async fn test_check_redis_valid_url_format() {
         let result = check_redis_connectivity("redis://localhost:6379").await;
         assert!(result.is_ok());
+    }
+
+    /// WR-03 (56-REVIEW): the malformed-scheme error must carry none of the URL.
+    #[tokio::test]
+    async fn check_redis_format_error_does_not_echo_the_value() {
+        const PW: &str = "test-key-not-a-secret-wr03-redis";
+        for url in [
+            format!("redis:/:{PW}@host"),
+            format!("valkey://:{PW}@host"),
+            format!("http://u:{PW}@host"),
+        ] {
+            let err = check_redis_connectivity(&url)
+                .await
+                .expect_err("a malformed-scheme URL must be rejected");
+            let display = err.to_string();
+            let debug = format!("{err:?}");
+            assert!(
+                !display.contains(PW),
+                "the Redis format error Display must not carry the URL password"
+            );
+            assert!(
+                !debug.contains(PW),
+                "the Redis format error Debug must not carry the URL password"
+            );
+            assert!(
+                display.contains(
+                    "Invalid Redis URL format: expected a redis:// or rediss:// URL (value not shown)"
+                ),
+                "the Redis format error must use the fixed value-free text"
+            );
+        }
+    }
+
+    /// WR-03 (56-REVIEW): a failed Qdrant request must not print the URL credentials.
+    ///
+    /// reqwest strips URL userinfo from its own error text, but it still echoes a
+    /// credential carried in the query string, so both forms are pinned here.
+    #[tokio::test]
+    async fn check_qdrant_failure_does_not_echo_the_url_credentials() {
+        const PW: &str = "test-key-not-a-secret-wr03-qdrant";
+        // Loopback port 1 refuses the connection, so no external network is used.
+        for url in [
+            format!("http://user:{PW}@127.0.0.1:1"),
+            format!("http://127.0.0.1:1?api-key={PW}"),
+        ] {
+            let err = check_qdrant_connectivity(&url)
+                .await
+                .expect_err("a refused loopback connection must be an error");
+            let display = err.to_string();
+            let debug = format!("{err:?}");
+            assert!(
+                !display.contains(PW),
+                "the Qdrant failure Display must not carry the URL credentials"
+            );
+            assert!(
+                !debug.contains(PW),
+                "the Qdrant failure Debug must not carry the URL credentials"
+            );
+        }
     }
 }

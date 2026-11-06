@@ -1,4 +1,4 @@
-# Public API Surface - Generated 2026-10-31 13:09:03 UTC
+# Public API Surface - Generated 2026-11-03 23:51:32 UTC
 # This file tracks all publicly exported items from the paladin crate
 # Generated using cargo-public-api v0.52.0
 
@@ -5656,14 +5656,17 @@ pub paladin::config::settings::Settings::vision: core::option::Option<paladin_ll
 pub paladin::config::settings::Settings::web_server: paladin::config::web_server::WebServerConfig
 impl paladin::config::settings::Settings
 pub fn paladin::config::settings::Settings::create_default_herald(&self) -> core::result::Result<alloc::sync::Arc<dyn paladin_core::platform::container::herald::Herald>, alloc::string::String>
+pub fn paladin::config::settings::Settings::get_agent_runtime_config(&self) -> paladin::config::agent_runtime::AgentRuntimeConfig
 pub fn paladin::config::settings::Settings::get_citadel_config(&self) -> paladin::config::citadel::CitadelConfig
 pub fn paladin::config::settings::Settings::get_file_storage_config(&self) -> paladin::config::file_storage::FileStorageConfig
 pub fn paladin::config::settings::Settings::get_garrison_config(&self) -> paladin_memory::config::garrison::GarrisonSettings
 pub fn paladin::config::settings::Settings::get_herald_config(&self) -> paladin::config::herald::HeraldConfig
 pub fn paladin::config::settings::Settings::get_queue_config(&self) -> paladin::config::queue::QueueConfig
 pub fn paladin::config::settings::Settings::get_sanctum_config(&self) -> paladin_memory::config::sanctum::SanctumConfig
+pub fn paladin::config::settings::Settings::get_trace_config(&self) -> paladin::config::trace::TraceConfig
 pub fn paladin::config::settings::Settings::get_treasurer_config(&self) -> paladin::config::treasurer::TreasurerConfig
 pub fn paladin::config::settings::Settings::get_vision_config(&self) -> paladin_llm::config::vision::VisionConfig
+pub fn paladin::config::settings::Settings::get_web_server_config(&self) -> paladin::config::web_server::WebServerConfig
 pub fn paladin::config::settings::Settings::load_from_file(&str) -> core::result::Result<Self, alloc::boxed::Box<dyn core::error::Error>>
 pub fn paladin::config::settings::Settings::new() -> core::result::Result<Self, config::error::ConfigError>
 pub fn paladin::config::settings::Settings::validate(&self) -> core::result::Result<(), alloc::string::String>
@@ -7266,14 +7269,17 @@ pub paladin::config::Settings::vision: core::option::Option<paladin_llm::config:
 pub paladin::config::Settings::web_server: paladin::config::web_server::WebServerConfig
 impl paladin::config::settings::Settings
 pub fn paladin::config::settings::Settings::create_default_herald(&self) -> core::result::Result<alloc::sync::Arc<dyn paladin_core::platform::container::herald::Herald>, alloc::string::String>
+pub fn paladin::config::settings::Settings::get_agent_runtime_config(&self) -> paladin::config::agent_runtime::AgentRuntimeConfig
 pub fn paladin::config::settings::Settings::get_citadel_config(&self) -> paladin::config::citadel::CitadelConfig
 pub fn paladin::config::settings::Settings::get_file_storage_config(&self) -> paladin::config::file_storage::FileStorageConfig
 pub fn paladin::config::settings::Settings::get_garrison_config(&self) -> paladin_memory::config::garrison::GarrisonSettings
 pub fn paladin::config::settings::Settings::get_herald_config(&self) -> paladin::config::herald::HeraldConfig
 pub fn paladin::config::settings::Settings::get_queue_config(&self) -> paladin::config::queue::QueueConfig
 pub fn paladin::config::settings::Settings::get_sanctum_config(&self) -> paladin_memory::config::sanctum::SanctumConfig
+pub fn paladin::config::settings::Settings::get_trace_config(&self) -> paladin::config::trace::TraceConfig
 pub fn paladin::config::settings::Settings::get_treasurer_config(&self) -> paladin::config::treasurer::TreasurerConfig
 pub fn paladin::config::settings::Settings::get_vision_config(&self) -> paladin_llm::config::vision::VisionConfig
+pub fn paladin::config::settings::Settings::get_web_server_config(&self) -> paladin::config::web_server::WebServerConfig
 pub fn paladin::config::settings::Settings::load_from_file(&str) -> core::result::Result<Self, alloc::boxed::Box<dyn core::error::Error>>
 pub fn paladin::config::settings::Settings::new() -> core::result::Result<Self, config::error::ConfigError>
 pub fn paladin::config::settings::Settings::validate(&self) -> core::result::Result<(), alloc::string::String>
@@ -8637,4 +8643,4 @@ pub fn T::execute_structured<'life0, 'life1, 'life2, 'async_trait, D>(&'life0 se
 pub fn T::execute_structured_with_options<'life0, 'life1, 'life2, 'life3, 'async_trait, D>(&'life0 self, &'life1 paladin_core::platform::container::paladin::Paladin, &'life2 str, &'life3 paladin_core::platform::container::structured::StructuredOptions) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<paladin_core::platform::container::structured::Structured<D>, paladin_core::platform::container::paladin_error::PaladinError>> + core::marker::Send + 'async_trait)>> where D: serde_core::de::DeserializeOwned + schemars::JsonSchema + core::marker::Send + 'async_trait, Self: core::marker::Sync + 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 
 ## Summary
-Total public items: 4325
+Total public items: 4331

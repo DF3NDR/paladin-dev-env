@@ -1,10 +1,10 @@
 //! OpenAI LLM adapter module.
 //!
-//! Exports [`OpenAIAdapter`] (and [`OpenAIConfig`]) for use with GPT-3.5, GPT-4,
+//! Exports [`OpenAIAdapter`](crate::openai::OpenAIAdapter) (and [`OpenAIConfig`](crate::openai::OpenAIConfig)) for use with GPT-3.5, GPT-4,
 //! and other OpenAI models.
 //!
 //! Enable the `openai-embeddings` feature flag to also get
-//! [`OpenAIEmbeddingAdapter`].
+//! `OpenAIEmbeddingAdapter`.
 
 pub mod adapter;
 

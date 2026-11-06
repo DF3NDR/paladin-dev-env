@@ -8,7 +8,7 @@
 //! value -- see [`ToolErrorConfig`]), so a v0.9 `config.yml` with no
 //! `agent_runtime:` section boots v0.10 with **identical behavior**: X-09's
 //! "new subsystems are disabled by default" requirement, asserted by
-//! [`tests::default_agent_runtime_config_is_inert`] and backed at the
+//! `tests::default_agent_runtime_config_is_inert` and backed at the
 //! `Settings` boundary by MIGRATION §9.5's obligation.
 //!
 //! Scalar fields on each sub-struct are env-overridable under
@@ -17,7 +17,7 @@
 //! per-tool maps ([`ToolCallLimitConfig::per_tool`], [`ToolErrorConfig::per_tool`])
 //! and model context tables ([`HistoryTrimmerConfig::model_context_limits`])
 //! are **config-file only** -- there is deliberately no environment-variable
-//! form for a collection-shaped field, and [`tests::env_overrides_apply_to_scalar_fields_only`]
+//! form for a collection-shaped field, and `tests::env_overrides_apply_to_scalar_fields_only`
 //! pins that no such variable has any effect.
 //!
 //! No field in this tree is secret-shaped: [`ModelFallbackConfig`] names
@@ -29,7 +29,7 @@
 //! this module deliberately does **not** apply the hand-written `Debug`
 //! convention [`crate::config::node_cache::NodeCacheConfig`] uses for its
 //! `redis_password` field -- every type below derives `Debug` plainly, and
-//! [`tests::config_carries_no_secret_shaped_field`] pins the absence of any
+//! `tests::config_carries_no_secret_shaped_field` pins the absence of any
 //! key/secret/token/password-shaped field.
 //!
 //! `PaladinConfig` (`paladin_config.rs:44`, pre-existing, pub fields,
@@ -1135,7 +1135,7 @@ impl From<&ModelRetryConfig> for RetryPolicy {
 /// (D-12). Names providers only; the factory resolves them at
 /// `build_chain` time. Credentials keep coming from
 /// `LlmProviderFactory`'s existing env/config path, never from this
-/// struct (D-12, D-41) -- see [`tests::config_carries_no_secret_shaped_field`].
+/// struct (D-12, D-41) -- see `tests::config_carries_no_secret_shaped_field`.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct ModelFallbackConfig {
     /// Whether fallback is wired at all. `false` out of the box.

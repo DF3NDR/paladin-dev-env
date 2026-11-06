@@ -1,0 +1,13 @@
+# check-doc-models.allowlist
+#
+# Exemptions for scripts/check-doc-models.sh (DF-18). One entry per line:
+#
+#   <path>|<line substring>|<reason>
+#
+# <path> is relative to the repository root. A deprecated-id hit is exempt only
+# when it sits in <path> on a line that contains <line substring>. Every entry
+# needs a reason that says why that line deliberately shows the deprecated id;
+# an entry is never a way to avoid editing a site. An entry that exempts no hit
+# fails the gate as STALE_ALLOW, so delete an entry when its line is fixed.
+# Blank lines and lines starting with '#' are ignored.
+docs/src/appendix/sentinel.md|// Not .model("gpt-4")  // ❌ No vision|troubleshooting line that deliberately names the retired non-vision id as the wrong choice for vision work; swapping in a served id would make the "no vision" claim false

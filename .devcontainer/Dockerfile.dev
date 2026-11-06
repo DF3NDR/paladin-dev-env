@@ -139,6 +139,11 @@ RUN cargo install --locked --version 0.5.9 cargo-cyclonedx
 # measurement survives a devcontainer rebuild.
 RUN cargo install --locked --version 0.50.0 cargo-semver-checks
 
+# Install cargo-llvm-cov (pinned) — mirrors the `coverage` job in .github/workflows/ci.yml
+# (`tool: cargo-llvm-cov@0.8.7`) and drives `make coverage`; it needs the llvm-tools-preview
+# component added above.
+RUN cargo install --locked --version 0.8.7 cargo-llvm-cov
+
 # Install the doc-build toolchain (pinned) — mirrors .github/workflows/docs.yml:44-54
 # exactly, so `mdbook build docs/` run in this container and in CI cannot disagree on
 # tooling. Consumer: `mdbook build docs/` (no `make` target).

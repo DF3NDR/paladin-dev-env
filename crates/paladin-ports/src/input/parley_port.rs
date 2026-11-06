@@ -1,8 +1,8 @@
 //! Parley Port — Triggering a Resume Without Naming the Engine (HITL-05, D-25)
 //!
-//! [`ParleyPort`] lets an HTTP surface (`paladin-web`) trigger a suspended
+//! [`ParleyPort`](crate::input::parley_port::ParleyPort) lets an HTTP surface (`paladin-web`) trigger a suspended
 //! thread's resume without ever naming `paladin-battalion`: every type in
-//! [`ParleyPort::resume_with`]'s signature is either a `paladin-core` value
+//! [`ParleyPort::resume_with`](crate::input::parley_port::ParleyPort::resume_with)'s signature is either a `paladin-core` value
 //! type or declared in this module (ADR-0031, ADR-0038). The facade adapter
 //! (`src/application/services/parley/`, a later plan wave) implements this
 //! trait over a real `WarEngine`, so `paladin-web` depends on this port
@@ -14,17 +14,17 @@
 //!   rejected — an unknown thread, an unregistered graph, a thread that
 //!   is not suspended, an unknown or already-answered `parley_id`, a
 //!   response whose shape does not match its request's `ParleyKind`, or an
-//!   expired parley — surfaces as a typed [`ParleyError`] variant from THIS
+//!   expired parley — surfaces as a typed [`ParleyError`](crate::input::parley_port::ParleyError) variant from THIS
 //!   call, before it returns. An error means nothing was persisted (beyond
 //!   the sole documented exception: an expired parley under
 //!   `OnExpire::FailRun` persists a `Failed` Waypoint as part of returning
-//!   [`ParleyError::ParleyExpired`] — a policy outcome, not a caller-input
+//!   [`ParleyError::ParleyExpired`](crate::input::parley_port::ParleyError::ParleyExpired) — a policy outcome, not a caller-input
 //!   rejection) and the thread is still suspended exactly as it was before
 //!   the call.
 //! - **A success means the continuation is already running in the
 //!   background.** Once validation accepts the submission and every
 //!   outstanding parley now has a response, the call returns immediately
-//!   with a [`ResumeAccepted`] handle; the run itself continues on a task
+//!   with a [`ResumeAccepted`](crate::input::parley_port::ResumeAccepted) handle; the run itself continues on a task
 //!   the caller does not hold a connection open for. A caller polls the
 //!   thread's state (a separate read path) to observe the outcome.
 //! - **A submission that leaves the thread still suspended (a valid but

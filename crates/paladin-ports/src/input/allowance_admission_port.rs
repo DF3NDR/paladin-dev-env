@@ -1,23 +1,23 @@
 //! Allowance Admission Port -- the admission-time check the Treasurer answers (ALLOW-02, C1)
 //!
-//! [`AllowanceAdmissionPort`] is the input port `paladin-web` and `RunSubmissionService` call
+//! [`AllowanceAdmissionPort`](crate::input::allowance_admission_port::AllowanceAdmissionPort) is the input port `paladin-web` and `RunSubmissionService` call
 //! before a run (or an agent call) is accepted. It is core-typed only: `paladin-web` cannot
 //! name the facade's `Treasurer` (that would be a crate cycle), so the facade implements this
 //! port and the callers hold an `Arc<dyn AllowanceAdmissionPort>`.
 //!
-//! The Treasurer's identity input is a [`RunAttribution`] -- tenant and API key name only, never
+//! The Treasurer's identity input is a [`RunAttribution`](paladin_core::platform::container::principal::RunAttribution) -- tenant and API key name only, never
 //! a role -- so no role can bypass an allowance (D-09).
 //!
 //! ## Contract
 //!
 //! - **Admission is a check only** (D-05): no hold is placed and no ledger row is written. Holds
 //!   and mid-run halts are a later phase's concern.
-//! - **A refusal precedes every write** (ALLOW-02): [`AdmissionError::Refused`] must be answered
+//! - **A refusal precedes every write** (ALLOW-02): [`AdmissionError::Refused`](crate::input::allowance_admission_port::AdmissionError::Refused) must be answered
 //!   before any run row, queue entry or ledger row exists.
 //! - **Fail closed** (D-10): when a principal has a configured ceiling and the ledger cannot be
-//!   read, the answer is [`AdmissionError::Backend`], never an admission.
-//! - [`AllowanceAdmissionPort::confirm`] is called once the admitted run (or agent call) is
-//!   durably accepted; [`AllowanceAdmissionPort::abandon`] when it never was.
+//!   read, the answer is [`AdmissionError::Backend`](crate::input::allowance_admission_port::AdmissionError::Backend), never an admission.
+//! - [`AllowanceAdmissionPort::confirm`](crate::input::allowance_admission_port::AllowanceAdmissionPort::confirm) is called once the admitted run (or agent call) is
+//!   durably accepted; [`AllowanceAdmissionPort::abandon`](crate::input::allowance_admission_port::AllowanceAdmissionPort::abandon) when it never was.
 //!
 //! # Examples
 //!

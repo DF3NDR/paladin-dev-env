@@ -8,6 +8,7 @@ files:
   - crates/paladin-llm/examples/live_vendor_smoke.rs
   - .planning/phases/50.1-consumer-surface-readiness/50.1-SEED-PROBE.md
 owner: repo maintainer
+recheck_by: 2026-11-09
 ---
 
 ## Problem
@@ -31,3 +32,7 @@ usable. OpenAI's pro tier is one of the select others: `gpt-5.5-pro` (newest), `
 
 Owner decision recorded 2026-10-20 during `/gsd-execute-phase 50.1` (see `50.1-PROBE-CANDIDATES.md`
 `## Final candidate set`): deferred out of Phase 50.1 to a follow-up phase.
+
+## Update 2026-11-05 (Phase 58 pre-tag audit, R-62)
+
+Acknowledged and kept open by the Phase 58 pre-tag audit (`58-AUDIT-DISPOSITIONS.md` R-62). Owner: repo maintainer. Re-check by 2026-11-09, the maintainer's `DATE` recorded in `58-CI-EVIDENCE.md` `## Maintainer decisions (58-05)`.

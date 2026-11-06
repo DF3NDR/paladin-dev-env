@@ -40,7 +40,7 @@ system_prompt: |
 # - gpt-4: Most capable, higher cost (recommended for complex tasks)
 # - gpt-3.5-turbo: Faster, lower cost (good for simple tasks)
 # - deepseek-chat: Cost-effective alternative with good performance
-model: "gpt-4"
+model: "gpt-4o-mini"
 
 # Temperature: Controls randomness in responses (0.0 to 1.0)
 # - 0.0 = Deterministic, factual, consistent

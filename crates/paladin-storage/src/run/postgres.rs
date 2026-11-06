@@ -72,6 +72,18 @@ const SELECT_ACTIVE_RUN_FOR_THREAD: &str = "SELECT run_id, thread_id, assistant_
      WHERE thread_id = $1 \
      AND status IN ('queued','running','awaiting_input') LIMIT 1";
 
+/// Phase 57 D-02: a thread's OWNER run in ONE row -- mirrors `sqlite.rs`'s
+/// `SELECT_OWNER_RUN_FOR_THREAD` (see its doc comment), with a `$1` bind. PostgreSQL orders
+/// booleans false-first, so `(tenant_id IS NULL) ASC` puts attributed runs ahead of
+/// unattributed ones; then the oldest `submitted_at`, then the smallest `run_id`. `LIMIT 1` is
+/// the point (row 86): a non-owner row is never decoded.
+const SELECT_OWNER_RUN_FOR_THREAD: &str = "SELECT run_id, thread_id, assistant_id, \
+     assistant_version, status, input, submitted_at, started_at, finished_at, attempt, \
+     cancel_requested, error, webhook, pending_responses, fork_from, output, \
+     final_waypoint_id, schema_version, tenant_id, api_key_id, halt_reason FROM runs \
+     WHERE thread_id = $1 \
+     ORDER BY (tenant_id IS NULL) ASC, submitted_at ASC, run_id ASC LIMIT 1";
+
 const UPDATE_REQUEST_CANCEL: &str = "UPDATE runs SET cancel_requested = TRUE WHERE run_id = $1 \
      AND status IN ('queued','running','awaiting_input')";
 
@@ -617,6 +629,19 @@ impl RunRepositoryPort for PostgresRunRepository {
         row.as_ref().map(Self::row_to_run).transpose()
     }
 
+    async fn owner_run_for_thread(
+        &self,
+        thread_id: &ThreadId,
+    ) -> Result<Option<Run>, RunRepositoryError> {
+        let row = sqlx::query(SELECT_OWNER_RUN_FOR_THREAD)
+            .bind(thread_id.as_str())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| self.wrap_error(e))?;
+
+        row.as_ref().map(Self::row_to_run).transpose()
+    }
+
     async fn request_cancel(&self, run_id: &RunId) -> Result<RunStatus, RunRepositoryError> {
         let result = sqlx::query(UPDATE_REQUEST_CANCEL)
             .bind(run_id.as_str())
@@ -1055,6 +1080,47 @@ mod tests {
         contract_tests::get_on_unsupported_schema_version_fails(&store).await;
     }
 
+    #[tokio::test]
+    async fn owner_run_for_thread_ignores_later_admin_and_unattributed_runs() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::owner_run_for_thread_ignores_later_admin_and_unattributed_runs(&store)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn owner_run_for_thread_returns_the_earliest_attributed_run() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::owner_run_for_thread_returns_the_earliest_attributed_run(&store).await;
+    }
+
+    #[tokio::test]
+    async fn owner_run_for_thread_falls_back_to_the_earliest_run_when_none_is_attributed() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::owner_run_for_thread_falls_back_to_the_earliest_run_when_none_is_attributed(&store).await;
+    }
+
+    #[tokio::test]
+    async fn owner_run_for_thread_is_none_for_a_thread_with_no_runs() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::owner_run_for_thread_is_none_for_a_thread_with_no_runs(&store).await;
+    }
+
+    #[tokio::test]
+    async fn owner_run_for_thread_decodes_only_the_owner_row() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::owner_run_for_thread_decodes_only_the_owner_row(&store).await;
+    }
+
     // Plain `#[tokio::test]` (current-thread flavor), not `multi_thread`:
     // this module's declared-test count is asserted equal to
     // `contract_tests`'s `pub async fn` count by regex on the literal
@@ -1229,6 +1295,29 @@ mod tests {
                 "SELECT constant must read both attribution columns: {constant}"
             );
         }
+    }
+
+    #[test]
+    fn owner_query_reads_exactly_one_row_attributed_first_oldest_first() {
+        // DB-free query-shape guard (Phase 57 row 86): the owner lookup is one bound,
+        // single-row statement ordered the exact reverse of `list`, attributed runs first.
+        let sql = SELECT_OWNER_RUN_FOR_THREAD;
+        assert!(
+            sql.contains("WHERE thread_id = $1"),
+            "the thread id must be bound: {sql}"
+        );
+        assert!(
+            sql.contains("ORDER BY (tenant_id IS NULL) ASC, submitted_at ASC, run_id ASC LIMIT 1"),
+            "owner order and single-row limit: {sql}"
+        );
+        assert!(
+            !sql.contains("limit + 1") && !sql.contains("DESC"),
+            "no page fetch and no newest-first order: {sql}"
+        );
+        assert!(
+            sql.contains("halt_reason") && sql.contains("tenant_id") && sql.contains("api_key_id"),
+            "the full column list `row_to_run` decodes: {sql}"
+        );
     }
 
     #[test]

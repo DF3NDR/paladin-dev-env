@@ -11,7 +11,7 @@
       "name": "MIT OR Apache-2.0",
       "identifier": "MIT OR Apache-2.0"
     },
-    "version": "0.11.0"
+    "version": "0.11.1"
   },
   "paths": {
     "/v1/agents": {
@@ -2368,7 +2368,7 @@
           "threads"
         ],
         "summary": "`GET /threads` -- paginated thread list, newest-activity-first (D-45,\nD-47). Authenticated, any role, tenant-scoped (TENANT-03, ADR-0063).",
-        "description": "An Admin lists every thread. A user-role principal lists only the threads\nwhose latest run is attributed to its own tenant; a thread with no run is\nAdmin-only, and with no run store wired a non-admin lists nothing. Because\nthe other tenants' threads are filtered out of a page after it is read, a\npage may hold fewer than `limit` items (even none) while `next_cursor` is\nstill non-null: keep following `next_cursor` until it is `null`. A request\nexamines a bounded number of threads, so the walk always makes progress\nwithout one request scanning the whole store.\n\nA cursor walk gives a stable ordering for threads that already existed\nwhen the first page was fetched, but is NOT a point-in-time snapshot: a\nthread whose latest waypoint was written after the first page was read\nmay be omitted from the walk (D-47 backstop), and two threads with an\nidentical `last_updated_at` straddling a page boundary can be skipped (the\ncursor is an exclusive timestamp).\n\nReturns:\n- `200 OK` with [`ThreadListResponse`] on success; `{ items: [],\n  next_cursor: null }` when the walk ends with nothing visible;\n- `400 Bad Request` for `limit == 0`/`limit > 100`, or an unparseable\n  `cursor`;\n- `501 Not Implemented` if no waypoint backend is configured.",
+        "description": "An Admin lists every thread. A user-role principal lists only the threads\nwhose owner run (its earliest attributed run) is attributed to its own tenant; a\nthread with no run is Admin-only, and with no run store wired a non-admin lists nothing. Because\nthe other tenants' threads are filtered out of a page after it is read, a\npage may hold fewer than `limit` items (even none) while `next_cursor` is\nstill non-null: keep following `next_cursor` until it is `null`. A request\nexamines a bounded number of threads, so the walk always makes progress\nwithout one request scanning the whole store.\n\nA cursor walk gives a stable ordering for threads that already existed\nwhen the first page was fetched, but is NOT a point-in-time snapshot: a\nthread whose latest waypoint was written after the first page was read\nmay be omitted from the walk (D-47 backstop), and two threads with an\nidentical `last_updated_at` straddling a page boundary can be skipped (the\ncursor is an exclusive timestamp).\n\nReturns:\n- `200 OK` with [`ThreadListResponse`] on success; `{ items: [],\n  next_cursor: null }` when the walk ends with nothing visible;\n- `400 Bad Request` for `limit == 0`/`limit > 100`, or an unparseable\n  `cursor`;\n- `501 Not Implemented` if no waypoint backend is configured.",
         "operationId": "list_threads",
         "parameters": [
           {
@@ -2465,7 +2465,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Thread summary. Tenant-scoped: a user-role principal can read only a thread whose latest run belongs to its tenant; an admin-role principal can read every thread.",
+            "description": "Thread summary. Tenant-scoped: a user-role principal can read only a thread whose owner (its earliest attributed run) belongs to its tenant; a later Admin or schedule run never moves it; an admin-role principal can read every thread.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2789,7 +2789,7 @@
         ],
         "responses": {
           "200": {
-            "description": "A page of waypoint summaries. Tenant-scoped: a user-role principal can read only a thread whose latest run belongs to its tenant; an admin-role principal can read every thread.",
+            "description": "A page of waypoint summaries. Tenant-scoped: a user-role principal can read only a thread whose owner (its earliest attributed run) belongs to its tenant; a later Admin or schedule run never moves it; an admin-role principal can read every thread.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2966,7 +2966,7 @@
           "threads"
         ],
         "summary": "`GET /threads/{id}/state` -- the thread's latest status, plus outstanding\nparleys/responses when suspended.",
-        "description": "Authenticated, any role, tenant-scoped through `load_visible_thread`: a user-role\nprincipal sees only a thread whose latest run belongs to its tenant, an Admin sees\nevery thread, and a thread the caller may not see answers the same `404` as a missing\none (ADR-0063).\n\nReturns:\n- `200 OK` with [`ThreadStateResponse`] on success;\n- `400 Bad Request` for an invalid thread id;\n- `404 Not Found` for an unknown thread, or one the caller may not see;\n- `501 Not Implemented` if no waypoint backend is configured.",
+        "description": "Authenticated, any role, tenant-scoped through `load_visible_thread`: a user-role\nprincipal sees only a thread whose owner run (its earliest attributed run) belongs to its\ntenant, an Admin sees\nevery thread, and a thread the caller may not see answers the same `404` as a missing\none (ADR-0063).\n\nReturns:\n- `200 OK` with [`ThreadStateResponse`] on success;\n- `400 Bad Request` for an invalid thread id;\n- `404 Not Found` for an unknown thread, or one the caller may not see;\n- `501 Not Implemented` if no waypoint backend is configured.",
         "operationId": "get_thread_state",
         "parameters": [
           {
@@ -2981,7 +2981,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Thread state. Tenant-scoped: a user-role principal can read only a thread whose latest run belongs to its tenant; an admin-role principal can read every thread.",
+            "description": "Thread state. Tenant-scoped: a user-role principal can read only a thread whose owner (its earliest attributed run) belongs to its tenant; a later Admin or schedule run never moves it; an admin-role principal can read every thread.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3981,7 +3981,7 @@
               "object",
               "null"
             ],
-            "description": "Why this run halted, when it halted on spend (ALLOW-03, Phase 42 D-06): a JSON object\ntagged by `reason` -- `\"allowance_exhausted\"` with the halted ceiling's own `scope`,\n`kind`, `balance`, `ceiling`, `window_start` and `window_end` (identical to the `details`\nof the Phase 41 `429 allowance_exhausted`), or `\"ledger_unavailable\"` with no other key\nwhen the ledger could not be read and the run halted fail-closed. `null` for every run\nthat did not halt on spend. A halt is a resume point, not a failure: `error` stays\n`null` beside it. Built only by `HaltReason::wire_json`; never carries another scope's\nfigures, a tenant id or an API key name or value. Always serialised, mirroring `cost`."
+            "description": "Why this run halted, when it halted on spend (ALLOW-03, Phase 42 D-06): a JSON object\ntagged by `reason` -- `\"allowance_exhausted\"` with the halted ceiling's own `scope`,\n`kind`, `balance`, `ceiling`, `window_start` and `window_end` (identical to the `details`\nof the Phase 41 `429 allowance_exhausted`), or `\"ledger_unavailable\"` with no other key\nwhen the ledger could not be read and the run halted fail-closed, or `\"model_unpriced\"`\nwith a `model` key naming the model, when the run's model had no `treasurer.pricing` row\nat dispatch and the LLM was not called. `null` for every run\nthat did not halt on spend. A halt is a resume point, not a failure: `error` stays\n`null` beside it. Built only by `HaltReason::wire_json`; never carries another scope's\nfigures, a tenant id or an API key name or value. Always serialised, mirroring `cost`."
           },
           "pending_responses": {
             "type": "integer",

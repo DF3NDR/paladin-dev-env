@@ -6,7 +6,7 @@ and delivers the result. This guide covers the **ingestion adapters**, the **pro
 use cases**, the **content → agent bridge**, and **delivery** — documenting only what is wired
 into the compiled crate today.
 
-> Every code example targets the current **v0.10.0** workspace. The substantive examples are real,
+> Every code example targets the current workspace release. The substantive examples are real,
 > compiled code pulled from the `paladin-doc-examples` crate via mdBook `{{#include}}` (a few
 > illustrative fragments are `rust,ignore`). The API forms are verified against
 > `crates/paladin-content/src/`.
@@ -158,8 +158,8 @@ bridge — see the [bridge recipes](agent-orchestrator-bridge.md#use-case-recipe
 
 ## Capabilities and Limitations
 
-The crate's manifest declares some features whose adapters are **not yet implemented** in
-v0.10.0. To keep this guide honest:
+The crate's manifest declares some features whose adapters are **not yet implemented**.
+To keep this guide honest:
 
 | Capability | Status |
 |------------|--------|
@@ -172,11 +172,11 @@ v0.10.0. To keep this guide honest:
 | Content delivery (`DeliverContentUseCase`) | ✅ Implemented |
 | **Web scraping** (`web-scraping` feature) | ⚠️ Feature/dep declared, **no adapter yet** |
 | **RSS/Atom feeds** (`rss` feature) | ⚠️ Feature/dep declared, **no adapter yet** |
-| **Filtering & deduplication** (`content_filtering_service`) | ⚠️ Module present but **disabled** (not compiled) |
+| **Filtering & deduplication** | ⚠️ **Not implemented**: no filtering module exists |
 
 For web-scraping and RSS today, fetch the raw resource with `HttpContentFetcher` and parse it in
-your own adapter. Filtering/dedup must likewise be done in caller code until the
-`content_filtering_service` module is completed and re-enabled.
+your own adapter. Filtering/dedup must likewise be done in caller code; the framework ships no
+filtering service.
 
 ---
 

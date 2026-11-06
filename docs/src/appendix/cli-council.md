@@ -452,7 +452,7 @@ paladin council --verbose --topic "..."
 paladin council --participants 2 --topic "Hello, how are you?"
 
 # Check provider configuration
-paladin setup-check
+paladin-cli setup-check
 ```
 
 ## Advanced Usage

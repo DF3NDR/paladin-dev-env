@@ -17,7 +17,8 @@
 //! `redis_password` never appears in a `Debug` rendering (T-25-18): this
 //! struct implements `Debug` by hand rather than deriving it, because no
 //! sibling config in this codebase has an existing redaction convention to
-//! follow for a raw secret field.
+//! follow for a raw secret field. It is also never written by `Serialize`
+//! (R-95), so a dump or re-write of this config cannot carry it.
 
 use serde::{Deserialize, Serialize};
 
@@ -35,7 +36,8 @@ pub enum NodeCacheBackend {
 
 /// Configuration for the per-node result cache backend (Doc 04 FT-FR-18…20,
 /// D-29, X-09). See the module-level documentation for the disabled-by-
-/// default contract and why `redis_password` is never `Debug`-printed.
+/// default contract and why `redis_password` is never `Debug`-printed. The
+/// password is also omitted by `Serialize` (R-95) and still loads when present.
 ///
 /// # Examples
 ///
@@ -60,7 +62,10 @@ pub struct NodeCacheConfig {
     /// The Redis server port.
     pub redis_port: u16,
     /// The Redis server password, if authentication is required. Never
-    /// rendered by this struct's `Debug` implementation.
+    /// rendered by this struct's `Debug` implementation and never written by
+    /// `Serialize` (R-95: `skip_serializing`, no serde default, so it is
+    /// still optional when a value is loaded).
+    #[serde(skip_serializing)]
     pub redis_password: Option<String>,
     /// The Redis logical database index.
     pub redis_db: u8,
@@ -276,5 +281,49 @@ mod tests {
         let rendered = format!("{config:?}");
         assert!(!rendered.contains("super-secret-value"));
         assert!(rendered.contains("REDACTED"));
+    }
+
+    /// R-95 (58-06 register, 56-REVIEW WR-09 class): serialising a
+    /// `NodeCacheConfig` must not write the Redis password.
+    #[test]
+    fn node_cache_config_serialisation_omits_the_redis_password() {
+        let sentinel = "test-key-not-a-secret-r95-node-cache-password";
+        let config = NodeCacheConfig {
+            redis_password: Some(sentinel.to_string()),
+            ..NodeCacheConfig::default()
+        };
+        assert_eq!(config.redis_password.as_deref(), Some(sentinel));
+        let value = serde_json::to_value(&config).expect("NodeCacheConfig serialises");
+        let object = value.as_object().expect("serialises as an object");
+        assert!(
+            !object.contains_key("redis_password"),
+            "NodeCacheConfig serialised `redis_password`"
+        );
+        assert!(
+            !value.to_string().contains(sentinel),
+            "NodeCacheConfig serialisation carries the password value"
+        );
+        // Non-vacuous: the neighbouring fields are still written.
+        assert_eq!(object["redis_host"], "localhost");
+        assert_eq!(object["key_prefix"], "paladin:node_cache");
+    }
+
+    /// R-95 load pin: a JSON value carrying `redis_password` still loads it.
+    #[test]
+    fn node_cache_config_still_loads_a_redis_password() {
+        let sentinel = "test-key-not-a-secret-r95-node-cache-loaded";
+        let value = serde_json::json!({
+            "enabled": true,
+            "backend": "redis",
+            "redis_host": "cache.example.internal",
+            "redis_port": 6379,
+            "redis_password": sentinel,
+            "redis_db": 1,
+            "key_prefix": "paladin:node_cache",
+        });
+        let config: NodeCacheConfig =
+            serde_json::from_value(value).expect("a value with a password loads");
+        assert_eq!(config.redis_password.as_deref(), Some(sentinel));
+        assert_eq!(config.redis_host, "cache.example.internal");
     }
 }

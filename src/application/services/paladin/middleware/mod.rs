@@ -15,7 +15,7 @@
 //!
 //! # Two layers, not one (D-05)
 //!
-//! | | [`crate::engine::hooks::NodeInterceptor`] (`paladin-battalion`) | [`ExecutionMiddleware`] (here) |
+//! | | [`crate::engine::hooks::NodeInterceptor`](paladin_battalion::engine::hooks::NodeInterceptor) (`paladin-battalion`) | [`ExecutionMiddleware`] (here) |
 //! |---|---|---|
 //! | Scope | The whole node, once per Aegis attempt | One model call, or one tool call |
 //! | Frequency | Once per node execution attempt | Once per reasoning-loop iteration / once per tool dispatch |

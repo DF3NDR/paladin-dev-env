@@ -45,7 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let paladin = PaladinBuilder::new(llm_port.clone() as Arc<dyn LlmPort>)
         .system_prompt("You are a helpful AI assistant")
         .name("BasicAssistant")
-        .model("gpt-4")
+        .model("gpt-4o-mini")
         .temperature(0.7)
         .max_loops(1) // Single iteration for simplicity
         .build()

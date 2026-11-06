@@ -1,6 +1,6 @@
 //! Pricing decorator — `PricingLlmAdapter` (D-08, D-09; ADR-0052)
 //!
-//! [`PricingLlmAdapter`] is a stateless `Arc<dyn LlmPort>` decorator apart from its immutable
+//! [`PricingLlmAdapter`](crate::pricing::PricingLlmAdapter) is a stateless `Arc<dyn LlmPort>` decorator apart from its immutable
 //! `Arc<PriceTable>` and one process-wide warn-once set — the sibling shape to
 //! [`crate::fallback::FallbackLlmAdapter`]. Per ADR-0052, cost is metered at the `LlmPort`
 //! boundary on both run paths, so this decorator composes OUTSIDE any `FallbackLlmAdapter`
@@ -9,7 +9,7 @@
 //! fallback hop, or a mixed-model graph.
 //!
 //! A streaming call is priced from the terminal chunk's usage only (Phase 31 contract) against
-//! the REQUEST's model string, since [`StreamingResponse`] carries no model of its own.
+//! the REQUEST's model string, since [`StreamingResponse`](paladin_ports::output::llm_port::StreamingResponse) carries no model of its own.
 //!
 //! ## No cross-call state (D-09)
 //!
@@ -17,7 +17,7 @@
 //! (`validate_model`, `get_available_models`, `get_provider_name`, `get_capabilities`)
 //! unchanged. `generate` prices `response.model` -- the model that actually SERVED the call,
 //! which may differ from the requested model after a `FallbackLlmAdapter` hop (D-05); a
-//! stream prices the REQUEST's model, since [`StreamingResponse`] carries no served-model
+//! stream prices the REQUEST's model, since [`StreamingResponse`](paladin_ports::output::llm_port::StreamingResponse) carries no served-model
 //! string of its own. Both paths share one `price_or_warn` so the pricing/warn-once rule
 //! cannot diverge between them.
 //!

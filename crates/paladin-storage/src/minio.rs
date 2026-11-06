@@ -23,13 +23,42 @@ use paladin_ports::output::file_storage_port::{
 };
 use paladin_ports::output::log_port::LogPort;
 
+/// A secret as `Debug` prints it: `<redacted>`, or `""` when empty.
+///
+/// A module-private copy of the three-line rule in `paladin_llm::redaction::RedactedKey` (and
+/// paladin-ai's `config::redaction::RedactedSecret`), both `pub(crate)` there. Neither is
+/// reachable from this crate, and a shared helper here would need a `lib.rs` change, so this
+/// file carries its own (the paladin-notifications DF-07 precedent; R-95).
+struct RedactedSecret<'a>(&'a str);
+
+impl std::fmt::Debug for RedactedSecret<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0.is_empty() {
+            f.write_str("\"\"")
+        } else {
+            f.write_str("<redacted>")
+        }
+    }
+}
+
 /// Configuration for an S3-compatible store connection using rust-s3 (RustFS in
 /// dev/test/CI; MinIO, AWS S3, DigitalOcean Spaces or any SigV4 S3 endpoint in production).
+///
+/// `Debug` is implemented by hand: it prints `access_key` and `secret_key` as `<redacted>`
+/// when set (the derived `Debug` printed them), and `Serialize` omits both keys altogether.
+/// Loading is unchanged: neither key has a serde default, so a value missing either one still
+/// fails to load (R-95).
 #[doc(hidden)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct MinioConfig {
     pub endpoint: String,
+    /// Never written by `Serialize` (`skip_serializing`, no serde default) and printed as
+    /// `<redacted>` by `Debug`.
+    #[serde(skip_serializing)]
     pub access_key: String,
+    /// Never written by `Serialize` (`skip_serializing`, no serde default) and printed as
+    /// `<redacted>` by `Debug`.
+    #[serde(skip_serializing)]
     pub secret_key: String,
     pub bucket: String,
     pub region: Option<String>,
@@ -39,6 +68,24 @@ pub struct MinioConfig {
     pub request_timeout: Duration,
     pub max_retries: u32,
     pub max_idle_conns: u32,
+}
+
+impl std::fmt::Debug for MinioConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MinioConfig")
+            .field("endpoint", &self.endpoint)
+            .field("access_key", &RedactedSecret(&self.access_key))
+            .field("secret_key", &RedactedSecret(&self.secret_key))
+            .field("bucket", &self.bucket)
+            .field("region", &self.region)
+            .field("secure", &self.secure)
+            .field("path_style", &self.path_style)
+            .field("connection_timeout", &self.connection_timeout)
+            .field("request_timeout", &self.request_timeout)
+            .field("max_retries", &self.max_retries)
+            .field("max_idle_conns", &self.max_idle_conns)
+            .finish()
+    }
 }
 
 impl Default for MinioConfig {
@@ -111,6 +158,56 @@ fn s3_error_code(body: &str) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+/// Render an [`S3Error`] as bounded text that is safe to embed in a [`FileStorageError`], a log
+/// line or a health report (45-REVIEW WR-02).
+///
+/// A non-2xx S3 response reaches callers as `HttpFailWithBody(status, body)`, and the body can
+/// echo the access-key id, the string-to-sign and other request detail; `Display` would embed
+/// all of it. Only the numeric status and the short `<Code>` value (via [`s3_error_code`], which
+/// is bounded to 64 characters) are reported. Every other variant maps to a fixed label that
+/// carries none of the variant's payload text, so it can never leak a secret or a signed URL.
+fn s3_err_summary(e: &S3Error) -> String {
+    match e {
+        S3Error::HttpFailWithBody(status, body) => {
+            format!("HTTP {status} {}", s3_error_code(body))
+        }
+        S3Error::HttpFail => "S3 request failed (non-2xx response)".to_string(),
+        S3Error::MaxExpiry(_) => "presigned URL expiry exceeds the S3 maximum".to_string(),
+        S3Error::Credentials(_)
+        | S3Error::WLCredentials
+        | S3Error::RLCredentials
+        | S3Error::CredentialsReadLock
+        | S3Error::CredentialsWriteLock => "S3 credentials unavailable".to_string(),
+        S3Error::Io(_) => "S3 request failed (io)".to_string(),
+        _ => "S3 request failed".to_string(),
+    }
+}
+
+/// The arguments `list_files` sends to the S3 list-objects call, derived from the caller's
+/// [`ListOptions`] by one pure function so the mapping is testable without a store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ListPageRequest {
+    prefix: String,
+    delimiter: Option<String>,
+    continuation_token: Option<String>,
+    max_keys: Option<usize>,
+}
+
+/// Map [`ListOptions`] to the S3 list request.
+///
+/// `ListOptions::limit` is the page size (`max-keys`). It must never be sent as the S3
+/// `delimiter`: the store would treat the limit's digits as a path separator and roll every
+/// key containing them into `CommonPrefixes`, silently dropping those objects (45-REVIEW CR-01).
+/// No delimiter is ever sent, so the listing is flat and complete.
+fn list_page_request(options: &ListOptions) -> ListPageRequest {
+    ListPageRequest {
+        prefix: options.prefix.clone().unwrap_or_default(),
+        delimiter: None,
+        continuation_token: options.continuation_token.clone(),
+        max_keys: options.limit,
+    }
+}
+
 /// Adapter for an S3-compatible store using the rust-s3 crate (RustFS in dev/test/CI;
 /// MinIO, AWS S3, DigitalOcean Spaces or any SigV4 S3 endpoint in production).
 #[doc(hidden)]
@@ -160,7 +257,10 @@ impl MinioAdapter {
         // Create bucket instance
         let bucket = Bucket::new(&config.bucket, region, credentials)
             .map_err(|e| {
-                FileStorageError::ConfigurationError(format!("Failed to create bucket: {}", e))
+                FileStorageError::ConfigurationError(format!(
+                    "Failed to create bucket: {}",
+                    s3_err_summary(&e)
+                ))
             })?
             .with_path_style();
 
@@ -202,7 +302,7 @@ impl MinioAdapter {
             }
             Ok(Err(e)) => Err(FileStorageError::ConnectionError(format!(
                 "Failed to check bucket: {}",
-                e
+                s3_err_summary(&e)
             ))),
             Err(_) => Err(FileStorageError::Timeout),
         }
@@ -245,7 +345,7 @@ impl MinioAdapter {
                 } else {
                     Err(FileStorageError::ConnectionError(format!(
                         "Failed to create bucket: {}",
-                        e
+                        s3_err_summary(&e)
                     )))
                 }
             }
@@ -357,13 +457,23 @@ impl MinioAdapter {
         headers
     }
 
+    /// Apply the caller's filters to listed objects and append the survivors as `FileItem`s.
+    fn collect_listed(&self, objects: Vec<Object>, options: &ListOptions, out: &mut Vec<FileItem>) {
+        for object in objects {
+            let path = PathBuf::from(&object.key);
+            if self.should_include_file(&object, &path, options) {
+                out.push(self.s3_object_to_file_item(&object, path));
+            }
+        }
+    }
+
     /// Execute operation with timeout and retries
     async fn execute_with_retry<F, T, Fut>(&self, operation: F) -> FileStorageResult<T>
     where
         F: Fn() -> Fut,
         Fut: std::future::Future<Output = Result<T, S3Error>>,
     {
-        let mut last_error = None;
+        let mut last_error: Option<S3Error> = None;
 
         for attempt in 0..=self.config.max_retries {
             match timeout(self.config.request_timeout, operation()).await {
@@ -385,7 +495,7 @@ impl MinioAdapter {
             "Operation failed after {} retries: {}",
             self.config.max_retries,
             last_error
-                .map(|e| e.to_string())
+                .map(|e| s3_err_summary(&e))
                 .unwrap_or_else(|| "Unknown error".to_string())
         )))
     }
@@ -499,7 +609,7 @@ impl FileStoragePort for MinioAdapter {
             Ok(Err(S3Error::HttpFail)) | Ok(Err(S3Error::HttpFailWithBody(404, _))) => Ok(false),
             Ok(Err(e)) => Err(FileStorageError::IoError(format!(
                 "Failed to check file existence: {}",
-                e
+                s3_err_summary(&e)
             ))),
             Err(_) => Err(FileStorageError::Timeout),
         }
@@ -544,38 +654,54 @@ impl FileStoragePort for MinioAdapter {
         Ok(file_item)
     }
 
+    /// List files, honouring `limit` as the page size and `continuation_token` as the resume
+    /// point.
+    ///
+    /// With a `limit` or a `continuation_token` this issues exactly one S3 list-objects page and
+    /// reports `has_more` / `continuation_token` from that page's truncation state, so a caller
+    /// can follow the token to the rest. Without either it lists every page. The prefix, size and
+    /// extension filters run after the fetch, so a filtered page may hold fewer than `limit`
+    /// items while `has_more` is still `true`; callers keep following the token until it is
+    /// `None`.
     async fn list_files(&self, options: Option<ListOptions>) -> FileStorageResult<FileListResult> {
         let options = options.unwrap_or_default();
-
-        let prefix = options.prefix.clone().unwrap_or_default();
-        let max_keys = options.limit.map(|l| l.to_string());
-
-        let results = self
-            .execute_with_retry(|| self.bucket.list(prefix.clone(), max_keys.clone()))
-            .await
-            .map_err(|e| FileStorageError::IoError(format!("Failed to list files: {}", e)))?;
+        let req = list_page_request(&options);
+        let paged = req.max_keys.is_some() || req.continuation_token.is_some();
 
         let mut files = Vec::new();
+        let mut has_more = false;
+        let mut continuation_token = None;
 
-        // Process all list results
-        for list_result in results {
-            for object in list_result.contents {
-                let path = PathBuf::from(&object.key);
+        if paged {
+            let (page, _status) = self
+                .execute_with_retry(|| {
+                    self.bucket.list_page(
+                        req.prefix.clone(),
+                        req.delimiter.clone(),
+                        req.continuation_token.clone(),
+                        None,
+                        req.max_keys,
+                    )
+                })
+                .await
+                .map_err(|e| FileStorageError::IoError(format!("Failed to list files: {}", e)))?;
 
-                // Apply filters
-                if self.should_include_file(&object, &path, &options) {
-                    let file_item = self.s3_object_to_file_item(&object, path);
-                    files.push(file_item);
-                }
+            has_more = page.is_truncated;
+            continuation_token = page.next_continuation_token;
+            self.collect_listed(page.contents, &options, &mut files);
+        } else {
+            let results = self
+                .execute_with_retry(|| self.bucket.list(req.prefix.clone(), req.delimiter.clone()))
+                .await
+                .map_err(|e| FileStorageError::IoError(format!("Failed to list files: {}", e)))?;
+
+            for list_result in results {
+                self.collect_listed(list_result.contents, &options, &mut files);
             }
         }
 
         // Sort files by modification date (newest first)
         files.sort_by_key(|b| std::cmp::Reverse(b.modified_at));
-
-        // For simplicity, we'll assume no more results for now
-        let has_more = false;
-        let continuation_token = None;
 
         Ok(FileListResult {
             files,
@@ -674,7 +800,8 @@ impl FileStoragePort for MinioAdapter {
         // Try to list objects as a simple health check
         match timeout(
             self.config.connection_timeout,
-            self.bucket.list("".to_string(), Some("1".to_string())),
+            self.bucket
+                .list_page(String::new(), None, None, None, Some(1)),
         )
         .await
         {
@@ -692,7 +819,7 @@ impl FileStoragePort for MinioAdapter {
                 })
             }
             Ok(Err(e)) => {
-                let error_msg = format!("MinIO health check failed: {}", e);
+                let error_msg = format!("MinIO health check failed: {}", s3_err_summary(&e));
                 self.log_operation(LogLevel::Error, error_msg.clone()).await;
 
                 Ok(StorageHealth {
@@ -922,7 +1049,10 @@ impl AdvancedFileStoragePort for MinioAdapter {
             .presign_put(&object_name, expires_in_secs, None, None)
             .await
             .map_err(|e| {
-                FileStorageError::IoError(format!("Failed to generate upload URL: {}", e))
+                FileStorageError::IoError(format!(
+                    "Failed to generate upload URL: {}",
+                    s3_err_summary(&e)
+                ))
             })?;
 
         Ok(url)
@@ -943,7 +1073,10 @@ impl AdvancedFileStoragePort for MinioAdapter {
             .presign_get(&object_name, expires_in_secs, None)
             .await
             .map_err(|e| {
-                FileStorageError::IoError(format!("Failed to generate download URL: {}", e))
+                FileStorageError::IoError(format!(
+                    "Failed to generate download URL: {}",
+                    s3_err_summary(&e)
+                ))
             })?;
 
         Ok(url)
@@ -967,7 +1100,10 @@ impl AdvancedFileStoragePort for MinioAdapter {
             .initiate_multipart_upload(&object_name, "application/octet-stream")
             .await
             .map_err(|e| {
-                FileStorageError::IoError(format!("Failed to initiate multipart upload: {}", e))
+                FileStorageError::IoError(format!(
+                    "Failed to initiate multipart upload: {}",
+                    s3_err_summary(&e)
+                ))
             })?;
 
         Ok(encode_multipart_token(&object_name, &response.upload_id))
@@ -975,9 +1111,14 @@ impl AdvancedFileStoragePort for MinioAdapter {
 
     /// Upload one part and return the part's ETag (raw, opaque to the port).
     ///
-    /// Every non-final part must be at least 5 MiB on S3 and RustFS. `rust-s3` aborts
-    /// the whole upload itself when a part is rejected, so a later abort of that token
-    /// reports the upload as already gone.
+    /// Every non-final part must be at least 5 MiB on S3 and RustFS.
+    ///
+    /// A rejected part returns an error and **leaves the multipart upload open**: this crate
+    /// builds `rust-s3` with its default `fail-on-err` feature, which turns a non-2xx response
+    /// into an error before `rust-s3`'s own abort-on-rejected-part branch can run. The caller
+    /// must call [`FileStoragePort::abort_multipart_upload`] to discard the parts already
+    /// stored, or the store keeps (and bills for) them. Only the bounded S3 status and code
+    /// are reported in the error, never the response body (45-REVIEW WR-01, WR-02).
     async fn upload_part(
         &self,
         upload_id: &str,
@@ -996,7 +1137,9 @@ impl AdvancedFileStoragePort for MinioAdapter {
                 "application/octet-stream",
             )
             .await
-            .map_err(|e| FileStorageError::IoError(format!("Failed to upload part: {}", e)))?;
+            .map_err(|e| {
+                FileStorageError::IoError(format!("Failed to upload part: {}", s3_err_summary(&e)))
+            })?;
 
         Ok(part.etag)
     }
@@ -1004,9 +1147,9 @@ impl AdvancedFileStoragePort for MinioAdapter {
     /// Complete a multipart upload from its `(part number, ETag)` pairs.
     ///
     /// S3 can answer `200` with an `<Error>` body on completion, so both the status and
-    /// the body are checked; only the bounded S3 error code is reported, never the body.
-    /// `rust-s3` aborts the upload itself when a part fails, so completing after a
-    /// failed part reports the upload as gone.
+    /// the body are checked; only the bounded S3 status and error code are reported, never the
+    /// body. A failed completion, like a rejected part, leaves the multipart upload open: the
+    /// caller must call [`FileStoragePort::abort_multipart_upload`] to discard it (45-REVIEW WR-01).
     async fn complete_multipart_upload(
         &self,
         upload_id: &str,
@@ -1024,10 +1167,16 @@ impl AdvancedFileStoragePort for MinioAdapter {
             .complete_multipart_upload(&key, id, parts)
             .await
             .map_err(|e| {
-                FileStorageError::IoError(format!("Failed to complete multipart upload: {}", e))
+                FileStorageError::IoError(format!(
+                    "Failed to complete multipart upload: {}",
+                    s3_err_summary(&e)
+                ))
             })?;
 
         let body = response.as_str().unwrap_or_default();
+        // `fail-on-err` (a `rust-s3` default feature this crate leaves on) already turns a
+        // non-2xx response into an `Err` above, so the status test is defensive. The `<Error>`
+        // body test is live: S3 can answer `200` with an error document on completion.
         if response.status_code() >= 300 || body.contains("<Error>") {
             return Err(FileStorageError::IoError(format!(
                 "Failed to complete multipart upload: {}",
@@ -1041,8 +1190,9 @@ impl AdvancedFileStoragePort for MinioAdapter {
     /// Abort a multipart upload, discarding every uploaded part.
     ///
     /// A `404 NoSuchUpload` (already aborted or completed) is
-    /// [`FileStorageError::FileNotFound`]; `rust-s3` aborts an upload itself when a
-    /// part fails, so aborting after such a failure reports the same.
+    /// [`FileStorageError::FileNotFound`]. Nothing aborts an upload on the caller's behalf, not
+    /// even after a rejected part, so this is the call that releases a failed upload's parts;
+    /// it reports `FileNotFound` only when the upload no longer exists (45-REVIEW WR-01).
     async fn abort_multipart_upload(&self, upload_id: &str) -> FileStorageResult<()> {
         let (key, id) = decode_multipart_token(upload_id)?;
 
@@ -1055,7 +1205,7 @@ impl AdvancedFileStoragePort for MinioAdapter {
             }
             Err(e) => Err(FileStorageError::IoError(format!(
                 "Failed to abort multipart upload: {}",
-                e
+                s3_err_summary(&e)
             ))),
         }
     }
@@ -1158,6 +1308,94 @@ impl MinioAdapter {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn retry_exhaustion_text_never_echoes_the_response_body() {
+        let credentials = Credentials::new(Some("ak"), Some("sk"), None, None, None).unwrap();
+        let region = Region::Custom {
+            region: "us-east-1".to_string(),
+            endpoint: "http://127.0.0.1:1".to_string(),
+        };
+        let adapter = MinioAdapter {
+            bucket: Bucket::new("b", region, credentials)
+                .unwrap()
+                .with_path_style(),
+            config: MinioConfig {
+                max_retries: 0,
+                ..MinioConfig::default()
+            },
+            log_port: None,
+        };
+
+        let err = adapter
+            .execute_with_retry(|| async {
+                Err::<(), _>(S3Error::HttpFailWithBody(
+                    403,
+                    "<Error><Code>AccessDenied</Code><AWSAccessKeyId>AKIAEXAMPLE0000000000\
+                     </AWSAccessKeyId></Error>"
+                        .to_string(),
+                ))
+            })
+            .await
+            .unwrap_err();
+        let text = err.to_string();
+        assert!(text.contains("HTTP 403 AccessDenied"), "got {text}");
+        assert!(!text.contains("AKIA"), "got {text}");
+    }
+
+    #[test]
+    fn s3_err_summary_never_echoes_the_response_body() {
+        let body = "<Error><Code>SignatureDoesNotMatch</Code>\
+            <AWSAccessKeyId>AKIAEXAMPLE0000000000</AWSAccessKeyId>\
+            <StringToSign>secret-request-detail</StringToSign></Error>";
+        let summary = s3_err_summary(&S3Error::HttpFailWithBody(403, body.to_string()));
+        assert_eq!(summary, "HTTP 403 SignatureDoesNotMatch");
+        assert!(!summary.contains("AKIA"));
+        assert!(!summary.contains("secret-request-detail"));
+
+        // A body with no <Code> reports the status and the fixed fallback code.
+        let summary = s3_err_summary(&S3Error::HttpFailWithBody(
+            500,
+            "internal detail AKIAEXAMPLE0000000000".to_string(),
+        ));
+        assert_eq!(summary, format!("HTTP 500 {}", s3_error_code("")));
+        assert!(!summary.contains("AKIA"));
+        assert!(!summary.contains("internal detail"));
+
+        // A non-HTTP variant yields a fixed string carrying none of its payload text.
+        let summary = s3_err_summary(&S3Error::Credentials(
+            s3::creds::error::CredentialsError::ConfigMissingAccessKeyId,
+        ));
+        assert!(!summary.is_empty());
+        assert!(!summary.to_lowercase().contains("accesskeyid"));
+        let summary = s3_err_summary(&S3Error::Io(std::io::Error::other(
+            "secret-io-detail AKIAEXAMPLE0000000000",
+        )));
+        assert!(!summary.contains("secret-io-detail"));
+        assert!(!summary.contains("AKIA"));
+        assert!(!s3_err_summary(&S3Error::HttpFail).is_empty());
+        assert!(!s3_err_summary(&S3Error::MaxExpiry(999_999)).contains("999999"));
+    }
+
+    #[test]
+    fn list_request_sends_the_limit_as_max_keys_never_as_a_delimiter() {
+        let options = ListOptions {
+            prefix: Some("p/".to_string()),
+            limit: Some(5),
+            continuation_token: Some("tok".to_string()),
+            ..Default::default()
+        };
+        let req = list_page_request(&options);
+        assert_eq!(req.delimiter, None, "the limit must never be a delimiter");
+        assert_eq!(req.max_keys, Some(5));
+        assert_eq!(req.continuation_token, Some("tok".to_string()));
+        assert_eq!(req.prefix, "p/");
+
+        let req = list_page_request(&ListOptions::default());
+        assert_eq!(req.delimiter, None);
+        assert_eq!(req.max_keys, None);
+        assert_eq!(req.continuation_token, None);
+    }
+
     #[test]
     fn test_minio_config_default() {
         let config = MinioConfig::default();
@@ -1225,16 +1463,181 @@ mod tests {
     fn test_minio_config_serialization() {
         let config = MinioConfig::default();
 
-        // Test that serialization works (actual values would require serde_json)
+        // Test that serialization works.
         let serialized = serde_json::to_string(&config).expect("Should serialize");
         assert!(serialized.contains("localhost:9000"));
         assert!(serialized.contains("paladin-files"));
 
+        // R-95: `Serialize` omits both keys, so the round trip supplies them itself (this
+        // asserts nothing about whether the keys are present in the serialised text, which is
+        // what keeps it passing before and after the fix).
+        let mut value: serde_json::Value =
+            serde_json::from_str(&serialized).expect("Should parse as JSON");
+        let object = value.as_object_mut().expect("serialises as an object");
+        object.insert(
+            "access_key".to_string(),
+            serde_json::json!("test-key-not-a-secret-r95-minio-round-trip-access"),
+        );
+        object.insert(
+            "secret_key".to_string(),
+            serde_json::json!("test-key-not-a-secret-r95-minio-round-trip-secret"),
+        );
+
         // Test deserialization
-        let deserialized: MinioConfig =
-            serde_json::from_str(&serialized).expect("Should deserialize");
+        let deserialized: MinioConfig = serde_json::from_value(value).expect("Should deserialize");
         assert_eq!(deserialized.endpoint, config.endpoint);
         assert_eq!(deserialized.bucket, config.bucket);
+        assert_eq!(
+            deserialized.access_key,
+            "test-key-not-a-secret-r95-minio-round-trip-access"
+        );
+        assert_eq!(
+            deserialized.secret_key,
+            "test-key-not-a-secret-r95-minio-round-trip-secret"
+        );
+    }
+
+    /// R-95 (58-06 register, 56-REVIEW WR-09 class): serialising a `MinioConfig` must
+    /// write neither key.
+    #[test]
+    fn minio_config_serialisation_omits_both_keys() {
+        let access = "test-key-not-a-secret-r95-minio-access-key";
+        let secret = "test-key-not-a-secret-r95-minio-secret-key";
+        let config = MinioConfig {
+            access_key: access.to_string(),
+            secret_key: secret.to_string(),
+            ..MinioConfig::default()
+        };
+        assert_eq!(config.access_key, access);
+        assert_eq!(config.secret_key, secret);
+        let value = serde_json::to_value(&config).expect("MinioConfig serialises");
+        let object = value.as_object().expect("serialises as an object");
+        for key in ["access_key", "secret_key"] {
+            assert!(!object.contains_key(key), "MinioConfig serialised `{key}`");
+        }
+        let text = value.to_string();
+        assert!(
+            !text.contains(access),
+            "serialisation carries the access key"
+        );
+        assert!(
+            !text.contains(secret),
+            "serialisation carries the secret key"
+        );
+        // Non-vacuous: the neighbouring fields are still written.
+        assert_eq!(object["endpoint"], "localhost:9000");
+        assert_eq!(object["bucket"], "paladin-files");
+    }
+
+    /// R-95 (DF-07 class): a `Debug` rendering must carry neither key.
+    #[test]
+    fn minio_config_debug_redacts_both_keys() {
+        let access = "test-key-not-a-secret-r95-minio-access-key";
+        let secret = "test-key-not-a-secret-r95-minio-secret-key";
+        let config = MinioConfig {
+            endpoint: "files.example.internal:9000".to_string(),
+            access_key: access.to_string(),
+            secret_key: secret.to_string(),
+            ..MinioConfig::default()
+        };
+        assert_eq!(config.access_key, access);
+        assert_eq!(config.secret_key, secret);
+        let rendered = format!("{config:?}");
+        assert!(!rendered.contains(access), "access key leaked: {rendered}");
+        assert!(!rendered.contains(secret), "secret key leaked: {rendered}");
+        assert!(
+            rendered.contains("<redacted>"),
+            "marker missing: {rendered}"
+        );
+        assert!(rendered.contains("files.example.internal:9000"));
+        assert!(rendered.contains("paladin-files"));
+
+        // An empty key shows the empty-string form, not the marker.
+        let empty = MinioConfig {
+            access_key: String::new(),
+            secret_key: String::new(),
+            ..MinioConfig::default()
+        };
+        let rendered = format!("{empty:?}");
+        assert!(rendered.contains("access_key: \"\""), "{rendered}");
+        assert!(rendered.contains("secret_key: \"\""), "{rendered}");
+        assert!(!rendered.contains("<redacted>"), "{rendered}");
+    }
+
+    /// R-95 drift guard: the pretty `Debug` of a default value names every serialised
+    /// field plus both key names, so a later field cannot be dropped from the
+    /// hand-written `Debug`.
+    #[test]
+    fn minio_config_debug_names_every_field() {
+        let rendered = format!("{:#?}", MinioConfig::default());
+        let value = serde_json::to_value(MinioConfig::default()).expect("serialises");
+        let object = value.as_object().expect("serialises as an object");
+        for key in object
+            .keys()
+            .map(String::as_str)
+            .chain(["access_key", "secret_key"])
+        {
+            assert!(
+                rendered.contains(&format!("{key}:")),
+                "Debug output does not name `{key}`: {rendered}"
+            );
+        }
+    }
+
+    /// R-95 load pin: both keys stay required on load (no serde default), so a value
+    /// missing either one fails naming it, and a value with both loads.
+    #[test]
+    fn minio_config_requires_both_keys_on_load() {
+        let mut base = serde_json::to_value(MinioConfig::default()).expect("serialises");
+        let object = base.as_object_mut().expect("serialises as an object");
+        object.remove("access_key");
+        object.remove("secret_key");
+
+        let mut only_secret = base.clone();
+        only_secret.as_object_mut().expect("object").insert(
+            "secret_key".to_string(),
+            serde_json::json!("test-key-not-a-secret-r95-minio-load-secret"),
+        );
+        let err = serde_json::from_value::<MinioConfig>(only_secret)
+            .expect_err("a value without access_key must not load")
+            .to_string();
+        assert!(
+            err.contains("missing field") && err.contains("access_key"),
+            "{err}"
+        );
+
+        let mut only_access = base.clone();
+        only_access.as_object_mut().expect("object").insert(
+            "access_key".to_string(),
+            serde_json::json!("test-key-not-a-secret-r95-minio-load-access"),
+        );
+        let err = serde_json::from_value::<MinioConfig>(only_access)
+            .expect_err("a value without secret_key must not load")
+            .to_string();
+        assert!(
+            err.contains("missing field") && err.contains("secret_key"),
+            "{err}"
+        );
+
+        let mut both = base;
+        let object = both.as_object_mut().expect("object");
+        object.insert(
+            "access_key".to_string(),
+            serde_json::json!("test-key-not-a-secret-r95-minio-load-access"),
+        );
+        object.insert(
+            "secret_key".to_string(),
+            serde_json::json!("test-key-not-a-secret-r95-minio-load-secret"),
+        );
+        let loaded: MinioConfig = serde_json::from_value(both).expect("both keys load");
+        assert_eq!(
+            loaded.access_key,
+            "test-key-not-a-secret-r95-minio-load-access"
+        );
+        assert_eq!(
+            loaded.secret_key,
+            "test-key-not-a-secret-r95-minio-load-secret"
+        );
     }
 
     #[test]

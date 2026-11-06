@@ -2,17 +2,15 @@
 //!
 //! Interactive wizard to guide new users through Paladin setup
 
+use super::provider_probe::{validate_anthropic_key, validate_deepseek_key, validate_openai_key};
 use crate::application::cli::error::{CliError, CliResult};
 use crate::application::cli::formatters::output::OutputFormatter;
 use crate::application::cli::formatters::progress::Spinner;
 use crate::application::cli::interactive::prompts::PromptBuilder;
 use crate::application::cli::interactive::wizard::{StepResult, Wizard, WizardContext, WizardStep};
 use crate::application::cli::templates::env::EnvTemplate;
-use reqwest::Client;
-use serde_json::json;
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::time::Duration;
+use std::path::{Path, PathBuf};
 
 // Constants for context keys
 const KEY_SELECTED_PROVIDERS: &str = "selected_providers";
@@ -59,95 +57,7 @@ impl Provider {
     }
 }
 
-// API Validation Functions
-
-/// Validate OpenAI API key by calling the models endpoint
-async fn validate_openai_key(api_key: &str) -> CliResult<()> {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|e| CliError::execution(format!("Failed to create HTTP client: {}", e)))?;
-
-    let response = client
-        .get("https://api.openai.com/v1/models")
-        .header("Authorization", format!("Bearer {}", api_key))
-        .send()
-        .await
-        .map_err(|e| CliError::execution(format!("API request failed: {}", e)))?;
-
-    if response.status().is_success() {
-        Ok(())
-    } else {
-        let status = response.status();
-        let error_text = response.text().await.unwrap_or_default();
-        Err(CliError::execution(format!(
-            "OpenAI API validation failed ({}): {}",
-            status, error_text
-        )))
-    }
-}
-
-/// Validate Anthropic API key by making a minimal request
-async fn validate_anthropic_key(api_key: &str) -> CliResult<()> {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|e| CliError::execution(format!("Failed to create HTTP client: {}", e)))?;
-
-    // Anthropic uses x-api-key header
-    let body = json!({
-        "model": "claude-3-haiku-20240307",
-        "max_tokens": 1,
-        "messages": [{"role": "user", "content": "test"}]
-    });
-
-    let response = client
-        .post("https://api.anthropic.com/v1/messages")
-        .header("x-api-key", api_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| CliError::execution(format!("API request failed: {}", e)))?;
-
-    if response.status().is_success() {
-        Ok(())
-    } else {
-        let status = response.status();
-        let error_text = response.text().await.unwrap_or_default();
-        Err(CliError::execution(format!(
-            "Anthropic API validation failed ({}): {}",
-            status, error_text
-        )))
-    }
-}
-
-/// Validate DeepSeek API key by calling the models endpoint
-async fn validate_deepseek_key(api_key: &str) -> CliResult<()> {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|e| CliError::execution(format!("Failed to create HTTP client: {}", e)))?;
-
-    let response = client
-        .get("https://api.deepseek.com/v1/models")
-        .header("Authorization", format!("Bearer {}", api_key))
-        .send()
-        .await
-        .map_err(|e| CliError::execution(format!("API request failed: {}", e)))?;
-
-    if response.status().is_success() {
-        Ok(())
-    } else {
-        let status = response.status();
-        let error_text = response.text().await.unwrap_or_default();
-        Err(CliError::execution(format!(
-            "DeepSeek API validation failed ({}): {}",
-            status, error_text
-        )))
-    }
-}
+// API key validation lives in the shared `provider_probe` module (DF-19).
 
 /// Generate sample configuration files
 fn generate_sample_configs(provider: &str) -> CliResult<()> {
@@ -604,7 +514,9 @@ impl WizardStep for SummaryStep {
     }
 }
 
-/// Write .env file with API keys
+/// Write .env file with API keys.
+///
+/// On unix the file is written at mode 0600 (see [`write_env_file_at`]).
 fn write_env_file(context: &WizardContext, merge: bool) -> CliResult<()> {
     let provider_names = context
         .get(KEY_SELECTED_PROVIDERS)
@@ -635,9 +547,40 @@ fn write_env_file(context: &WizardContext, merge: bool) -> CliResult<()> {
         .generate(&api_keys, existing_content.as_deref())
         .map_err(|e| CliError::configuration(format!("Template error: {}", e)))?;
 
-    std::fs::write(".env", content)?;
+    write_env_file_at(Path::new(".env"), &content)?;
 
     Ok(())
+}
+
+/// Write `content` to `path` as the whole `.env` file.
+///
+/// Separate from [`write_env_file`] so tests can target an explicit path instead of
+/// changing the working directory (tests run in parallel).
+///
+/// On unix the file is created with mode 0600 (it holds provider API keys), and an
+/// existing, wider file is narrowed to 0600 through the open handle before the first
+/// byte is written (WR-04). Other targets keep the plain whole-file write.
+#[cfg(unix)]
+fn write_env_file_at(path: &Path, content: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    // The create mode applies only to a new file; narrow an older, wider one before
+    // any key goes in.
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    file.write_all(content.as_bytes())
+}
+
+/// Write `content` to `path` as the whole `.env` file (plain write on non-unix targets).
+#[cfg(not(unix))]
+fn write_env_file_at(path: &Path, content: &str) -> std::io::Result<()> {
+    std::fs::write(path, content)
 }
 
 /// Run the onboarding wizard
@@ -764,5 +707,65 @@ mod tests {
         assert_eq!(EnvFileStep.name(), "Environment File");
         assert_eq!(SampleConfigsStep.name(), "Sample Configurations");
         assert_eq!(SummaryStep.name(), "Summary");
+    }
+
+    #[cfg(unix)]
+    fn mode_of(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path)
+            .expect("the .env file must exist")
+            .permissions()
+            .mode()
+            & 0o777
+    }
+
+    /// WR-04 (56-REVIEW): a new `.env` holds provider API keys and must be owner-only.
+    #[cfg(unix)]
+    #[test]
+    fn write_env_file_at_creates_a_new_file_at_mode_0600() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join(".env");
+
+        write_env_file_at(&path, "OPENAI_API_KEY=test-key-not-a-secret-wr04\n").unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "OPENAI_API_KEY=test-key-not-a-secret-wr04\n"
+        );
+        assert_eq!(mode_of(&path), 0o600, "a new .env must be created 0600");
+    }
+
+    /// WR-04 (56-REVIEW): an existing wider file is narrowed before any key is written.
+    #[cfg(unix)]
+    #[test]
+    fn write_env_file_at_narrows_an_existing_0644_file_to_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join(".env");
+        std::fs::write(&path, "OLD_VALUE_THAT_IS_LONGER_THAN_THE_NEW_TEXT=1\n").unwrap();
+        // Explicit chmod so the umask cannot hide the defect.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(mode_of(&path), 0o644);
+
+        write_env_file_at(&path, "NEW=2\n").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "NEW=2\n");
+        assert_eq!(mode_of(&path), 0o600, "an existing .env must end 0600");
+    }
+
+    /// WR-04 (56-REVIEW): an already-private file stays private.
+    #[cfg(unix)]
+    #[test]
+    fn write_env_file_at_keeps_an_existing_0600_file_at_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join(".env");
+        std::fs::write(&path, "OLD=1\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        write_env_file_at(&path, "NEW=2\n").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "NEW=2\n");
+        assert_eq!(mode_of(&path), 0o600);
     }
 }

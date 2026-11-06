@@ -21,9 +21,9 @@ Add Paladin to `Cargo.toml`:
 
 ```toml
 [dependencies]
-paladin-ai    = "0.10.0"
-paladin-ports = "0.10.0"
-paladin-llm   = { version = "0.10.0", features = ["openai"] }
+paladin-ai    = "0.11.1"
+paladin-ports = "0.11.1"
+paladin-llm   = { version = "0.11.1", features = ["openai"] }
 tokio         = { version = "1", features = ["full"] }
 ```
 
@@ -50,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let paladin = PaladinBuilder::new(llm_port.clone())
         .system_prompt("You are a concise and helpful assistant.")
         .name("HelloPaladin")
-        .model("gpt-4")
+        .model("gpt-4o-mini")
         .temperature(0.7)
         .max_loops(1)
         .build()
@@ -106,6 +106,18 @@ cargo run --example formation_sequential
 # Concurrent multi-agent execution
 cargo run --example phalanx_parallel
 ```
+
+`cargo run --example` needs a checkout of the workspace, so the commands above do not work from a
+crate that only depends on `paladin-ai` from crates.io. To run an example from the published
+package instead:
+
+- Copy the example's source from the downloaded package, for instance
+  `~/.cargo/registry/src/*/paladin-ai-<version>/examples/basic_paladin.rs`, into your own crate's
+  `examples/` directory.
+- Add the crates the example imports to your `[dependencies]`. `basic_paladin` imports
+  `paladin_ports`, so run `cargo add paladin-ports` as well as depending on `paladin-ai` and
+  `tokio`.
+- Run it with `cargo run --example basic_paladin` from your crate.
 
 ## Understanding the Output
 

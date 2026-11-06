@@ -3,7 +3,7 @@
 //! # The policy in one paragraph
 //!
 //! A sampling parameter reaches a vendor only when the target model's
-//! [`ModelProfile`] admits it. The work is split in two so that no value is ever judged twice and
+//! [`ModelProfile`](paladin_ports::output::model_profile::ModelProfile) admits it. The work is split in two so that no value is ever judged twice and
 //! none is ever swapped for another:
 //!
 //! - **Refuse at build.** `PaladinBuilder` refuses an *explicit* value (an operator's
@@ -23,10 +23,10 @@
 //! Every omission is recorded twice. The first time an adapter instance omits a given
 //! (model, parameter) it emits one `log::warn!` (target `paladin::sampling`) -- once, so a hot
 //! loop cannot flood the log. Every buffered response from a request that omitted something
-//! carries [`PARAMS_OMITTED_METADATA_KEY`] in `LlmResponse.metadata`; the key is absent when
+//! carries [`PARAMS_OMITTED_METADATA_KEY`](crate::sampling::PARAMS_OMITTED_METADATA_KEY) in `LlmResponse.metadata`; the key is absent when
 //! nothing was omitted. The same two-part rule covers a `response_format` the profile cannot
-//! honour ([`RESPONSE_FORMAT_ADJUSTED_METADATA_KEY`]). A `max_tokens` above the model's profiled
-//! maximum is different in kind: it is refused before anything is sent ([`check_max_tokens`]),
+//! honour ([`RESPONSE_FORMAT_ADJUSTED_METADATA_KEY`](crate::sampling::RESPONSE_FORMAT_ADJUSTED_METADATA_KEY)). A `max_tokens` above the model's profiled
+//! maximum is different in kind: it is refused before anything is sent (`check_max_tokens`),
 //! never clamped, because a truncated answer is not the one the caller asked for.
 //!
 //! Streamed calls have no metadata channel yet, so a streamed omission is visible through the

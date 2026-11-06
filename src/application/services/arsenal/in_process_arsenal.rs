@@ -17,7 +17,7 @@
 //!
 //! [`InProcessArsenal::validate_call`] validates a call's arguments against
 //! the registered [`Armament::parameters`] JSON Schema using
-//! [`shape_check`](paladin_core::platform::container::structured::shape_check)
+//! [`shape_check`]
 //! (plan 26-12) rather than a second hand-rolled validator — one JSON-Schema
 //! subset implementation in the workspace, not two.
 //!
@@ -31,7 +31,7 @@
 //! `.github/instructions/rust.instructions.md`), so a panicking handler is
 //! a bug in the handler to fix, not a condition this port should convert
 //! into a value. A handler that legitimately fails should return `Err`,
-//! which [`invoke`](Self::invoke) turns into a failed [`ArmamentResult`]
+//! which [`invoke`](paladin_ports::output::arsenal_port::ArsenalPort::invoke) turns into a failed [`ArmamentResult`]
 //! (never a panic) — see `a_closure_error_becomes_an_armament_result_error_not_a_panic`
 //! below.
 

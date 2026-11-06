@@ -24,8 +24,12 @@ when `t` is strictly lower, and otherwise records `t` and stores the entry. A st
 holder whose lock expired mid-computation therefore cannot overwrite the entry a newer holder
 already wrote. An equal token is accepted (the same holder writing again). A `Local` token has no
 cross-worker ordering and is a plain `put`. An ignored write is `Ok(())` with a debug line, never
-an error, so the D-29 best-effort contract is untouched. The fence key lives at least
-`max(2 * entry ttl, 1 h)`, so it outlasts the entry it guards.
+an error, so the D-29 best-effort contract is untouched. The fence key lives
+`clamp(2 * entry ttl, 5 min, 30 min)` (`crate::redis_fence::fence_marker_ttl_ms`), so it never
+outlives the Redis Cadence fencing counter that numbers its tokens (43-REVIEW WR-01): the counter
+lives `max(10 * lock ttl, 1 h)`, and 30 minutes is half its floor. The cost is that, for an entry
+TTL above 15 minutes, the marker can expire before the entry, so a late holder's duplicate write
+of the same deterministic result is accepted after at most 30 minutes (ADR-0058 (g)).
 
 `invalidate` removes the fence marker together with the entry (it matches both by prefix); the
 returned count then includes any fence markers removed, which only occur for entries written
@@ -51,13 +55,11 @@ use redis::{AsyncCommands, Client, Script, aio::ConnectionManager};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
+use crate::redis_fence::fence_marker_ttl_ms;
 use paladin_core::platform::container::battlefield::StateDelta;
 use paladin_core::platform::container::node_cache::CachedDelta;
 use paladin_ports::output::cadence_port::FencingToken;
 use paladin_ports::output::node_cache_port::{NodeCacheError, NodeCacheKey, NodeCachePort};
-
-/// The floor for a fence marker's time-to-live (one hour), so a fence outlasts a short entry.
-const MIN_FENCE_TTL_MS: u64 = 60 * 60 * 1000;
 
 /// Fenced-write script: store an entry unless a strictly higher fencing token was seen.
 ///
@@ -72,7 +74,8 @@ const MIN_FENCE_TTL_MS: u64 = 60 * 60 * 1000;
 /// - `ARGV[1]` = the serialized entry
 /// - `ARGV[2]` = the entry's time-to-live, in milliseconds
 /// - `ARGV[3]` = the fencing token, as a decimal string
-/// - `ARGV[4]` = the fence marker's time-to-live, in milliseconds (`max(2 * entry ttl, 1 h)`)
+/// - `ARGV[4]` = the fence marker's time-to-live, in milliseconds (`clamp(2 * entry ttl, 5 min,
+///   30 min)`, see `crate::redis_fence::fence_marker_ttl_ms`)
 pub const NODE_CACHE_PUT_FENCED_LUA: &str = r#"
 local last = tonumber(redis.call('GET', KEYS[2]) or '-1')
 local token = tonumber(ARGV[3])
@@ -96,14 +99,17 @@ return 1
 /// security.instructions.md's "no config type carrying a credential is
 /// `Debug`-formatted outward"): `Debug` is implemented by hand below and
 /// renders the password as a fixed placeholder, exactly as the facade's
-/// `NodeCacheConfig` does, rather than derived.
+/// `NodeCacheConfig` does, rather than derived. `Serialize` omits the password too (R-95).
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RedisNodeCacheConfig {
     /// The Redis server hostname.
     pub redis_host: String,
     /// The Redis server port.
     pub redis_port: u16,
-    /// The Redis server password, if authentication is required.
+    /// The Redis server password, if authentication is required. Never written by
+    /// `Serialize` (`skip_serializing`, no serde default, so it is still optional on load;
+    /// R-95).
+    #[serde(skip_serializing)]
     pub redis_password: Option<String>,
     /// The Redis logical database index.
     pub redis_db: u8,
@@ -303,7 +309,7 @@ impl NodeCachePort for RedisNodeCache {
             // Exactly as `put`: a zero TTL is an immediate expiry and Redis rejects `PX 0`.
             return Ok(());
         }
-        let fence_ttl_ms = ttl_ms.saturating_mul(2).max(MIN_FENCE_TTL_MS);
+        let fence_ttl_ms = fence_marker_ttl_ms(ttl_ms);
 
         let mut conn = self.conn.write().await;
         let stored: i64 = self
@@ -393,6 +399,50 @@ mod tests {
         assert_eq!(config.connection_timeout, 30);
         assert_eq!(config.key_prefix, "paladin:node_cache");
         assert_eq!(config.max_retries, 3);
+    }
+
+    /// R-95 (58-06 register, 56-REVIEW WR-09 class): serialising a
+    /// `RedisNodeCacheConfig` must not write the password.
+    #[test]
+    fn redis_node_cache_config_serialisation_omits_the_redis_password() {
+        let sentinel = "test-key-not-a-secret-r95-redis-node-cache-password";
+        let config = RedisNodeCacheConfig {
+            redis_password: Some(sentinel.to_string()),
+            ..test_config()
+        };
+        assert_eq!(config.redis_password.as_deref(), Some(sentinel));
+        let value = serde_json::to_value(&config).expect("RedisNodeCacheConfig serialises");
+        let object = value.as_object().expect("serialises as an object");
+        assert!(
+            !object.contains_key("redis_password"),
+            "RedisNodeCacheConfig serialised `redis_password`"
+        );
+        assert!(
+            !value.to_string().contains(sentinel),
+            "RedisNodeCacheConfig serialisation carries the password value"
+        );
+        // Non-vacuous: the neighbouring fields are still written.
+        assert_eq!(object["redis_host"], "localhost");
+        assert_eq!(object["key_prefix"], "test-node-cache");
+    }
+
+    /// R-95 load pin: a JSON value carrying `redis_password` still loads it.
+    #[test]
+    fn redis_node_cache_config_still_loads_a_redis_password() {
+        let sentinel = "test-key-not-a-secret-r95-redis-node-cache-loaded";
+        let value = serde_json::json!({
+            "redis_host": "cache.example.internal",
+            "redis_port": 6379,
+            "redis_password": sentinel,
+            "redis_db": 1,
+            "connection_timeout": 30,
+            "key_prefix": "test-node-cache",
+            "max_retries": 3,
+        });
+        let config: RedisNodeCacheConfig =
+            serde_json::from_value(value).expect("a value with a password loads");
+        assert_eq!(config.redis_password.as_deref(), Some(sentinel));
+        assert_eq!(config.redis_host, "cache.example.internal");
     }
 
     /// T-25-70: a `Debug` rendering of the config must never carry the
@@ -667,8 +717,142 @@ mod tests {
         assert!(encode_entry(&contract_tests::sample_delta(1), Duration::MAX).is_ok());
     }
 
+    /// 43-REVIEW WR-01: a fence marker written by an on-time stampede-lock holder (one that writes
+    /// within its lock TTL) must expire no later than the Redis Cadence fencing counter that
+    /// numbered it. Otherwise the counter expires first, the next lock restarts at token 1, and
+    /// `put_fenced` refuses every valid write against the surviving marker. Pure: needs no server.
+    #[test]
+    fn fence_marker_never_outlives_the_counter_that_numbers_it() {
+        use crate::redis_fence::{FENCE_MARKER_CEILING, FENCE_MARKER_FLOOR, fence_counter_ttl_ms};
+
+        const SECOND: u64 = 1_000;
+        const MINUTE: u64 = 60 * SECOND;
+        const HOUR: u64 = 60 * MINUTE;
+
+        let entry_ttls = [
+            SECOND,
+            10 * MINUTE,
+            29 * MINUTE,
+            31 * MINUTE,
+            2 * HOUR,
+            24 * HOUR,
+        ];
+        let lock_ttls = [
+            1,
+            120 * SECOND,
+            6 * MINUTE,
+            30 * MINUTE,
+            31 * MINUTE,
+            2 * HOUR,
+            24 * HOUR,
+        ];
+        assert_eq!(
+            fence_marker_ttl_ms(SECOND),
+            u64::try_from(FENCE_MARKER_FLOOR.as_millis()).unwrap(),
+            "a short entry's marker sits at the floor"
+        );
+        assert_eq!(
+            fence_marker_ttl_ms(2 * HOUR),
+            u64::try_from(FENCE_MARKER_CEILING.as_millis()).unwrap(),
+            "a long entry's marker sits at the ceiling"
+        );
+        for entry in entry_ttls {
+            let marker = fence_marker_ttl_ms(entry);
+            for lock in lock_ttls {
+                let counter =
+                    u64::try_from(fence_counter_ttl_ms(i64::try_from(lock).unwrap())).unwrap();
+                assert!(
+                    lock + marker <= counter,
+                    "entry ttl {entry} ms, lock ttl {lock} ms: lock + marker = {} ms outlives the \
+                     counter's {counter} ms",
+                    lock + marker
+                );
+            }
+        }
+    }
+
     async fn stored_delta(cache: &RedisNodeCache, key: &NodeCacheKey) -> Option<StateDelta> {
         cache.get(key).await.unwrap().map(|cached| cached.delta)
+    }
+
+    /// 43-REVIEW WR-01, observed live: the fence marker a holder wrote must not
+    /// outlive the Redis Cadence's fencing counter, or the next lock epoch (whose
+    /// counter restarts at 1) is refused for as long as the stale marker lives.
+    ///
+    /// The counter's lifetime is hours, so the test moves the marker's clock
+    /// instead of waiting: it shifts the marker's TTL by the counter's lifetime
+    /// (less 50 ms) -- exactly what the passage of that time does to the marker.
+    /// A marker that outlives the counter survives the shift and refuses the
+    /// token-1 write. It touches only keys under its own `cache.config` prefix.
+    #[tokio::test]
+    async fn fenced_write_after_the_counter_expires_is_accepted() {
+        use crate::redis_fence::fence_counter_ttl_ms;
+
+        let Some(cache) = cache_or_skip().await else {
+            return;
+        };
+        let key = NodeCacheKey::new("fence-counter-epoch");
+        let entry_ttl = Duration::from_secs(2 * 60 * 60);
+        let lock_ttl_ms: i64 = 120_000;
+        let counter_ttl_ms = fence_counter_ttl_ms(lock_ttl_ms);
+
+        // The prior epoch: a holder with token 3 writes, leaving a marker of 3.
+        cache
+            .put_fenced(
+                &key,
+                &contract_tests::sample_delta(1),
+                entry_ttl,
+                &FencingToken::Distributed(3),
+            )
+            .await
+            .unwrap();
+
+        // Observe the invariant live, then let the counter's lifetime pass.
+        let client = Client::open(redis_test_url()).unwrap();
+        let mut raw = client.get_multiplexed_async_connection().await.unwrap();
+        let fence = fence_key(&cache.config, &key);
+        let marker_pttl: i64 = redis::cmd("PTTL")
+            .arg(&fence)
+            .query_async(&mut raw)
+            .await
+            .unwrap();
+        assert!(
+            marker_pttl + lock_ttl_ms <= counter_ttl_ms,
+            "lock + marker ({} ms) outlives the counter ({counter_ttl_ms} ms)",
+            marker_pttl + lock_ttl_ms
+        );
+        let shift = counter_ttl_ms - 50;
+        if marker_pttl <= shift {
+            let _: i64 = redis::cmd("DEL")
+                .arg(&fence)
+                .query_async(&mut raw)
+                .await
+                .unwrap();
+        } else {
+            let _: i64 = redis::cmd("PEXPIRE")
+                .arg(&fence)
+                .arg(marker_pttl - shift)
+                .query_async(&mut raw)
+                .await
+                .unwrap();
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // The counter has expired, so the next lock restarts at 1: its write
+        // must be accepted, not refused by a marker left over from token 3.
+        cache
+            .put_fenced(
+                &key,
+                &contract_tests::sample_delta(2),
+                entry_ttl,
+                &FencingToken::Distributed(1),
+            )
+            .await
+            .expect("a fresh epoch's write is accepted");
+        assert_eq!(
+            stored_delta(&cache, &key).await,
+            Some(contract_tests::sample_delta(2))
+        );
     }
 
     #[tokio::test]
@@ -812,9 +996,12 @@ mod tests {
             .await
             .unwrap();
         assert!(entry_pttl > 0 && entry_pttl <= 30_000, "{entry_pttl}");
+        // The marker is `clamp(2 x entry, 5 min, 30 min)` (43-REVIEW WR-01): a 30 s
+        // entry gets the 5 minute floor, and it still outlives the entry.
+        let marker_ms = i64::try_from(fence_marker_ttl_ms(30_000)).unwrap();
         assert!(
-            fence_pttl > 3_590_000 && fence_pttl <= 3_600_000,
-            "the fence outlives the entry, at least an hour: {fence_pttl}"
+            fence_pttl > marker_ms - 10_000 && fence_pttl <= marker_ms,
+            "the fence outlives the entry by the marker rule ({marker_ms} ms): {fence_pttl}"
         );
         assert_eq!(fence_value, "3");
         drop(conn);

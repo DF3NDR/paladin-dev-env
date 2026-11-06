@@ -1,7 +1,7 @@
 //! Cross-instance cancellation (D-14, D-15, D-16, PLAT-FR-04): the
-//! debounced [`CancellationProbe`] adapter reading the durable cancel flag
-//! through [`RunRepositoryPort`], and the per-instance local-token registry
-//! [`RunSubmissionService::cancel`] consults to decide `was_local`.
+//! debounced [`CancellationProbe`](paladin_ports::output::cancellation_probe::CancellationProbe) adapter reading the durable cancel flag
+//! through [`RunRepositoryPort`](paladin_ports::output::run_repository_port::RunRepositoryPort), and the per-instance local-token registry
+//! [`RunSubmissionService::cancel`](paladin_ports::input::run_submission_port::RunSubmissionPort::cancel) consults to decide `was_local`.
 //!
 //! ## Two signals, two purposes
 //!
@@ -169,7 +169,7 @@ impl CancellationProbe for PerRunCancelProbe {
 
 /// The registry a [`RunWorkerPool`](super::worker::RunWorkerPool) shares
 /// with [`RunSubmissionService`](super::submission::RunSubmissionService)
-/// (via [`RunSubmissionService::with_local_tokens`]) so `cancel` can decide
+/// (via [`RunSubmissionService::with_local_tokens`](crate::application::services::run::submission::RunSubmissionService::with_local_tokens)) so `cancel` can decide
 /// `CancelOutcome::was_local` (D-16): whether THIS process instance is
 /// dispatching the target run right now.
 ///
@@ -212,6 +212,15 @@ impl LocalRunTokens {
             }
             None => false,
         }
+    }
+
+    /// Read-only test hook: whether `run_id` is currently registered, so a
+    /// test can wait on dispatch registration instead of sleeping for a
+    /// fixed duration (TESTS-02, D-09). Test-only, so it adds nothing to
+    /// the public surface.
+    #[cfg(test)]
+    pub(crate) async fn is_registered(&self, run_id: &RunId) -> bool {
+        self.tokens.read().await.contains_key(run_id)
     }
 }
 
@@ -465,5 +474,30 @@ mod tests {
 
         let quiet = PerRunCancelProbe::new(Some(Arc::new(FixedProbe(false))), local, shutdown);
         assert!(!quiet.is_cancelled(&thread()).await);
+    }
+
+    #[tokio::test]
+    async fn is_registered_tracks_register_and_remove() {
+        let tokens = LocalRunTokens::new();
+        let run_id = RunId::new_v7();
+        assert!(
+            !tokens.is_registered(&run_id).await,
+            "a fresh registry holds no run"
+        );
+
+        tokens
+            .register(run_id.clone(), CancellationToken::new())
+            .await;
+        assert!(tokens.is_registered(&run_id).await, "registered -> true");
+        assert!(
+            tokens.clone().is_registered(&run_id).await,
+            "a clone shares the map, so it observes the registration"
+        );
+
+        tokens.remove(&run_id).await;
+        assert!(
+            !tokens.is_registered(&run_id).await,
+            "removed -> false again"
+        );
     }
 }

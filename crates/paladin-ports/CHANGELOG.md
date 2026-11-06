@@ -5,6 +5,22 @@ All notable changes to `paladin-ports` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows lockstep workspace versioning.
 
+## [Unreleased]
+
+## [0.11.1] - 2026-11-06
+
+### Added
+
+- The provided trait method `RunRepositoryPort::owner_run_for_thread(&self, thread_id: &ThreadId)
+  -> Result<Option<Run>, RunRepositoryError>`, which returns the thread's owner run: the earliest
+  run carrying `submitted_by`, ordered `(submitted_at ASC, run_id ASC)`; when no run on the
+  thread is attributed, the earliest run overall; `None` only for a thread with no run. A run
+  added later by an Admin, a schedule or another tenant never moves ownership. The default body
+  pages `list` and decodes every run on the thread; the SQLite, PostgreSQL and in-memory
+  repositories override it with a single-row read. It is additive: every existing implementor
+  compiles unchanged (X-10.4). Closes WINDOWS rows 86 and 87 (53-REVIEW WR-02, WR-03; ADR-0063 as
+  amended by Phase 57 D-02).
+
 ## [0.11.0] - 2026-10-26
 
 ### Added

@@ -32,7 +32,7 @@
 //! # Every `VaultError` becomes a tool-result error, not a panic
 //!
 //! Both handlers return `Err(message)` on any [`VaultError`], which
-//! [`InProcessArsenal::invoke`] turns into a failed [`ArmamentResult`] fed
+//! [`InProcessArsenal::invoke`](paladin_ports::output::arsenal_port::ArsenalPort::invoke) turns into a failed [`ArmamentResult`](paladin_core::platform::container::arsenal::ArmamentResult) fed
 //! back to the model on its next iteration -- never a propagated `Err` that
 //! would abort the run. A [`VaultError::NamespaceDenied`] message names both
 //! the requested and granted namespaces so the model has enough information

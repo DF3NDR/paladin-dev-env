@@ -7,17 +7,28 @@ and this project follows lockstep workspace versioning.
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-11-06
+
 ### Added
 
 - `RunReadScope::permits_thread` -- the thread-visibility rule: a thread belongs to the tenant of
-  its latest run (the newest by `submitted_at`, `run_id` as the tiebreak); `All` sees every
-  thread, a `Tenant` scope sees a thread only when its latest run is attributed to that tenant,
-  and a thread with no run is visible to `All` only (TENANT-03, Phase 53).
+  its owner run (the earliest run carrying `submitted_by`, ordered `submitted_at` then `run_id`
+  ascending; when no run is attributed, the earliest run overall, which only `All` sees); `All`
+  sees every thread, a `Tenant` scope sees a thread only when its owner run is attributed to that
+  tenant, and a thread with no run is visible to `All` only (TENANT-03, Phase 53; Phase 57 D-02
+  replaced the latest-run wording, which never shipped in a release). The parameter is named
+  `owner`; the predicate is unchanged.
 - `RESERVED_PRINCIPAL_LITERALS` (`open-access`, `unattributed`) and `RESERVED_KEY_NAME_LITERALS`
   (`anonymous`) in `platform::container::principal` -- the one source for the literals a
   configured API key name or tenant may not take, exact and case-sensitive. `TenantId::new` is
   unchanged and still accepts them; the root crate's `AuthConfig::validate` rejects them at config
   load (TENANT-09, Phase 53).
+
+- `HaltReason::ModelUnpriced { model }`, wire tag `model_unpriced` (serde form `{"reason":"model_unpriced","model":"<name>"}`). It is an additive variant on a `#[non_exhaustive]` enum, recorded when an agent-kind run's model has no `treasurer.pricing` row at dispatch (`MIGRATION.md` section 11.1 `M-B-31`; FIXES-03, Phase 55 plan 55-02).
+
+### Changed
+
+- `FieldVersionService::get_field_version_history` (and the in-memory repository behind it) returns `Err(VersioningError::EntityNotFound(field_id))` for a field with no stored version, where it returned `Ok` with a randomly generated `node_id`; `purge_old_field_versions` on such a field still returns `Ok(0)`. `CollectionVersionService` reports a collection's count changes as `ItemAdded` / `ItemRemoved` carrying `Uuid::nil()` (the documented "item not tracked" sentinel), where it carried a random id. The rustdoc of `Field`, `CollectionType`, `Item`, the `element` module and both versioning services now says each is unfinished scaffolding retained pending the recorded base-layer review (`MIGRATION.md` section 11.1 `M-B-34`; FIXES-02, Phase 55 plan 55-05).
 
 ## [0.11.0] - 2026-10-26
 

@@ -5,6 +5,10 @@
 //! to decompose complex tasks into subtasks, execute them with dependency tracking,
 //! and synthesize results into a cohesive response.
 //!
+//! Subtasks are planned with an empty `expected_output`, because the LLM plan schema has none,
+//! and the subtask prompt then states no expected output. A caller-built [`Subtask`] that
+//! carries an `expected_output` still has it placed in its prompt.
+//!
 //! # Examples
 //!
 //! ```rust,no_run
@@ -414,7 +418,8 @@ Return ONLY the JSON, no additional text."#,
             let subtask = Subtask::new(
                 llm_subtask.id.clone(),
                 llm_subtask.description,
-                "Expected output from subtask execution".to_string(), // TODO: Ask LLM for expected output
+                // The LLM plan schema carries no expected output, so none is invented (FIXES-02, D-03).
+                String::new(),
             );
             plan.add_subtask(subtask)
                 .map_err(PlanningError::InvalidPlan)?;
@@ -498,8 +503,23 @@ Return ONLY the JSON, no additional text."#,
         context: &str,
         model: &str,
     ) -> Result<String, PlanningError> {
-        let prompt = format!(
-            r#"You are executing a subtask as part of a larger plan.
+        // An empty expected output means none was specified: state none, rather than an
+        // empty `EXPECTED OUTPUT:` line or an instruction to focus on it (FIXES-02, D-03).
+        let prompt = if subtask.expected_output.trim().is_empty() {
+            format!(
+                r#"You are executing a subtask as part of a larger plan.
+
+SUBTASK: {}
+
+CONTEXT:
+{}
+
+Execute this subtask and provide the result. Be concise and focused on the subtask."#,
+                subtask.description, context
+            )
+        } else {
+            format!(
+                r#"You are executing a subtask as part of a larger plan.
 
 SUBTASK: {}
 
@@ -509,8 +529,9 @@ CONTEXT:
 {}
 
 Execute this subtask and provide the result. Be concise and focused on the expected output."#,
-            subtask.description, subtask.expected_output, context
-        );
+                subtask.description, subtask.expected_output, context
+            )
+        };
 
         let user_prompt = UserPrompt {
             query: prompt,
@@ -623,6 +644,162 @@ mod tests {
                 temperature_range: None,
             }
         }
+    }
+
+    /// Test double that records every [`LlmRequest`] it receives, then answers like
+    /// [`MockLlmPort`] with its canned response.
+    struct RecordingLlmPort {
+        inner: MockLlmPort,
+        requests: std::sync::Mutex<Vec<LlmRequest>>,
+    }
+
+    impl RecordingLlmPort {
+        fn new(response: impl Into<String>) -> Self {
+            Self {
+                inner: MockLlmPort::new(response),
+                requests: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        /// `Debug` text of every request recorded so far (test code only, so `expect` is fine).
+        fn recorded(&self) -> Vec<String> {
+            self.requests
+                .lock()
+                .expect("recorded-requests lock is never poisoned in these tests")
+                .iter()
+                .map(|request| format!("{request:?}"))
+                .collect()
+        }
+    }
+
+    #[async_trait]
+    impl LlmPort for RecordingLlmPort {
+        async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
+            self.requests
+                .lock()
+                .expect("recorded-requests lock is never poisoned in these tests")
+                .push(request.clone());
+            self.inner.generate(request).await
+        }
+
+        async fn generate_stream(
+            &self,
+            request: LlmRequest,
+        ) -> Result<
+            Box<
+                dyn futures::Stream<
+                        Item = Result<paladin_ports::output::llm_port::StreamingResponse, LlmError>,
+                    > + Send,
+            >,
+            LlmError,
+        > {
+            self.inner.generate_stream(request).await
+        }
+
+        async fn validate_model(&self, model: &str) -> Result<bool, LlmError> {
+            self.inner.validate_model(model).await
+        }
+
+        async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
+            self.inner.get_available_models().await
+        }
+
+        fn get_provider_name(&self) -> &'static str {
+            self.inner.get_provider_name()
+        }
+
+        fn get_capabilities(&self) -> ProviderCapabilities {
+            self.inner.get_capabilities()
+        }
+    }
+
+    /// The sentence `create_plan` used to invent as every subtask's expected output. Written as
+    /// two pieces so that the source holds no copy of it outside this guard.
+    const FORMER_PLACEHOLDER: &str = concat!("Expected output from ", "subtask execution");
+
+    const TWO_SUBTASK_PLAN: &str = r#"{
+        "task": "Review the module",
+        "subtasks": [
+            {"id": "1", "description": "Read the code", "dependencies": []},
+            {"id": "2", "description": "Summarise findings", "dependencies": ["1"]}
+        ]
+    }"#;
+
+    #[tokio::test]
+    async fn create_plan_does_not_fabricate_an_expected_output() {
+        let service = PlanningService::new(Arc::new(MockLlmPort::new(TWO_SUBTASK_PLAN)));
+
+        let plan = service
+            .create_plan("Review the module", 10, "gpt-4")
+            .await
+            .expect("plan should parse");
+
+        assert_eq!(plan.subtasks.len(), 2);
+        for subtask in &plan.subtasks {
+            assert_eq!(subtask.expected_output, "");
+        }
+        assert!(
+            !format!("{plan:?}").contains(FORMER_PLACEHOLDER),
+            "no placeholder sentence may appear in a produced plan"
+        );
+    }
+
+    #[tokio::test]
+    async fn subtask_prompt_omits_expected_output_when_none_is_set() {
+        let llm_port = Arc::new(RecordingLlmPort::new(TWO_SUBTASK_PLAN));
+        let service = PlanningService::new(llm_port.clone());
+
+        let plan = service
+            .create_plan("Review the module", 10, "gpt-4")
+            .await
+            .expect("plan should parse");
+        service
+            .execute_subtasks(&plan, "Review the module", "gpt-4")
+            .await
+            .expect("subtasks should execute");
+
+        let subtask_prompts: Vec<String> = llm_port
+            .recorded()
+            .into_iter()
+            .filter(|request| request.contains("SUBTASK:"))
+            .collect();
+        assert_eq!(subtask_prompts.len(), 2);
+        for prompt in &subtask_prompts {
+            assert!(!prompt.contains("EXPECTED OUTPUT:"), "{prompt}");
+            assert!(
+                !prompt.contains("focused on the expected output"),
+                "{prompt}"
+            );
+            assert!(!prompt.contains(FORMER_PLACEHOLDER), "{prompt}");
+        }
+    }
+
+    #[tokio::test]
+    async fn subtask_prompt_keeps_a_supplied_expected_output() {
+        let llm_port = Arc::new(RecordingLlmPort::new("done"));
+        let service = PlanningService::new(llm_port.clone());
+
+        let mut plan = TaskPlan::new("Market work".to_string(), 5);
+        plan.add_subtask(Subtask::new(
+            "1".to_string(),
+            "Analyze".to_string(),
+            "Market analysis report".to_string(),
+        ))
+        .expect("subtask should be added");
+
+        service
+            .execute_subtasks(&plan, "Market work", "gpt-4")
+            .await
+            .expect("subtasks should execute");
+
+        let subtask_prompts: Vec<String> = llm_port
+            .recorded()
+            .into_iter()
+            .filter(|request| request.contains("SUBTASK:"))
+            .collect();
+        assert_eq!(subtask_prompts.len(), 1);
+        assert!(subtask_prompts[0].contains("EXPECTED OUTPUT: Market analysis report"));
+        assert!(subtask_prompts[0].contains("focused on the expected output"));
     }
 
     #[test]

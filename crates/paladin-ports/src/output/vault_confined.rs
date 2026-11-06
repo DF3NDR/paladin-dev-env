@@ -1,8 +1,8 @@
 //! `ConfinedVault` — the Vault's enforcement point (Doc 05 RT-04, D-20).
 //!
-//! Wraps an inner [`VaultPort`] behind a granted [`Namespace`] and denies
+//! Wraps an inner [`VaultPort`](crate::output::vault_port::VaultPort) behind a granted [`Namespace`](paladin_core::platform::container::vault::Namespace) and denies
 //! every call whose target namespace does not have the grant as a
-//! [`Namespace::is_prefix_of`] ancestor, **before** the inner port is ever
+//! [`Namespace::is_prefix_of`](paladin_core::platform::container::vault::Namespace::is_prefix_of) ancestor, **before** the inner port is ever
 //! touched. This is the single place a host-issued grant becomes an
 //! enforced boundary: everything upstream of this file (a `RunScope`, an
 //! Armament call, a graph author's own code) only ever sees the Vault
@@ -10,8 +10,8 @@
 //!
 //! # Why this lives in `paladin-ports`, not the facade (deviation, D-20/D-21)
 //!
-//! `ConfinedVault` needs nothing beyond [`VaultPort`] (this crate) and
-//! [`Namespace`] (`paladin-core`, already re-exported here) — no adapter,
+//! `ConfinedVault` needs nothing beyond [`VaultPort`](crate::output::vault_port::VaultPort) (this crate) and
+//! [`Namespace`](paladin_core::platform::container::vault::Namespace) (`paladin-core`, already re-exported here) — no adapter,
 //! no infrastructure dependency. Placing it here, beside the trait it
 //! implements, is what makes it reachable from BOTH sides of Doc 05 RT-04:
 //! `PaladinExecutionService` (the facade crate, `paladin-ai`) resolves and
@@ -31,7 +31,7 @@
 //! `namespace` argument, not one relative to the grant, and `ConfinedVault`
 //! is built the same way: every method receives the caller's own full
 //! `Namespace` and compares it against `self.granted` with
-//! [`Namespace::is_prefix_of`]. The alternative — namespaces relative to the
+//! [`Namespace::is_prefix_of`](paladin_core::platform::container::vault::Namespace::is_prefix_of). The alternative — namespaces relative to the
 //! grant — was considered and rejected: it would be harmless in isolation,
 //! but it would make PRD 05 §3.4's attack test unexpressible (there would be
 //! no way for a scripted tool call to even *name* a sibling namespace like

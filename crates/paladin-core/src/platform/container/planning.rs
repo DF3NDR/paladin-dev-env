@@ -123,7 +123,8 @@ pub struct Subtask {
     /// Description of what this subtask accomplishes
     pub description: String,
 
-    /// Expected output or result from executing this subtask
+    /// Expected output or result from executing this subtask; empty when none was specified
+    /// (`PlanningService` leaves it empty, since its plan schema carries none)
     pub expected_output: String,
 
     /// Actual result after execution (None if not yet executed)

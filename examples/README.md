@@ -1962,14 +1962,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // builder chain -- `OpenAIConfig::new(api_key, model)` names the adapter's
     // default model; the model PaladinBuilder sets below decides each request)
     let llm_adapter: Arc<dyn LlmPort> = Arc::new(
-        OpenAIAdapter::new(OpenAIConfig::new(api_key, "gpt-4".to_string()))?
+        OpenAIAdapter::new(OpenAIConfig::new(api_key, "gpt-4o-mini".to_string()))?
     );
 
     // Create Paladin
     let paladin = PaladinBuilder::new(llm_adapter)
         .name("MyPaladin")
         .system_prompt("You are a helpful assistant.")
-        .model("gpt-4")
+        .model("gpt-4o-mini")
         .build()
         .await?;
 

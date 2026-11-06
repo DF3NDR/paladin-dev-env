@@ -377,9 +377,9 @@
 //! # Related Modules
 //!
 //! - [`paladin_core::platform::container::battalion`] - Battalion domain entities
-//! - [`paladin_battalion::battalion`] - Battalion execution services (adapters)
-//! - [`paladin_ports::output::paladin_port`] - Individual agent execution
-//! - [`paladin_battalion::commander`] - Strategic pattern routing
+//! - `paladin_battalion::battalion` - Battalion execution services (adapters)
+//! - [`paladin_ports::output::paladin_port`](crate::output::paladin_port) - Individual agent execution
+//! - `paladin_battalion::commander` - Strategic pattern routing
 //! - [`paladin_core::platform::container::citadel`] - Checkpointing and recovery
 
 use async_trait::async_trait;

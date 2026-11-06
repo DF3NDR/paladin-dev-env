@@ -2,7 +2,7 @@
 
 **Phase 29, plan 29-01 (SHIP-02, D-06/D-07, RESEARCH.md Pitfall 1, Open Question 1).**
 
-Both files in this directory are frozen, byte-identical copies of blobs committed at the
+Both `v0.9.0-*` files in this directory are frozen, byte-identical copies of blobs committed at the
 `v0.9.0` tag. Neither is hand-trimmed, hand-edited, or copied from the current working tree.
 Each was produced by redirecting `git show <tag>:<path>` output straight to disk — never by
 copying the tree's current file and relabelling it.
@@ -53,3 +53,32 @@ CI checks out with `fetch-depth: 1` and no tags (RESEARCH.md, verified against
 `.github/workflows/ci.yml`), so `git show v0.9.0:...` is not available inside a CI test run.
 Committing the exact blob bytes, with the SHAs above re-derivable by anyone with a full
 clone, is the only option that is both hermetic and checkable.
+
+## Derived fixtures (hand-maintained, not frozen)
+
+**Phase 56, plan 56-02 (DOGF-03, D-09..D-11).** Unlike the two `v0.9.0-*` files above, the
+following files are NOT frozen blobs. They are derived from the root `config.example.yml` and
+maintained by hand, because the example keeps its optional blocks commented out (a verbatim
+copy must load unchanged) and a round-trip test needs every optional key present.
+
+- `config.example.full.yml` is `config.example.yml` with every commented-out optional block
+  enabled. The source is the root `config.example.yml` at the plan-start commit `4f0858a63`.
+  Enabled blocks: `llm.kimi` `max_tokens` / `context_window` / `models`, `http.auth.api_keys`
+  entries, `http.auth.bearer_token.tenant`, `treasurer.pricing`, `treasurer.allowance` and the
+  `treasurer.cadence` in-process block. Probe rows added on top (D-11): the tenant `Acme-Prod`;
+  pricing ids `Qwen/qwen3.7-plus`, `gpt-5.5.1` and `claude-3-5-sonnet-20241022`; provider
+  `models:` overrides with `/` and `.` in their ids; money values as quoted decimal strings;
+  the temperature shapes `{fixed: 1.0}`, `{range: [0.0, 1.0]}` and `not_sent`; an `ollama`
+  `api_key` and `reasoning_wire`; non-empty `per_tool` maps, a guardrail rule,
+  `model_context_limits`, `model_fallback.providers` and `steps`, a `trace.otel.headers` entry
+  and `agents[0]` `max_loops` / `stop_words` / `reasoning_effort` / `reasoning_fallback`.
+- `config.example.redis-cadence.yml` carries the second `treasurer.cadence.backend` shape
+  (`redis` with `url_env`), which the example documents only as a commented line.
+
+Neither file pins a blob SHA: they are expected to change when the example gains a key.
+`full_fixture_carries_every_example_key` in `tests/config_example_roundtrip.rs` is the drift
+guard that keeps the full fixture in step: it fails when a live key path, or a commented key
+line, of `config.example.yml` is missing from the fixture.
+
+Every credential in these files is an obviously fake literal containing
+`test-key-not-a-secret`, and the full fixture contains no `${` placeholder at all.

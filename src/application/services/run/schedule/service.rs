@@ -3,9 +3,9 @@
 //! # Claim before submit (D-37)
 //!
 //! [`ScheduleService::tick_once`]'s ordering is the whole restart/replica
-//! safety story: for each due schedule, [`RunScheduleRepositoryPort::claim_tick`]
+//! safety story: for each due schedule, [`RunScheduleRepositoryPort::claim_tick`](paladin_ports::output::run_schedule_repository_port::RunScheduleRepositoryPort::claim_tick)
 //! is called FIRST; only a `true` result (this instance won the conditional
-//! update) leads to [`RunSubmissionPort::submit`] being called at all. Two
+//! update) leads to [`RunSubmissionPort::submit`](paladin_ports::input::run_submission_port::RunSubmissionPort::submit) being called at all. Two
 //! `ScheduleService` instances racing the same tick therefore submit at most
 //! one run between them, and a restarted instance re-reads `next_tick` from
 //! the repository rather than any in-process state, so it neither
@@ -139,7 +139,7 @@ impl Default for ScheduleServiceOptions {
     }
 }
 
-/// Drives due [`RunSchedule`]s through a claim-then-submit tick loop
+/// Drives due [`RunSchedule`](paladin_core::platform::container::run_schedule::RunSchedule)s through a claim-then-submit tick loop
 /// (PLAT-05, D-37, D-39), and -- via `admin.rs`'s `ScheduleAdminPort` impl --
 /// validates and persists them in the first place (D-42, D-46). Fields are
 /// `pub(super)` rather than private so `schedule::admin`'s

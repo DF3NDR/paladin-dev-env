@@ -467,16 +467,36 @@ ADR-0006 (`.planning/decisions/0006-coverage-gate.md`). Install it:
 # it cannot instrument the build at all.
 rustup component add llvm-tools-preview
 
-# Install cargo-llvm-cov itself
-cargo install cargo-llvm-cov --locked
+# Install cargo-llvm-cov itself, pinned to the version CI uses
+cargo install cargo-llvm-cov --version 0.8.7 --locked
 
 # Faster alternative to `cargo install`: cargo binstall downloads a prebuilt
 # binary instead of compiling from source.
-cargo binstall cargo-llvm-cov
+cargo binstall cargo-llvm-cov --version 0.8.7
 ```
+
+The `--version 0.8.7` pin is the version CI installs (`tool: cargo-llvm-cov@0.8.7` in the
+`coverage` job of `.github/workflows/ci.yml`). An unpinned install takes the newest release, and a
+newer tool can move the figure by a fraction of a percent with no code change, which would read as
+a disagreement with CI that is really tool drift. When the CI pin moves, move it here too. Confirm
+what you have with `cargo llvm-cov --version`.
+
+**Inside the project devcontainer**, run that check first. The image installs the
+`llvm-tools-preview` component but may not carry `cargo-llvm-cov` itself, and a copy installed by
+hand under `/usr/local/cargo/bin` does not survive a container rebuild (only
+`/usr/local/cargo/registry` is a persisted volume). If it answers
+`error: no such command: llvm-cov`, run the pinned install above.
 
 The gated measurement runs against `--features integration-tests`, which needs live Redis and
 RustFS. **Start them first** — `make services-up` — or your local figure will not match CI's.
+
+**Inside the project devcontainer there is no Docker socket, so `make services-up` cannot run
+there, and it does not need to.** The devcontainer's compose file already starts Redis and RustFS
+as sibling services on `paladin-dev-network`, reachable as `redis:6379` and `rustfs:9000`, and
+`scripts/coverage.sh` probes exactly those names before it falls back to `localhost`. Skip step 1
+below and go straight to `make coverage`. To check the siblings are up first,
+`getent hosts redis rustfs` should print two addresses and `redis-cli -h redis ping` should answer
+`PONG`.
 
 ### Local generation
 
@@ -549,8 +569,27 @@ amending the ADR in place with the new figure, command, and date — and it neve
 
 ### Reading the output
 
-`make coverage` prints an LCOV summary; `make coverage-html` writes a browsable report to
-`target/coverage/html/index.html`. The report breaks down by region, function, and line:
+`make coverage` prints the test results and writes the LCOV report to `lcov.info`; **it does not
+print a coverage percentage** (`--lcov --output-path` writes a file and prints nothing, which is why
+CI computes its own figure in a separate summary step). To read the line figure from your run, sum
+the `LF:` (lines found) and `LH:` (lines hit) records of `lcov.info`, the same summation CI runs:
+
+```bash
+python3 - <<'PY'
+lf = lh = 0
+for line in open("lcov.info"):
+    if   line.startswith("LF:"): lf += int(line[3:])
+    elif line.startswith("LH:"): lh += int(line[3:])
+print(f"Lines: {lh}/{lf} = {100*lh/lf:.2f}%  (truncated: {int(100*lh/lf)})")
+PY
+```
+
+Compare the `truncated` value with the `Lines:` line of the `coverage-summary` artifact of the CI
+run on the same commit, truncated the same way. They should be the same whole percent.
+
+`make coverage-html` (the same `integration-tests,llm-all` scope as the gate, with the same services
+running) writes a browsable report to `target/coverage/html/index.html`. The report
+breaks down by region, function, and line:
 
 - **Region** — sub-expression-level coverage (e.g., both branches of an `if`).
 - **Function** — whether a function was called at all.

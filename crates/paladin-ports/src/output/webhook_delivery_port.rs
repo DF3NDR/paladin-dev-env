@@ -1,6 +1,6 @@
 //! Webhook Delivery Repository Port — a Durable Retry Queue (D-40)
 //!
-//! [`WebhookDeliveryRepositoryPort`] is the whole contract every backend
+//! [`WebhookDeliveryRepositoryPort`](crate::output::webhook_delivery_port::WebhookDeliveryRepositoryPort) is the whole contract every backend
 //! adapter (`InMemoryWebhookDeliveryRepository`,
 //! `SqliteWebhookDeliveryRepository`, `PostgresWebhookDeliveryRepository`,
 //! all `paladin-storage`) implements.

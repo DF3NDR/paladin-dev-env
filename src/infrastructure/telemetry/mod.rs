@@ -1,8 +1,8 @@
 //! The facade's telemetry composition module (OBS-02, D-10, D-11).
 //!
-//! `WarEngine` itself keeps no default [`TraceSink`] (D-10) — the untraced
+//! `WarEngine` itself keeps no default [`TraceSink`](paladin_ports::output::trace_sink_port::TraceSink) (D-10) — the untraced
 //! path stays zero-cost for any caller who never wires one. This module is
-//! where the FACADE opts a run back in: [`build_run_sink`] is the single
+//! where the FACADE opts a run back in: [`build_run_sink`](crate::infrastructure::telemetry::build_run_sink) is the single
 //! place a run's sink fan-out is assembled, called once per run by the
 //! worker's own composition root (`src/application/services/run/worker.rs`)
 //! so `paladin-server`'s run worker and `paladin-cli muster` both attach the
@@ -12,15 +12,15 @@
 //! (`trace.log_sink: false`) or a log filter (`RUST_LOG=paladin::trace=off`)
 //! — no code change either way.
 //!
-//! [`build_run_sink`] is also where the `otel`-gated [`OtelTraceSink`]
+//! [`build_run_sink`](crate::infrastructure::telemetry::build_run_sink) is also where the `otel`-gated `OtelTraceSink`
 //! (28-09) joins the fan-out, behind BOTH the Cargo feature and
 //! `trace.otel.enabled` — a default build never references it (D-10/D-11),
-//! and where [`PersistingTraceSink`] (28-11, OBS-FR-07) joins it behind
-//! `trace.persist` AND an available [`RunTracePort`] -- a build/run with no
+//! and where [`PersistingTraceSink`](crate::infrastructure::telemetry::PersistingTraceSink) (28-11, OBS-FR-07) joins it behind
+//! `trace.persist` AND an available [`RunTracePort`](paladin_ports::output::run_trace_port::RunTracePort) -- a build/run with no
 //! persistence backend wired never attaches it either.
 //!
-//! [`HeraldTraceSink`] (38-08, D-12) is composed separately, by
-//! `RunWorkerPool::run_once`, alongside [`build_run_sink`]'s own output — it hands each
+//! [`HeraldTraceSink`](crate::infrastructure::telemetry::HeraldTraceSink) (38-08, D-12) is composed separately, by
+//! `RunWorkerPool::run_once`, alongside [`build_run_sink`](crate::infrastructure::telemetry::build_run_sink)'s own output — it hands each
 //! run's `RunFinished` record to an operator-configured [`Herald`](paladin_core::platform::container::herald::Herald)
 //! rather than a trace-observability backend, so it stays out of this function's own
 //! "which observability backends are attached" decision.

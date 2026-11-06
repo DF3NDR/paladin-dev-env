@@ -73,7 +73,7 @@ validated: 2026-10-27
 | Three one-way doors (Principal shape D-01, PrincipalRef, attribution columns) | TENANT-01, TENANT-02, PLAT-07 | operator `checkpoint:decision` 40-01-01 | recorded in 40-01-SUMMARY.md |
 | PostgreSQL contract legs | TENANT-02, PLAT-07 | no PostgreSQL server in the sandbox (clauses self-skip) | CI `postgres-integration` (fails on any `SKIP:`) |
 | `paladin-web` semver measurement against 0.9.0 | all | the 0.9.0 baseline's `utoipa-swagger-ui` build script needs GitHub egress | CI `Semver Checks (vs v0.9.0)` job (known D-09 no-op) |
-| ~20 judgment-tier prohibitions | all | LLM-judge verdicts are non-authoritative (ADR-550 D4) | human review recommended; listed in 40-VERIFICATION.md and the milestone audit |
+| ~20 judgment-tier prohibitions | all | LLM-judge verdicts are non-authoritative (ADR-550 D4) | human read recorded 2026-11-04, see .planning/phases/57-register-hygiene-close-out/57-JUDGMENT-READ.md |
 | 82 % coverage floor | all | `cargo-llvm-cov` absent locally | CI `Coverage` job (92.74 % on the v0.11.0 merge commit) |
 
 ---

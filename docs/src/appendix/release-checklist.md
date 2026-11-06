@@ -22,7 +22,7 @@ This checklist defines the required release path from code freeze through publis
 
 - Ensure root changelog and per-crate changelogs are updated. The per-crate changelogs are now
   stamped by the release tooling (`make release`'s changelog finalization step, extended
-  alongside the root changelog) rather than edited by hand across all ten crates.
+  alongside the root changelog) rather than edited by hand across every publishable crate.
 - **The root `## [VERSION]` section is a hard prerequisite for the release run, not just good
   practice.** Tagging without it fails the `create-release` job outright — there is no fallback
   body source. If this happens, the fix is to finalize the changelog (`make release

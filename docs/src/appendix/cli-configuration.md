@@ -31,7 +31,7 @@ name: "my-agent"
 system_prompt: "You are a helpful AI assistant."
 llm:
   provider: "openai"
-  model: "gpt-4"
+  model: "gpt-4o-mini"
   temperature: 0.7
 max_loops: 3
 user_name: "User"
@@ -213,7 +213,7 @@ system_prompt: |
 
 llm:
   provider: "openai"
-  model: "gpt-4"
+  model: "gpt-4o-mini"
   temperature: 0.7
 
 max_loops: 5
@@ -237,7 +237,7 @@ system_prompt: |
 
 llm:
   provider: "openai"
-  model: "gpt-4"
+  model: "gpt-4o-mini"
   temperature: 0.5
 
 max_loops: 10
@@ -287,7 +287,7 @@ system_prompt: |
 
 llm:
   provider: "openai"
-  model: "gpt-4"
+  model: "gpt-4o-mini"
   temperature: 0.7
 
 max_loops: 5
@@ -538,7 +538,7 @@ Still having issues? Check:
    paladin agent run -c config.yaml -i "test" -v
    ```
 
-2. **Test Configuration**: Use `paladin setup-check` to verify environment
+2. **Test Configuration**: Use `paladin-cli setup-check` to verify environment
 
 3. **GitHub Issues**: [github.com/DF3NDR/paladin-dev-env/issues](https://github.com/DF3NDR/paladin-dev-env/issues)
 

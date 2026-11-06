@@ -188,6 +188,10 @@ pub async fn run_all_file_storage_tests() -> Result<(), Box<dyn std::error::Erro
             "etag_opaque_token",
             tests::test_etag_is_an_opaque_stable_token(),
         ),
+        (
+            "list_limit_continuation",
+            tests::test_list_files_honours_limit_and_drops_no_keys(),
+        ),
         ("storage_stats", tests::test_storage_statistics()),
         ("error_handling", tests::test_error_handling()),
         (
@@ -384,6 +388,9 @@ mod tests {
     #[ignore]
     pub async fn test_presigned_urls() -> Result<(), Box<dyn std::error::Error>> {
         let ctx = FileStorageTestContext::new().await?;
+        // Every reqwest error here is mapped with `without_url()`: its `Display` otherwise includes
+        // the full presigned URL (access key id and signature), which would land in CI logs on a
+        // connection failure (45-REVIEW WR-03).
         let http = reqwest::Client::new();
 
         let file_path = PathBuf::from("presigned/test.txt");
@@ -404,9 +411,20 @@ mod tests {
             "✅ Generated presigned download URL for {}",
             download_url.split('?').next().unwrap_or_default()
         );
-        let response = http.get(&download_url).send().await?;
+        let response = http
+            .get(&download_url)
+            .send()
+            .await
+            .map_err(|e| e.without_url())?;
         assert!(response.status().is_success());
-        assert_eq!(response.bytes().await?.as_ref(), content);
+        assert_eq!(
+            response
+                .bytes()
+                .await
+                .map_err(|e| e.without_url())?
+                .as_ref(),
+            content
+        );
 
         // Presigned upload URL: a real PUT through it, then read the object back.
         let upload_path = PathBuf::from("presigned/upload.txt");
@@ -424,7 +442,8 @@ mod tests {
             .put(&upload_url)
             .body(upload_content.clone())
             .send()
-            .await?;
+            .await
+            .map_err(|e| e.without_url())?;
         assert!(response.status().is_success());
 
         // Read it back through a presigned download URL for the same path.
@@ -432,9 +451,20 @@ mod tests {
             .adapter
             .generate_download_url(&upload_path, Duration::from_secs(3600), None)
             .await?;
-        let response = http.get(&readback_url).send().await?;
+        let response = http
+            .get(&readback_url)
+            .send()
+            .await
+            .map_err(|e| e.without_url())?;
         assert!(response.status().is_success());
-        assert_eq!(response.bytes().await?.as_ref(), upload_content.as_slice());
+        assert_eq!(
+            response
+                .bytes()
+                .await
+                .map_err(|e| e.without_url())?
+                .as_ref(),
+            upload_content.as_slice()
+        );
 
         ctx.cleanup().await?;
         Ok(())
@@ -541,6 +571,76 @@ mod tests {
         assert_ne!(via_head, after_overwrite);
 
         println!("✅ ETag opaque token test passed");
+        ctx.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore]
+    pub async fn test_list_files_honours_limit_and_drops_no_keys()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let ctx = FileStorageTestContext::new().await?;
+
+        // Keys `a5` and `b5` contain the digit of `limit: Some(5)`-style values; the old
+        // adapter sent the limit as the S3 delimiter and silently dropped such keys
+        // (45-REVIEW CR-01). A unique prefix keeps the case independent of other tests.
+        let prefix = format!("list-limit-{}/", uuid::Uuid::new_v4());
+        for name in ["a5", "b5", "c"] {
+            let path = PathBuf::from(format!("{prefix}{name}"));
+            ctx.adapter
+                .upload_file(&path, name.as_bytes(), None)
+                .await?;
+        }
+
+        // A limit of 2 returns exactly 2 files and says there is more.
+        let first = ctx
+            .adapter
+            .list_files(Some(ListOptions {
+                prefix: Some(prefix.clone()),
+                limit: Some(2),
+                ..Default::default()
+            }))
+            .await?;
+        assert_eq!(first.files.len(), 2, "limit: Some(2) must return 2 files");
+        assert!(first.has_more, "a truncated page must report has_more");
+        let token = first
+            .continuation_token
+            .clone()
+            .ok_or("a truncated page must carry a continuation token")?;
+
+        // Following the token returns the remaining file and ends the listing.
+        let second = ctx
+            .adapter
+            .list_files(Some(ListOptions {
+                prefix: Some(prefix.clone()),
+                limit: Some(2),
+                continuation_token: Some(token),
+                ..Default::default()
+            }))
+            .await?;
+        assert_eq!(second.files.len(), 1);
+        assert!(!second.has_more);
+        assert!(second.continuation_token.is_none());
+
+        // No limit lists everything, including both keys that contain a `5`.
+        let all = ctx
+            .adapter
+            .list_files(Some(ListOptions {
+                prefix: Some(prefix.clone()),
+                ..Default::default()
+            }))
+            .await?;
+        assert_eq!(all.files.len(), 3, "no key may be dropped from a listing");
+        assert!(!all.has_more);
+        for name in ["a5", "b5", "c"] {
+            let want = PathBuf::from(format!("{prefix}{name}"));
+            assert!(
+                all.files.iter().any(|f| f.path == want),
+                "{name} missing from the unlimited listing"
+            );
+        }
+
+        println!("✅ List limit and continuation test passed");
         ctx.cleanup().await?;
         Ok(())
     }

@@ -61,7 +61,9 @@ use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
 use paladin_storage::webhook::in_memory::InMemoryWebhookDeliveryRepository;
 
 use super::resolver::{AssistantResolver, CodeWorkflowResolver};
-use super::worker::{LeaseHeartbeat, RunWorkerOptions, RunWorkerPool};
+use super::worker::{
+    LeaseHeartbeat, RUN_ERROR_CHAR_BUDGET, RunWorkerOptions, RunWorkerPool, bounded_run_error,
+};
 
 /// A [`PaladinPort`] that must never be called -- every graph in this
 /// module is Function/Gate-only, mirroring the `UnusedPaladinPort`
@@ -1361,15 +1363,33 @@ fn agent_pool(
 ) {
     let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
     let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+    let (mut pool, bus) = agent_pool_over(port, repository.clone(), queue.clone());
+    if let Some(deliveries) = deliveries {
+        pool = pool.with_webhook_deliveries(deliveries);
+    }
+    (pool, repository, queue, bus)
+}
+
+/// [`agent_pool`]'s body over an injected repository and queue, so a test can hand the worker
+/// a double that fails one write ([`FailingWriteRepository`]) or counts acks and nacks
+/// ([`AckNackQueue`]). Returns the pool and its event bus.
+fn agent_pool_over(
+    port: Arc<dyn PaladinPort>,
+    repository: Arc<dyn RunRepositoryPort>,
+    queue: Arc<dyn RunQueuePort>,
+) -> (
+    RunWorkerPool<InMemoryWaypointStore>,
+    Arc<super::events::RunEventBus>,
+) {
     let store = Arc::new(InMemoryWaypointStore::new());
     let resolver: Arc<dyn AssistantResolver> = Arc::new(AgentOnlyResolver);
     let engine = Arc::new(WarEngine::new(Arc::new(UnusedPaladinPort), store.clone()));
     let bus = Arc::new(super::events::RunEventBus::new());
-    let mut pool = RunWorkerPool::new(
+    let pool = RunWorkerPool::new(
         engine,
         store,
-        repository.clone(),
-        queue.clone(),
+        repository,
+        queue,
         resolver,
         Duration::from_secs(30),
     )
@@ -1379,10 +1399,324 @@ fn agent_pool(
         log_sink: false,
         ..crate::config::trace::TraceConfig::default()
     });
-    if let Some(deliveries) = deliveries {
-        pool = pool.with_webhook_deliveries(deliveries);
+    (pool, bus)
+}
+
+// --- 45-REVIEW WR-04 (plan 57-13, D-14): a terminal event follows the durable write -------
+
+/// The one repository write a [`FailingWriteRepository`] refuses.
+enum FailAt {
+    /// `update_status` whose target status is this one; every other transition (the dispatch-time
+    /// `Queued -> Running` flip included) is delegated.
+    StatusTo(RunStatus),
+    /// Every `record_outcome` call.
+    Outcome,
+}
+
+/// A [`RunRepositoryPort`] double that delegates to an [`InMemoryRunRepository`] except for the
+/// one write named by its [`FailAt`], which fails with a fixed backend error. Standing in for a
+/// store that goes away between the agent call and the durable terminal write.
+struct FailingWriteRepository {
+    inner: InMemoryRunRepository,
+    fail_at: FailAt,
+}
+
+impl FailingWriteRepository {
+    fn new(fail_at: FailAt) -> Self {
+        Self {
+            inner: InMemoryRunRepository::new(),
+            fail_at,
+        }
     }
-    (pool, repository, queue, bus)
+
+    fn injected() -> RunRepositoryError {
+        RunRepositoryError::Backend {
+            source: "injected write failure".into(),
+        }
+    }
+}
+
+#[async_trait]
+impl RunRepositoryPort for FailingWriteRepository {
+    async fn insert(&self, run: &Run) -> Result<(), RunRepositoryError> {
+        self.inner.insert(run).await
+    }
+
+    async fn get(&self, run_id: &RunId) -> Result<Option<Run>, RunRepositoryError> {
+        self.inner.get(run_id).await
+    }
+
+    async fn update_status(
+        &self,
+        run_id: &RunId,
+        from: RunStatus,
+        to: RunStatus,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), RunRepositoryError> {
+        if matches!(&self.fail_at, FailAt::StatusTo(target) if *target == to) {
+            return Err(Self::injected());
+        }
+        self.inner.update_status(run_id, from, to, at).await
+    }
+
+    async fn record_outcome(
+        &self,
+        run_id: &RunId,
+        outcome: RunOutcomeRecord,
+    ) -> Result<(), RunRepositoryError> {
+        if matches!(self.fail_at, FailAt::Outcome) {
+            return Err(Self::injected());
+        }
+        self.inner.record_outcome(run_id, outcome).await
+    }
+
+    async fn list(&self, query: RunQuery) -> Result<RunPage, RunRepositoryError> {
+        self.inner.list(query).await
+    }
+
+    async fn active_run_for_thread(
+        &self,
+        thread_id: &ThreadId,
+    ) -> Result<Option<Run>, RunRepositoryError> {
+        self.inner.active_run_for_thread(thread_id).await
+    }
+
+    async fn request_cancel(&self, run_id: &RunId) -> Result<RunStatus, RunRepositoryError> {
+        self.inner.request_cancel(run_id).await
+    }
+
+    async fn is_cancel_requested(&self, thread_id: &ThreadId) -> Result<bool, RunRepositoryError> {
+        self.inner.is_cancel_requested(thread_id).await
+    }
+
+    async fn bump_attempt(&self, run_id: &RunId) -> Result<u32, RunRepositoryError> {
+        self.inner.bump_attempt(run_id).await
+    }
+
+    async fn record_resume(
+        &self,
+        run_id: &RunId,
+        responses: Vec<ParleyResponse>,
+    ) -> Result<u32, RunRepositoryError> {
+        self.inner.record_resume(run_id, responses).await
+    }
+
+    async fn clear_pending_responses(&self, run_id: &RunId) -> Result<(), RunRepositoryError> {
+        self.inner.clear_pending_responses(run_id).await
+    }
+}
+
+/// A [`RunQueuePort`] double that delegates to an [`InMemoryRunQueue`], counts `ack` and `nack`
+/// calls, and (when built with `fail_ack`) fails every `ack` with a backend error.
+struct AckNackQueue {
+    inner: InMemoryRunQueue,
+    fail_ack: bool,
+    acks: AtomicUsize,
+    nacks: AtomicUsize,
+}
+
+impl AckNackQueue {
+    fn new(fail_ack: bool) -> Self {
+        Self {
+            inner: InMemoryRunQueue::new(),
+            fail_ack,
+            acks: AtomicUsize::new(0),
+            nacks: AtomicUsize::new(0),
+        }
+    }
+
+    fn acks(&self) -> usize {
+        self.acks.load(Ordering::SeqCst)
+    }
+
+    fn nacks(&self) -> usize {
+        self.nacks.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl RunQueuePort for AckNackQueue {
+    async fn enqueue(
+        &self,
+        run: QueuedRun,
+    ) -> Result<(), paladin_ports::output::run_queue_port::QueueError> {
+        self.inner.enqueue(run).await
+    }
+
+    async fn dequeue(
+        &self,
+        lease: Duration,
+    ) -> Result<
+        Option<paladin_ports::output::run_queue_port::LeasedRun>,
+        paladin_ports::output::run_queue_port::QueueError,
+    > {
+        self.inner.dequeue(lease).await
+    }
+
+    async fn extend_lease(
+        &self,
+        token: &paladin_ports::output::run_queue_port::LeaseToken,
+        lease: Duration,
+    ) -> Result<(), paladin_ports::output::run_queue_port::QueueError> {
+        self.inner.extend_lease(token, lease).await
+    }
+
+    async fn ack(
+        &self,
+        token: &paladin_ports::output::run_queue_port::LeaseToken,
+    ) -> Result<(), paladin_ports::output::run_queue_port::QueueError> {
+        self.acks.fetch_add(1, Ordering::SeqCst);
+        if self.fail_ack {
+            return Err(paladin_ports::output::run_queue_port::QueueError::Backend {
+                message: "injected ack failure".to_string(),
+            });
+        }
+        self.inner.ack(token).await
+    }
+
+    async fn nack(
+        &self,
+        token: &paladin_ports::output::run_queue_port::LeaseToken,
+        requeue_delay: Duration,
+    ) -> Result<(), paladin_ports::output::run_queue_port::QueueError> {
+        self.nacks.fetch_add(1, Ordering::SeqCst);
+        self.inner.nack(token, requeue_delay).await
+    }
+
+    async fn depth(&self) -> Result<u64, paladin_ports::output::run_queue_port::QueueError> {
+        self.inner.depth().await
+    }
+}
+
+/// Submit a fresh agent run over `repository`/`queue`, bind and subscribe the bus the way
+/// [`agent_kind_run_emits_exactly_one_terminal_event`] does, drive one `run_once`, and return the
+/// `run_once` result with the run id and every event the bus buffered.
+async fn drive_agent_run_collecting_events(
+    pool: &RunWorkerPool<InMemoryWaypointStore>,
+    bus: &Arc<super::events::RunEventBus>,
+    repository: &Arc<dyn RunRepositoryPort>,
+    queue: &Arc<dyn RunQueuePort>,
+) -> (
+    Result<bool, super::worker::WorkerError>,
+    RunId,
+    Vec<paladin_core::platform::container::run::RunStreamEvent>,
+) {
+    let (run_id, thread_id) = submit(repository, queue, "code-agent").await;
+    bus.bind(thread_id.clone(), run_id.clone()).await;
+    let mut rx = bus.subscribe(&run_id).await.expect("bound");
+    let result = pool.run_once().await;
+    let events = drain_events(&mut rx);
+    (result, run_id, events)
+}
+
+/// 45-REVIEW WR-04 (D-14, P-13-1): a completed agent run whose `Completed` status write fails
+/// publishes NO terminal event -- the row is still `running` and the message is redelivered --
+/// and the worker nacks instead of propagating the repository error.
+#[tokio::test]
+async fn agent_completion_whose_status_write_fails_emits_no_terminal_event_and_nacks() {
+    let repository = Arc::new(FailingWriteRepository::new(FailAt::StatusTo(
+        RunStatus::Completed,
+    )));
+    let repo_port: Arc<dyn RunRepositoryPort> = repository.clone();
+    let queue = Arc::new(AckNackQueue::new(false));
+    let queue_port: Arc<dyn RunQueuePort> = queue.clone();
+    let (pool, bus) = agent_pool_over(
+        Arc::new(AlwaysSucceedsPaladinPort),
+        repo_port.clone(),
+        queue_port.clone(),
+    );
+
+    let (result, run_id, events) =
+        drive_agent_run_collecting_events(&pool, &bus, &repo_port, &queue_port).await;
+
+    assert!(
+        matches!(result, Ok(true)),
+        "a failed status write nacks and returns Ok(true), got {result:?}"
+    );
+    assert_eq!(terminal_count(&events), 0, "got {events:?}");
+    assert_eq!((queue.acks(), queue.nacks()), (0, 1), "nack, never ack");
+    let run = repo_port.get(&run_id).await.unwrap().unwrap();
+    assert_eq!(run.status, RunStatus::Running, "the row never committed");
+}
+
+/// 45-REVIEW WR-04 (D-14, P-13-1): the same for a completed run whose outcome write fails.
+#[tokio::test]
+async fn agent_completion_whose_outcome_write_fails_emits_no_terminal_event_and_nacks() {
+    let repository = Arc::new(FailingWriteRepository::new(FailAt::Outcome));
+    let repo_port: Arc<dyn RunRepositoryPort> = repository.clone();
+    let queue = Arc::new(AckNackQueue::new(false));
+    let queue_port: Arc<dyn RunQueuePort> = queue.clone();
+    let (pool, bus) = agent_pool_over(
+        Arc::new(AlwaysSucceedsPaladinPort),
+        repo_port.clone(),
+        queue_port.clone(),
+    );
+
+    let (result, _run_id, events) =
+        drive_agent_run_collecting_events(&pool, &bus, &repo_port, &queue_port).await;
+
+    assert!(
+        matches!(result, Ok(true)),
+        "a failed outcome write nacks and returns Ok(true), got {result:?}"
+    );
+    assert_eq!(terminal_count(&events), 0, "got {events:?}");
+    assert_eq!((queue.acks(), queue.nacks()), (0, 1), "nack, never ack");
+}
+
+/// 45-REVIEW WR-04 (D-14, P-13-1): a completed run whose `ack` fails publishes no terminal
+/// event, and `run_once` returns the queue error (a nack on the same lease after a failed ack is
+/// not meaningful).
+#[tokio::test]
+async fn agent_completion_whose_ack_fails_emits_no_terminal_event() {
+    let repo_port: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+    let queue = Arc::new(AckNackQueue::new(true));
+    let queue_port: Arc<dyn RunQueuePort> = queue.clone();
+    let (pool, bus) = agent_pool_over(
+        Arc::new(AlwaysSucceedsPaladinPort),
+        repo_port.clone(),
+        queue_port.clone(),
+    );
+
+    let (result, _run_id, events) =
+        drive_agent_run_collecting_events(&pool, &bus, &repo_port, &queue_port).await;
+
+    assert!(
+        result.is_err(),
+        "the queue error propagates, got {result:?}"
+    );
+    assert_eq!(terminal_count(&events), 0, "got {events:?}");
+    assert_eq!(queue.nacks(), 0, "no nack after a failed ack");
+}
+
+/// 45-REVIEW WR-04 (D-14, P-13-1): a failed agent run whose `persist_failure` write fails
+/// publishes no `Failed` terminal event (no `error`), and the message is nacked.
+#[tokio::test]
+async fn agent_failure_whose_persist_fails_emits_no_terminal_event_and_nacks() {
+    let repository = Arc::new(FailingWriteRepository::new(FailAt::StatusTo(
+        RunStatus::Failed,
+    )));
+    let repo_port: Arc<dyn RunRepositoryPort> = repository.clone();
+    let queue = Arc::new(AckNackQueue::new(false));
+    let queue_port: Arc<dyn RunQueuePort> = queue.clone();
+    let (pool, bus) = agent_pool_over(
+        Arc::new(AlwaysFailsPaladinPort),
+        repo_port.clone(),
+        queue_port.clone(),
+    );
+
+    let (result, _run_id, events) =
+        drive_agent_run_collecting_events(&pool, &bus, &repo_port, &queue_port).await;
+
+    assert!(
+        matches!(result, Ok(true)),
+        "a failed persist nacks and returns Ok(true), got {result:?}"
+    );
+    assert_eq!(terminal_count(&events), 0, "got {events:?}");
+    assert!(
+        !events.iter().any(|e| e.kind == RunStreamEventKind::Error),
+        "no error event for an uncommitted failure, got {events:?}"
+    );
+    assert_eq!((queue.acks(), queue.nacks()), (0, 1), "nack, never ack");
 }
 
 // --- 51-15 (G-1, D-11): the single-agent NodeFinished carries the call's effort ---
@@ -1670,6 +2004,133 @@ async fn failed_agent_run_node_finished_carries_no_reasoning() {
     }
 }
 
+// --- 57-13 (45-REVIEW WR-06): a failed agent run reports the spend it incurred ---
+
+/// A [`PaladinPort`] standing in for a multi-loop agent whose first call was billed and
+/// whose second loop then failed: it records the first call into the active
+/// `ATTEMPT_SPEND` scope exactly as `PaladinExecutionService` does at every fold, then
+/// returns an error that carries no figures.
+struct SpendsThenFailsPaladinPort {
+    usage: TokenUsage,
+    cost: paladin_core::platform::container::cost::Cost,
+}
+
+#[async_trait]
+impl PaladinPort for SpendsThenFailsPaladinPort {
+    async fn execute(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinResult, PaladinError> {
+        paladin_ports::output::spend_scope::record_incurred_spend(&self.usage, Some(&self.cost));
+        Err(PaladinError::ExecutionError("second call failed".into()))
+    }
+
+    async fn execute_stream(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinStream, PaladinError> {
+        unreachable!("this test never calls execute_stream")
+    }
+
+    fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+        Ok(())
+    }
+}
+
+/// The `(usage, cost)` of the one persisted `NodeFinished` row and of the `RunFinished`
+/// row (with its status) of an agent run's trace.
+#[allow(clippy::type_complexity)]
+fn failed_run_figures(
+    rows: &[paladin_core::platform::container::trace::TraceRecord],
+) -> (
+    (
+        TokenUsage,
+        Option<paladin_core::platform::container::cost::Cost>,
+    ),
+    (
+        RunFinishStatus,
+        TokenUsage,
+        Option<paladin_core::platform::container::cost::Cost>,
+    ),
+) {
+    let node = rows
+        .iter()
+        .find_map(|r| match &r.event {
+            TraceEvent::NodeFinished { usage, cost, .. } => Some((usage.clone(), cost.clone())),
+            _ => None,
+        })
+        .expect("an agent run persists a NodeFinished row");
+    let run = rows
+        .iter()
+        .find_map(|r| match &r.event {
+            TraceEvent::RunFinished {
+                status,
+                usage,
+                cost,
+                ..
+            } => Some((*status, usage.clone(), cost.clone())),
+            _ => None,
+        })
+        .expect("an agent run persists a RunFinished row");
+    (node, run)
+}
+
+/// 45-REVIEW WR-06: a loop that was billed for a call and then failed reports exactly that
+/// usage and cost on its `NodeFinished` and, folded through the dispatcher, on `RunFinished`
+/// and the persisted trace -- not zero and `None`.
+#[tokio::test]
+async fn failed_agent_run_reports_the_spend_it_incurred_before_failing() {
+    use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+    use paladin_core::platform::container::waypoint::NodeOutcomeKind;
+
+    let usd = CurrencyCode::new("USD").expect("USD is valid");
+    let port = Arc::new(SpendsThenFailsPaladinPort {
+        usage: TokenUsage::new(1_000, 2_000),
+        cost: Cost::new(22_500_000, usd.clone()),
+    });
+    let (worker, repository, queue, traces) =
+        agent_pool_with_traces(port, Arc::new(AgentOnlyResolver));
+    let (_run_id, thread_id) = submit(&repository, &queue, "code-agent").await;
+
+    assert!(worker.run_once().await.unwrap());
+    let rows = read_agent_trace(&traces, &thread_id).await;
+    let (outcome, _, _) = node_finished_reasoning(&rows);
+    assert_eq!(outcome, NodeOutcomeKind::Failed);
+    let ((node_usage, node_cost), (status, run_usage, run_cost)) = failed_run_figures(&rows);
+    let expected_cost = Some(Cost::new(22_500_000, usd));
+    assert_eq!(
+        node_usage,
+        TokenUsage::new(1_000, 2_000),
+        "the failed NodeFinished carries the usage billed before the failure"
+    );
+    assert_eq!(node_cost, expected_cost, "and the cost billed before it");
+    assert_eq!(status, RunFinishStatus::Failed);
+    assert_eq!(run_usage, TokenUsage::new(1_000, 2_000));
+    assert_eq!(run_cost, expected_cost);
+}
+
+/// 45-REVIEW WR-06 guard: a first-call failure that billed nothing still reports zero usage
+/// and no cost -- the scope is read, not invented.
+#[tokio::test]
+async fn failed_agent_run_with_no_billed_call_reports_zero_spend() {
+    let (worker, repository, queue, traces) = agent_pool_with_traces(
+        Arc::new(AlwaysFailsPaladinPort),
+        Arc::new(AgentOnlyResolver),
+    );
+    let (_run_id, thread_id) = submit(&repository, &queue, "code-agent").await;
+
+    assert!(worker.run_once().await.unwrap());
+    let rows = read_agent_trace(&traces, &thread_id).await;
+    let ((node_usage, node_cost), (status, run_usage, run_cost)) = failed_run_figures(&rows);
+    assert_eq!(node_usage, TokenUsage::default());
+    assert_eq!(node_cost, None);
+    assert_eq!(status, RunFinishStatus::Failed);
+    assert_eq!(run_usage, TokenUsage::default());
+    assert_eq!(run_cost, None);
+}
+
 /// Drain every event currently buffered on `rx`.
 fn drain_events(
     rx: &mut tokio::sync::broadcast::Receiver<
@@ -1688,6 +2149,54 @@ fn terminal_count(events: &[paladin_core::platform::container::run::RunStreamEve
         .iter()
         .filter(|e| matches!(e.kind, RunStreamEventKind::Done | RunStreamEventKind::Error))
         .count()
+}
+
+/// 45-REVIEW WR-05 (D-14, T-57-17): [`bounded_run_error`] redacts secret
+/// shapes BEFORE it bounds the length (`security.instructions.md`:
+/// truncating first can slice a secret across the budget boundary and leak
+/// its tail), and leaves plain short text untouched.
+#[test]
+fn bounded_run_error_redacts_before_bounding() {
+    // A bare provider-key shape is redacted.
+    let redacted = bounded_run_error("boom: sk-agent-secret-marker");
+    assert!(
+        !redacted.contains("sk-agent-secret-marker"),
+        "got {redacted:?}"
+    );
+    assert!(redacted.starts_with("boom:"), "got {redacted:?}");
+
+    // A long body ending in a bearer token is bounded AND the token is gone.
+    let long = format!("{} Bearer abcdef0123456789", "x".repeat(5_000));
+    let bounded = bounded_run_error(&long);
+    assert!(
+        !bounded.contains("abcdef0123456789"),
+        "the trailing bearer token must not survive, got a {}-char string",
+        bounded.chars().count()
+    );
+    assert!(
+        bounded.chars().count() <= RUN_ERROR_CHAR_BUDGET + 64,
+        "bounded to the budget plus the elision marker, got {} chars",
+        bounded.chars().count()
+    );
+
+    // A secret straddling the budget boundary is not partially present:
+    // redaction runs first, so no fragment of the key survives truncation.
+    let straddle = format!(
+        "{}sk-straddle-secret-abcdefghij tail",
+        "y".repeat(RUN_ERROR_CHAR_BUDGET - 6)
+    );
+    let bounded = bounded_run_error(&straddle);
+    assert!(
+        !bounded.contains("straddle-secret") && !bounded.contains("abcdefghij"),
+        "no fragment of a boundary-straddling secret may remain, got {} chars",
+        bounded.chars().count()
+    );
+
+    // Plain short text round-trips unchanged.
+    assert_eq!(
+        bounded_run_error("Execution error: provider returned 503"),
+        "Execution error: provider returned 503"
+    );
 }
 
 /// D-15, T-45-08, T-45-10: every agent run ends with EXACTLY ONE terminal
@@ -1726,10 +2235,20 @@ async fn agent_kind_run_emits_exactly_one_terminal_event() {
     );
     let failed = repository.get(&run_id).await.unwrap().unwrap();
     assert_eq!(failed.status, RunStatus::Failed);
-    assert_eq!(
-        failed.error.as_deref(),
-        Some(format!("Execution error: {AGENT_FAILURE_TEXT}").as_str()),
-        "the failure text stays readable through GET /runs/{{id}}"
+    // 45-REVIEW WR-05 (D-14): the stored error is redacted before it is
+    // bounded and persisted, so the provider-secret marker never reaches
+    // `GET /runs/{id}` -- while the non-secret prefix stays diagnosable.
+    let stored_error = failed
+        .error
+        .as_deref()
+        .expect("a failed run stores its error");
+    assert!(
+        stored_error.starts_with("Execution error: llm exploded:"),
+        "the diagnosable prefix survives redaction, got {stored_error:?}"
+    );
+    assert!(
+        !stored_error.contains("sk-agent-secret-marker"),
+        "the stored run error must not carry the secret-shaped marker, got {stored_error:?}"
     );
 
     // --- success ---
@@ -2688,6 +3207,22 @@ pub(super) mod agent_budget {
     /// lifetime ceiling of `ceiling` nanos for `svc-a` (`None`: no ceiling for anyone) priced
     /// only for `priced_model`.
     fn harness(model: &str, priced_model: &str, ceiling: Option<i64>) -> Harness {
+        harness_over(
+            model,
+            priced_model,
+            ceiling,
+            Arc::new(InMemoryRunRepository::new()),
+        )
+    }
+
+    /// [`harness`] over an injected repository, for the tests that hand the worker a double that
+    /// fails one write (`FailingWriteRepository`).
+    fn harness_over(
+        model: &str,
+        priced_model: &str,
+        ceiling: Option<i64>,
+        repository: Arc<dyn RunRepositoryPort>,
+    ) -> Harness {
         let ledger = Arc::new(ReadCountingLedger::default());
         let mut policy = AllowancePolicy::new(usd(), 80);
         if let Some(cap) = ceiling {
@@ -2715,7 +3250,6 @@ pub(super) mod agent_budget {
             None,
         );
 
-        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
         let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
         let store = Arc::new(InMemoryWaypointStore::new());
         let resolver: Arc<dyn AssistantResolver> = Arc::new(LoopingAgentResolver {
@@ -2940,6 +3474,32 @@ pub(super) mod agent_budget {
         ));
     }
 
+    /// 45-REVIEW WR-04 (D-14, PD-13-2): a dispatch-time halt whose outcome write fails publishes
+    /// NO terminal event (the row never reached `halted`), makes no LLM call, and surfaces the
+    /// repository error exactly as before.
+    #[tokio::test]
+    async fn agent_kind_halt_whose_outcome_write_fails_emits_no_terminal_event() {
+        let repository: Arc<dyn RunRepositoryPort> =
+            Arc::new(FailingWriteRepository::new(FailAt::Outcome));
+        let h = harness_over("gpt-4", "gpt-4", Some(CEILING_NANOS), repository);
+        let (_run_id, mut rx) = submit_agent_run(&h, true).await;
+        spend(&h, CEILING_NANOS).await;
+
+        let result = h.pool.run_once().await;
+
+        assert!(
+            result.is_err(),
+            "the halt's repository error propagates, got {result:?}"
+        );
+        assert_eq!(
+            h.llm.call_count(),
+            0,
+            "no LLM call once the allowance is spent"
+        );
+        let events = drain_events(&mut rx);
+        assert_eq!(terminal_count(&events), 0, "got {events:?}");
+    }
+
     /// A8, D-03: an unreadable ledger at dispatch fails closed -- `Halted` with
     /// `ledger_unavailable`, no LLM call, no figures.
     #[tokio::test]
@@ -2970,10 +3530,11 @@ pub(super) mod agent_budget {
         );
     }
 
-    /// D-10: a model that lost its price row between admission and dispatch is `Failed` with a
-    /// typed error naming the model -- not a halt, and never a run of unmetered spend.
+    /// D-10, amended by FIXES-03 / D-04: a model that lost its price row between admission and
+    /// dispatch is `Halted` with `model_unpriced` naming the model -- a resume point once the
+    /// operator adds the row, and never a run of unmetered spend (the LLM is not called).
     #[tokio::test]
-    async fn agent_kind_run_whose_model_became_unpriced_fails_without_calling_the_llm() {
+    async fn agent_kind_run_whose_model_became_unpriced_halts_without_calling_the_llm() {
         let h = harness("gpt-4", "some-other-model", Some(CEILING_NANOS));
         let (run_id, mut rx) = submit_agent_run(&h, true).await;
 
@@ -2981,19 +3542,25 @@ pub(super) mod agent_budget {
 
         assert_eq!(h.llm.call_count(), 0);
         let run = h.repository.get(&run_id).await.unwrap().unwrap();
-        assert_eq!(run.status, RunStatus::Failed);
-        assert!(run.halt_reason.is_none());
-        let error = run.error.as_deref().expect("the typed error is on the row");
-        assert!(error.contains("gpt-4"), "names the model: {error}");
+        assert_eq!(run.status, RunStatus::Halted);
+        assert!(run.error.is_none(), "a halt is not a failure");
         assert!(
-            error.contains("treasurer.pricing"),
-            "names the missing row: {error}"
+            run.output.is_none(),
+            "nothing ran, so there is no partial output"
         );
+        let reason = HaltReason::ModelUnpriced {
+            model: "gpt-4".into(),
+        };
+        assert_eq!(run.halt_reason, Some(reason.clone()));
         let events = drain_events(&mut rx);
         assert_eq!(terminal_count(&events), 1, "got {events:?}");
-        assert_eq!(events.last().unwrap().kind, RunStreamEventKind::Error);
-        let (event, _payload) = only_delivery(&h, &run_id).await;
-        assert_eq!(event, RunEventKind::Failed);
+        let terminal = events.last().unwrap();
+        assert_eq!(terminal.kind, RunStreamEventKind::Done);
+        assert_eq!(terminal.payload["status"], "halted");
+        assert_eq!(terminal.payload["halt_reason"], reason.wire_json());
+        let (event, payload) = only_delivery(&h, &run_id).await;
+        assert_eq!(event, RunEventKind::Halted);
+        assert_eq!(payload["halt_reason"], reason.wire_json());
     }
 
     /// A principal with no configured ceiling, and a run that records no submitter, complete as

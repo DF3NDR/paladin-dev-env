@@ -144,7 +144,7 @@ battalion:
 paladins:
   classifier:
     system_prompt: "Classify content into categories..."
-    model: gpt-4
+    model: gpt-4o-mini
     temperature: 0.3
   # ... additional paladins
 
@@ -368,7 +368,7 @@ paladin muster --output v2.yaml --task "improved description"
 **Solution:**
 ```bash
 # Check API keys and provider configuration
-paladin setup-check
+paladin-cli setup-check
 
 # Try a different provider
 paladin muster --task "..." --provider deepseek
@@ -384,7 +384,7 @@ paladin muster --task "simplified version of workflow"
 paladin-cli muster --help
 
 # Check provider status
-paladin setup-check
+paladin-cli setup-check
 
 # Enable verbose output for debugging
 paladin muster --task "..." --verbose

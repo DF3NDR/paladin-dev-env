@@ -189,7 +189,7 @@ use paladin_core::platform::container::waypoint::NodeId;
 let evaluator = LlmDecisionEvaluator::new(
     "route_urgency",
     llm.clone(),
-    "gpt-4",
+    "gpt-4o-mini",
     "Is this urgent? Reply escalate or archive.\n\n{output}",
     vec![
         ("escalate".to_string(), NodeId::new("urgent_handler")),
@@ -221,7 +221,7 @@ let commander = CommanderBuilder::new(paladin_port)
     .paladins(paladins)
     .strategy_selection(StrategySelection::Semantic {
         llm: llm.clone(),
-        model: "gpt-4".to_string(),
+        model: "gpt-4o-mini".to_string(),
     })
     .build()?;
 ```

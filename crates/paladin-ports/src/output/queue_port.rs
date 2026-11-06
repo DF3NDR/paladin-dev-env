@@ -324,13 +324,13 @@
 //!
 //! ## Related Modules
 //!
-//! - [`QueueItem`](paladin_core::platform::container::queue_item::QueueItem) - Queue item structure
-//! - [`QueueItemConfig`](paladin_core::platform::container::queue_item::QueueItemConfig) - Item configuration
-//! - [`QueueConfig`](paladin_core::platform::container::queue_config::QueueConfig) - Queue configuration
+//! - [`QueueItem`] - Queue item structure
+//! - [`QueueItemConfig`] - Item configuration
+//! - [`QueueConfig`] - Queue configuration
 //! - [`QueueStats`] - Queue statistics
 //! - [`QueueError`] - Error types
 //! - [`Message`](paladin_core::base::entity::message::Message) - Message wrapper
-//! - [`MessagePriority`](paladin_core::base::entity::message::MessagePriority) - Priority levels
+//! - [`MessagePriority`] - Priority levels
 //!
 //! ## See Also
 //!

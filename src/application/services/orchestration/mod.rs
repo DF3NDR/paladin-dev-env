@@ -366,7 +366,7 @@ impl Orchestrator {
     /// Execute a previously-created workflow end-to-end.
     ///
     /// Runs the workflow's jobs according to its
-    /// [`WorkflowExecutionOrder`](crate::core::platform::container::workflow::WorkflowExecutionOrder):
+    /// [`WorkflowExecutionOrder`]:
     ///
     /// - `Sequential`: jobs run in order; output of job `N` is threaded into the
     ///   context consumed by job `N+1`. Execution stops at the first failure.

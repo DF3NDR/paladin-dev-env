@@ -15,7 +15,7 @@
 //!
 //! # Modules
 //!
-//! ## [services]
+//! ## \[services\]
 //!
 //! Application services that implement and orchestrate business workflows:
 //!
@@ -31,11 +31,11 @@
 //! in the [`paladin_battalion`] crate and are re-exported via
 //! [`services::battalion`](crate::application::services::battalion).
 //!
-//! ## [errors]
+//! ## \[errors\]
 //!
 //! Facade-level cross-cutting error types (e.g. `PlanningError`, `PromptError`).
 //!
-//! ## [cli] (feature `cli`)
+//! ## \[cli\] (feature `cli`)
 //!
 //! Command-line interface: command implementations, config loaders, formatters, interactive
 //! prompts, and templates.

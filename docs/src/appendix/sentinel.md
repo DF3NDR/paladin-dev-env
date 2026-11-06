@@ -63,7 +63,7 @@ Sentinel follows Paladin's hexagonal architecture:
 ```toml
 # Cargo.toml
 [dependencies]
-paladin-ai = "0.5"
+paladin-ai = "0.11.1"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -548,7 +548,7 @@ paladins:
 
   - name: "Reporter"
     system_prompt: "Generate analysis report"
-    model: "gpt-4"
+    model: "gpt-4o-mini"
     vision_enabled: false
 
 images:

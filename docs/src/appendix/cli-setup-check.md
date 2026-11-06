@@ -4,7 +4,7 @@ Comprehensive environment validation to ensure your Paladin installation is corr
 
 ## Overview
 
-The `paladin setup-check` command validates your entire Paladin environment:
+The `paladin-cli setup-check` command validates your entire Paladin environment:
 - System requirements (CLI version, Rust toolchain)
 - Environment configuration (.env file, API keys)
 - LLM provider connectivity (OpenAI, Anthropic, DeepSeek)
@@ -14,13 +14,13 @@ The `paladin setup-check` command validates your entire Paladin environment:
 
 ```bash
 # Basic validation
-paladin setup-check
+paladin-cli setup-check
 
 # Detailed output with timing
-paladin setup-check --verbose
+paladin-cli setup-check --verbose
 
 # Minimal output (CI-friendly)
-paladin setup-check --quiet
+paladin-cli setup-check --quiet
 ```
 
 ## Command Options
@@ -119,6 +119,7 @@ Providers:
   - Authentication
   - API version compatibility
   - Response time
+  - The request goes to the Anthropic adapter's default model (the seeded model the CLI was built with). A failure names that model and quotes Anthropic's reply with credentials redacted.
 
 - **DeepSeek** (`GET /models`)
   - Authentication
@@ -185,7 +186,7 @@ The command returns different exit codes based on results:
 ```bash
 #!/bin/bash
 
-paladin setup-check --quiet
+paladin-cli setup-check --quiet
 status=$?
 
 case $status in
@@ -241,7 +242,7 @@ All critical checks passed!
 Includes additional diagnostic information:
 
 ```bash
-paladin setup-check --verbose
+paladin-cli setup-check --verbose
 ```
 
 ```
@@ -339,7 +340,7 @@ Providers:
 
 3. **Re-run onboarding:**
    ```bash
-   paladin onboarding
+   paladin-cli onboarding
    ```
 
 **Problem:** Connection timeout
@@ -363,7 +364,7 @@ Providers:
 
 3. **Increase timeout:**
    ```bash
-   PALADIN_REQUEST_TIMEOUT=10000 paladin setup-check
+   PALADIN_REQUEST_TIMEOUT=10000 paladin-cli setup-check
    ```
 
 ### Service Checks Fail
@@ -406,7 +407,7 @@ Use in CI/CD pipelines:
 # GitHub Actions
 - name: Validate Paladin Environment
   run: |
-    paladin setup-check --quiet
+    paladin-cli setup-check --quiet
   env:
     OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 ```
@@ -416,7 +417,7 @@ Use in CI/CD pipelines:
 stage('Validate Environment') {
   steps {
     sh '''
-      paladin setup-check --quiet
+      paladin-cli setup-check --quiet
       if [ $? -ne 0 ]; then
         echo "Environment validation failed"
         exit 1
@@ -428,7 +429,7 @@ stage('Validate Environment') {
 
 ## Related Commands
 
-- **[`paladin onboarding`](cli-onboarding.md)** - Set up environment from scratch
+- **[`paladin-cli onboarding`](cli-onboarding.md)** - Set up environment from scratch
 - **[`paladin features`](cli-usage.md)** - Check available features
 - **[`paladin agent run`](cli-usage.md)** - Run agents after validation
 

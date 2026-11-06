@@ -20,6 +20,7 @@ decisions:
 metrics:
   completed: 2026-10-23
 requirements: [REASON-05]
+requirements-completed: [REASON-05]
 status: complete
 ---
 
@@ -75,3 +76,7 @@ None. T-51-43 (repudiation) and T-51-44 (information disclosure) are mitigated a
 - 1a9e4bca: test(51-15): agent-run trace reasoning guards (D-11)
 
 ## Self-Check: PASSED
+
+## Requirements-completed amended (Phase 57, 2026-11-04)
+
+This was the last plan that progressed REASON-05 per `51-VERIFICATION.md`, whose requirements table reads `| REASON-05 | 03, 05, 07, 09, 12, 15 | SATISFIED | Truth 5; both trace paths now fill the fields |`. Recorded under D-41; this plan previously carried no `requirements-completed` key, so one is added.

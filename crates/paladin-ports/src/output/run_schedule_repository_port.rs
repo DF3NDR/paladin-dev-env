@@ -1,12 +1,12 @@
 //! Run Schedule Repository Port — Restart- and Replica-Safe Ticks (D-36, D-37)
 //!
-//! [`RunScheduleRepositoryPort`] is the whole contract every backend adapter
+//! [`RunScheduleRepositoryPort`](crate::output::run_schedule_repository_port::RunScheduleRepositoryPort) is the whole contract every backend adapter
 //! (`InMemoryRunScheduleRepository`, `SqliteRunScheduleRepository`,
 //! `PostgresRunScheduleRepository`, all `paladin-storage`) implements.
 //!
 //! ## `claim_tick` is the whole restart/replica-safety story (D-37)
 //!
-//! [`RunScheduleRepositoryPort::claim_tick`] is a conditional update: it
+//! [`RunScheduleRepositoryPort::claim_tick`](crate::output::run_schedule_repository_port::RunScheduleRepositoryPort::claim_tick) is a conditional update: it
 //! succeeds (`true`) for exactly one caller when several race the same
 //! `expected_next`, and every other racing caller sees `false`. A caller only
 //! submits a run when its own `claim_tick` call returned `true` — this is

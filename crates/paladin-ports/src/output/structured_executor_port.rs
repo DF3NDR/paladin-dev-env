@@ -1,14 +1,14 @@
 //! Structured Executor Port — the bounded JSON-schema repair loop (RT-05,
 //! RT-FR-17…19, D-26, D-27).
 //!
-//! [`StructuredExecutorPort`] is object-safe at the JSON level (D-27): the
+//! [`StructuredExecutorPort`](crate::output::structured_executor_port::StructuredExecutorPort) is object-safe at the JSON level (D-27): the
 //! generic, typed `execute_structured<T>` extension (schema derived via
 //! `schemars::schema_for!`, value validated via `serde_json::from_value`) is
 //! a facade-side blanket implementation over `T: StructuredExecutorPort +
 //! ?Sized` (plan 26-17), not part of this trait — keeping this trait itself
 //! dyn-compatible for `Arc<dyn StructuredExecutorPort>`.
 //!
-//! [`run_structured`] is the generic bounded repair-loop driver both plan
+//! [`run_structured`](crate::output::structured_executor_port::run_structured) is the generic bounded repair-loop driver both plan
 //! 26-17's service implementation and plan 26-18's engine node path share:
 //! parameterizing it over `execute_fn` (how the model is actually called) is
 //! what lets one implementation of the loop serve both callers, rather than
@@ -153,8 +153,8 @@ fn repair_prompt(
 ///
 /// The loop: attempt 1 calls `execute_fn` with `input` plus
 /// [`render_instruction_block`]. The output is run through
-/// [`extract_json`](paladin_core::platform::container::structured::extract_json)
-/// then [`shape_check`](paladin_core::platform::container::structured::shape_check);
+/// [`extract_json`]
+/// then [`shape_check`];
 /// on either failure, if attempts remain (`opts.max_repair_attempts`),
 /// `execute_fn` is called again with a re-prompt carrying the failure AND
 /// the offending output verbatim (via the crate-private `repair_prompt`

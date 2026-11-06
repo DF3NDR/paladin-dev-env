@@ -12,6 +12,9 @@ use std::fs;
 use std::io::Read;
 use std::path::Path;
 
+/// Refusal text returned by `ingest_content` once validation has passed (FIXES-02, D-03).
+const INGEST_CONTENT_UNFINISHED: &str = "FileContentFetcher::ingest_content is unfinished: content ingestion is not implemented, nothing was stored";
+
 #[doc(hidden)]
 pub struct FileContentFetcher;
 
@@ -63,8 +66,8 @@ impl FileContentFetcher {
     fn create_video_content(&self, path: &Path) -> Result<ContentType, String> {
         let path_str = path.to_string_lossy().to_string();
 
-        // For now, we'll use a placeholder duration
-        // In a real implementation, you'd use a library like ffmpeg-rust to get actual duration
+        // Unfinished: `get_video_duration` always answers `None` (no media library is chosen),
+        // and `VideoContent` has no "unknown" duration, so an unknown duration is recorded as 0.
         let duration = self.get_video_duration(path).unwrap_or(0);
 
         let video_content =
@@ -76,8 +79,8 @@ impl FileContentFetcher {
     fn create_audio_content(&self, path: &Path) -> Result<ContentType, String> {
         let path_str = path.to_string_lossy().to_string();
 
-        // For now, we'll use a placeholder duration
-        // In a real implementation, you'd use a library like symphonia or rodio to get actual duration
+        // Unfinished: `get_audio_duration` always answers `None` (no media library is chosen),
+        // and `AudioContent` has no "unknown" duration, so an unknown duration is recorded as 0.
         let duration = self.get_audio_duration(path).unwrap_or(0);
 
         let audio_content =
@@ -89,8 +92,9 @@ impl FileContentFetcher {
     fn create_image_content(&self, path: &Path) -> Result<ContentType, String> {
         let path_str = path.to_string_lossy().to_string();
 
-        // For now, we'll use placeholder dimensions
-        // In a real implementation, you'd use a library like image-rs to get actual dimensions
+        // Unfinished: `get_image_dimensions` always answers `None` (no image library is chosen),
+        // and `ImageContent` has no "unknown" resolution, so unknown dimensions are recorded as
+        // (0, 0).
         let resolution = self.get_image_dimensions(path).unwrap_or((0, 0));
 
         let image_content =
@@ -99,21 +103,18 @@ impl FileContentFetcher {
         Ok(ContentType::Image(image_content))
     }
 
-    // Placeholder methods for media metadata extraction
-    // These would be implemented using appropriate media libraries
+    /// Not implemented: always returns `None` (which media library would back it is not decided).
     fn get_video_duration(&self, _path: &Path) -> Option<u64> {
-        // TODO: Implement using ffmpeg-rust or similar
         None
     }
 
+    /// Not implemented: always returns `None` (which media library would back it is not decided).
     fn get_audio_duration(&self, _path: &Path) -> Option<u64> {
-        // TODO: Implement using symphonia, rodio, or similar
         None
     }
 
+    /// Not implemented: always returns `None` (which media library would back it is not decided).
     fn get_image_dimensions(&self, _path: &Path) -> Option<(u32, u32)> {
-        // TODO: Implement using image crate
-        // You'll need to add `image = "0.24"` to Cargo.toml
         None
     }
 }
@@ -149,9 +150,20 @@ impl ContentIngestionPort for FileContentFetcher {
         Ok(content_item)
     }
 
+    /// Validates the item, then refuses: content ingestion is **unfinished**.
+    ///
+    /// Each content type still requires a URL, so a URL-less item gets its specific
+    /// `<Type> content requires a URL` error. A well-formed item then gets an `Err` naming this
+    /// method, because nothing is stored, indexed or thumbnailed; reporting `Ok(())` would tell
+    /// the caller its content was ingested when it was not. The decision is recorded in
+    /// `.planning/phases/55-correctness-fixes-test-hygiene-lint-bar/55-BASE-LAYER-REVIEW.md`.
+    ///
+    /// # Errors
+    ///
+    /// Always returns `Err`: a validation message for an item without a URL, otherwise the
+    /// unfinished-ingestion refusal.
     fn ingest_content(&self, content: ContentItem) -> Result<(), String> {
-        // This would implement the logic to store the content in your system
-        // For now, we'll just validate that the content is properly formed
+        // Validate that the content is properly formed before refusing.
         match content.content() {
             ContentType::Text(_) => {
                 // Validate text content
@@ -179,14 +191,8 @@ impl ContentIngestionPort for FileContentFetcher {
             }
         }
 
-        // TODO: Implement actual ingestion logic
-        // This might involve:
-        // - Storing content in a repository
-        // - Creating search indices
-        // - Generating thumbnails for images/videos
-        // - Extracting metadata
-
-        Ok(())
+        // Unfinished: refuse rather than report a success that stored nothing (FIXES-02, D-03).
+        Err(INGEST_CONTENT_UNFINISHED.to_string())
     }
 }
 
@@ -305,23 +311,27 @@ mod tests {
     }
 
     #[test]
-    fn test_ingest_content_validation() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_ingest_content_refuses_valid_content_as_unfinished()
+    -> Result<(), Box<dyn std::error::Error>> {
         let fetcher = FileContentFetcher;
 
-        // Test with valid content
+        // A valid item passes validation and is then refused: nothing is stored.
         let text_content = TextContent::new(None, Some("test".to_string()))?;
         let mut valid_content = ContentItem::new(ContentType::Text(text_content))?;
         valid_content.set_url(Some(Url::parse("file:///test.txt")?));
 
         let result = fetcher.ingest_content(valid_content);
-        assert!(result.is_ok());
+        assert_eq!(
+            result,
+            Err("FileContentFetcher::ingest_content is unfinished: content ingestion is not implemented, nothing was stored".to_string())
+        );
 
-        // Test with invalid content (no URL)
+        // An item without a URL still gets its specific validation error.
         let text_content = TextContent::new(None, Some("test".to_string()))?;
         let invalid_content = ContentItem::new(ContentType::Text(text_content))?;
 
         let result = fetcher.ingest_content(invalid_content);
-        assert!(result.is_err());
+        assert_eq!(result, Err("Text content requires a URL".to_string()));
 
         Ok(())
     }

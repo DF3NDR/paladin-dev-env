@@ -1,6 +1,6 @@
 //! # Cancellation Probe Port — Cross-Instance Cancellation (PLAT-FR-04, D-14)
 //!
-//! Defines [`CancellationProbe`], the seam a durable, cross-instance cancel
+//! Defines [`CancellationProbe`](crate::output::cancellation_probe::CancellationProbe), the seam a durable, cross-instance cancel
 //! signal attaches to the superstep engine through. `WarEngine::
 //! with_cancellation_probe` (`paladin-battalion`) consults an attached probe
 //! at every superstep boundary, BESIDE — never instead of — the existing
@@ -13,7 +13,7 @@
 //! that holds the `Arc` can fire it. Phase 27's Platform API runs workers
 //! across multiple instances (`RunWorkerPool`), so `POST /runs/{id}/cancel`
 //! landing on instance B must still reach a run executing on instance A.
-//! [`CancellationProbe`] is the engine-side half of that mechanism: an
+//! [`CancellationProbe`](crate::output::cancellation_probe::CancellationProbe) is the engine-side half of that mechanism: an
 //! adapter backed by the run repository (`DbCancellationProbe`, the facade
 //! crate) answers "has someone durably requested cancellation for this
 //! thread's run?" by reading a flag written through ANY instance's
@@ -21,7 +21,7 @@
 //!
 //! ## Infallible by design — a probe failure must never fail a run
 //!
-//! [`CancellationProbe::is_cancelled`] returns a plain `bool`, never a
+//! [`CancellationProbe::is_cancelled`](crate::output::cancellation_probe::CancellationProbe::is_cancelled) returns a plain `bool`, never a
 //! `Result`. This mirrors [`crate::output::trace_sink_port`]'s "errors are
 //! diagnostics only" contract, but goes one step further: there is no
 //! `Result` at all for a caller to even consider inspecting. An adapter
@@ -31,7 +31,7 @@
 //!
 //! ## Policy in the adapter, mechanism in the engine (D-15)
 //!
-//! The engine calls [`CancellationProbe::is_cancelled`] once per superstep
+//! The engine calls [`CancellationProbe::is_cancelled`](crate::output::cancellation_probe::CancellationProbe::is_cancelled) once per superstep
 //! boundary, unconditionally and simply — it has no opinion about how
 //! expensive that call is. Debouncing (caching an answer for a configured
 //! interval so a fast graph cannot hammer the database) is entirely the

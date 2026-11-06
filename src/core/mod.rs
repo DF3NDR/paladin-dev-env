@@ -14,14 +14,14 @@
 //!
 //! # Modules
 //!
-//! ## [base]
+//! ## \[base\]
 //!
 //! Foundation types and patterns used throughout the core domain:
 //! - [`Entity<T>`](crate::core::base::entity::Entity) - Entity wrapper with UUID, timestamps, versioning
 //! - Collection management utilities
 //! - Field definitions and message types
 //!
-//! ## [platform]
+//! ## \[platform\]
 //!
 //! Domain entities representing the Paladin multi-agent system:
 //!

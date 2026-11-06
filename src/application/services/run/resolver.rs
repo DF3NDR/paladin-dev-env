@@ -1,6 +1,6 @@
 //! Assistant resolver seam (D-33's predecessor, scoped to this tracer
 //! slice): resolves an assistant reference to a runnable engine artifact
-//! without [`super::submission::RunSubmissionService`] or the web layer
+//! without [`super::submission::RunSubmissionService`](crate::application::services::run::submission::RunSubmissionService) or the web layer
 //! needing to know how resolution works.
 
 use std::collections::HashMap;

@@ -1,7 +1,7 @@
 //! Facade `ParleyPort` Adapter Over a Real `WarEngine` (HITL-05, D-25)
 //!
 //! [`ParleyPortAdapter`] implements `paladin-ports`'
-//! [`ParleyPort`](paladin_ports::input::parley_port::ParleyPort) over a real
+//! [`ParleyPort`] over a real
 //! `WarEngine`: it resolves the thread's own graph through a
 //! [`GraphRegistry`](super::registry::GraphRegistry) (D-26), validates a
 //! submission, and either returns a typed error synchronously (nothing

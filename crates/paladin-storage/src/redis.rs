@@ -17,17 +17,59 @@ use paladin_ports::output::queue_port::{
 };
 use paladin_ports::output::queue_port::{QueueError, QueueStats};
 
+/// A secret as `Debug` prints it: `<redacted>`, or `""` when empty.
+///
+/// A module-private copy of the three-line rule in `paladin_llm::redaction::RedactedKey` (and
+/// paladin-ai's `config::redaction::RedactedSecret`), both `pub(crate)` there. Neither is
+/// reachable from this crate, and a shared helper here would need a `lib.rs` change, so this
+/// file carries its own (the paladin-notifications DF-07 precedent; R-95).
+struct RedactedSecret<'a>(&'a str);
+
+impl std::fmt::Debug for RedactedSecret<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0.is_empty() {
+            f.write_str("\"\"")
+        } else {
+            f.write_str("<redacted>")
+        }
+    }
+}
+
 /// Configuration for Redis connection
+///
+/// `Debug` is implemented by hand: it prints `redis_password` as `<redacted>` when one is set
+/// (the derived `Debug` printed it), and `Serialize` omits the password altogether. Loading is
+/// unchanged, so the password is still optional when a value is deserialised (R-95).
 #[doc(hidden)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct RedisQueueConfig {
     pub redis_host: String,
     pub redis_port: u16,
+    /// Never written by `Serialize` (`skip_serializing`, no serde default) and printed as
+    /// `<redacted>` by `Debug`.
+    #[serde(skip_serializing)]
     pub redis_password: Option<String>,
     pub redis_db: u8,
     pub connection_timeout: u64,
     pub key_prefix: String,
     pub max_retries: u32,
+}
+
+impl std::fmt::Debug for RedisQueueConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RedisQueueConfig")
+            .field("redis_host", &self.redis_host)
+            .field("redis_port", &self.redis_port)
+            .field(
+                "redis_password",
+                &self.redis_password.as_deref().map(RedactedSecret),
+            )
+            .field("redis_db", &self.redis_db)
+            .field("connection_timeout", &self.connection_timeout)
+            .field("key_prefix", &self.key_prefix)
+            .field("max_retries", &self.max_retries)
+            .finish()
+    }
 }
 
 impl Default for RedisQueueConfig {
@@ -1620,6 +1662,92 @@ mod tests {
         assert_eq!(config.connection_timeout, 30);
         assert_eq!(config.key_prefix, "paladin:queue");
         assert_eq!(config.max_retries, 3);
+    }
+
+    /// R-95 (58-06 register, 56-REVIEW WR-09 class): serialising a
+    /// `RedisQueueConfig` must not write the password.
+    #[test]
+    fn redis_queue_config_serialisation_omits_the_redis_password() {
+        let sentinel = "test-key-not-a-secret-r95-redis-queue-password";
+        let config = RedisQueueConfig {
+            redis_password: Some(sentinel.to_string()),
+            ..test_config()
+        };
+        assert_eq!(config.redis_password.as_deref(), Some(sentinel));
+        let value = serde_json::to_value(&config).expect("RedisQueueConfig serialises");
+        let object = value.as_object().expect("serialises as an object");
+        assert!(
+            !object.contains_key("redis_password"),
+            "RedisQueueConfig serialised `redis_password`"
+        );
+        assert!(
+            !value.to_string().contains(sentinel),
+            "RedisQueueConfig serialisation carries the password value"
+        );
+        // Non-vacuous: the neighbouring fields are still written.
+        assert_eq!(object["redis_host"], "localhost");
+        assert_eq!(object["key_prefix"], "test-prefix");
+    }
+
+    /// R-95 (DF-07 class): a `Debug` rendering must not carry the password.
+    #[test]
+    fn redis_queue_config_debug_redacts_the_redis_password() {
+        let sentinel = "test-key-not-a-secret-r95-redis-queue-password";
+        let config = RedisQueueConfig {
+            redis_host: "queue.example.internal".to_string(),
+            redis_password: Some(sentinel.to_string()),
+            ..test_config()
+        };
+        assert_eq!(config.redis_password.as_deref(), Some(sentinel));
+        let rendered = format!("{config:?}");
+        assert!(
+            !rendered.contains(sentinel),
+            "password leaked into Debug output: {rendered}"
+        );
+        assert!(
+            rendered.contains("<redacted>"),
+            "marker missing: {rendered}"
+        );
+        assert!(rendered.contains("queue.example.internal"));
+        assert!(rendered.contains("test-prefix"));
+
+        let unset = format!("{:?}", test_config());
+        assert!(unset.contains("redis_password: None"), "{unset}");
+    }
+
+    /// R-95 drift guard: the pretty `Debug` of a default config names every
+    /// serialised field plus `redis_password`, so a later field cannot be
+    /// dropped from (or silently left out of) the hand-written `Debug`.
+    #[test]
+    fn redis_queue_config_debug_names_every_field() {
+        let rendered = format!("{:#?}", RedisQueueConfig::default());
+        let value = serde_json::to_value(RedisQueueConfig::default()).expect("serialises");
+        let object = value.as_object().expect("serialises as an object");
+        for key in object.keys().map(String::as_str).chain(["redis_password"]) {
+            assert!(
+                rendered.contains(&format!("{key}:")),
+                "Debug output does not name `{key}`: {rendered}"
+            );
+        }
+    }
+
+    /// R-95 load pin: a JSON value carrying `redis_password` still loads it.
+    #[test]
+    fn redis_queue_config_still_loads_a_redis_password() {
+        let sentinel = "test-key-not-a-secret-r95-redis-queue-loaded";
+        let value = serde_json::json!({
+            "redis_host": "queue.example.internal",
+            "redis_port": 6379,
+            "redis_password": sentinel,
+            "redis_db": 1,
+            "connection_timeout": 30,
+            "key_prefix": "test-prefix",
+            "max_retries": 3,
+        });
+        let config: RedisQueueConfig =
+            serde_json::from_value(value).expect("a value with a password loads");
+        assert_eq!(config.redis_password.as_deref(), Some(sentinel));
+        assert_eq!(config.redis_host, "queue.example.internal");
     }
 
     #[test]

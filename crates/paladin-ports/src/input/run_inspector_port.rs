@@ -1,23 +1,23 @@
 //! Run Inspector Port — a core-typed view of "what happened on this
 //! thread" (D-24, OBS-03 / OBS-FR-10).
 //!
-//! [`RunInspectorPort`] lets `paladin-web` render the `dev-ui` run
+//! [`RunInspectorPort`](crate::input::run_inspector_port::RunInspectorPort) lets `paladin-web` render the `dev-ui` run
 //! inspector page (`GET /v1/dev-ui/threads/{id}`) without ever learning the
 //! graph vocabulary -- it never imports the battalion orchestration crate,
 //! never sees a `GraphShape`, a `WarGraph`, or a `TraceEvent` (ADR-0031). Every field on
-//! [`InspectorView`] is a core value type (ADR-0016), mirroring
+//! [`InspectorView`](crate::input::run_inspector_port::InspectorView) is a core value type (ADR-0016), mirroring
 //! [`crate::input::run_event_stream_port`]'s own "core-typed only"
 //! convention -- one input port, one method, the facade decides everything
 //! behind it.
 //!
 //! # `field_changes` carries names only, always (T-28-14-01)
 //!
-//! [`SuperstepRow::field_changes`] is `Vec<FieldName>` by TYPE -- there is
+//! [`SuperstepRow::field_changes`](crate::input::run_inspector_port::SuperstepRow::field_changes) is `Vec<FieldName>` by TYPE -- there is
 //! no configuration, flag, or opt-in that puts a `Battlefield` field VALUE
 //! anywhere on this view. A `DeltaMerged` trace record's own opt-in
 //! `value`/`value_bytes` (D-05, `trace.state_values`) is never read by the
 //! facade implementation of this port. This is a type-level guarantee, not
-//! a redaction step: there is nowhere on [`InspectorView`] a value could be
+//! a redaction step: there is nowhere on [`InspectorView`](crate::input::run_inspector_port::InspectorView) a value could be
 //! placed even by mistake.
 //!
 //! # `ThreadId` is not an authorization boundary

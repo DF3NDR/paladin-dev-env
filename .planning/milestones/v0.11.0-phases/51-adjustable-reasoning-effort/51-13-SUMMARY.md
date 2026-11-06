@@ -56,7 +56,7 @@ key-decisions:
 patterns-established:
   - "Plan 51-14 can run the page's llm.kimi block verbatim against the live API."
 
-requirements-completed: []
+requirements-completed: [REASON-02]
 requirements-progress: [REASON-02, REASON-06, REASON-07]
 
 duration: about 3h (cold worktree build, tracer checkpoint round trip)
@@ -146,3 +146,7 @@ None. The only new surface is documentation and a cfg(test) module. T-51-38 (a d
 - Files present: `docs/src/user-guides/reasoning-effort.md`, `.planning/decisions/0062-reasoning-effort-fail-loud-policy.md`, `.planning/phases/51-adjustable-reasoning-effort/deferred-items.md`, and every file in `key-files.modified`.
 - Commits `c69b7cf6`, `cb549e74`, `5918ed83` and `ecd85ffe` present on `worktree-agent-a2eb16aa98b074555`.
 - `ls .planning/decisions/0062-*.md` lists exactly one file; ADR-0061's diff is the one appended pointer line.
+
+## Requirements-completed amended (Phase 57, 2026-11-04)
+
+This was the last plan that progressed REASON-02 per `51-VERIFICATION.md`, whose requirements table reads `| REASON-02 | 01, 03-06, 11-13 | SATISFIED | Truth 2 |`. Recorded under D-41; the `requirements-progress` key is unchanged.

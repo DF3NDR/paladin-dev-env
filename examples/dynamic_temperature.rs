@@ -65,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let factual_paladin = PaladinBuilder::new(factual_llm.clone() as Arc<dyn LlmPort>)
         .system_prompt("You are a knowledgeable assistant providing accurate information")
         .name("FactualAgent")
-        .model("gpt-4")
+        .model("gpt-4o-mini")
         .temperature(0.2) // Low temperature for factual precision
         .max_loops(1)
         .build()
@@ -112,7 +112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let creative_paladin = PaladinBuilder::new(creative_llm.clone() as Arc<dyn LlmPort>)
         .system_prompt("You are a creative copywriter with expertise in branding")
         .name("CreativeAgent")
-        .model("gpt-4")
+        .model("gpt-4o-mini")
         .temperature(0.85) // High temperature for creativity
         .max_loops(1)
         .build()
@@ -163,7 +163,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let balanced_paladin = PaladinBuilder::new(balanced_llm.clone() as Arc<dyn LlmPort>)
         .system_prompt("You are a software architecture consultant")
         .name("BalancedAgent")
-        .model("gpt-4")
+        .model("gpt-4o-mini")
         .temperature(0.5) // Medium temperature for balanced approach
         .max_loops(1)
         .build()

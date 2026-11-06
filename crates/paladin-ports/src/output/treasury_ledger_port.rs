@@ -1,6 +1,6 @@
 //! Treasury Ledger Port — the Treasurer's Durable Spend Ledger (LEDGR-01..04, ADR-0053)
 //!
-//! [`TreasuryLedgerPort`] is the WHOLE contract every backend adapter (`InMemoryTreasuryLedger`,
+//! [`TreasuryLedgerPort`](crate::output::treasury_ledger_port::TreasuryLedgerPort) is the WHOLE contract every backend adapter (`InMemoryTreasuryLedger`,
 //! `SqliteTreasuryLedger`, `PostgresTreasuryLedger`, all `paladin-storage`) implements: an
 //! append-only, derive-on-read ledger whose scope+window balance is a plain `SUM` of every
 //! row's signed contribution (ADR-0053 §1-2, cited not re-argued, D-00a). `reserve` and
@@ -9,16 +9,16 @@
 //!
 //! ## Store-enforced settlement idempotency (D-06)
 //!
-//! [`TreasuryLedgerPort::settle`] must compile to a store-enforced constraint — a partial
+//! [`TreasuryLedgerPort::settle`](crate::output::treasury_ledger_port::TreasuryLedgerPort::settle) must compile to a store-enforced constraint — a partial
 //! unique index on `(run_id, superstep, attempt)` restricted to `kind = 'settle'`, with
 //! `INSERT ... ON CONFLICT ... DO NOTHING` — never an application-level "have I already settled
-//! this?" check. Zero rows affected is [`SettleOutcome::AlreadySettled`], never an error: a
+//! this?" check. Zero rows affected is [`SettleOutcome::AlreadySettled`](paladin_core::platform::container::treasury_ledger::SettleOutcome::AlreadySettled), never an error: a
 //! duplicate settlement key under lease redelivery, resume, retry or model fallback is success
 //! (LEDGR-03).
 //!
 //! ## Policy-free ledger (D-03)
 //!
-//! This port knows no allowance policy: [`TreasuryLedgerPort::reserve`] takes the caller's
+//! This port knows no allowance policy: [`TreasuryLedgerPort::reserve`](crate::output::treasury_ledger_port::TreasuryLedgerPort::reserve) takes the caller's
 //! ceiling and window bounds and admits a hold only if the scope+window balance would not
 //! exceed the ceiling; Phase 41 computes ceilings and windows from allowance config, this port
 //! never reads such config itself.

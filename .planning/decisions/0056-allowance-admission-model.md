@@ -9,6 +9,13 @@ Accepted
 **Phase:** 41 (Admission-Time Allowance Enforcement), plan 41-09. The design was approved at the plan 41-01
 Task 1 checkpoint on 2026-10-03 (see Decision, "Checkpoint outcome").
 
+**Amended 2026-10-31 (Phase 54, FIRST-06):** the earlier text of this ADR said Phase 42 would close the D-05
+over-admission race by writing a reservation at the superstep boundary. ADR-0057 superseded that plan: the
+Phase 42 boundary is a check-only balance read and writes no reservation, so the race is accepted, bounded to
+one superstep's spend per run, and held open as `.planning/WINDOWS.md` row 65. The D-01, D-05, Considered
+Options, Tests and Downstream Consumers passages are corrected to match; no other part of this decision
+changes.
+
 ## Context
 
 Phase 41 delivers ALLOW-01 (per-tenant and per-API-key spend allowances over a rolling window, computed
@@ -54,8 +61,8 @@ arithmetic, no trailing window. The reset instant is predictable, the once-per-w
 key `window_start`, and a refused caller is told the reset instant (`Retry-After`). The accepted cost is that
 a tenant can spend up to twice an allowance across one window boundary (the tail of one window plus the head
 of the next); this is documented, not mitigated. Reversibility is costly: the reset instant is part of the
-`429`/`Retry-After` contract, the notices table is keyed on `window_start`, and Phase 42's reservations reuse
-the same `window_for` function.
+`429`/`Retry-After` contract, the notices table is keyed on `window_start`, and Phase 42's superstep-boundary
+check reuses the same `window_for` function (ADR-0057).
 
 **D-03. Every configured limit must fit.** A principal `(tenant, key)` has up to four ceilings, evaluated in
 one fixed order: key window, key lifetime, tenant window, tenant lifetime. Each is checked against its own
@@ -67,8 +74,9 @@ the same balance function over `[Unix epoch, far future)`; it has no reset insta
 **D-05. Admission is a check only: no hold, no ledger write.** For each ceiling the Treasurer reads the
 balance and refuses when `balance >= ceiling` (a balance exactly at the ceiling is exhausted). Nothing about a
 refused submit reaches the ledger. Two admissions in the same instant may both pass; that over-admission race
-is accepted here and is closed by Phase 42's reservation at the superstep boundary (ADR-0052), which adds a
-`reserve` beside this check without changing it. No test in this phase claims to prevent the race.
+is accepted. Phase 42 does not close it: ADR-0057 makes the superstep-boundary check check-only too, so runs
+admitted in the same instant can each overshoot by at most one superstep, and `.planning/WINDOWS.md` row 65
+holds the race open. No test in this phase claims to prevent the race.
 
 **D-09. No role bypass.** Allowances bind every principal regardless of role. The Treasurer's
 `admit(&RunAttribution, ..)` receives an identity and no role, so an Admin key with an entry is refused and
@@ -117,10 +125,12 @@ durable notice row and the operator webhook always fire.
   key allowance that silently shadows the tenant's defeats per-tenant governance; the narrower shapes drop
   half of ALLOW-01.
 - **Reusing `spend()` for the tenant-wide figure, or leaving the choice open** (rejected, D-04): `spend()`
-  sums settled `charged_nanos` only and ignores reservations once Phase 42 places them. One additive
+  sums settled `charged_nanos` only and would ignore any reservation row a later phase placed (ADR-0057: Phase
+  42 places none). One additive
   `balance(BalanceQuery)` read over `amount_nanos` serves both phases.
 - **Reserve a minimum hold at admission, or a zero-amount reserve for a serialized `SUM`** (rejected, D-05):
-  race-proof today but pulls Phase 42's settle/release attachment forward, and the zero-row variant covers
+  race-proof today, but it needs a settle-and-release attachment that no phase has built (ADR-0057 defers the
+  per-superstep reservation hold), and the zero-row variant covers
   only the `(tenant, key)` pair and writes a row per admission.
 - **Gating `RunSubmissionService` only, leaving agent execute open** (rejected, D-07): Phase 40 D-16 made the
   agent routes settle under the principal, so an exhausted `POST /runs` caller could spend the same allowance
@@ -210,14 +220,14 @@ Landed in Phase 41 (plans 41-01 through 41-08, 2026-10-03/04). Named proofs by d
   `operator_delivery_is_signed_with_the_operator_secret_without_a_run_lookup`.
 
 The accepted over-admission race (D-05) and the accepted 2x boundary burst (D-01) are deliberately not
-covered by a prevention test; Phase 42 closes the first.
+covered by a prevention test; ADR-0057 keeps the first accepted and bounded (WINDOWS row 65).
 
 ## Downstream Consumers
 
-- **Phase 42 (mid-run enforcement and reservations)** - reuses `window_for`, `TreasuryLedgerPort::balance`
-  (a reservation row counts toward the balance automatically, because it reads `amount_nanos`) and the fixed
-  ceiling order, and closes the D-05 over-admission race by reserving at the superstep boundary beside the
-  admission check; it cites this ADR with ADR-0052 and ADR-0053 rather than re-opening admission.
+- **Phase 42 (mid-run enforcement)** - reuses `window_for`, `TreasuryLedgerPort::balance` and the fixed
+  ceiling order, and checks the balance again at the superstep boundary, check-only (ADR-0057), leaving the
+  D-05 over-admission race accepted; it cites this ADR with ADR-0052 and ADR-0053 rather than re-opening
+  admission.
 
   *Dated note, 2026-10-06 (plan 42-01, ADR-0057):* superseded -- Phase 42 halts at the superstep boundary with a
   check-only balance read and writes no reservation; the over-admission race of 41 D-05 is accepted, bounded to one

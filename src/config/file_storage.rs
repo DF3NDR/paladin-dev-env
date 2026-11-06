@@ -1,13 +1,19 @@
 //! Configuration for MinIO file storage.
 
 use crate::config::env_utils::EnvOverridable;
+use crate::config::redaction::RedactedSecret;
 use serde::{Deserialize, Serialize};
 
 /// Configuration for MinIO file storage
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `Debug` prints `minio_access_key` and `minio_secret_key` as `<redacted>` (DF-07), and
+/// `Serialize` omits both (WR-09).
+#[derive(Clone, Serialize, Deserialize)]
 pub struct FileStorageConfig {
     pub minio_endpoint: String,
+    #[serde(skip_serializing)]
     pub minio_access_key: String,
+    #[serde(skip_serializing)]
     pub minio_secret_key: String,
     pub minio_bucket: String,
     pub minio_region: Option<String>,
@@ -18,6 +24,25 @@ pub struct FileStorageConfig {
     pub max_idle_conns: Option<u32>,
     pub max_file_size: Option<u64>,
     pub allowed_extensions: Option<Vec<String>>,
+}
+
+impl std::fmt::Debug for FileStorageConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FileStorageConfig")
+            .field("minio_endpoint", &self.minio_endpoint)
+            .field("minio_access_key", &RedactedSecret(&self.minio_access_key))
+            .field("minio_secret_key", &RedactedSecret(&self.minio_secret_key))
+            .field("minio_bucket", &self.minio_bucket)
+            .field("minio_region", &self.minio_region)
+            .field("minio_secure", &self.minio_secure)
+            .field("minio_path_style", &self.minio_path_style)
+            .field("connection_timeout", &self.connection_timeout)
+            .field("request_timeout", &self.request_timeout)
+            .field("max_idle_conns", &self.max_idle_conns)
+            .field("max_file_size", &self.max_file_size)
+            .field("allowed_extensions", &self.allowed_extensions)
+            .finish()
+    }
 }
 
 impl Default for FileStorageConfig {
@@ -190,5 +215,64 @@ mod tests {
             env::remove_var("APP_MINIO_MAX_FILE_SIZE");
             env::remove_var("APP_MINIO_ALLOWED_EXTENSIONS");
         }
+    }
+
+    #[test]
+    fn file_storage_config_debug_redacts_both_minio_keys() {
+        let access = "test-key-not-a-secret-df07-minio-access-key";
+        let secret = "test-key-not-a-secret-df07-minio-secret-key";
+        let config = FileStorageConfig {
+            minio_access_key: access.to_string(),
+            minio_secret_key: secret.to_string(),
+            ..FileStorageConfig::default()
+        };
+        // Non-vacuous: both fields really hold their sentinels.
+        assert_eq!(config.minio_access_key, access);
+        assert_eq!(config.minio_secret_key, secret);
+        let text = format!("{config:?}");
+        assert!(
+            !text.contains(access),
+            "FileStorageConfig Debug leaked the access key"
+        );
+        assert!(
+            !text.contains(secret),
+            "FileStorageConfig Debug leaked the secret key"
+        );
+        assert_eq!(text.matches("<redacted>").count(), 2, "markers in: {text}");
+        assert!(text.contains("localhost:9000"), "endpoint missing: {text}");
+        assert!(text.contains("paladin-files"), "bucket missing: {text}");
+    }
+
+    /// WR-09 (56-REVIEW): serialising a `FileStorageConfig` must not write either key.
+    #[test]
+    fn file_storage_config_serialisation_omits_both_minio_keys() {
+        let access = "test-key-not-a-secret-df07-minio-access-key";
+        let secret = "test-key-not-a-secret-df07-minio-secret-key";
+        let config = FileStorageConfig {
+            minio_access_key: access.to_string(),
+            minio_secret_key: secret.to_string(),
+            ..FileStorageConfig::default()
+        };
+        assert_eq!(config.minio_access_key, access);
+        assert_eq!(config.minio_secret_key, secret);
+        let value = serde_json::to_value(&config).expect("FileStorageConfig serialises");
+        let object = value.as_object().expect("serialises as an object");
+        for field in ["minio_access_key", "minio_secret_key"] {
+            assert!(
+                !object.contains_key(field),
+                "FileStorageConfig serialised `{field}`"
+            );
+        }
+        let text = value.to_string();
+        assert!(
+            !text.contains(access),
+            "serialisation carries the access key value"
+        );
+        assert!(
+            !text.contains(secret),
+            "serialisation carries the secret key value"
+        );
+        // Non-vacuous: the other fields are still written.
+        assert_eq!(object["minio_bucket"], "paladin-files");
     }
 }

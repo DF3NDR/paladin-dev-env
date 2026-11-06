@@ -3,7 +3,7 @@
 //! Every other `TraceSink` in this module writes a below-the-engine record for
 //! observability (`LogTraceSink`) or durability (`PersistingTraceSink`). This one is
 //! different in purpose, not contract: it watches the trace stream for
-//! [`TraceEvent::RunFinished`](paladin_core::platform::container::trace::TraceEvent::RunFinished),
+//! [`TraceEvent::RunFinished`],
 //! builds an [`ExecutionMetadata`] from it through
 //! [`ExecutionMetadata::from_run_finished`], and hands that to a [`Herald`], writing the
 //! rendered summary to the `paladin::herald` log target at `info`.
@@ -43,11 +43,11 @@ use paladin_ports::output::trace_sink_port::{TraceRecord, TraceSink, TraceSinkEr
 /// The `log` target [`HeraldTraceSink`] writes its rendered summary to (D-11b), at `info`.
 pub const HERALD_LOG_TARGET: &str = "paladin::herald";
 
-/// A [`TraceSink`] that hands every [`TraceEvent::RunFinished`](paladin_core::platform::container::trace::TraceEvent::RunFinished)
+/// A [`TraceSink`] that hands every [`TraceEvent::RunFinished`]
 /// record it sees to a [`Herald`] (D-12): builds an [`ExecutionMetadata`] via
 /// [`ExecutionMetadata::from_run_finished`], calls
 /// [`Herald::finalize_stream`], and logs the result under [`HERALD_LOG_TARGET`] at
-/// `info`. A [`TraceEvent::AllowanceWarning`](paladin_core::platform::container::trace::TraceEvent::AllowanceWarning)
+/// `info`. A [`TraceEvent::AllowanceWarning`]
 /// is recorded and folded into that metadata (D-18); every other event is a no-op — see the
 /// module docs for the "one summary per engine dispatch" cardinality this relies on.
 pub struct HeraldTraceSink {

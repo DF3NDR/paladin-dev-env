@@ -225,3 +225,7 @@ sibling path is absent (`if !fixture_path.exists() { return Ok(()) }`).
 _Reviewed: 2026-10-14_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
+
+## Dispositions (Phase 57)
+
+Every WR/CR finding above is dispositioned in `.planning/phases/57-register-hygiene-close-out/57-REVIEW-DISPOSITIONS.md` (REG-05, D-10). This section is the only addition to this file.

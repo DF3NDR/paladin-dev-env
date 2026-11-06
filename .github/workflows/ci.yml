@@ -174,6 +174,20 @@ jobs:
       - name: Check core/ports dependency allowlist (ADR-0015)
         run: ./scripts/check-dependency-allowlist.sh
 
+      # Phase 54 D-11 (FIRST-03): holds the copyable version strings in the
+      # README files, docs/src, k8s/ and openapi.json to the workspace version.
+      # CI runs each gate script itself and does not call `make check-gates`,
+      # so the gate needs its own step.
+      - name: Check user-facing version strings (FIRST-03)
+        run: ./scripts/check-version-strings.sh
+
+      # Phase 55 D-01 (FIXES-01): holds every published crate free of stub
+      # panics (todo!/unimplemented!) outside #[cfg(test)]. CI runs each gate
+      # script itself and does not call `make check-gates`, so the gate needs
+      # its own step.
+      - name: Check no stub panics in published crates (FIXES-01)
+        run: ./scripts/check-no-stub-panics.sh
+
       # Phase 52 D-06 / CIREL-03: scripts/check-migration-allowlist.sh is the
       # single implementation of the semver-allowlist set-equality gate (the
       # inline awk copy that used to live in the `semver` job was deleted). It
@@ -315,9 +329,9 @@ jobs:
           echo "  4. Commit the updated baseline"
 
   # MSRV verification (X-11.2, D-07). Dedicated job pinned to the workspace's
-  # declared `workspace.package.rust-version = "1.88"` (single source, all ten
-  # crate manifests inherit it via `rust-version.workspace = true`, see
-  # MIGRATION.md §9.3), independent of and parallel with every other job --
+  # declared `workspace.package.rust-version = "1.88"` (single source; every
+  # publishable crate manifest inherits it via `rust-version.workspace = true`,
+  # see MIGRATION.md §9.3), independent of and parallel with every other job --
   # no `needs:` edge, so it cannot gate or be gated by anything else. The
   # pinned dev toolchain (rust-toolchain.toml, 1.97.1) would otherwise
   # override whatever this job installs; RUSTUP_TOOLCHAIN is the same
@@ -1552,7 +1566,7 @@ jobs:
               elif line.startswith("FNH:"): fnh += int(line[4:])
           if lf == 0:
               raise SystemExit("::error::lcov.info contains no LF: records")
-          print("Scope: --workspace --features integration-tests (the gated measurement)")
+          print("Scope: --workspace --features integration-tests,llm-all (the gated measurement)")
           print(f"Lines:     {lh}/{lf} = {100*lh/lf:.2f}%")
           print(f"Functions: {fnh}/{fnf} = {100*fnh/fnf:.2f}%")
           PY

@@ -18,15 +18,15 @@
 //!
 //! `llm_port` here is the SERVICE's own configured port, read once per
 //! `before_model` call -- never a per-run override
-//! ([`super::ModelCallContext::llm_override`] is set by port-shaping
-//! middleware such as [`super::ModelFallbackMiddleware`] LATER in the
+//! ([`ModelCallContext::llm_override`](crate::application::services::paladin::middleware::ModelCallContext::llm_override) is set by port-shaping
+//! middleware such as [`ModelFallbackMiddleware`](crate::application::services::paladin::middleware::ModelFallbackMiddleware) LATER in the
 //! documented assembly order, so it is never visible to this middleware's
 //! own `before_model` in the same iteration).
 //!
 //! # Trimming is `KeepSystemAndRecent` (D-15)
 //!
 //! The system prompt, retrieved context, current input, accumulated output
-//! and any middleware-pushed [`super::PromptSection`] are the assembly's
+//! and any middleware-pushed [`PromptSection`](crate::application::services::paladin::middleware::PromptSection) are the assembly's
 //! *fixed parts* and are never touched. History entries are admitted
 //! newest-first while
 //! `counted(fixed) + Σ counted(kept) + reserve_for_response <= limit`; the
@@ -41,7 +41,7 @@
 //! Stability (identical inputs produce an identical kept set) falls
 //! directly out of the algorithm being a pure function of the fixed parts,
 //! the ordered history, the resolved limit and the reserve, over a
-//! deterministic [`TokenCounterPort`] -- not an accident that needs its own
+//! deterministic [`TokenCounterPort`](paladin_ports::output::token_counter_port::TokenCounterPort) -- not an accident that needs its own
 //! caching or ordering guard.
 //!
 //! A [`crate::core::platform::container::garrison::GarrisonEntry`] with

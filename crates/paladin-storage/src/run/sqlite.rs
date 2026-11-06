@@ -63,6 +63,19 @@ const SELECT_ACTIVE_RUN_FOR_THREAD: &str = "SELECT run_id, thread_id, assistant_
      WHERE thread_id = ? \
      AND status IN ('queued','running','awaiting_input') LIMIT 1";
 
+/// Phase 57 D-02: a thread's OWNER run in ONE row. Attributed runs sort first
+/// (`tenant_id IS NULL` is 0 for them, 1 for an unattributed run), then the oldest
+/// `submitted_at`, then the smallest `run_id` -- the exact reverse of `list`'s
+/// `submitted_at DESC, run_id DESC`. `LIMIT 1` is the point (row 86): only the owner row is
+/// ever decoded, so an unreadable or newer-schema row that is not the owner cannot fail the
+/// lookup. No caller value is interpolated; `thread_id` is bound.
+const SELECT_OWNER_RUN_FOR_THREAD: &str = "SELECT run_id, thread_id, assistant_id, \
+     assistant_version, status, input, submitted_at, started_at, finished_at, attempt, \
+     cancel_requested, error, webhook, pending_responses, fork_from, output, \
+     final_waypoint_id, schema_version, tenant_id, api_key_id, halt_reason FROM runs \
+     WHERE thread_id = ? \
+     ORDER BY (tenant_id IS NULL) ASC, submitted_at ASC, run_id ASC LIMIT 1";
+
 const UPDATE_REQUEST_CANCEL: &str = "UPDATE runs SET cancel_requested = 1 WHERE run_id = ? \
      AND status IN ('queued','running','awaiting_input')";
 
@@ -620,6 +633,19 @@ impl RunRepositoryPort for SqliteRunRepository {
         row.as_ref().map(Self::row_to_run).transpose()
     }
 
+    async fn owner_run_for_thread(
+        &self,
+        thread_id: &ThreadId,
+    ) -> Result<Option<Run>, RunRepositoryError> {
+        let row = sqlx::query(SELECT_OWNER_RUN_FOR_THREAD)
+            .bind(thread_id.as_str())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| self.wrap_error(e))?;
+
+        row.as_ref().map(Self::row_to_run).transpose()
+    }
+
     async fn request_cancel(&self, run_id: &RunId) -> Result<RunStatus, RunRepositoryError> {
         let result = sqlx::query(UPDATE_REQUEST_CANCEL)
             .bind(run_id.as_str())
@@ -940,6 +966,40 @@ mod tests {
     #[tokio::test]
     async fn get_on_unsupported_schema_version_fails() {
         contract_tests::get_on_unsupported_schema_version_fails(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn owner_run_for_thread_ignores_later_admin_and_unattributed_runs() {
+        contract_tests::owner_run_for_thread_ignores_later_admin_and_unattributed_runs(
+            &fresh_store().await,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn owner_run_for_thread_returns_the_earliest_attributed_run() {
+        contract_tests::owner_run_for_thread_returns_the_earliest_attributed_run(
+            &fresh_store().await,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn owner_run_for_thread_falls_back_to_the_earliest_run_when_none_is_attributed() {
+        contract_tests::owner_run_for_thread_falls_back_to_the_earliest_run_when_none_is_attributed(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn owner_run_for_thread_is_none_for_a_thread_with_no_runs() {
+        contract_tests::owner_run_for_thread_is_none_for_a_thread_with_no_runs(
+            &fresh_store().await,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn owner_run_for_thread_decodes_only_the_owner_row() {
+        contract_tests::owner_run_for_thread_decodes_only_the_owner_row(&fresh_store().await).await;
     }
 
     // The one clause that needs a REAL shared on-disk database -- proving

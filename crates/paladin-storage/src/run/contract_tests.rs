@@ -1432,3 +1432,251 @@ pub async fn list_scoped_pagination_has_no_gap_or_overlap(port: &dyn RunReposito
     assert_eq!(page_sizes, vec![2, 2, 1], "pages of sizes 2, 2, 1");
     assert_eq!(seen, expected_ids, "no gap: every A run seen, in order");
 }
+
+// ── Thread ownership (Phase 57 D-01/D-02, WINDOWS rows 86 and 87) ────────
+//
+// A thread carries no tenant of its own. It belongs to the tenant of its
+// OWNER run: the earliest run carrying `submitted_by`, ordered
+// `(submitted_at ASC, run_id ASC)`. `RunRepositoryPort::owner_run_for_thread`
+// is the one read that answers it, and every adapter must agree.
+
+/// Drive a freshly inserted run to `Completed` so the next `insert` on the
+/// same thread is not rejected with `ThreadBusy` (D-18: one active run per
+/// thread).
+async fn finish_run(port: &dyn RunRepositoryPort, run: &Run) {
+    port.update_status(
+        &run.run_id,
+        RunStatus::Queued,
+        RunStatus::Running,
+        contract_timestamp(),
+    )
+    .await
+    .unwrap();
+    port.update_status(
+        &run.run_id,
+        RunStatus::Running,
+        RunStatus::Completed,
+        contract_timestamp(),
+    )
+    .await
+    .unwrap();
+}
+
+/// A run added after the owner run -- by an Admin acting under another
+/// tenant's attribution, or by a schedule (`submitted_by: None`) -- never
+/// changes who owns the thread (P-02-1, row 87, T-57-05).
+pub async fn owner_run_for_thread_ignores_later_admin_and_unattributed_runs(
+    port: &dyn RunRepositoryPort,
+) {
+    let acme = unique_tenant("contract-owner-acme");
+    let ops = unique_tenant("contract-owner-ops");
+    let thread = unique_thread("contract-owner-ignores-later");
+    let assistant_id = unique("contract-owner-ignores-later");
+    let t0 = contract_timestamp();
+
+    let acme_run = sample_attributed_run(&thread, &assistant_id, t0, &acme, "svc-acme");
+    port.insert(&acme_run).await.unwrap();
+    finish_run(port, &acme_run).await;
+
+    let scheduled = sample_run(&thread, &assistant_id, t0 + chrono::Duration::seconds(1));
+    port.insert(&scheduled).await.unwrap();
+    finish_run(port, &scheduled).await;
+
+    let admin_fork = sample_attributed_run(
+        &thread,
+        &assistant_id,
+        t0 + chrono::Duration::seconds(2),
+        &ops,
+        "admin-key",
+    );
+    port.insert(&admin_fork).await.unwrap();
+    finish_run(port, &admin_fork).await;
+
+    let owner = port
+        .owner_run_for_thread(&thread)
+        .await
+        .unwrap()
+        .expect("a thread with runs has an owner run");
+    assert_eq!(
+        owner.run_id, acme_run.run_id,
+        "a later Admin-tenant run or a later unattributed run must not move ownership"
+    );
+    assert_eq!(
+        owner.submitted_by.as_ref().map(|a| &a.tenant_id),
+        Some(&acme)
+    );
+}
+
+/// The owner is the earliest attributed run. Two attributed runs that share a `submitted_at`
+/// are separated by `run_id` ascending (the exact reverse of `list`'s order), and a later
+/// run from another tenant never takes the thread over.
+pub async fn owner_run_for_thread_returns_the_earliest_attributed_run(
+    port: &dyn RunRepositoryPort,
+) {
+    let acme = unique_tenant("contract-owner-first-acme");
+    let globex = unique_tenant("contract-owner-first-globex");
+    let thread = unique_thread("contract-owner-first");
+    let assistant_id = unique("contract-owner-first");
+    let t0 = contract_timestamp();
+
+    let first = sample_attributed_run(&thread, &assistant_id, t0, &acme, "svc-1");
+    port.insert(&first).await.unwrap();
+    finish_run(port, &first).await;
+
+    let second = sample_attributed_run(
+        &thread,
+        &assistant_id,
+        t0 + chrono::Duration::seconds(1),
+        &acme,
+        "svc-2",
+    );
+    port.insert(&second).await.unwrap();
+    finish_run(port, &second).await;
+
+    let rival = sample_attributed_run(
+        &thread,
+        &assistant_id,
+        t0 + chrono::Duration::seconds(2),
+        &globex,
+        "svc-3",
+    );
+    port.insert(&rival).await.unwrap();
+
+    let owner = port
+        .owner_run_for_thread(&thread)
+        .await
+        .unwrap()
+        .expect("a thread with runs has an owner run");
+    assert_eq!(owner.run_id, first.run_id, "the earliest attributed run");
+    assert_eq!(
+        owner.submitted_by.as_ref().map(|a| &a.tenant_id),
+        Some(&acme),
+        "a later run from another tenant must not take the thread over"
+    );
+
+    // Tie on `submitted_at`: the smaller `run_id` string wins.
+    let tied_thread = unique_thread("contract-owner-first-tie");
+    let tied_at = contract_timestamp();
+    let a = sample_attributed_run(&tied_thread, &assistant_id, tied_at, &acme, "svc-a");
+    port.insert(&a).await.unwrap();
+    finish_run(port, &a).await;
+    let b = sample_attributed_run(&tied_thread, &assistant_id, tied_at, &globex, "svc-b");
+    port.insert(&b).await.unwrap();
+    let expected = if a.run_id.as_str() < b.run_id.as_str() {
+        &a
+    } else {
+        &b
+    };
+    let tied_owner = port
+        .owner_run_for_thread(&tied_thread)
+        .await
+        .unwrap()
+        .expect("a thread with runs has an owner run");
+    assert_eq!(
+        tied_owner.run_id, expected.run_id,
+        "equal `submitted_at` is broken by the smaller `run_id`"
+    );
+}
+
+/// A thread whose runs are all unattributed (a schedule-only thread) has the EARLIEST run as
+/// its owner, so it stays Admin-only: a `Tenant` scope does not permit it, and a tenant cannot
+/// claim it as thread birth (P-02-3, T-57-06). `None` is reserved for a thread with no run.
+pub async fn owner_run_for_thread_falls_back_to_the_earliest_run_when_none_is_attributed(
+    port: &dyn RunRepositoryPort,
+) {
+    let thread = unique_thread("contract-owner-unattributed");
+    let assistant_id = unique("contract-owner-unattributed");
+    let t0 = contract_timestamp();
+
+    let first = sample_run(&thread, &assistant_id, t0);
+    port.insert(&first).await.unwrap();
+    finish_run(port, &first).await;
+    let second = sample_run(&thread, &assistant_id, t0 + chrono::Duration::seconds(1));
+    port.insert(&second).await.unwrap();
+
+    let owner = port
+        .owner_run_for_thread(&thread)
+        .await
+        .unwrap()
+        .expect("a thread with only unattributed runs still has an owner run");
+    assert_eq!(owner.run_id, first.run_id, "the earliest run overall");
+    assert!(owner.submitted_by.is_none());
+
+    let tenant_scope = RunReadScope::Tenant(unique_tenant("contract-owner-unattributed-tenant"));
+    assert!(
+        !tenant_scope.permits_thread(Some(&owner)),
+        "no tenant may claim a thread that only unattributed runs ever touched"
+    );
+    assert!(RunReadScope::All.permits_thread(Some(&owner)));
+}
+
+/// A thread with no run at all has no owner: `Ok(None)`.
+pub async fn owner_run_for_thread_is_none_for_a_thread_with_no_runs(port: &dyn RunRepositoryPort) {
+    let thread = unique_thread("contract-owner-none");
+    let owner = port.owner_run_for_thread(&thread).await.unwrap();
+    assert!(owner.is_none(), "no run on the thread means no owner");
+}
+
+/// The owner lookup reads and decodes exactly one row (row 86, T-57-07): a newer-schema row
+/// that is not the owner never fails it, whether it comes after the owner or sorts first by
+/// time but is unattributed.
+pub async fn owner_run_for_thread_decodes_only_the_owner_row(port: &dyn RunRepositoryPort) {
+    let acme = unique_tenant("contract-owner-decode-acme");
+    let assistant_id = unique("contract-owner-decode");
+    let t0 = contract_timestamp();
+
+    // A valid owner, then a LATER row this build cannot decode.
+    let thread = unique_thread("contract-owner-decode-later");
+    let owner_run = sample_attributed_run(&thread, &assistant_id, t0, &acme, "svc-a");
+    port.insert(&owner_run).await.unwrap();
+    finish_run(port, &owner_run).await;
+    let mut from_the_future = sample_attributed_run(
+        &thread,
+        &assistant_id,
+        t0 + chrono::Duration::seconds(1),
+        &acme,
+        "svc-a",
+    );
+    from_the_future.schema_version = "v99-from-the-future".to_string();
+    port.insert(&from_the_future).await.unwrap();
+
+    let owner = port
+        .owner_run_for_thread(&thread)
+        .await
+        .expect("a non-owner newer-schema row must not fail the lookup")
+        .expect("the owner exists");
+    assert_eq!(owner.run_id, owner_run.run_id);
+
+    // An EARLIER unattributed row this build cannot decode, then a valid attributed run: the
+    // attributed run is the owner, and the unreadable row sorts after it and is never decoded.
+    let thread = unique_thread("contract-owner-decode-earlier");
+    let mut early_unreadable =
+        sample_run(&thread, &assistant_id, t0 - chrono::Duration::seconds(1));
+    early_unreadable.schema_version = "v99-from-the-future".to_string();
+    port.insert(&early_unreadable).await.unwrap();
+    port.update_status(
+        &early_unreadable.run_id,
+        RunStatus::Queued,
+        RunStatus::Running,
+        contract_timestamp(),
+    )
+    .await
+    .unwrap();
+    port.update_status(
+        &early_unreadable.run_id,
+        RunStatus::Running,
+        RunStatus::Completed,
+        contract_timestamp(),
+    )
+    .await
+    .unwrap();
+    let attributed = sample_attributed_run(&thread, &assistant_id, t0, &acme, "svc-a");
+    port.insert(&attributed).await.unwrap();
+
+    let owner = port
+        .owner_run_for_thread(&thread)
+        .await
+        .expect("an unreadable unattributed row must not fail the lookup")
+        .expect("the owner exists");
+    assert_eq!(owner.run_id, attributed.run_id);
+}

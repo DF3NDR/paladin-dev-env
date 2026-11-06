@@ -31,7 +31,7 @@ let paladin = PaladinBuilder::new(llm_adapter)
 let paladin = PaladinBuilder::new(llm_adapter)
     .name("DataAnalyst")
     .system_prompt("You are an expert data analyst. Provide clear, data-driven insights.")
-    .model("gpt-4")
+    .model("gpt-4o-mini")
     .temperature(0.7)
     .max_loops(5)
     .timeout_seconds(120)
@@ -131,7 +131,7 @@ Choose the right model for your use case:
 ```rust,ignore
 // GPT-4 Turbo - Best for complex reasoning
 .model("gpt-4-turbo")  // Latest turbo model
-.model("gpt-4")        // Standard GPT-4
+.model("gpt-4o-mini")        // Standard GPT-4
 
 // GPT-3.5 - Fast and cost-effective
 .model("gpt-3.5-turbo")  // Recommended for most tasks
@@ -369,7 +369,7 @@ let config = Settings::load_from_file("config.yml")?;
 ```yaml
 agents:
   - id: "assistant"
-    model: "gpt-4"
+    model: "gpt-4o-mini"
     system_prompt: "You are a helpful assistant."
     temperature: 0.7
     max_loops: 5
@@ -416,7 +416,7 @@ impl PaladinFactory {
         PaladinBuilder::new(llm_adapter)
             .system_prompt("Expert Rust code reviewer")
             .temperature(0.2)
-            .model("gpt-4")
+            .model("gpt-4o-mini")
             .build()
             .await
     }
@@ -476,7 +476,7 @@ let paladin = PaladinBuilder::new(llm_adapter)
 ```rust,ignore
 // Best model, detailed prompts
 let paladin = PaladinBuilder::new(llm_adapter)
-    .model("gpt-4")
+    .model("gpt-4o-mini")
     .temperature(0.5)
     .max_loops(10)
     .timeout_seconds(300)

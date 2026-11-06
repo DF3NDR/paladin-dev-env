@@ -12,7 +12,7 @@
 //! |---|---|---|---|
 //! | **Scope** | cross-thread namespaced key/value | one conversation's transcript | one run's durable engine state |
 //! | **Lifetime** | until explicitly deleted | the conversation | the retention policy |
-//! | **Addressed by** | [`Namespace`] + key | a [`GarrisonPort`](crate::output::garrison_port::GarrisonPort) instance | `(ThreadId, WaypointId)` |
+//! | **Addressed by** | [`Namespace`](paladin_core::platform::container::vault::Namespace) + key | a [`GarrisonPort`](crate::output::garrison_port::GarrisonPort) instance | `(ThreadId, WaypointId)` |
 //! | **Who writes** | the host, or the agent through a confined tool | the execution service | the `WarEngine` |
 //! | **Typical content** | durable facts about a user or a domain | conversation turns | Battlefield snapshots and Frontier state |
 //!

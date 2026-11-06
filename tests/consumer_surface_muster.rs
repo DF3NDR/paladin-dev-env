@@ -46,6 +46,7 @@ use uuid::Uuid;
 // ---- facade `paladin::` (features llm-anthropic + llm-deepseek) ----
 use paladin::application::services::battalion::phalanx_service::PhalanxExecutionService;
 use paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService;
+use paladin::config::treasurer::CadenceConfig;
 use paladin::core::base::entity::Entity;
 use paladin::core::platform::container::aegis::{Aegis, ErrorHandlerSpec, TimeoutPolicy};
 use paladin::core::platform::container::arsenal::{
@@ -61,6 +62,7 @@ use paladin::core::platform::container::prompt::{
 use paladin::core::platform::container::transience::Transience;
 use paladin::core::platform::container::waypoint::NodeId;
 use paladin::infrastructure::adapters::arsenal::mcp_protocol::MCPClient;
+use paladin::infrastructure::cadence::{CadenceWiring, build_cadence, with_cadence};
 use paladin::infrastructure::resilience::circuit_breaker::CircuitBreaker;
 use paladin::prelude::{
     ArsenalPort, BattalionResult, LlmPort, PaladinBuilder, PaladinError, PaladinResult, Phalanx,
@@ -619,6 +621,17 @@ fn rate_limit_pin() -> (LlmError, impl Fn(&LlmError) -> Option<&'static str>) {
         }
     };
     (with_hint, rate_limited)
+}
+
+/// Folded todo `2026-11-04-muster-pin-cadence-consumer-imports` (web3sec return report
+/// `56-WEB3SEC-RETURN-REPORT-50.md`, section 4): the three Cadence paths the consumer's Phase 50
+/// code takes. `build_cadence` and `with_cadence` are named through fn-pointer coercions that spell
+/// their full signatures, and `CadenceConfig` is built through `Default`. NEVER CALLED: it only
+/// has to type-check, so no pacing is built and no Redis or other socket is touched.
+fn cadence_consumer_imports_pin() -> CadenceConfig {
+    let _build: fn(&CadenceConfig) -> Result<Option<CadenceWiring>, String> = build_cadence;
+    let _wrap: fn(Arc<dyn LlmPort>, Option<&CadenceWiring>) -> Arc<dyn LlmPort> = with_cadence;
+    CadenceConfig::default()
 }
 
 /// Appendix B item 4: a spend cap is `UsageLimitExceeded { provider, regain_hint }` (both fields

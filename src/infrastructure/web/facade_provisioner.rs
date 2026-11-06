@@ -2,8 +2,8 @@
 //!
 //! The HTTP API's `POST /agents` route (in `paladin-web`) delegates to an injected
 //! [`AgentProvisioner`] to turn a request [`AgentSpec`] into a `(Paladin, executor)`
-//! pair. [`FacadeProvisioner`] is that implementation: it reuses the same
-//! [`build_agent`](super::agent_host::build_agent) path as config load, so
+//! pair. [`FacadeProvisioner`](crate::infrastructure::web::facade_provisioner::FacadeProvisioner) is that implementation: it reuses the same
+//! `build_agent` path as config load, so
 //! config-defined and runtime-registered agents are built identically.
 
 use std::sync::Arc;
@@ -100,7 +100,7 @@ impl FacadeProvisioner {
     /// before.
     ///
     /// The blocks are operator-only configuration: a runtime
-    /// [`AgentSpec`](paladin_web::AgentSpec) carries a model and nothing else about how a
+    /// [`AgentSpec`] carries a model and nothing else about how a
     /// provider is constructed, so a caller cannot steer a host, a key or a limit.
     ///
     /// # Examples
@@ -125,7 +125,7 @@ impl FacadeProvisioner {
     }
 
     /// Set the operator's `agent_runtime.token_budget` that the one
-    /// [`TokenBudget`](crate::application::services::paladin::middleware::limits::TokenBudget)
+    /// [`TokenBudget`]
     /// installed on every runtime-provisioned agent's service enforces (D-11, G12) -- the same
     /// figure a config-defined agent carries. The default is the disabled budget, so a
     /// provisioner built with [`FacadeProvisioner::new`] is unchanged until a derived figure

@@ -13,7 +13,7 @@
 //! # Mechanism
 //!
 //! Every deletion this routine performs goes through
-//! [`WaypointPort::prune_thread`], added in Plan 22-13: for each thread with
+//! [`WaypointPort::prune_thread`](paladin_ports::output::waypoint_port::WaypointPort::prune_thread), added in Plan 22-13: for each thread with
 //! something to remove, exactly one keep-set call. There is no longer a
 //! delete-then-resave sequence -- the enumeration of survivors, the
 //! whole-thread delete, and the resave loop that Plan 22-13's context

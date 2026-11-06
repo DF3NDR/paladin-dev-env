@@ -1,25 +1,25 @@
 //! The shared context-window precedence resolver every consumer of
-//! [`ProviderCapabilities`] calls through, instead of writing its own
+//! [`ProviderCapabilities`](paladin_ports::output::llm_port::ProviderCapabilities) calls through, instead of writing its own
 //! config-table/capability/fallback walk (PRIM-04, D-01/D-02).
 //!
-//! [`resolve_context_window`] applies a fixed, four-step precedence order:
+//! [`resolve_context_window`](crate::window::resolve_context_window) applies a fixed, four-step precedence order:
 //!
 //! 1. `config_table.get(model)` -- a per-model override, when one exists.
 //! 2. `capabilities.max_context_tokens` -- the provider's own declared window.
-//! 3. `policy`'s framework default (the lenient [`WindowFallbackPolicy::Default`] branch).
-//! 4. `policy`'s caller-supplied fallback (the strict [`WindowFallbackPolicy::Strict`]
+//! 3. `policy`'s framework default (the lenient [`WindowFallbackPolicy::Default`](crate::window::WindowFallbackPolicy::Default) branch).
+//! 4. `policy`'s caller-supplied fallback (the strict [`WindowFallbackPolicy::Strict`](crate::window::WindowFallbackPolicy::Strict)
 //!    branch), or refusal if the caller supplied none.
 //!
-//! **Strictness is a TYPE, not a flag.** [`WindowFallbackPolicy`] carries the
+//! **Strictness is a TYPE, not a flag.** [`WindowFallbackPolicy`](crate::window::WindowFallbackPolicy) carries the
 //! lenient/strict distinction as two enum variants rather than a boolean flag plus a
 //! separately-held `Option<u32>` -- a flag and an option can disagree with each other; a
 //! two-variant enum cannot. This is the same no-invented-window stance ADR-0010 applies
 //! elsewhere in this crate: the framework never manufactures a context window on its
-//! own. [`WindowFallbackPolicy::Default`] always resolves because its `u32` IS the
+//! own. [`WindowFallbackPolicy::Default`](crate::window::WindowFallbackPolicy::Default) always resolves because its `u32` IS the
 //! framework's own documented default, supplied by the caller at construction time, not
-//! invented here. [`WindowFallbackPolicy::Strict`] carries only the CALLER's own
+//! invented here. [`WindowFallbackPolicy::Strict`](crate::window::WindowFallbackPolicy::Strict) carries only the CALLER's own
 //! `Option<u32>` fallback -- when that is `None`, the resolver refuses with
-//! [`UnknownContextWindow`] rather than guessing. Supplying a fallback is explicit
+//! [`UnknownContextWindow`](crate::window::UnknownContextWindow) rather than guessing. Supplying a fallback is explicit
 //! caller policy either way; this module never invents one.
 
 use std::collections::HashMap;

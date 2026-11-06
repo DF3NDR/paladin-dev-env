@@ -1,4 +1,4 @@
-//! The per-model profile registry (ADR-0061 (c), D-05..D-07): which [`ModelProfile`] applies to
+//! The per-model profile registry (ADR-0061 (c), D-05..D-07): which [`ModelProfile`](paladin_ports::output::model_profile::ModelProfile) applies to
 //! which model of one provider, and how that was decided.
 //!
 //! # Precedence
@@ -6,16 +6,16 @@
 //! For a model id, **by exact match only** (a seed for `kimi-k3` does not match
 //! `kimi-k3-preview`):
 //!
-//! 1. a [`ModelOverride`] from configuration, applied **field by field** over
+//! 1. a [`ModelOverride`](crate::registry::ModelOverride) from configuration, applied **field by field** over
 //! 2. the seeded entry for that model, if one exists, else over
 //! 3. the adapter-wide fallback profile.
 //!
 //! A model with neither a seed nor an override runs on the adapter-wide fallback and is *visibly*
 //! unprofiled: the registry logs one `warn!` (target `paladin::registry`) per instance per model
-//! and the adapter stamps [`UNPROFILED_MODEL_METADATA_KEY`] on the response. An unknown model is
+//! and the adapter stamps [`UNPROFILED_MODEL_METADATA_KEY`](crate::registry::UNPROFILED_MODEL_METADATA_KEY) on the response. An unknown model is
 //! never a refusal (D-07) -- a deployment must be able to point at a model released yesterday.
 //!
-//! A [`ModelOverride`] is an explicit operator statement, so it is validated hard: finite,
+//! A [`ModelOverride`](crate::registry::ModelOverride) is an explicit operator statement, so it is validated hard: finite,
 //! ordered, non-zero, with a maximum output inside the context window, unknown keys rejected.
 //! The merged result is re-validated too, so an override that is fine alone but contradicts the
 //! seeded value it is laid over (a maximum output above the seeded window) is refused at
@@ -1745,7 +1745,11 @@ mod seeded_tests {
         // Listing: max_input_tokens=1000000, max_tokens=128000.
         assert_eq!(p.context_window, Some(1_000_000));
         assert_eq!(p.max_output_tokens, Some(128_000));
-        // Probe 1 carried no reasoning text and the listing capabilities were truncated.
+        // `reasoning` records whether the default call returned reasoning text
+        // (`ModelProfile.reasoning`). 50.1-SEED-PROBE.md probe 1, the default call:
+        // `reasoning text: absent`. 51-EFFORT-PROBE.md `### claude-opus-4-8`: 0 reasoning
+        // tokens on the default and adaptive calls, 41 only on the non-default `max` +
+        // `thinking: adaptive` request. So `false`, pinned here (Phase 55, FIXES-05).
         assert!(!p.reasoning);
         // Probes 12 and 13: Anthropic has no JSON mode.
         assert!(!p.json_object && !p.json_schema);
@@ -3708,6 +3712,20 @@ mod endpoint_builder_tests {
     /// The provider-level reasoning default builders `config_knob_builders!`'s `@common` arm
     /// generates (Phase 51, D-00e, D-05): every `*Config` starts with neither set (D-00i), the
     /// builders set both, and `Debug` names both fields while still redacting the key (T-51-22).
+    ///
+    /// Compiled only when a provider feature is on: with `mock` alone there is no `*Config` to
+    /// probe, so the body would be empty.
+    #[cfg(any(
+        feature = "openai",
+        feature = "anthropic",
+        feature = "deepseek",
+        feature = "kimi",
+        feature = "qwen",
+        feature = "grok",
+        feature = "ollama",
+        feature = "openai-compatible",
+        feature = "gemini"
+    ))]
     #[test]
     fn reasoning_default_builders_work_on_every_config() {
         use paladin_ports::output::llm_port::{ReasoningEffort, ReasoningFallback};

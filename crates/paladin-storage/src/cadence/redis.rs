@@ -112,6 +112,7 @@ use redis::aio::{ConnectionManager, ConnectionManagerConfig};
 use redis::{Client, Script};
 use tokio::sync::OnceCell;
 
+use crate::redis_fence::fence_counter_ttl_ms;
 use crate::redis_url::redact_connection_url;
 use paladin_ports::output::cadence_port::{
     CADENCE_DELAY_CEILING, CadenceError, CadenceKey, CadencePolicy, CadencePort, FencingToken,
@@ -126,12 +127,6 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// The floor for a key's idle time-to-live.
 const MIN_KEY_TTL: Duration = Duration::from_secs(60);
-
-/// The floor for a fencing counter's time-to-live (research Pitfall 13).
-const MIN_FENCE_TTL: Duration = Duration::from_secs(60 * 60);
-
-/// How many times longer than its lock a fencing counter must live.
-const FENCE_TTL_FACTOR: u32 = 10;
 
 /// Reconnect attempts the manager makes before giving up on one command.
 const RECONNECT_RETRIES: usize = 1;
@@ -551,14 +546,6 @@ fn lock_ttl_ms(ttl: Duration) -> i64 {
     millis(ttl.clamp(Duration::from_millis(1), CADENCE_DELAY_CEILING))
 }
 
-/// A fencing counter's TTL for a lock of `lock_ttl_ms`: `max(10 * lock ttl, 1 h)`, so the
-/// counter always outlives the locks it numbers (research Pitfall 13).
-fn fence_ttl_ms(lock_ttl_ms: i64) -> i64 {
-    lock_ttl_ms
-        .saturating_mul(i64::from(FENCE_TTL_FACTOR))
-        .max(millis(MIN_FENCE_TTL))
-}
-
 /// Map a jitter fraction into `[0, 1)`: NaN and negatives to zero, one and above to just below
 /// one (the same mapping `CadencePolicy::delay_for` applies).
 fn sanitized_fraction(fraction: f64) -> f64 {
@@ -632,7 +619,10 @@ impl CadencePort for RedisCadence {
         ttl: Duration,
     ) -> Result<Option<FencingToken>, CadenceError> {
         let lock_ttl = lock_ttl_ms(ttl);
-        let args = [lock_ttl.to_string(), fence_ttl_ms(lock_ttl).to_string()];
+        let args = [
+            lock_ttl.to_string(),
+            fence_counter_ttl_ms(lock_ttl).to_string(),
+        ];
         let token: Option<i64> = self
             .evaluate_keys(
                 &self.try_lock_script,
@@ -1576,12 +1566,12 @@ mod tests {
     #[test]
     fn fence_ttl_is_ten_times_the_lock_and_at_least_an_hour() {
         // 10 x 120 s = 20 min, below the floor: the one-hour floor wins.
-        assert_eq!(fence_ttl_ms(120_000), 3_600_000);
-        assert_eq!(fence_ttl_ms(1), 3_600_000);
+        assert_eq!(fence_counter_ttl_ms(120_000), 3_600_000);
+        assert_eq!(fence_counter_ttl_ms(1), 3_600_000);
         // 10 x 2 h = 20 h, above the floor.
-        assert_eq!(fence_ttl_ms(7_200_000), 72_000_000);
+        assert_eq!(fence_counter_ttl_ms(7_200_000), 72_000_000);
         // Saturating, never overflowing.
-        assert_eq!(fence_ttl_ms(i64::MAX), i64::MAX);
+        assert_eq!(fence_counter_ttl_ms(i64::MAX), i64::MAX);
     }
 
     #[test]

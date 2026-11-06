@@ -4,7 +4,7 @@
 **Crates:** `paladin-battalion` (`WarEngine`, `WarGraph`), `paladin-core` (`Battlefield`,
 `Waypoint`), `paladin-storage` (the `WaypointPort` backends)
 
-> Every code example targets the current **v0.10.0** workspace. The substantive examples are
+> Every code example targets the current workspace release. The substantive examples are
 > real, compiled code pulled from the `paladin-doc-examples` crate via mdBook `{{#include}}`, so
 > they are checked against the live API; a few illustrative fragments are marked `rust,ignore`.
 > The API forms are verified against `crates/paladin-battalion/` and `crates/paladin-core/`.

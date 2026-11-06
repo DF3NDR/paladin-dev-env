@@ -53,7 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
              and performance considerations.",
         )
         .name("DatabaseArchitect")
-        .model("gpt-4")
+        .model("gpt-4o-mini")
         .temperature(0.3) // Low temp for technical precision
         .max_loops(1)
         .build()
@@ -83,7 +83,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
              security recommendations following OWASP guidelines.",
         )
         .name("SecuritySpecialist")
-        .model("gpt-4")
+        .model("gpt-4o-mini")
         .temperature(0.2) // Very low for security precision
         .max_loops(1)
         .build()
@@ -115,7 +115,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
              versioning strategies, and developer experience. Design clean, intuitive APIs.",
         )
         .name("ApiDesigner")
-        .model("gpt-4")
+        .model("gpt-4o-mini")
         .temperature(0.4)
         .max_loops(1)
         .build()
@@ -168,7 +168,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
              and synthesize results into cohesive solutions.",
         )
         .name("ProjectCoordinator")
-        .model("gpt-4")
+        .model("gpt-4o-mini")
         .temperature(0.6)
         .max_loops(2)
         .build()

@@ -147,6 +147,15 @@ trustworthy enough to anchor a gate.
 
 ## Current State
 
+**Milestone v0.11.1 "Dogfood Cleanup" in progress — opened 2026-10-27, 6 of 7 phases complete
+(52-57; 68/68 plans, every `VERIFICATION.md` `passed`).** Phase 57 sealed the registers on
+2026-11-05: `WINDOWS.md` `open_count: 0` (108 rows), zero undispositioned review warnings held by
+`scripts/check-review-dispositions.sh`, the three diagnosed debug sessions archived, the Phase 40
+judgment read recorded, the four `zip` RustSec exceptions re-dated to 2027-03-31, `make security`
+green, `make test` 5593/0 on the head. Open items carried into Phase 58: code-review CR-01 (run
+worker status-before-outcome write order), WR-01/WR-02, and the red `Generated SDK Clients smoke`
+CI job. **Next: Phase 58 "Crate Release"** — `/gsd-discuss-phase 58` (no `58-CONTEXT.md` yet).
+
 **Milestone v0.11.0 "Treasurer Spend Governance" shipped — closed 2026-10-27.** 15 phases
 (38-51, with 50.1 inserted; Phases 48-51 added mid-milestone from a code survey and three web3sec
 handoffs), 174 plans, 281 tasks, 34 days (2026-09-24 → 2026-10-27; 1,126 commits on the release
@@ -163,7 +172,7 @@ Archived: `milestones/v0.11.0-ROADMAP.md`, `v0.11.0-REQUIREMENTS.md`,
 the merge commit (floor 82 %, ADR-0006), `make security` green with three `zip` RustSec
 advisories carried as dated exceptions, eleven new ADRs (0052-0062), `WINDOWS.md` `open_count: 13`
 (all dispositioned as owned debt in the audit), MSRV 1.88. Full record: `MILESTONES.md`.
-**Next: `/gsd-new-milestone`** — new phases start at Phase 52.
+v0.11.1 "Dogfood Cleanup" opened 2026-10-27 at Phase 52 (see above).
 
 **Milestone v0.10.0 "Durable Agent Execution Runtime" shipped — closed 2026-09-23.** 19 phases
 (22-37.1, with 22.1, 36.1 and 37.1 inserted), 231 plans (228 executed, 3 superseded by Phase
@@ -922,6 +931,71 @@ unless a phase adopts them):
   (TENANT-03 … TENANT-10; A1–A5, A8) — Phase 53, verified 2026-10-31, ADR-0063; WINDOWS row 58
   closed. Review warnings WR-01…03 (thread-list 500 on a newer-schema row, owner lockout from a
   corrupt older row or a latest-run ownership transfer) carried as WINDOWS rows 85-87.
+- ✓ First-run usability — any `http.auth.api_keys[].key` containing `${` is refused at config
+  load with a message naming the entry (never the value), in every auth state and before the
+  listener binds; `config.example.yml` ships zero loadable keys; the k8s server config is the
+  `config.yml` key of `paladin-server-secrets` (`items` projection, `defaultMode 0440`,
+  `fsGroup 65532`), `configmap.yaml` retired; every README/docs/`k8s/` install pin, `Current
+  version` line, label and image tag reads the workspace version, held by `check-version-strings.sh`
+  in `make check-gates` and CI (four pattern classes, one exempt file, fails on an empty scan or
+  an unmatched class, observed red on a planted stale pin); memory/content changelog corrections
+  under `[Unreleased]`, ADR-0056 citing ADR-0057, count-free release comments, dangling
+  `[Unreleased]` link deleted, node-cache guide stating the server attaches no cache; FIRST-08
+  reconciled under D-18 (the two symbols live in `paladin-ports`, guarded by `make check-semver`)
+  (FIRST-01 … FIRST-09; B1, C1–C8, C10) — Phase 54, verified 2026-11-01, no new ADR. Residuals: the
+  provider-key `REPLACE_ME` placeholder accepted (AR-54-03); `make release` runs no version gate
+  before the tag (CR-01, carried to Phase 58).
+- ✓ Correctness fixes, test hygiene and lint bar — no `todo!()`/`unimplemented!()` reachable
+  outside `#[cfg(test)]` in a published crate, held by `scripts/check-no-stub-panics.sh` in `make
+  check-gates` and CI (624 files scanned, 0 findings; 88-assertion harness; its residual lexical
+  limits named in the script header); the 20 storage stubs return a typed `QueryError` and
+  `content_filtering_service.rs` is deleted; every unfinished content/base-layer item carries a
+  keep/fence/remove decision (`55-BASE-LAYER-REVIEW.md`); an agent-kind run whose model lost its
+  price at dispatch records `halted` with `HaltReason::ModelUnpriced` (M-B-31); boot warns once per
+  unpriced reachable model, stored agent versions included; the `claude-opus-4-8` `reasoning: false`
+  seed verified correct, not changed; hermetic `build_run_api_persists_*` tests through a
+  `pub(crate)` engine-port seam, the cancel test synchronised on `is_registered` instead of a sleep,
+  one `SELF_HOSTED_PROVIDERS` list, a 13-combination `paladin-llm` feature matrix clean, all eight
+  crate-level `#![allow(rustdoc::…)]` removed with both rustdoc bars green and ADR-0033 amended
+  (FIXES-01 … 03, 05, 06, TESTS-01 … 06, CIREL-08) — Phase 55, verified 2026-11-02. FIXES-04
+  (`RunStatusValue::Cancelled`) re-homed to the next minor under D-05, because both eval enums are
+  exhaustive and the variant would be a breaking change; WINDOWS row 73 fixed, row 67 waived.
+- ✓ Dogfood findings — the 36 `DF-nn` entries of `.project/v0.11.1/02-dogfood-findings-log.md`
+  (the maintainer's runs, the unkeyed and keyed first-run walks on the published `0.11.0` crates,
+  the local coverage walk and the web3sec return against `70657919`) each carry a final disposition
+  (24 `in v0.11.1`, 10 `out` with a todo pointer, 2 duplicates), held append-only and checked by
+  `scripts/check-findings-log.sh` (43-assertion harness, outside `check-gates`); every S1/S2 fixed
+  before the tag: whole-config startup log replaced by `settings_summary` and five config types given
+  a redacting `Debug` (DF-07, M-B-36, §11.8 rotation step); `paladin-server` validates after the
+  `APP_*` overlay and before any listener (DF-08/DF-26, M-B-37/38); one provider-probe module with
+  reply redaction and no redirects (DF-19); `config.example.yml` round-trips through both loaders
+  with every optional key (`tests/config_example_roundtrip.rs`, 14 tests)
+  (DOGF-01 … DOGF-06) — Phase 56, verified 2026-11-04, no new ADR. Owner calls at UAT: DF-18 stays
+  S3 / re-homed, the devcontainer coverage figure satisfies DOGF-05. Residual: a pre-existing
+  `sk-proj-…` key literal in `.project/…/LIVE_API_TESTS_FIX.md` surfaced by the security scan,
+  escalated to the maintainer.
+- ✓ Register hygiene close-out — `WINDOWS.md` at `open_count: 0` (108 rows: 55 fixed, 53 waived;
+  rows 56/68/69/79 dispositioned on superseding evidence, every other open row closed on re-run
+  tests or CI job ids, waived in the D-03 `Re-homed: owner=…revisit=…basis=` shape, or re-homed
+  with an owner and a date; the 57-10 triage minted rows 101-108); zero undispositioned review
+  warnings across the thirteen archived Phase 38-51 reviews, held by
+  `scripts/check-review-dispositions.sh` (`checked 51 finding(s) across 13 review file(s);
+  0 failure(s)`; register 43 closed / 8 waived / 0 open) with its 25-assertion shell harness under
+  `make test-shell-guards`; six gap-closure fixes landed as code rather than waivers (45 WR-04
+  terminal-event ordering, 51 WR-01 effort-refusal label, 41 WR-01 treasurer notice give-back,
+  43 WR-01/WR-04/WR-05 fence-marker TTL, cadence zero-delay and failure recording; M-B-41…M-B-47);
+  Phase 45 and 51 SUMMARY frontmatter carries STORE-02 and REASON-02/03/05/06; the three diagnosed
+  debug sessions archived as resolved; the bounded Phase 40 judgment-tier read recorded
+  (`57-JUDGMENT-READ.md`, 26 rows, owner confirm-all) and the Phase 42 subset accepted as-is;
+  the four `zip 3.0.0` RustSec exceptions (0367/0368/0369 and the new 0429) re-checked against
+  `utoipa-swagger-ui` 10.0.2 (still `zip ^9` behind a utoipa 6 migration) and re-dated to
+  2027-03-31 with `make security` green (REG-01 … REG-06; F1–F5) — Phase 57, verified 2026-11-05,
+  ADR-0063 amended, no new ADR. Code review (`57-REVIEW.md`, non-blocking): one critical carried
+  into Phase 58's inbox — the run worker writes `Completed`/`Failed` before the outcome, so a
+  failed outcome write followed by the new nack is dropped as a stale terminal message on
+  redelivery (CR-01) — plus an empty `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET` wiping a YAML
+  secret (WR-01) and lenient evidence tokens in the disposition checker (WR-02). The
+  `Generated SDK Clients smoke` CI job is red on the phase head and owned by no row.
 
 **Treasurer Spend Governance — shipped v0.11.0, closed 2026-10-27; crates at `0.11.0`**
 (Phases 38-51, 174 plans, 63/66 requirements verified, ADOPT-01…03 superseded). Archive:
@@ -1382,14 +1456,9 @@ while the code ships):
 **Milestone v0.11.1 "Dogfood Cleanup" (opened 2026-10-27).** Requirement IDs are minted in
 `.planning/REQUIREMENTS.md`; the themes below are the scope (inventory rows in parentheses):
 
-- [ ] First-run usability — unexpanded `${VAR}` auth keys refused at boot, version strings fixed and
-      gated, changelog/doc/k8s corrections, API-surface snapshot refreshed (B1, C1–C8, C10)
-- [ ] Correctness small fixes — `todo!()` fenced, Failed-vs-Halted mapping, `Cancelled` eval
-      status, opus-4-8 seed row, hermetic and non-flaky tests, lint leftovers (B2–B6, E1–E5, E7)
-- [ ] Dogfood findings — every `DF-nn` in `02-dogfood-findings-log.md` dispositioned; the
-      promoted ones fixed (content arrives from the maintainer's runs and the web3sec return)
-- [ ] Register hygiene close-out — nine draft phases validated, SUMMARY frontmatter, WINDOWS
-      dispositions, debug sessions archived, Phase 40 prohibition read (F1–F5)
+- [x] All six requirement themes validated (Phases 52-57, see Validated above). Phase 58 "Crate
+      Release" (the lockstep bump, `MIGRATION.md` consumer statement, pre-tag audit and the
+      `v0.11.1` tag) carries release work, not requirement themes.
 
 Carried-in open items (tracked, not requirements):
 
@@ -1399,8 +1468,9 @@ Carried-in open items (tracked, not requirements):
   (**out** of v0.11.1 by decision), the base-item review (folded into the correctness theme as
   review-and-fence).
 - Nyquist validation unreconciled for archived Phases 05-21.
-- The three `zip 3.0.0` RustSec exceptions (review 2026-12-31) — re-check `utoipa-swagger-ui`
-  upstream at milestone open; not a requirement unless the upstream has moved.
+- The four `zip 3.0.0` RustSec exceptions (RUSTSEC-2026-0367/0368/0369/0429) — re-checked in
+  Phase 57 (REG-06): `utoipa-swagger-ui` 10.0.2 still pins `zip ^9` behind a utoipa 6 migration,
+  so all four are re-dated to 2027-03-31 with the check recorded in `SECURITY-EXCEPTIONS.md`.
 
 ### Out of Scope
 
@@ -2327,7 +2397,24 @@ checks at patch for all twelve packages — ✓ Good); the Treasurer boot guard'
 spot is accepted as a code-review control after an owner read of the shipped wiring (AC-N5, UAT
 2026-10-31 — ✓ Good); review warnings WR-01…03 carried as follow-ups (WINDOWS rows 85-87, proposed
 owner Phase 55) and WR-04/05 accepted as ADR-0063 residuals (UAT 2026-10-31 — ⚠️ Revisit, the three
-rows must close or be waived before the `v0.11.1` tag).
+rows must close or be waived before the `v0.11.1` tag). Phase 54's owner decisions (no ADR; 54-CONTEXT
+D-01…D-18): any `${` in an HTTP API key is refused at config load regardless of `enabled` (D-01/D-02 —
+✓ Good, boot refusal proven at process level); the k8s server config is delivered as a Secret, not a
+ConfigMap (D-05 — ✓ Good, cluster apply confirmed by the maintainer at UAT 2026-11-01); the version gate
+matches four copyable pattern classes with a one-entry per-file exemption list and only checks, never
+rewrites (D-07/D-08/D-12 — ✓ Good; ⚠️ Revisit at Phase 58: `make release` does not run it before the
+tag, review CR-01); the crate changelog corrections ride a new `[Unreleased]` entry and ADR-0056 is
+amended in place (D-13/D-14 — ✓ Good); FIRST-08 reconciled by a dated note rather than padding the
+facade snapshot (D-18 — ✓ Good); the provider-key `REPLACE_ME` placeholder in the Secret template
+accepted as residual AR-54-03 (UAT 2026-11-01 — ✓ Good, SC1 scope is `http.auth.api_keys[].key`). Phase 56's owner decisions (no ADR; 56-CONTEXT D-01…D-17): the findings log is append-only and
+its checker stays out of `check-gates` (D-01/D-03 — ✓ Good, zero deleted lines since seed, 36/36
+dispositioned); S1/S2 fixes land in DF-id order with the id in every commit subject (D-06 — ✓ Good);
+the web3sec return is triaged only from the relayed verbatim text and the `confirm-triage` choice is
+the maintainer's (D-15/D-16 — ✓ Good, P1/P4/P11 confirmed at UAT 2026-11-04); the local coverage walk
+passes on integer-truncated same-commit figures (D-17 — ✓ Good, 92.79 % / 92.86 % on a devcontainer,
+bare-host path unwalked); DF-18's Quickstart `gpt-4` literal kept at S3 / re-homed to the 109-site
+sweep (UAT 2026-11-04 — ⚠️ Revisit: the first copied program exits 1 on a working key until that
+todo lands). Phase 57's owner decisions (no ADR minted; ADR-0063 and ADR-0058 amended in place; 57-CONTEXT D-01…D-43, PD-nn plan decisions): a thread's owner is its earliest attributed run, read through one defaulted `RunRepositoryPort::owner_run_for_thread` single-row method, additive so `v0.11.1` stays a patch (option-a, D-02 — ✓ Good, a later Admin or scheduled run never moves a thread; 56 `thread_controller` tests, three adapters); the review-disposition register is gated by `scripts/check-review-dispositions.sh`, which derives every expected id from the archived `NN-REVIEW.md` headings and never from the register, kept manual and outside `check-gates` (D-11/D-12 — ✓ Good, 0 failures over 51 findings; ⚠️ Revisit: 57-REVIEW WR-02, it accepts a non-evidence pointer as a closed row); the live findings the sweep turned up were triaged option-a — seven correctness/security items fixed in phase (WINDOWS rows 94-100) and eight other-class items waived with owner, revisit and basis (rows 101-108) (D-14 — ✓ Good, `open_count: 0` on 108 rows); RUSTSEC-2026-0429 joins the three `zip 3.0.0` exceptions under the same compensating control, the lift deferred to the utoipa 6 migration because `utoipa-swagger-ui` 10.0.2 also requires `utoipa ^6`, all four re-dated to 2027-03-31 (D-30/D-31/PD-01-2 — ✓ Good, `make security` exit 0); the Phase 40 judgment-tier read is the owner's blanket `confirm all` over 26 rows with the test/code split derived from evidence as 13/7, not copied from D-20 (D-20…D-22 — ✓ Good); an empty operator-webhook secret is treated as absent with one boot warning and nothing refused (PD-05-3 — ⚠️ Revisit: 57-REVIEW WR-01, an empty `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET` silently wipes a YAML-configured secret, carried to Phase 58); the worker emits its terminal event only after the durable write and ack, and a failed second write on the success arm nacks with a 1 s delay (PD-13-2/PD-13-3 — ⚠️ Revisit: 57-REVIEW CR-01, the run's outcome is lost when only the second write fails, carried to Phase 58); the node-cache fence marker is capped at clamp(2 × entry ttl, 5 min, 30 min) rather than lengthening the counter (PD-16-1 — ✓ Good; residual EA-57-20, a holder more than 28 minutes late can still outlive the counter).
 
 ## Evolution
 
@@ -2347,6 +2434,39 @@ This document evolves at phase transitions and milestone boundaries.
 2. Core Value check — still the right priority?
 3. Audit Out of Scope — reasons still valid?
 4. Update Context with current state
+
+---
+*Last updated: 2026-11-05 after **Phase 57: Register Hygiene Close-Out** completed and verified — 16
+plans (11 planned, 5 gap-closure fix plans added from the 57-10 triage), REG-01…06; verification
+`passed` 5/5 criteria, 6/6 requirements; `WINDOWS.md` `open_count: 0` (108 rows, 55 fixed, 53
+waived), review register 43 closed / 8 waived / 0 open, `make security` green with the four `zip`
+exceptions re-dated to 2027-03-31, `make test` 5593/0, 14 suites. "Register hygiene close-out"
+moved to Validated; ADR-0063 amended, no new ADR. Code review non-blocking: CR-01, WR-01, WR-02
+carried to Phase 58. Next: Phase 58.*
+
+*Last updated: 2026-11-04 after **Phase 56: Dogfood Findings** completed and verified — 14 plans,
+DOGF-01…06; verification `passed` 11/11, UAT 4/4 (DF-18 S3 accepted, devcontainer coverage walk
+accepted for DOGF-05, P1/P4/P11 confirmed, keyed-walk evidence confirmed), security 0 open (70
+threats, 5 accepted; one out-of-register finding escalated: a tracked `sk-proj-…` literal in
+`.project/…/LIVE_API_TESTS_FIX.md`). Every `DF-nn` dispositioned, the seven S1/S2 fixed and
+regression-tested, the startup log and config `Debug` no longer print credentials. "Dogfood
+findings" moved to Validated; no new ADR. Next: Phase 57.*
+
+*Last updated: 2026-11-02 after **Phase 55: Correctness Fixes, Test Hygiene & Lint Bar** completed and
+verified — 13 plans, 12 of 13 requirements satisfied and FIXES-04 re-homed to the next minor (D-05);
+verification `passed` 5/5; code review 0 critical / 3 warnings, all three fixed over five fix
+iterations (the stub-panic gate hardened against renamed, macro-built, `include!`-loaded and
+`#[path]`-moved stubs). Nothing reachable in a published crate panics from an unfinished stub, and the
+test suite and lint/rustdoc bars are hermetic and warning-free. "Correctness fixes, test hygiene and
+lint bar" moved to Validated; ADR-0033 amended, no new ADR. Next: Phase 56.*
+
+*Last updated: 2026-11-01 after **Phase 54: First-Run Usability** completed and verified — 9 plans,
+FIRST-01…09 (FIRST-08 reconciled under D-18); verification `passed` 5/5, UAT 3/3 (WR-02 accepted, kind
+apply and compose first-run checked by the maintainer), security 0 open (32 threats, 3 accepted). A
+copied example can no longer load a placeholder as a credential, every install snippet and version line
+reads 0.11.0 and `check-version-strings.sh` keeps it so in `make check-gates` and CI. "First-run
+usability" moved from Active to Validated; no ADR minted. CR-01 (pre-tag gate run) carried to Phase 58.
+Next: Phase 55.*
 
 ---
 *Last updated: 2026-10-31 after **Phase 53: Tenant Isolation Closure** completed and verified — the

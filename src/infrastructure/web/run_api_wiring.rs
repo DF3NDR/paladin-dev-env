@@ -3,7 +3,7 @@
 //! registered), the event bus, and the routers -- all off by default (D-50), all registered
 //! with the shutdown coordinator (D-13), all fail-closed on a feature/config mismatch.
 //!
-//! [`build_run_api`] is the single entry point, mirroring
+//! [`build_run_api`](crate::infrastructure::web::run_api_wiring::build_run_api) is the single entry point, mirroring
 //! `src/bin/paladin-server.rs`'s `build_thread_state`/`thread_state_over_store` precedent
 //! from Phase 24 (HITL-05, D-24..D-26): every new subsystem defaults to
 //! [`crate::config::run_store::RunStoreBackend::Disabled`], in which case every new route
@@ -19,13 +19,13 @@
 //! constructor can apply. `WarEngine<W: WaypointPort>` and `RunWorkerPool<W: WaypointPort>`
 //! are both generic over a *concrete, `Sized`* store type, but the waypoint store this
 //! module receives has already been erased to `Arc<dyn WaypointPort>` (the same shape
-//! `ThreadApiState::waypoints` carries) by the time it reaches here. [`ErasedWaypointStore`]
+//! `ThreadApiState::waypoints` carries) by the time it reaches here. [`ErasedWaypointStore`](crate::infrastructure::web::run_api_wiring::ErasedWaypointStore)
 //! is a minimal newtype wrapping that trait object and re-implementing
-//! [`WaypointPort`] by delegation -- `Arc<ErasedWaypointStore>` is `Sized`, so it satisfies
+//! [`WaypointPort`](paladin_ports::output::waypoint_port::WaypointPort) by delegation -- `Arc<ErasedWaypointStore>` is `Sized`, so it satisfies
 //! `WarEngine`/`RunWorkerPool`'s generic bound without this module (or its caller) ever
 //! needing to know or care whether the underlying backend is SQLite or Postgres.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -37,18 +37,21 @@ use tokio_util::sync::CancellationToken;
 use paladin_battalion::engine::WarEngine;
 use paladin_battalion::engine::registries::EngineRegistries;
 use paladin_battalion::engine::shutdown::ShutdownCoordinator;
-use paladin_core::platform::container::assistant::AssistantSource;
+use paladin_core::platform::container::assistant::{AssistantId, AssistantKind, AssistantSource};
+use paladin_core::platform::container::cost::PriceTable;
 use paladin_core::platform::container::principal::TenantId;
 use paladin_core::platform::container::run::AssistantRef;
 use paladin_core::platform::container::run_schedule::RunScheduleId;
 use paladin_core::platform::container::waypoint::{ThreadId, Waypoint, WaypointId};
 use paladin_llm::cadence::CadenceWiring;
+use paladin_llm::pricing::PRICING_LOG_TARGET;
 use paladin_ports::input::allowance_admission_port::AllowanceAdmissionPort;
 use paladin_ports::input::assistant_admin_port::AssistantAdminPort;
 use paladin_ports::input::run_event_stream_port::RunEventStreamPort;
 use paladin_ports::input::run_submission_port::RunSubmissionPort;
 use paladin_ports::input::schedule_admin_port::ScheduleAdminPort;
 use paladin_ports::output::assistant_repository_port::AssistantRepositoryPort;
+use paladin_ports::output::paladin_port::PaladinPort;
 use paladin_ports::output::run_queue_port::RunQueuePort;
 use paladin_ports::output::run_repository_port::RunRepositoryPort;
 use paladin_ports::output::run_schedule_repository_port::RunScheduleRepositoryPort;
@@ -85,6 +88,7 @@ use crate::config::run_stream::RunStreamConfig;
 use crate::config::run_worker::RunWorkerConfig;
 use crate::config::schedules::SchedulesConfig;
 use crate::config::settings::Settings;
+use crate::config::treasurer::AllowanceWebhookConfig;
 use crate::config::webhooks::WebhooksConfig;
 use crate::infrastructure::cadence::build_cadence;
 use crate::infrastructure::web::facade_provisioner::paladin_port_from_settings_with_cadence;
@@ -383,7 +387,7 @@ async fn build_postgres_quartet(url_env: &str) -> Result<RepoQuartet, Box<dyn st
 /// `Disabled` -> `Ok(None)` (D-08: no ledger installed when no backend is configured);
 /// `Sqlite { path }` -> a [`SqliteTreasuryLedger`](paladin_storage::treasury::sqlite::SqliteTreasuryLedger)
 /// sharing that exact database file; `Postgres { url_env }` -> a
-/// [`PostgresTreasuryLedger`](paladin_storage::treasury::postgres::PostgresTreasuryLedger)
+/// `PostgresTreasuryLedger`
 /// sharing that exact database, on a build with `storage-postgres` (a named-feature error
 /// otherwise, mirroring `build_postgres_quartet`'s own precedent).
 ///
@@ -442,7 +446,7 @@ async fn build_postgres_treasury_ledger(
 /// [`SqliteTreasuryLedger`](paladin_storage::treasury::sqlite::SqliteTreasuryLedger) on that
 /// exact database file (it implements [`TreasuryNoticePort`] beside the ledger port, and its
 /// construction applies the `treasury_notices` migration); `Postgres { url_env }` -> a
-/// [`PostgresTreasuryLedger`](paladin_storage::treasury::postgres::PostgresTreasuryLedger) on
+/// `PostgresTreasuryLedger` on
 /// that exact database, on a build with `storage-postgres` (a named-feature error otherwise).
 ///
 /// # Errors
@@ -766,6 +770,230 @@ fn report_unattributed_schedules(outcome: &ScanOutcome) {
     }
 }
 
+/// FIXES-06, D-07: the models a metered principal can reach that have no `treasurer.pricing` row,
+/// sorted and de-duplicated.
+///
+/// "No row" is exactly the lookup dispatch uses (`PriceTable::row`, exact and case-sensitive), so
+/// the boot warning and the admission/dispatch refusal can never disagree about which models are
+/// unpriced. Returns nothing unless a Treasurer is configured AND a ceiling applies: without
+/// either, no call is metered and a missing row is harmless. Pure, so the whole table is tested
+/// without building a server.
+fn unpriced_reachable_models<'a>(
+    treasurer_configured: bool,
+    has_ceiling: bool,
+    prices: &PriceTable,
+    reachable: impl IntoIterator<Item = &'a str>,
+) -> Vec<String> {
+    if !(treasurer_configured && has_ceiling) {
+        return Vec::new();
+    }
+    reachable
+        .into_iter()
+        .filter(|model| prices.row(model).is_none())
+        .map(str::to_owned)
+        .collect::<BTreeSet<String>>()
+        .into_iter()
+        .collect()
+}
+
+/// The one-sentence boot warning for an unpriced reachable `model`.
+///
+/// Built from the model name alone -- never a tenant, an API key name or a key value -- and the
+/// model is escaped with [`str::escape_debug`], because a stored assistant's model is
+/// caller-supplied text and a newline in it must not forge a second log line (T-55-21,
+/// T-55-24). The sentence also names what the boot check cannot see, so an operator does not
+/// read silence as full coverage. Pure, so the content is tested without a process-wide logger.
+fn unpriced_model_warning_line(model: &str) -> String {
+    format!(
+        "model `{}` is reachable by a metered principal but has no treasurer.pricing row: \
+         agent-kind calls on it are refused at admission (422 model_unpriced) or halted at \
+         dispatch (model_unpriced); workflow assistants are not refused; every stored version \
+         (including pinned older ones) of the agent-kind assistants stored at boot is checked, \
+         but workflow graph-node models, runtime-provisioned agents and agent-kind assistants \
+         or versions created after boot are not checked here -- add a treasurer.pricing row \
+         for it",
+        model.escape_debug()
+    )
+}
+
+/// The one-sentence boot warning for an operator allowance webhook with no signing secret
+/// (41-REVIEW WR-05, D-14), or `None` when there is nothing to say.
+///
+/// Returns `Some` exactly when a webhook is configured and its secret is absent or empty; a
+/// configured secret -- including an unexpanded `${...}` placeholder, the deferred Phase 54
+/// WR-04 -- and an unconfigured webhook are both silent. The sentence names the config key and
+/// the env var an operator would set, and never the webhook URL, a secret value, a tenant or
+/// an API key name (T-57-19). Additive by design: boot is never refused. Pure, so the content
+/// is tested without a process-wide logger.
+fn operator_webhook_secret_warning_line(
+    webhook: Option<&AllowanceWebhookConfig>,
+) -> Option<String> {
+    let webhook = webhook?;
+    if webhook
+        .secret
+        .as_deref()
+        .is_some_and(|secret| !secret.is_empty())
+    {
+        return None;
+    }
+    Some(
+        "the treasurer allowance webhook has no signing secret: set \
+         treasurer.allowance.webhook.secret (or APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET); an empty \
+         value counts as unset, and until one is set every operator notice is signed with the \
+         empty key, which any receiver can reproduce, so X-Paladin-Signature authenticates \
+         nothing"
+            .to_string(),
+    )
+}
+
+/// How many assistants each page of the boot-time stored-model scan asks for (D-07).
+const ASSISTANT_SCAN_PAGE: u32 = 100;
+
+/// What the boot-time stored-model scan found: the model of every agent-kind version of every
+/// stored, non-deleted assistant, and where the walk stopped if something could not be read.
+#[derive(Debug, Default)]
+struct StoredAgentModelScan {
+    /// One entry per agent-kind version read, in assistant page order and then ascending version
+    /// order (not de-duplicated: [`unpriced_reachable_models`] de-duplicates).
+    models: Vec<String>,
+    /// `Some` when the walk stopped early: a page or a version page could not be read, or the
+    /// store handed back a cursor that does not advance (a repeated assistant cursor, a `Some`
+    /// cursor on an empty page, or a version cursor not greater than the previous one). Holds the
+    /// id of the last assistant read completely before the stop (`None` inside means the very
+    /// first page). Carries no error text and no row content (P2 of D-14).
+    stopped_after: Option<Option<AssistantId>>,
+}
+
+/// FIXES-06, D-07, WR-01: walk every stored, non-deleted assistant once, read-only, and collect
+/// the `model` of every agent-kind version in its history -- the models a stored assistant can
+/// send a metered run to, since a run or schedule may pin any version, not only the latest.
+///
+/// Pages with `list(ASSISTANT_SCAN_PAGE, cursor, false)` to exhaustion and walks each item's
+/// history with `list_versions(id, ASSISTANT_SCAN_PAGE, cursor)`; only those two read methods are
+/// ever called. An unreadable page or version page, a version cursor that does not advance, or an
+/// assistant cursor that repeats one already followed (or arrives on an empty page) ends the walk
+/// and is recorded without its error text; the function never returns an error, so the boot that
+/// called it is never blocked and never loops.
+async fn scan_stored_agent_models(repo: &dyn AssistantRepositoryPort) -> StoredAgentModelScan {
+    scan_stored_agent_models_paged(repo, ASSISTANT_SCAN_PAGE).await
+}
+
+/// [`scan_stored_agent_models`] with the page size supplied, so a test can force several pages
+/// over a handful of rows.
+async fn scan_stored_agent_models_paged(
+    repo: &dyn AssistantRepositoryPort,
+    page_size: u32,
+) -> StoredAgentModelScan {
+    let mut scan = StoredAgentModelScan::default();
+    let mut cursor: Option<AssistantId> = None;
+    // The last assistant fully read: the position reported if the next read fails.
+    let mut last_read: Option<AssistantId> = None;
+    // Every assistant cursor already followed. A store that hands one back again (or a cursor on
+    // an empty page) would loop boot forever, so either ends the walk like an unreadable page.
+    // Set membership, not `next > prev`: the store orders ids by its own collation (a Postgres
+    // locale can differ from byte order), so comparing ids here could stop a healthy walk.
+    let mut followed: HashSet<AssistantId> = HashSet::new();
+    loop {
+        let page = match repo.list(page_size, cursor.clone(), false).await {
+            Ok(page) => page,
+            Err(_) => {
+                // The error text can carry row detail; the position is all the operator gets.
+                scan.stopped_after = Some(last_read);
+                return scan;
+            }
+        };
+        for item in &page.items {
+            if !collect_agent_version_models(repo, &item.assistant_id, page_size, &mut scan.models)
+                .await
+            {
+                scan.stopped_after = Some(last_read);
+                return scan;
+            }
+            last_read = Some(item.assistant_id.clone());
+        }
+        match page.next_cursor {
+            None => return scan,
+            Some(next) if page.items.is_empty() || !followed.insert(next.clone()) => {
+                scan.stopped_after = Some(last_read);
+                return scan;
+            }
+            Some(next) => cursor = Some(next),
+        }
+    }
+}
+
+/// Walk one stored assistant's whole version history with `list_versions(id, page_size, cursor)`
+/// (ascending by version, `next_cursor` followed until `None`) and push the `model` of every
+/// agent-kind version onto `models` (WR-01): a run or schedule can pin any version from 1 to
+/// `latest`, so an older version's model is as reachable as the latest one's. A non-agent version,
+/// or one whose body has no string `model`, is skipped.
+///
+/// Returns `false` when the history could not be read to its end: a version page failed, or the
+/// store handed back a cursor that does not advance (not greater than the previous one, or a
+/// non-empty cursor on an empty page), which would otherwise loop boot forever. The error text is
+/// dropped here; the caller records only the position (P2 of D-14).
+async fn collect_agent_version_models(
+    repo: &dyn AssistantRepositoryPort,
+    assistant_id: &AssistantId,
+    page_size: u32,
+    models: &mut Vec<String>,
+) -> bool {
+    let mut cursor: Option<u32> = None;
+    loop {
+        let Ok(page) = repo.list_versions(assistant_id, page_size, cursor).await else {
+            return false;
+        };
+        models.extend(
+            page.items
+                .iter()
+                .filter(|version| version.definition.kind == AssistantKind::Agent)
+                .filter_map(|version| {
+                    version
+                        .definition
+                        .body
+                        .get("model")
+                        .and_then(serde_json::Value::as_str)
+                })
+                .map(str::to_owned),
+        );
+        match page.next_cursor {
+            None => return true,
+            Some(next) if page.items.is_empty() || cursor.is_some_and(|prev| next <= prev) => {
+                return false;
+            }
+            Some(next) => cursor = Some(next),
+        }
+    }
+}
+
+/// The position-only sentence for a scan that stopped early, or `None` when the walk completed.
+/// It names both causes, an unreadable or a non-advancing page or version, because the scan does
+/// not record which one stopped it. Never carries an error text or row content (P2 of D-14).
+fn stored_scan_stop_line(scan: &StoredAgentModelScan) -> Option<String> {
+    let stopped_after = scan.stopped_after.as_ref()?;
+    let position = match stopped_after {
+        Some(id) => format!("after assistant id {id}"),
+        None => "at start".to_string(),
+    };
+    Some(format!(
+        "stored agent-kind assistant scan for unpriced models stopped at an unreadable or \
+         non-advancing page or version ({position}); assistants from there on were not checked \
+         -- inspect the assistants store directly"
+    ))
+}
+
+/// Log one warning per unpriced reachable model, and the scan's stop line if any, under
+/// [`PRICING_LOG_TARGET`] (`paladin::pricing`). Infallible and advisory: boot continues whatever
+/// was logged (B4). The settle-time warn-once set in `paladin-llm` is separate and untouched.
+fn report_unpriced_reachable_models(models: &[String], scan_stop: Option<String>) {
+    for model in models {
+        log::warn!(target: PRICING_LOG_TARGET, "{}", unpriced_model_warning_line(model));
+    }
+    if let Some(line) = scan_stop {
+        log::warn!(target: PRICING_LOG_TARGET, "{line}");
+    }
+}
+
 /// [`build_run_api`] with the run engine's `PaladinPort` paced through the supplied `cadence`
 /// wiring (PACE-02, D-08).
 ///
@@ -792,6 +1020,51 @@ pub async fn build_run_api_with_cadence(
     auth: AgentAuthConfig,
     code_registry: Arc<AgentRegistry>,
     cadence: Option<CadenceWiring>,
+) -> Result<RunApiHandles, Box<dyn std::error::Error>> {
+    build_run_api_with_engine_port(
+        configs,
+        settings,
+        coordinator,
+        waypoint_store,
+        auth,
+        code_registry,
+        EnginePortSource {
+            cadence,
+            paladin_port_override: None,
+        },
+    )
+    .await
+}
+
+/// Which [`PaladinPort`] the run engine uses, and how it is paced (TESTS-01, D-08).
+///
+/// `paladin_port_override: None` builds the real port from `settings` through
+/// `paladin_port_from_settings_with_cadence`, paced by `cadence` -- this is the only value
+/// shipped wiring ever passes, because the public [`build_run_api`] and
+/// [`build_run_api_with_cadence`] both delegate with `None`. `Some` replaces that port and is for
+/// in-crate tests only, so a test can drive a run through the production router and worker pool
+/// with a scripted port and no network. Crate-private on purpose: no public surface can inject an
+/// engine port.
+pub(crate) struct EnginePortSource {
+    /// The pacing wiring handed to the real port (`None` installs no pacing). Unused when
+    /// `paladin_port_override` is `Some`.
+    pub(crate) cadence: Option<CadenceWiring>,
+    /// A port used in place of the one built from `settings`. Only this file's `#[cfg(test)]`
+    /// module constructs `Some`.
+    pub(crate) paladin_port_override: Option<Arc<dyn PaladinPort>>,
+}
+
+/// The body of [`build_run_api_with_cadence`], with the run engine's port source supplied
+/// (TESTS-01, D-08). Every contract, error and rustdoc promise of [`build_run_api`] and
+/// [`build_run_api_with_cadence`] holds here; the only difference is `engine_port`.
+pub(crate) async fn build_run_api_with_engine_port(
+    configs: RunApiConfigs,
+    settings: &Settings,
+    coordinator: ShutdownCoordinator,
+    waypoint_store: Option<Arc<dyn WaypointPort>>,
+    auth: AgentAuthConfig,
+    code_registry: Arc<AgentRegistry>,
+    engine_port: EnginePortSource,
 ) -> Result<RunApiHandles, Box<dyn std::error::Error>> {
     // D-11: an allowance that would silently enforce nothing is a boot error, checked BEFORE
     // the disabled-store early return so a disabled store cannot hide a configured allowance.
@@ -887,9 +1160,15 @@ pub async fn build_run_api_with_cadence(
     // `treasury_ledger` under `AgentLoopSettlement::PlatformRunsOnly` when `Some`, so an
     // agent-kind run's own dispatch (never the shared engine's own superstep settlements)
     // settles through this port.
-    let paladin_port =
-        paladin_port_from_settings_with_cadence(settings, treasury_ledger.clone(), cadence)
-            .map_err(|e| format!("failed to build the run engine's LLM port: {e}"))?;
+    let paladin_port = match engine_port.paladin_port_override {
+        Some(port) => port,
+        None => paladin_port_from_settings_with_cadence(
+            settings,
+            treasury_ledger.clone(),
+            engine_port.cadence,
+        )
+        .map_err(|e| format!("failed to build the run engine's LLM port: {e}"))?,
+    };
 
     let mut engine_config = EngineConfig::default();
     engine_config.apply_env_overrides();
@@ -974,6 +1253,25 @@ pub async fn build_run_api_with_cadence(
         let price_table = treasurer_config
             .price_table()
             .map_err(|e| format!("invalid treasurer configuration: {e}"))?;
+        // FIXES-06, D-07, B4: warn once per model a metered principal can reach that has no price
+        // row. Advisory, never refuses boot; paladin-llm's settle-time warn-once set is separate.
+        let mut reachable: Vec<String> = code_registry
+            .list()
+            .into_iter()
+            .map(|(_, paladin)| paladin.data.model.clone())
+            .collect();
+        let stored = scan_stored_agent_models(assistant_repository.as_ref()).await;
+        let scan_stop = stored_scan_stop_line(&stored);
+        reachable.extend(stored.models);
+        report_unpriced_reachable_models(
+            &unpriced_reachable_models(
+                true,
+                true,
+                &price_table,
+                reachable.iter().map(String::as_str),
+            ),
+            scan_stop,
+        );
         let mut treasurer = Treasurer::new(policy, Arc::clone(ledger))
             .with_notices(Arc::clone(notices))
             .with_pricing(Arc::new(price_table));
@@ -1071,6 +1369,14 @@ pub async fn build_run_api_with_cadence(
         None
     };
 
+    // 41-REVIEW WR-05: an operator webhook without a secret signs with the empty key. Warn once
+    // at boot; never refuse (additive, D-00b) and never name the URL or a value.
+    if let Some(line) =
+        operator_webhook_secret_warning_line(treasurer_config.allowance.webhook.as_ref())
+    {
+        log::warn!("{line}");
+    }
+
     // PLAT-05: the webhook delivery drain loop is always spawned when the run store is
     // enabled -- delivery is a persisted, durable queue (D-40), not gated on any per-run
     // webhook actually being configured.
@@ -1087,7 +1393,8 @@ pub async fn build_run_api_with_cadence(
             .allowance
             .webhook
             .as_ref()
-            .and_then(|webhook| webhook.secret.clone()),
+            .and_then(|webhook| webhook.secret.clone())
+            .filter(|secret| !secret.is_empty()),
     );
     tasks.push(Arc::new(webhook_service).spawn(&coordinator));
 
@@ -1157,6 +1464,11 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
+    use paladin_core::platform::container::execution_result::PaladinResult;
+    use paladin_core::platform::container::paladin::Paladin;
+    use paladin_core::platform::container::paladin_error::PaladinError;
+    use paladin_core::platform::container::token_usage::TokenUsage;
+    use paladin_ports::output::paladin_port::PaladinStream;
     use tower::ServiceExt;
 
     fn default_configs() -> RunApiConfigs {
@@ -1688,6 +2000,615 @@ mod tests {
         }
     }
 
+    // ---- Phase 55 (55-09, FIXES-06, D-07): boot warning for unpriced reachable models ----
+
+    /// A price table that prices `gpt-4` and nothing else.
+    fn gpt4_only_prices() -> PriceTable {
+        use paladin_core::platform::container::cost::{CurrencyCode, PriceRow};
+        PriceTable::new(CurrencyCode::new("USD").expect("usd")).with_row(
+            "gpt-4",
+            PriceRow::new(10_000_000_000, 10_000_000_000).expect("a non-negative row"),
+        )
+    }
+
+    /// FIXES-06, D-07: the warning set is exactly the models with no `PriceTable::row`, sorted and
+    /// de-duplicated, and it is empty unless a Treasurer is configured AND a ceiling applies.
+    #[test]
+    fn unpriced_reachable_models_table() {
+        let prices = gpt4_only_prices();
+        let table: [(bool, bool, Vec<&str>, Vec<&str>); 9] = [
+            // No Treasurer: nothing is metered, so nothing is warned.
+            (false, true, vec!["x"], vec![]),
+            // No ceiling: same.
+            (true, false, vec!["x"], vec![]),
+            (false, false, vec!["x"], vec![]),
+            // Every model priced.
+            (true, true, vec!["gpt-4"], vec![]),
+            // One unpriced.
+            (true, true, vec!["gpt-4", "claude-x"], vec!["claude-x"]),
+            // Duplicates collapse.
+            (true, true, vec!["zeta", "zeta"], vec!["zeta"]),
+            // Unsorted input comes back sorted.
+            (
+                true,
+                true,
+                vec!["zeta", "gpt-4", "alpha", "zeta"],
+                vec!["alpha", "zeta"],
+            ),
+            // The lookup is exact and case-sensitive, like dispatch's.
+            (true, true, vec!["GPT-4"], vec!["GPT-4"]),
+            // An empty reachable set.
+            (true, true, vec![], vec![]),
+        ];
+        for (treasurer_configured, has_ceiling, reachable, expected) in table {
+            assert_eq!(
+                unpriced_reachable_models(
+                    treasurer_configured,
+                    has_ceiling,
+                    &prices,
+                    reachable.iter().copied()
+                ),
+                expected,
+                "treasurer={treasurer_configured} ceiling={has_ceiling} reachable={reachable:?}"
+            );
+        }
+    }
+
+    /// FIXES-06, D-07, T-55-21, T-55-24: the line names the model and every gap the warning
+    /// cannot see, names no tenant or key, and a model string with a newline cannot forge a
+    /// second log line.
+    #[test]
+    fn unpriced_model_warning_line_names_the_model_and_the_gaps() {
+        let line = unpriced_model_warning_line("claude-x");
+        for needle in [
+            "claude-x",
+            "treasurer.pricing",
+            "422 model_unpriced",
+            "model_unpriced",
+            "workflow assistants are not refused",
+            "graph-node",
+            "runtime-provisioned",
+            "every stored version (including pinned older ones)",
+            "agent-kind assistants or versions created after boot",
+        ] {
+            assert!(line.contains(needle), "missing {needle:?} in {line}");
+        }
+        for forbidden in ["tenant", "api_key", "sk-"] {
+            assert!(
+                !line.contains(forbidden),
+                "the line must not mention {forbidden:?}: {line}"
+            );
+        }
+
+        let forged = unpriced_model_warning_line("evil\nERROR fake line\r\u{1b}[31m");
+        assert!(
+            !forged.contains('\n') && !forged.contains('\r') && !forged.contains('\u{1b}'),
+            "control characters are escaped: {forged:?}"
+        );
+        assert!(forged.contains("evil\\nERROR fake line"), "{forged}");
+    }
+
+    /// Seeds one assistant version in `repo`.
+    async fn seed_assistant_version(
+        repo: &paladin_storage::assistant::in_memory::InMemoryAssistantRepository,
+        id: &str,
+        kind: AssistantKind,
+        body: serde_json::Value,
+    ) {
+        use paladin_core::platform::container::assistant::{
+            AssistantDefinition, NewAssistantVersion,
+        };
+        let assistant_id = AssistantId::new(id).expect("a valid assistant id");
+        let new = NewAssistantVersion {
+            definition: AssistantDefinition { kind, body },
+            created_by: None,
+            note: None,
+        };
+        let existing = repo.get(&assistant_id).await.expect("read");
+        if existing.is_some() {
+            repo.append_version(&assistant_id, new)
+                .await
+                .expect("append a version");
+        } else {
+            repo.create(&assistant_id, new).await.expect("create");
+        }
+    }
+
+    /// FIXES-06, D-07, WR-01: the stored scan reads agent-kind assistants only, at EVERY stored
+    /// version (a pinned older version still runs), skips workflow and soft-deleted ones, pages
+    /// to exhaustion, and reports no stop.
+    #[tokio::test]
+    async fn stored_agent_model_scan_reads_agent_kind_models_only() {
+        use paladin_storage::assistant::in_memory::InMemoryAssistantRepository;
+        let repo = InMemoryAssistantRepository::new();
+        // `stored-a` is republished: v1 stays reachable by a pinned run or schedule, so its
+        // model counts as well as the latest one's.
+        seed_assistant_version(
+            &repo,
+            "stored-a",
+            AssistantKind::Agent,
+            serde_json::json!({"model": "stored-old", "system_prompt": "p"}),
+        )
+        .await;
+        seed_assistant_version(
+            &repo,
+            "stored-a",
+            AssistantKind::Agent,
+            serde_json::json!({"model": "stored-a", "system_prompt": "p"}),
+        )
+        .await;
+        seed_assistant_version(
+            &repo,
+            "stored-flow",
+            AssistantKind::Workflow,
+            serde_json::json!({"model": "workflow-model-never-read"}),
+        )
+        .await;
+        seed_assistant_version(
+            &repo,
+            "stored-gone",
+            AssistantKind::Agent,
+            serde_json::json!({"model": "stored-gone", "system_prompt": "p"}),
+        )
+        .await;
+        repo.soft_delete(&AssistantId::new("stored-gone").expect("id"))
+            .await
+            .expect("soft delete");
+
+        let scan = scan_stored_agent_models_paged(&repo, 1).await;
+        assert_eq!(
+            scan.models,
+            vec!["stored-old".to_string(), "stored-a".to_string()]
+        );
+        assert!(scan.stopped_after.is_none(), "{:?}", scan.stopped_after);
+        assert!(stored_scan_stop_line(&scan).is_none());
+
+        // The default page size reads the same set.
+        let default_scan = scan_stored_agent_models(&repo).await;
+        assert_eq!(default_scan.models, scan.models);
+    }
+
+    /// FIXES-06, D-07, WR-01: a version history longer than one page is walked to its end, in
+    /// ascending version order, and a version without a string `model` is skipped.
+    #[tokio::test]
+    async fn stored_agent_model_scan_pages_through_every_version() {
+        use paladin_storage::assistant::in_memory::InMemoryAssistantRepository;
+        let repo = InMemoryAssistantRepository::new();
+        for body in [
+            serde_json::json!({"model": "hist-1", "system_prompt": "p"}),
+            serde_json::json!({"system_prompt": "no model on this version"}),
+            serde_json::json!({"model": "hist-3", "system_prompt": "p"}),
+            serde_json::json!({"model": 7, "system_prompt": "not a string"}),
+            serde_json::json!({"model": "hist-5", "system_prompt": "p"}),
+        ] {
+            seed_assistant_version(&repo, "hist", AssistantKind::Agent, body).await;
+        }
+        seed_assistant_version(
+            &repo,
+            "later",
+            AssistantKind::Agent,
+            serde_json::json!({"model": "later-1", "system_prompt": "p"}),
+        )
+        .await;
+
+        // Two versions per page: `hist` takes three version pages.
+        let scan = scan_stored_agent_models_paged(&repo, 2).await;
+        assert_eq!(
+            scan.models,
+            ["hist-1", "hist-3", "hist-5", "later-1"]
+                .map(str::to_string)
+                .to_vec()
+        );
+        assert!(scan.stopped_after.is_none(), "{:?}", scan.stopped_after);
+    }
+
+    /// An `AssistantRepositoryPort` that delegates to an in-memory store, except that it can fail
+    /// one chosen `list` or `list_versions` call (0-based) with an error text that must never
+    /// reach a log line, or hand back a version or assistant cursor that never advances.
+    struct ScriptedAssistants {
+        inner: paladin_storage::assistant::in_memory::InMemoryAssistantRepository,
+        list_calls: std::sync::atomic::AtomicUsize,
+        fail_list_call: Option<usize>,
+        version_calls: std::sync::atomic::AtomicUsize,
+        fail_version_call: Option<usize>,
+        stuck_version_cursor: bool,
+        /// When set, every `list` page names this id as its next cursor, however far the walk
+        /// has got: a buggy store whose assistant cursor never moves past it.
+        stuck_list_cursor: Option<AssistantId>,
+        /// When set, every `list` page comes back with no items and a fresh, never-repeated next
+        /// cursor (`ghost-<call>`): a buggy store that a set of followed cursors alone never stops.
+        empty_list_pages: bool,
+    }
+
+    impl ScriptedAssistants {
+        fn new(
+            fail_list_call: Option<usize>,
+            fail_version_call: Option<usize>,
+            stuck_version_cursor: bool,
+        ) -> Self {
+            Self {
+                inner: paladin_storage::assistant::in_memory::InMemoryAssistantRepository::new(),
+                list_calls: std::sync::atomic::AtomicUsize::new(0),
+                fail_list_call,
+                version_calls: std::sync::atomic::AtomicUsize::new(0),
+                fail_version_call,
+                stuck_version_cursor,
+                stuck_list_cursor: None,
+                empty_list_pages: false,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl AssistantRepositoryPort for ScriptedAssistants {
+        async fn create(
+            &self,
+            assistant_id: &AssistantId,
+            new: paladin_core::platform::container::assistant::NewAssistantVersion,
+        ) -> Result<
+            paladin_core::platform::container::assistant::AssistantVersion,
+            paladin_ports::output::assistant_repository_port::AssistantRepositoryError,
+        > {
+            self.inner.create(assistant_id, new).await
+        }
+        async fn append_version(
+            &self,
+            assistant_id: &AssistantId,
+            new: paladin_core::platform::container::assistant::NewAssistantVersion,
+        ) -> Result<
+            paladin_core::platform::container::assistant::AssistantVersion,
+            paladin_ports::output::assistant_repository_port::AssistantRepositoryError,
+        > {
+            self.inner.append_version(assistant_id, new).await
+        }
+        async fn get(
+            &self,
+            assistant_id: &AssistantId,
+        ) -> Result<
+            Option<paladin_core::platform::container::assistant::Assistant>,
+            paladin_ports::output::assistant_repository_port::AssistantRepositoryError,
+        > {
+            self.inner.get(assistant_id).await
+        }
+        async fn get_version(
+            &self,
+            assistant_id: &AssistantId,
+            version: u32,
+        ) -> Result<
+            Option<paladin_core::platform::container::assistant::AssistantVersion>,
+            paladin_ports::output::assistant_repository_port::AssistantRepositoryError,
+        > {
+            self.inner.get_version(assistant_id, version).await
+        }
+        async fn list(
+            &self,
+            limit: u32,
+            cursor: Option<AssistantId>,
+            include_deleted: bool,
+        ) -> Result<
+            paladin_ports::output::assistant_repository_port::AssistantPage,
+            paladin_ports::output::assistant_repository_port::AssistantRepositoryError,
+        > {
+            let call = self
+                .list_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if Some(call) == self.fail_list_call {
+                return Err(
+                    paladin_ports::output::assistant_repository_port::AssistantRepositoryError::Serialization {
+                        message: "row 2 is corrupt: secret-row-detail".to_string(),
+                    },
+                );
+            }
+            let mut page = self.inner.list(limit, cursor, include_deleted).await?;
+            if let Some(stuck) = &self.stuck_list_cursor {
+                // A buggy store: the same cursor on every page, so a naive walk never ends.
+                page.next_cursor = Some(stuck.clone());
+            }
+            if self.empty_list_pages {
+                // A buggy store: an empty page that still names a new cursor every time.
+                page.items.clear();
+                page.next_cursor = Some(AssistantId::new(format!("ghost-{call}")).expect("id"));
+            }
+            Ok(page)
+        }
+        async fn list_versions(
+            &self,
+            assistant_id: &AssistantId,
+            limit: u32,
+            cursor: Option<u32>,
+        ) -> Result<
+            paladin_ports::output::assistant_repository_port::AssistantVersionPage,
+            paladin_ports::output::assistant_repository_port::AssistantRepositoryError,
+        > {
+            let call = self
+                .version_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if Some(call) == self.fail_version_call {
+                return Err(
+                    paladin_ports::output::assistant_repository_port::AssistantRepositoryError::Serialization {
+                        message: "version 2 is corrupt: secret-version-detail".to_string(),
+                    },
+                );
+            }
+            let mut page = self
+                .inner
+                .list_versions(assistant_id, limit, cursor)
+                .await?;
+            if self.stuck_version_cursor {
+                // A buggy store: always the same cursor, so a naive walk never ends.
+                page.next_cursor = Some(1);
+            }
+            Ok(page)
+        }
+        async fn soft_delete(
+            &self,
+            assistant_id: &AssistantId,
+        ) -> Result<(), paladin_ports::output::assistant_repository_port::AssistantRepositoryError>
+        {
+            self.inner.soft_delete(assistant_id).await
+        }
+    }
+
+    /// FIXES-06, D-07, P2 of D-14: an unreadable page stops the walk. The first page's models
+    /// survive, the stop records the position, and the rendered line carries no error text.
+    /// The scan returns a value, never an error, so boot is never blocked.
+    #[tokio::test]
+    async fn stored_agent_model_scan_stops_at_an_unreadable_page() {
+        let repo = ScriptedAssistants::new(Some(1), None, false);
+        for (id, model) in [("a-1", "model-1"), ("a-2", "model-2"), ("a-3", "model-3")] {
+            seed_assistant_version(
+                &repo.inner,
+                id,
+                AssistantKind::Agent,
+                serde_json::json!({"model": model, "system_prompt": "p"}),
+            )
+            .await;
+        }
+
+        let scan = scan_stored_agent_models_paged(&repo, 1).await;
+        assert_eq!(scan.models, vec!["model-1".to_string()]);
+        assert_eq!(
+            scan.stopped_after,
+            Some(Some(AssistantId::new("a-1").expect("id"))),
+            "the stop records the last assistant read before the unreadable page"
+        );
+        let line = stored_scan_stop_line(&scan).expect("a stop renders one line");
+        assert!(line.contains("a-1"), "{line}");
+        assert!(line.contains("unreadable"), "{line}");
+        assert!(
+            !line.contains("secret-row-detail") && !line.contains("corrupt"),
+            "no error text in the line: {line}"
+        );
+
+        // A failure on the very first page names the start of the walk.
+        let first_page_stop = StoredAgentModelScan {
+            models: Vec::new(),
+            stopped_after: Some(None),
+        };
+        let line = stored_scan_stop_line(&first_page_stop).expect("a stop renders one line");
+        assert!(line.contains("start"), "{line}");
+
+        // The reporter is infallible and logs through the pricing target.
+        report_unpriced_reachable_models(&["model-1".to_string()], Some(line));
+    }
+
+    /// FIXES-06, D-07, WR-01, P2 of D-14: an unreadable version page stops the whole walk. The
+    /// stop records the last assistant whose history was read completely, and the rendered line
+    /// carries no error text.
+    #[tokio::test]
+    async fn stored_agent_model_scan_stops_at_an_unreadable_version_page() {
+        // Version calls, page size 1: a-1 v1 (0), a-2 v1 (1), a-2 v2 (2, fails).
+        let repo = ScriptedAssistants::new(None, Some(2), false);
+        seed_assistant_version(
+            &repo.inner,
+            "a-1",
+            AssistantKind::Agent,
+            serde_json::json!({"model": "model-1", "system_prompt": "p"}),
+        )
+        .await;
+        for model in ["model-2a", "model-2b"] {
+            seed_assistant_version(
+                &repo.inner,
+                "a-2",
+                AssistantKind::Agent,
+                serde_json::json!({"model": model, "system_prompt": "p"}),
+            )
+            .await;
+        }
+        seed_assistant_version(
+            &repo.inner,
+            "a-3",
+            AssistantKind::Agent,
+            serde_json::json!({"model": "model-3", "system_prompt": "p"}),
+        )
+        .await;
+
+        let scan = scan_stored_agent_models_paged(&repo, 1).await;
+        assert!(
+            !scan
+                .models
+                .iter()
+                .any(|m| m == "model-2b" || m == "model-3"),
+            "nothing after the unreadable version page is read: {:?}",
+            scan.models
+        );
+        assert_eq!(
+            scan.stopped_after,
+            Some(Some(AssistantId::new("a-1").expect("id"))),
+            "the stop records the last assistant whose whole history was read"
+        );
+        let line = stored_scan_stop_line(&scan).expect("a stop renders one line");
+        assert!(line.contains("a-1"), "{line}");
+        assert!(
+            !line.contains("secret-version-detail") && !line.contains("corrupt"),
+            "no error text in the line: {line}"
+        );
+    }
+
+    /// FIXES-06, D-07, WR-01: a store whose version cursor never advances cannot loop the boot
+    /// scan forever; the walk stops and records the position like an unreadable page.
+    #[tokio::test]
+    async fn stored_agent_model_scan_stops_at_a_non_advancing_version_cursor() {
+        let repo = ScriptedAssistants::new(None, None, true);
+        for model in ["loop-1", "loop-2", "loop-3"] {
+            seed_assistant_version(
+                &repo.inner,
+                "looping",
+                AssistantKind::Agent,
+                serde_json::json!({"model": model, "system_prompt": "p"}),
+            )
+            .await;
+        }
+
+        let scan = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            scan_stored_agent_models_paged(&repo, 1),
+        )
+        .await
+        .expect("the scan terminates");
+        assert_eq!(scan.stopped_after, Some(None), "{:?}", scan.stopped_after);
+        let line = stored_scan_stop_line(&scan).expect("a stop renders one line");
+        assert!(
+            line.contains("non-advancing"),
+            "every read succeeded: {line}"
+        );
+    }
+
+    /// FIXES-06, D-07, WR-01: a store whose assistant-list cursor never advances cannot loop the
+    /// boot scan forever either. The walk reads each page once, stops at the first cursor it has
+    /// already followed, and records the last assistant read completely, like an unreadable page.
+    #[tokio::test]
+    async fn stored_agent_model_scan_stops_at_a_non_advancing_assistant_cursor() {
+        let mut repo = ScriptedAssistants::new(None, None, false);
+        repo.stuck_list_cursor = Some(AssistantId::new("a-1").expect("id"));
+        for (id, model) in [("a-1", "model-1"), ("a-2", "model-2"), ("a-3", "model-3")] {
+            seed_assistant_version(
+                &repo.inner,
+                id,
+                AssistantKind::Agent,
+                serde_json::json!({"model": model, "system_prompt": "p"}),
+            )
+            .await;
+        }
+
+        // Page size 1: page 1 (no cursor) is a-1, page 2 (cursor a-1) is a-2 and names a-1 again.
+        let scan = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            scan_stored_agent_models_paged(&repo, 1),
+        )
+        .await
+        .expect("the scan terminates");
+        assert_eq!(
+            scan.models,
+            vec!["model-1".to_string(), "model-2".to_string()]
+        );
+        assert_eq!(
+            scan.stopped_after,
+            Some(Some(AssistantId::new("a-2").expect("id"))),
+            "the stop records the last assistant read before the repeated cursor"
+        );
+        let line = stored_scan_stop_line(&scan).expect("a stop renders one line");
+        assert!(
+            line.contains("non-advancing"),
+            "every read succeeded: {line}"
+        );
+    }
+
+    /// FIXES-06, D-07, WR-01: a store that answers every `list` with an empty page and a fresh
+    /// next cursor never repeats a cursor, so only the empty-page half of the assistant-cursor
+    /// guard stops it. The walk stops on the first page, before any assistant was read, and the
+    /// line names the start of the walk.
+    #[tokio::test]
+    async fn stored_agent_model_scan_stops_at_an_empty_page_with_a_cursor() {
+        let mut repo = ScriptedAssistants::new(None, None, false);
+        repo.empty_list_pages = true;
+        seed_assistant_version(
+            &repo.inner,
+            "a-1",
+            AssistantKind::Agent,
+            serde_json::json!({"model": "model-1", "system_prompt": "p"}),
+        )
+        .await;
+
+        let scan = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            scan_stored_agent_models_paged(&repo, 1),
+        )
+        .await
+        .expect("the scan terminates");
+        assert!(scan.models.is_empty(), "{:?}", scan.models);
+        assert_eq!(scan.stopped_after, Some(None), "{:?}", scan.stopped_after);
+        assert_eq!(
+            repo.list_calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the walk stops at the first empty page"
+        );
+        let line = stored_scan_stop_line(&scan).expect("a stop renders one line");
+        assert!(line.contains("at start"), "{line}");
+    }
+
+    /// B4, D-07: a metered principal that can reach an unpriced code-registered model still
+    /// boots; the warning is advisory and never refuses anything.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn boot_with_an_unpriced_reachable_model_under_an_allowance_still_succeeds() {
+        use paladin_core::platform::container::paladin::PaladinData;
+        let (run_path, run_url) = temp_sqlite_url("unpriced_reachable");
+        let (wp_path, wp_url) = temp_sqlite_url("unpriced_reachable_wp");
+        let registry = Arc::new(AgentRegistry::new());
+        let paladin = Arc::new(paladin_core::base::entity::Entity::new(
+            PaladinData {
+                system_prompt: "hi".to_string(),
+                name: "Unpriced".to_string(),
+                model: "no-price-row-model".to_string(),
+                ..Default::default()
+            },
+            Some("Unpriced".to_string()),
+        ));
+        registry.insert(
+            "unpriced-agent",
+            paladin,
+            Arc::new(UnconsultedExecutorForBoot),
+        );
+        let coordinator = ShutdownCoordinator::new();
+        let handles = build_run_api_with_engine_port(
+            sqlite_configs(&run_url),
+            &allowance_settings(&[("svc-a", "1d", "2.50")], &[("acme", "7d", "25.00")]),
+            coordinator.clone(),
+            Some(sqlite_waypoints(&wp_url).await),
+            principal_auth(&[("secret-a", "svc-a", "acme")]),
+            registry,
+            EnginePortSource {
+                cadence: None,
+                paladin_port_override: Some(Arc::new(CannedAnswerPaladinPort)),
+            },
+        )
+        .await
+        .expect("an unpriced reachable model must not refuse boot");
+        assert!(handles.treasurer.is_some(), "the Treasurer is present");
+        coordinator.cancel_and_wait(Duration::from_secs(1)).await;
+        cleanup(&run_path);
+        cleanup(&wp_path);
+    }
+
+    /// An executor the boot test registers only because `AgentRegistry::insert` requires one;
+    /// no run is submitted, so it is never called.
+    struct UnconsultedExecutorForBoot;
+
+    #[async_trait]
+    impl paladin_ports::output::paladin_executor_port::PaladinExecutorPort
+        for UnconsultedExecutorForBoot
+    {
+        async fn execute(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+        ) -> Result<PaladinResult, PaladinError> {
+            Err(PaladinError::ExecutionError(
+                "the boot test submits no run".to_string(),
+            ))
+        }
+    }
+
     // ---- Phase 53 (53-06, D-12): a configured Treasurer must not boot unenforced ----
 
     /// TENANT-08, D-00f: the refusal fires on exactly one row of the four-row table, with the
@@ -1997,6 +2918,47 @@ mod tests {
         assert!(warns[0].contains(schedule_id(2).as_str()));
         assert!(!warns[0].contains(schedule_id(1).as_str()));
         assert!(warns[0].contains("POST /v1/schedules"));
+    }
+
+    /// 41-REVIEW WR-05 (D-14, T-57-19, P-05-3): a webhook with no secret, or an empty one,
+    /// yields one warning line that names the config key and the env var and says the
+    /// notices are signed with the empty key -- and never the webhook URL.
+    #[test]
+    fn operator_webhook_secret_warning_line_names_the_key_and_never_the_url() {
+        for secret in [None, Some(String::new())] {
+            let webhook = AllowanceWebhookConfig {
+                url: "https://ops.example.com/hook-sentinel-url".to_string(),
+                secret: secret.clone(),
+            };
+            let line = operator_webhook_secret_warning_line(Some(&webhook))
+                .unwrap_or_else(|| panic!("secret {secret:?} must warn"));
+            assert!(
+                line.contains("treasurer.allowance.webhook.secret"),
+                "{line}"
+            );
+            assert!(
+                line.contains("APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET"),
+                "{line}"
+            );
+            assert!(line.contains("empty key"), "{line}");
+            assert!(!line.contains("hook-sentinel-url"), "{line}");
+            assert!(!line.contains("ops.example.com"), "{line}");
+        }
+    }
+
+    /// 41-REVIEW WR-05 (D-00b, P-05-2): a configured secret -- including an unexpanded
+    /// `${...}` placeholder, which is the deferred Phase 54 WR-04 -- and no webhook at all
+    /// are both silent.
+    #[test]
+    fn operator_webhook_secret_warning_line_is_silent_with_a_secret() {
+        for secret in ["op-secret-0123456789", "${ALLOWANCE_WEBHOOK_SECRET}"] {
+            let webhook = AllowanceWebhookConfig {
+                url: "https://ops.example.com/hook".to_string(),
+                secret: Some(secret.to_string()),
+            };
+            assert_eq!(operator_webhook_secret_warning_line(Some(&webhook)), None);
+        }
+        assert_eq!(operator_webhook_secret_warning_line(None), None);
     }
 
     /// AC-17 (ordering): several unattributed schedules found across pages (page size 2) are one
@@ -2943,17 +3905,59 @@ mod tests {
         cleanup(&wp_path);
     }
 
-    /// Submits one agent-kind run through the real run router of a `build_run_api` wired with
-    /// `trace`, waits for it to end, and returns how many records `run_traces` holds for its
-    /// thread -- counted straight from the SQLite file, exactly as an operator's `sqlite3`
-    /// would.
+    /// A [`PaladinPort`] that answers every `execute` with one canned [`PaladinResult`] and never
+    /// leaves the process (TESTS-01, D-08): the stand-in for the real LLM port the run engine
+    /// would otherwise build from `settings`, so the run-API trace tests need no key and no
+    /// network.
+    struct CannedAnswerPaladinPort;
+
+    #[async_trait]
+    impl PaladinPort for CannedAnswerPaladinPort {
+        async fn execute(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+        ) -> Result<PaladinResult, PaladinError> {
+            Ok(PaladinResult {
+                output: "canned answer".to_string(),
+                usage: TokenUsage::new(11, 7),
+                ..Default::default()
+            })
+        }
+
+        async fn execute_stream(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+        ) -> Result<PaladinStream, PaladinError> {
+            Err(PaladinError::ExecutionError(
+                "streaming is not scripted".to_string(),
+            ))
+        }
+
+        fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+            Ok(())
+        }
+    }
+
+    /// Submits one agent-kind run through the real run router of a `build_run_api`-shaped wiring
+    /// built with `trace`, waits for it to end, and returns how many records `run_traces` holds
+    /// for its thread -- counted straight from the SQLite file, exactly as an operator's
+    /// `sqlite3` would.
+    ///
+    /// Hermetic: the run engine's port is the scripted [`CannedAnswerPaladinPort`], injected
+    /// through the crate-private [`EnginePortSource`] seam, so no API key and no network are
+    /// needed and no process environment variable is touched.
     async fn persisted_trace_records(label: &str, trace: crate::config::trace::TraceConfig) -> i64 {
         use paladin_core::platform::container::paladin::PaladinData;
         use paladin_core::platform::container::run::RunId;
 
-        struct FailingExecutor;
+        /// `AgentRegistry::insert` requires an executor. The agent-kind run path never consults
+        /// the registry's executor (the run engine's port answers), so this one fails loudly if
+        /// that ever changes.
+        struct UnconsultedExecutor;
         #[async_trait]
-        impl paladin_ports::output::paladin_executor_port::PaladinExecutorPort for FailingExecutor {
+        impl paladin_ports::output::paladin_executor_port::PaladinExecutorPort for UnconsultedExecutor {
             async fn execute(
                 &self,
                 _paladin: &paladin_core::platform::container::paladin::Paladin,
@@ -2970,9 +3974,6 @@ mod tests {
             }
         }
 
-        unsafe {
-            std::env::set_var("OPENAI_API_KEY", "sk-test-run-api-wiring-hermetic");
-        }
         let (run_path, run_url) = temp_sqlite_url(label);
         let (wp_path, wp_url) = temp_sqlite_url(&format!("{label}_wp"));
 
@@ -2985,20 +3986,24 @@ mod tests {
             },
             Some("TracedAgent".to_string()),
         ));
-        registry.insert("traced-agent", paladin, Arc::new(FailingExecutor));
+        registry.insert("traced-agent", paladin, Arc::new(UnconsultedExecutor));
 
         let settings = Settings {
             trace,
             ..Settings::default()
         };
         let coordinator = ShutdownCoordinator::new();
-        let handles = build_run_api(
+        let handles = build_run_api_with_engine_port(
             sqlite_configs(&run_url),
             &settings,
             coordinator.clone(),
             Some(sqlite_waypoints(&wp_url).await),
             AgentAuthConfig::default(),
             registry,
+            EnginePortSource {
+                cadence: None,
+                paladin_port_override: Some(Arc::new(CannedAnswerPaladinPort)),
+            },
         )
         .await
         .expect("sqlite run store wires");
@@ -3041,9 +4046,6 @@ mod tests {
         }
         // Stopping the pool lets every per-run trace dispatcher drain before the read-back.
         coordinator.cancel_and_wait(Duration::from_secs(1)).await;
-        unsafe {
-            std::env::remove_var("OPENAI_API_KEY");
-        }
 
         let pool = sqlx::SqlitePool::connect(&run_url)
             .await
@@ -3063,7 +4065,6 @@ mod tests {
     /// `trace.persist: true` in the operator's config reaches the production worker pool: a run
     /// dispatched by a `build_run_api`-built server leaves its trace records in `run_traces`.
     #[tokio::test(flavor = "multi_thread")]
-    #[serial_test::serial(paladin_run_api_wiring_openai_api_key)]
     async fn build_run_api_persists_run_traces_when_trace_persist_is_set() {
         let records = persisted_trace_records(
             "trace_persist_on",
@@ -3081,7 +4082,6 @@ mod tests {
 
     /// The default (`trace.persist: false`) stays off: the same run persists no trace record.
     #[tokio::test(flavor = "multi_thread")]
-    #[serial_test::serial(paladin_run_api_wiring_openai_api_key)]
     async fn build_run_api_persists_no_run_traces_by_default() {
         let records = persisted_trace_records(
             "trace_persist_off",

@@ -46,7 +46,7 @@ key-decisions:
 patterns-established:
   - "The 45-01 native RustFS loop: unzip the release binary into the session scratchpad, run it with RUSTFS_ACCESS_KEY=testuser RUSTFS_SECRET_KEY=testpass123 RUSTFS_CONSOLE_ENABLE=false ./rustfs --address 127.0.0.1:9010 <empty-dir>, poll /health/ready, run a throwaway listener on 127.0.0.1:6380 for the harness Redis check"
 
-requirements-completed: []
+requirements-completed: [STORE-02]
 
 duration: 55min
 completed: 2026-09-29
@@ -137,3 +137,7 @@ None. No new network endpoint, auth path or trust-boundary schema. The new multi
 - `d6ac370d`, `71014c33`, `a2b22b1d` present in `git log`.
 - All 9 modified files present in the tree; `crates/paladin-storage/src/minio.rs` contains `fn split_token(`, `fn encode_multipart_token(`, `fn decode_multipart_token(`; `tests/integration/mod.rs` contains `to_socket_addrs`.
 - Acceptance greps all match the plan's expected values (0 `SystemLogAdapter`, 0 `not fully implemented`, 0 `copy_source`, 0 `testcontainers-modules` in `Cargo.toml` and `Cargo.lock`, 1 `tokio-tar` in `Cargo.lock`, `>= 11` listed suite cases).
+
+## Requirements-completed amended (Phase 57, 2026-11-04)
+
+STORE-02 is closed by `45-UAT.md` test 1 (`ci.yml` run 36751442387, the 11-case `FileStoragePort` contract suite green against RustFS) and by `45-VERIFICATION.md`. It is recorded on this plan because this plan's frontmatter is the one that claims the requirement (D-41). The frontmatter decision "STORE-01 and STORE-02 are NOT marked complete by this plan" describes the plan's own seal, written before UAT ran the CI backstop truth; the requirement is now complete.

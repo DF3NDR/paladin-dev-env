@@ -30,7 +30,7 @@ use croner::Cron;
 use thiserror::Error;
 
 /// The number of whitespace-separated fields the DEFAULT (unmodified)
-/// `tokio-cron-scheduler`-backed [`crate::scheduler::TokioCronSchedulerAdapter`]
+/// `tokio-cron-scheduler`-backed `crate::scheduler::TokioCronSchedulerAdapter`
 /// requires: `sec min hour day month weekday`. Re-exported here so
 /// `scheduler.rs`'s `validate_cron_field_count` can keep its own six-field
 /// requirement while sharing this module's counting primitive (D-38, X-03 --

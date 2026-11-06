@@ -2,33 +2,35 @@
 gsd_state_version: 1.0
 milestone: v0.11.1
 milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
-current_phase: 54
-current_phase_name: First-Run Usability
-status: planning
-stopped_at: Completed 53-08-PLAN.md
-last_updated: "2026-10-31T18:04:48.427Z"
-last_activity: 2026-10-31
-last_activity_desc: Phase 53 complete, transitioned to Phase 54
+current_phase: 58
+current_phase_name: Crate Release
+status: executing
+stopped_at: Completed 58-10-PLAN.md
+last_updated: "2026-11-06T01:47:45.201Z"
+last_activity: 2026-11-05
+last_activity_desc: Phase 58 execution started
 progress:
-  total_phases: 2
-  completed_phases: 2
-  total_plans: 16
-  completed_plans: 16
+  total_phases: 7
+  completed_phases: 6
+  total_plans: 84
+  completed_plans: 80
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-10-31 after Phase 53)
+See: .planning/PROJECT.md (updated 2026-11-05 after Phase 57)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 54 — First-Run Usability
+**Current focus:** Phase 58 — Crate Release
+`MIGRATION.md` consumer statement, pre-tag milestone audit over Phases 52-57 reading `passed`, the
+`v0.11.1` tag through `release.yml` and all twelve crates on crates.io)
 52-UAT 3/3 passed; PR #61 merged to `main` as `84686acfb` on 2026-10-30)
 (carried-gaps inventory, dogfood findings log, scoping notes): 7 phases (52-58), 53/53 requirements
-mapped. Phase 52 (CI & Release Pipeline Repair) completed 2026-10-30; Phase 53 (Tenant Isolation Closure) completed 2026-10-31; next: Phase 54. Decisions at open: OpenAI Responses API out,
+mapped. Phase 52 (CI & Release Pipeline Repair) completed 2026-10-30; Phase 53 (Tenant Isolation Closure) completed 2026-10-31; Phase 54 (First-Run Usability) completed 2026-11-01; next: Phase 55. Decisions at open: OpenAI Responses API out,
 `${VAR}` auth keys refused at boot, research skipped.
 
 **Previous milestone:** v0.11.0 "Treasurer Spend Governance" closed 2026-10-27 — 15 phases
@@ -50,18 +52,18 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 
 ## Current Position
 
-Phase: 54 — First-Run Usability
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-10-31 — Phase 53 complete, transitioned to Phase 54
+Phase: 58 (Crate Release) — EXECUTING
+Plan: 11 of 14
+Status: Ready to execute
+Last activity: 2026-11-05 — Phase 58 execution started
 
-Progress: [██████░░░░░░░░░░░░░░] 2/7 phases ([██████████] 100%) — Phase 53 plans [████████████████████] 8/8 (100%)
+Progress: [█████████████████░░░] 6/7 phases (v0.11.1) — plans [████████████████████] 68/68 ([██████████] 95%)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 605
+- Total plans completed: 657
 - Average duration: —
 - Total execution time: —
 
@@ -124,6 +126,10 @@ Progress: [██████░░░░░░░░░░░░░░] 2/7 pha
 | 47 | 10 | - | - |
 | 52 | 8 | - | - |
 | 53 | 8 | - | - |
+| 54 | 9 | - | - |
+| 55 | 13 | - | - |
+| 56 | 14 | - | - |
+| 57 | 16 | - | - |
 
 *Updated after each plan completion*
 
@@ -372,6 +378,70 @@ Progress: [██████░░░░░░░░░░░░░░] 2/7 pha
 | Phase 53 P06 | 14min | 3 tasks | 8 files |
 | Phase 53 P07 | 30min | 3 tasks | 9 files |
 | Phase 53 P08 | 12min | 3 tasks | 4 files |
+| Phase 54 P01 | 25min | 3 tasks | 5 files |
+| Phase 54 P02 | 10min | 2 tasks | 3 files |
+| Phase 54 P03 | 5min | 2 tasks | 6 files |
+| Phase 54 P04 | 8min | 3 tasks | 10 files |
+| Phase 54 P05 | 15min | 3 tasks | 6 files |
+| Phase 54 P06 | 20min | 3 tasks | 9 files |
+| Phase 54 P07 | 25min | 3 tasks | 4 files |
+| Phase 54 P08 | 10min | 2 tasks | 5 files |
+| Phase 54 P09 | 20min | 3 tasks | 6 files |
+| Phase 55 P01 | 12min | 3 tasks | 9 files |
+| Phase 55 P02 | 45min | 2 tasks | 8 files |
+| Phase 55 P03 | 35min | 2 tasks | 3 files |
+| Phase 55 P04 | 50 min | 3 tasks | 8 files |
+| Phase 55 P05 | 55 min | 3 tasks | 6 files |
+| Phase 55 P06 | 25min | 2 tasks | 3 files |
+| Phase 55 P07 | 15min | 2 tasks | 8 files |
+| Phase 55 P08 | 45min | 2 tasks | 43 files |
+| Phase 55 P09 | 11 min | 3 tasks | 3 files |
+| Phase 55 P10 | 40min | 2 tasks | 31 files |
+| Phase 55 P11 | 40 min | 3 tasks | 39 files |
+| Phase 55 P12 | 30min | 3 tasks | 8 files |
+| Phase 55 P13 | 45min | 3 tasks | 3 files |
+| Phase 56 P01 | ~20min | 2 tasks | 3 files |
+| Phase 56 P02 | 15min | 3 tasks | 9 files |
+| Phase 56 P03 | 25min | 3 tasks | 3 files |
+| Phase 56 P04 | ~15min | 2 tasks | 2 files |
+| Phase 56 P05 | 12min | 2 tasks | 4 files |
+| Phase 56 P06 | ~20min | 2 tasks | 5 files |
+| Phase 56 P07 | 25min | 3 tasks | 13 files |
+| Phase 56 P08 | 45min | 3 tasks | 5 files |
+| Phase 56 P09 | ~1h | 3 tasks | 8 files |
+| Phase 56 P11 | 15min | 3 tasks | 11 files |
+| Phase 56 P12 | 30min | 2 tasks | 4 files |
+| Phase 56 P13 | 2 sessions | 4 tasks | 7 files |
+| Phase 56 P14 | 1 session | 3 tasks | 6 files |
+| Phase 56 P10 | 20min (resume) | 3 tasks | 12 files |
+| Phase 57 P01 | approx 10min (continuation) | 3 tasks | 14 files |
+| Phase 57 P05 | 12min | 3 tasks | 9 files |
+| Phase 57 P08 | 35min | 3 tasks | 36 files |
+| Phase 57 P07 | 30min | 3 tasks | 2 files |
+| Phase 57 P02 | 70min | 3 tasks | 9 files |
+| Phase 57 P03 | 75min | 3 tasks | 5 files |
+| Phase 57 P06 | 28min | 3 tasks | 6 files |
+| Phase 57 P09 | 35min | 2 tasks | 5 files |
+| Phase 57 P04 | 35min | 2 tasks | 7 files |
+| Phase 57 P10 | ~1h | 3 tasks | 5 files |
+| Phase 57 P12 | 20min | 2 tasks | 4 files |
+| Phase 57 P13 | 26min | 3 tasks | 5 files |
+| Phase 57 P14 | 41min | 3 tasks | 7 files |
+| Phase 57 P15 | 42min | 3 tasks | 6 files |
+| Phase 57 P16 | ~60min | 3 tasks | 9 files |
+| Phase 57 P11 | ~2h | 3 tasks | 5 files |
+| Phase 58 P01 | 85min | 3 tasks | 7 files |
+| Phase 58 P02 | n/a | 2 tasks | 27 files |
+| Phase 58 P03 | not measured | 3 tasks | 115 files |
+| Phase 58 P04 | not measured | 3 tasks | 5 files |
+| Phase 58 P05 | 4h45m (incl. decision wait) | 3 tasks | 4 files |
+| Phase 58 P15 | 25min | 5 tasks | 13 files |
+| Phase 58 P06 | 21min | 3 tasks | 52 files |
+| Phase 58 P16 | 32min | 5 tasks | 11 files |
+| Phase 58 P07 | 15min | 3 tasks | 54 files |
+| Phase 58 P08 | 65min | 3 tasks | 4 files |
+| Phase 58 P09 | 2h20m | 3 tasks | 3 files |
+| Phase 58 P10 | 1h | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -381,6 +451,37 @@ Progress: [██████░░░░░░░░░░░░░░] 2/7 pha
 Phases 22-37.1 is recorded in its own `NN-CONTEXT.md` (and the SUMMARY decision lists) under
 `milestones/v0.10.0-phases/`; the locked ones are ADRs in `.planning/decisions/` and the
 `## Key Decisions` table in PROJECT.md. Only what a later milestone must honour is kept here:
+
+- **Phase 57 register hygiene close-out (2026-11-05, no ADR; ADR-0063 and ADR-0058 amended in place;
+  57-CONTEXT D-01…D-43)** — the registers the milestone audit reads now agree with the tree: `WINDOWS.md`
+  sealed at `open_count: 0` (108 rows, 55 fixed, 53 waived; waivers 101-108 carry owner, revisit and
+  basis), `57-REVIEW-DISPOSITIONS.md` at 43 closed / 8 waived / 0 open over all 51 Phase 38-51 findings,
+  gated by `scripts/check-review-dispositions.sh` (ids derived from the archive, manual, outside
+  `check-gates`), the three diagnosed debug sessions under `.planning/debug/resolved/`, the Phase 40
+  judgment-tier read recorded as the owner's `confirm all` (26/26, `57-JUDGMENT-READ.md`), and the four
+  `zip 3.0.0` exceptions (now incl. RUSTSEC-2026-0429) re-dated to 2027-03-31 with the lift deferred to
+  the utoipa 6 migration. Code decisions a later phase must honour: a thread's owner is its earliest
+  attributed run via the defaulted `RunRepositoryPort::owner_run_for_thread` (D-02, additive, patch
+  kept); failure text is redacted before it is bounded (2048 chars); S3 errors render status and code
+  only; an empty operator-webhook secret is absent plus one boot warn; the worker's terminal event
+  follows the commit; a won allowance notice is given back on a failed enqueue and confirm/abandon run
+  detached; a zero provider delay is no delay and a 429 record survives a dropped caller; the fence
+  marker TTL is clamp(2 × ttl, 5 min, 30 min). Owner call at UAT 2026-11-05: 17/17 checkpoints passed
+  (2 coverage entries auto-passed), no gaps.
+
+- **Phase 56 dogfood findings (2026-11-04, no ADR; 56-CONTEXT D-01…D-17, close gate OK)** — the
+  findings log is append-only (P3, zero deleted lines since seed `8e02a457e`) and the only
+  checker is `scripts/check-findings-log.sh`, deliberately outside `check-gates` (D-03); 36 `DF-nn`
+  entries all dispositioned (24 `in v0.11.1`, 10 `out` with a todo pointer, 2 duplicates); the
+  seven S1/S2 fixed in Stage C in DF-id order with the `DF-nn` in every commit subject (D-06):
+  `Settings` and four config types get a redacting `Debug` and the startup log prints
+  `settings_summary` only (DF-07, M-B-36, `MIGRATION.md` §11.8 rotation step); `paladin-server`
+  runs `Settings::validate()` after the documented `APP_*` env overlay and before any store or
+  listener (DF-08/DF-26, M-B-37/38); the provider probe is one module with reply redaction and
+  `Policy::none()` (DF-19). Owner calls at UAT 2026-11-04: DF-18 (Quickstart `gpt-4`) stays S3 /
+  re-homed to the 109-site todo; the devcontainer coverage walk (92.79 % local, 92.86 % CI)
+  satisfies DOGF-05; P1/P4/P11 held; the DOGF-02 `confirm-triage` choice (D-16) was the
+  maintainer's.
 
 - **Two-officer token model** — `Commissary` (input-side rationing) is kept and anchored;
   `Treasurer` (output-side spend governance) is reserved for Milestone 14, not built (ADR-0049,
@@ -699,6 +800,79 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: ADR-0063 (Phase 53-07): threads belong to the tenant of their latest run, jobs to their enqueuing agent id and tenant; amends ADR-0054; get_job #[deprecated] deferred to next minor
 - [Phase ?]: Phase 53-08 (2026-10-31): v0.11.1 patch decided, every change additive. Evidence: local reproduction of Semver Checks (vs v0.11.0) with scripts/check-semver.sh at --release-type patch on head 4ef9ddd2a, 223 checks: 223 pass, 31 skip for all twelve packages, 0 failure(s); MIGRATION.md 11.2 has no row, allowlist has no entry. Recorded in .planning/phases/53-tenant-isolation-closure/53-VERSION-DECISION.md
 - [Phase 53]: UAT (2026-10-31): AC-N5 passed on an owner read of the shipped wiring (the no-op-factory blind spot stays a code-review control); review warnings WR-01, WR-02, WR-03 carried as open WINDOWS rows 85-87 (proposed owner Phase 55), WR-04 and WR-05 recorded as ADR-0063 residuals
+- [Phase 54]: UAT (2026-11-01): 3/3 passed — WR-02 (`openai-api-key: "REPLACE_ME"` in `k8s/server/secret.yaml.example`) accepted as residual AR-54-03 (SC1/FIRST-01 cover `http.auth.api_keys[].key` only); the kind cluster apply (Secret-mounted config, `defaultMode 0440`, `fsGroup 65532`) and the compose step-2-before-step-1 path (WR-03) verified by the maintainer with real Docker/kind. CR-01 (`make release` runs no version-string gate before the tag) carried to Phase 58 as a pre-tag step.
+- [Phase ?]: Phase 54-01: HTTP API keys containing '${' are refused at config load (substring check, any auth state, before tenant/duplicate checks); message names the entry, never the value or variable (FIRST-01)
+- [Phase ?]: 54-03: prose banners naming the current release made version-free (PD-03-1) so only gated pattern classes carry a literal workspace version
+- [Phase ?]: 54-04: present-tense version claims and deployment image tags made version-free (X.Y.Z placeholders matching release.yml), not bumped; architecture-decisions.md swept not exempted
+- [Phase ?]: 54-05: crate corrections under [Unreleased] ### Fixed; ADR-0056 amended in place citing ADR-0057; node-cache key/rotation text lives in fault-tolerance.md and is linked elsewhere
+- [Phase ?]: 54-06: k8s server config delivered as the config.yml key of paladin-server-secrets (items projection, defaultMode 0440); configmap.yaml retired; WORKSPACE_VERSION tags docker-build-server
+- [Phase ?]: [Phase 54-07]: check-version-strings status order NO_VERSION, STALE_EXEMPTION, ZERO_FILES, CLASS_UNMATCHED, MISMATCH, OK with every named failure and finding listed; image candidates are v?digits.digits tags compared exactly
+- [Phase ?]: 54-08: footer [Unreleased] compare link deleted, not retargeted; release comments made count-free; release.toml records cargo-release 1.1.7 (D-15, D-16, D-17)
+- [Phase ?]: Phase 54-09: FIRST-08 reconciled by dated note, not by padding the facade snapshot; UnsupportedParameter and check_reasoning live in paladin-ports, guarded by make check-semver (WINDOWS row 59 precedent)
+- [Phase ?]: 55-01: check-no-stub-panics gate has no exemption list; out-of-line #[cfg(test)] mod files are exempt by transitive resolution only; refusal text for ContentListRepository is one helper per adapter file
+- [Phase ?]: 55-02: a model unpriced at dispatch records Halted with HaltReason::ModelUnpriced { model } (resumable), not Failed; ADR-0057 amended in place (FIXES-03)
+- [Phase ?]: 55-03: LocalRunTokens::is_registered is #[cfg(test)] pub(crate) and polled every 5 ms inside the 30 s timeout (not a watch/Notify signal); the four commander happy-path tests are kept, each pointing at its relocated error-path test
+- [Phase ?]: Phase 55-04: SELF_HOSTED_PROVIDERS is the single pub(crate) pair in reasoning.rs; claude-opus-4-8 keeps reasoning: false with the comment and pin citing the 50.1 and 51 probe rows (D-06 as reconciled); paladin-llm single-feature clippy fixed by cfg gates only (D-10)
+- [Phase 55]: 55-05: unversioned field history is EntityNotFound (repository), purge stays Ok(0); collection count changes carry Uuid::nil() sentinel; no VersioningError variant or pub item changed — D-03 as reconciled: least-destructive fences, removal is a next-minor semver decision
+- [Phase ?]: 55-06: ingest_content refuses with a named Err after validation (no shipped caller of the no-op); Subtask expected_output is empty and the prompt omits the empty line (D-03)
+- [Phase 55]: Phase 55-07: FIXES-04 re-homed to the next minor (D-05); RunStatusValue and Assertion are exhaustive public enums of published paladin-eval, so the variant is major at the patch gate; recorded in rustdoc, schema descriptions, guide, REQUIREMENTS v2 Eval harness, ROADMAP SC2, inventory B5 and phase deferred-items.md
+- [Phase 55]: 55-08: paladin-ports rustdoc suppressions removed; 187 diagnostics (170 unresolved, 17 redundant) fixed at source, 0 under both bars (CIREL-08, D-11)
+- [Phase 55]: 55-09: the run engine's PaladinPort is injected only through the pub(crate) EnginePortSource seam (override Some only in run_api_wiring tests); the boot warning for unpriced reachable models is advisory, covers the code registry plus stored agent-kind assistants, and logs under paladin::pricing without refusing boot — D-07 and D-08 as reconciled: no public item added, B4 never refuses, three unchecked classes named in the warning and the guides
+- [Phase ?]: Phase 55-10: paladin-llm, paladin-storage and paladin-notifications crate-level rustdoc suppressions removed; feature-gated, private and pub(crate) link targets are plain code spans, unconditional ports/core targets get explicit paths; the workspace default bar unifies features so per-crate default, all-features and no-default-features runs are also checked (CIREL-08, D-11)
+- [Phase 55]: 55-11: all eight crate-level rustdoc suppressions removed; ADR-0033 amended in place (474/455 supersede 309); doc-coverage-report.md regenerated at 14ee125e7 — Implemented methods link to the trait method; feature-gated, private and cfg(test) targets are code spans; the workspace bars hide links a per-crate cargo doc -p run flags
+- [Phase 55]: Plan 55-12: base-layer review verdict is keep all eight items, fence five fabricating ones, remove/rename/finish nothing; options A/B/C are next-minor candidates
+- [Phase ?]: Phase 55 plan 13: rows 73 and 67 are dispositioned on re-run evidence in 55-CORRECTNESS-EVIDENCE.md; FIXES-04 stays re-homed to the next minor and is not marked complete
+- [Phase 56]: P01: findings-log checker prints guidance before detail so the last output line is always 'parsed N entr...'; bare 'in v0.11.1' is NO_POINTER; check-findings-log stays outside check-gates and CI (D-03, P12)
+- [Phase ?]: 56-02: DF-06 (19-digit unquoted price loses digits on load) graded S4 and re-homed to a todo; example edit limited to steps: [] (DF-05)
+- [Phase ?]: Phase 56-03: requirements DOGF-02/04/05 left unmarked; the runbooks only prepare the human-gated runs, which plans 56-06/08/09/10 triage
+- [Phase ?]: 56-04: DF-01..DF-04 closed with dated in v0.11.1 dispositions only after every owner proof was re-run green on HEAD 6212e3ecf; check-findings-log.sh exits 0
+- [Phase ?]: [Phase 56-05] L3 logged as one S1 finding (DF-07, derived Debug over credential-bearing types rendered whole at src/main.rs:35); L6 logged S2 (DF-08, Settings::validate() has no caller in paladin-server); both open -> promote for Stage C
+- [Phase ?]: [Phase 56-05] L4 logged S3 (DF-09) and fixed by a comment-only edit to the web_server block of config.example.yml; DOGF-06 stays open until DF-07 and DF-08 are fixed in Stage C
+- [Phase ?]: 56-06: tag Quickstart pins 0.10.0 (DF-13, duplicate of DF-02); setup-check order/headings re-homed (DF-16); DOGF-04 stays open until the keyed half (56-08)
+- [Phase ?]: 56-07: cli-usage.md corrected with the other five CLI appendix pages (DF-17 names six); other subcommand lines still say paladin and are a Stage C decision
+- [Phase 56]: 56-08: DF-18 (Quickstart gpt-4 literal, 109 sites in 54 files, S3) dispositioned out/re-homed to a pending todo, not promoted: not a contained docs fix under D-05
+- [Phase 56]: 56-08: DF-19 (setup-check/onboarding Anthropic probe hard-codes claude-3-haiku-20240307, S2) open -> promote in v0.11.1 for Stage C; no code changed in 56-08
+- [Phase ?]: 56-09: coverage walk PASS under D-17 (local 92.79% vs CI 92.86%, both 92); DF-20..DF-25 logged, DF-21..DF-25 fixed in plan, DF-20 re-homed (Dockerfile.dev outside files_modified)
+- [Phase ?]: 56-11: DF-07 fixed in both halves; summary-only startup line plus redacting Debug on ApiKeyConfig, Settings, QueueConfig, FileStorageConfig, EmailAdapterConfig; URL fields (T-56-41) and Serialize (T-56-42) accepted
+- [Phase 56]: 56-12: paladin-server validates the whole config at boot via load_settings (PD-12-1); treasurer check kept first, agent_runtime validated only here (PD-12-2); binary-only, recorded as M-B-37 (D-00b)
+- [Phase ?]: 56-13: provider-key probes share one module/client (Policy::none, diagnostic_excerpt); Anthropic probe model = ANTHROPIC_DEFAULT_MODEL, drift-tested mirror for no-adapter builds
+- [Phase ?]: [Phase 56-14] DF-26: load_settings applies trace/agent_runtime/web_server env overlays via new Settings::get_*_config accessors before validate(); treasurer refusal stays first
+- [Phase ?]: Phase 56-10: DOGF-02 closed by confirm-triage (2026-11-04); web3sec return triaged into DF-27..DF-36, none S1/S2; docs fixes for DF-27/DF-28 land in docs/src because MIGRATION 10.8 is byte-frozen
+- [Phase 57]: [Phase 57-01] RUSTSEC-2026-0429 governed as fourth zip row; upstream condition met 2026-11-04 (utoipa-swagger-ui 10.0.2) but lift deferred to the utoipa 6 migration in the next minor release
+- [Phase 57]: 57-05: empty operator-webhook secret is absent and boot warns (additive, never refuses); run failure text is redacted then bounded to 2048 chars before persist and log
+- [Phase ?]: 57-08: check-review-dispositions.sh reads register rows only inside the '## Dispositions' section; WR-/CR-/IN- ids do not count as closed-row pointers; MALFORMED_ROW added as a fifteenth class
+- [Phase ?]: 57-07: owner confirmed all 26 Phase 40 judgment rows (20 prohibitions + C1..C6) on 2026-11-04; 0 rejects; tier split derived 13 test / 7 code
+- [Phase ?]: 57-02: thread ownership is the earliest attributed run, served by one defaulted RunRepositoryPort::owner_run_for_thread with an earliest-run fallback (owner selected option-a; D-01/D-02)
+- [Phase 57]: 57-09: 51 WR-01 is security-class LIVE (unredacted LlmError into ConfigurationError); 38 WR-01/WR-02 and 51 WR-02 other-class LIVE; all four go to the 57-10 triage
+- [Phase ?]: [Phase 57-04] ADR-0063 amended in place to the earliest-attributed-run owner rule (D-02); M-B-24/M-B-25 amended, 11.8 step 12 added; root CHANGELOG gets a new Fixed bullet because it had no thread bullet to amend
+- [Phase 57]: 57-10: owner chose option-a (D-14 as proposed): 7 correctness/security items (51 WR-01; 45 WR-04, WR-06; 41 WR-01; 43 WR-01, WR-04, WR-05) fixed in-phase via gap closure; 8 other-class items waived by 57-11 in the D-03 shape
+- [Phase 57]: [57-12] llm_error_label is a private fixed-label twin of llm_error_class in paladin_builder.rs; a failed reasoning check names its kind only, no payload rendered or logged (51-REVIEW WR-01, WINDOWS row 94)
+- [Phase 57]: 57-13: run_agent emits its terminal RunFinished only after the durable write and ack on every exit (on_committed callback); success-arm write failure logs run id and repository error then nacks; failed-run spend read from ATTEMPT_SPEND on the Err arm only (45 WR-04, WR-06, D-14)
+- [Phase 57]: 57-14: A failed operator enqueue gives the won allowance notice back inside confirm only; mid-run guard notices keep log-and-swallow (PD-14-1)
+- [Phase 57]: 57-14: confirm/abandon are cancellation-safe in the Treasurer (detached task); a private AdmissionSettlement drop guard settles dropped submissions (PD-14-2, PD-14-3)
+- [Phase 57]: 57-15: A zero provider delay is filtered to None in CadenceLlmAdapter::minimum_delay (not in CadencePolicy::delay_for), so paladin-ports is untouched and the port back-off paces a Retry-After 0 (43-REVIEW WR-05)
+- [Phase 57]: 57-15: note_failure records the 429 in a spawned, awaited task (Handle::try_current, inline fallback); a drop before the spawn or a process exit can still lose it (43-REVIEW WR-04, EA-57-17)
+- [Phase 57]: PD-16-1: cap the node-cache fence marker at clamp(2 x entry ttl, 5 min, 30 min) rather than lengthen the counter; a late duplicate write of the same deterministic result is accepted after 30 minutes (43-REVIEW WR-01, ADR-0058 (g))
+- [Phase 57]: EA-57-20: a holder more than 28 minutes late (default 120 s lock) can still leave a marker outliving the counter; the wait is bounded at 30 minutes (ADR-0058 (i))
+- [Phase 57]: 57-11: WINDOWS sealed at open_count 0 (waived 53, fixed 55, total 108); the Docker-gated rows 68, 90, 93 and 100 were flipped only after CI run 41927940508 on 4b115d511 showed their named tests ok; review register closed 43 / waived 8 / open 0, strict checker 0 failure(s)
+- [Phase ?]: 58-01: SDK smoke is a tag precondition (not a merge context); fixed CI-side in scripts/sdk-smoke/run.sh. treasury_spend flake is test-level, re-seal rule goes to maintainer at 58-05.
+- [Phase ?]: 58-02: no register amendment needed; tightened disposition checker reads 0 failures on the real archive
+- [Phase ?]: 58-02: key literal remains in git history since 928c6d5f9; rotation/purge is the maintainer's, put at plan 58-05
+- [Phase 58]: 58-03: check-doc-models gate lands with the DF-18 sweep; one allowlist entry (sentinel.md:877, a deliberate non-vision negative example); gpt-4o-mini default, gpt-5.4 at two docs sites
+- [Phase 58]: 58-04: [Unreleased] anchor entries cite their source commit and requirement id; herald carries the no-source-change line only because its v0.11.0..HEAD log is empty
+- [Phase 58]: 58-04: Dockerfile.dev pins cargo-release 1.1.2 while releases since 47-01 use 1.1.7 (finding handed to 58-05, not fixed)
+- [Phase ?]: DATE=2026-11-09: recheck_by for every re-homed row (58-05)
+- [Phase ?]: FLAKE=named-rerun amends D-00j for treasury_spend_prints_one_row_per_currency only (58-05)
+- [Phase ?]: WORDING=pointer-list for the SHIP-09 paragraph; re-read against 58-15 first (58-05)
+- [Phase ?]: Key rotated 2026-11-05, PURGE=none: R-84 fixed, R-85 waived (58-05)
+- [Phase ?]: D-07 amended: 56 WR-03, WR-04, WR-09 fixed in 0.11.1 via inserted plan 58-15 (58-05)
+- [Phase ?]: 58-15: WR-09 fixed with skip_serializing and no default (consumer gate found no serialise-then-deserialise consumer); M-B-50 supersedes M-B-36's 'Serialize unchanged' sentence
+- [Phase ?]: 58-15: Qdrant WR-03 test pins a query-string credential because reqwest 0.12.28 already strips userinfo
+- [Phase 58]: 58-06: R-95 re-homed (v0.12.0 Phase 1, 2026-11-09) for the four same-class Serialize types left by 58-15; D-11 semver green on SHA-S fb6d50da0 (12 packages, 223 checks, 0 failures); SHA-P 35e696cc9 pushed, resume file waits on its runs
+- [Phase ?]: 58-16: R-95 config types fixed before the tag (second D-07 amendment, Fix before tag): skip_serializing on five secret fields with no serde default, redacting hand-written Debug for RedisQueueConfig and MinioConfig via a module-private RedactedSecret per file
+- [Phase 58]: plan 58-07: pointer-list consumer statement reconciled with M-B-48..M-B-52 (nine config types stop serialising credential fields); M-B-27 and M-B-36 surfaced for maintainer at 58-08; SHA-C1 96eb49d38, SHA-C2 d88c519ab, SHA-C3 ac9411ea0, STAMP 2026-11-05, nothing pushed
+- [Phase 58]: 58-08: re-seal green on SHA-R 48146bc99 (row 4: 12 packages, 223 checks each, 0 failure(s)); D-10 correction SHA-R1 073bdd9ce (MIGRATION.md only); row 6 needed one disk-full infrastructure re-run (both outcomes recorded); row 5 and Coverage CI-attributed; acceptance-audit box left unticked
+- [Phase 58]: 58-10: tag day redated to 2026-11-06 (STAMP 2026-11-05); CODEQL=dismiss-now (eight F-58-08 alerts, governed rows in 58-11); AUDIT=validate-first (Phases 54 and 56 validated, milestone audit re-read as passed)
 
 ### Pending Todos
 
@@ -723,6 +897,60 @@ Four pending todos were acknowledged as deferred at the v0.11.0 close (see *Defe
 
 ### Blockers/Concerns
 
+**Phase 57 close (2026-11-05, 57-VERIFICATION `passed` 5/5, 57-UAT 17/17 + 2 automated, 57-SECURITY 0 open,
+57-VALIDATION `validated`):**
+
+- **Code review non-blocking findings carried to Phase 58** (`57-REVIEW.md`, 0 blocking): CR-01 the
+  worker's nack-and-redeliver on a failed second write loses the run's outcome when only that write
+  fails; WR-01 an empty `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET` env value silently wipes a
+  YAML-configured secret; WR-02 `check-review-dispositions.sh` accepts non-evidence as a closed
+  pointer. Five info items (IN-01…05) recorded there.
+
+- **Two orphaned Phase 55 deferrals have no owner or revisit** (`57-REGISTER-EVIDENCE.md` "Orphaned
+  deferrals"): the News API key travelling in the URL with `reqwest` error text able to echo it
+  (D-52-03-01, `news_api_fetcher.rs`) and the `${...}` placeholder in the Treasurer webhook `secret`
+  not refused (Phase 54 WR-04). Neither is a WINDOWS row; Phase 58's pre-tag audit must re-home them
+  with an owner and a date or they read as `tech_debt`.
+
+- **`Generated SDK Clients` smoke is red in CI** (job 126917997570 on run 41927940508) and was red on
+  two earlier runs, green on 41246424413; pre-dates Phase 57, no WINDOWS row, cause undiagnosed.
+  `Docker Build` and `Kubernetes Smoke Test` were cancelled on that run (superseded push), not failed.
+
+- **The review-disposition checker is manual** — exercised by `make test-shell-guards` through its 22
+  fixtures but not wired into `make check-gates` or CI, by design; the Phase 58 audit runs it by hand.
+
+- **Phases 54-57 are all on `claude/laughing-dirac-e0h2ax`, not yet merged to `main`** (`main` is still
+  the PR #62 merge `8b23cb4c5`; the branch is 358 commits ahead). A PR to `main` is the maintainer's
+  step before the Phase 58 bump commit, and the Phase 56 `sk-proj-…` literal finding below is still
+  open for that pre-tag pass.
+
+**Phase 56 close (2026-11-04, 56-VERIFICATION `passed` 11/11, 56-UAT 4/4, 56-SECURITY 0 open):**
+
+- **A complete `sk-proj-…` OpenAI key literal is tracked in
+  `.project/Milestone_3-Completion/Post-Epic_24-cleanup/LIVE_API_TESTS_FIX.md:53`** (in the tree
+  since at least `928c6d5f9`, 2026-07-30, so also in history). Found by the 56-SECURITY tree scan;
+  outside the phase's register (predates it). Maintainer action: rotate the key if it was ever
+  live, scrub the literal, decide on a history purge. A tracked-tree key-shape scan in
+  `check-gates` (the 56-08 staged-file scanner, made standing) is the candidate guard for Phase 57.
+
+- **Bare-host coverage path still unwalked** — DOGF-05 accepted at UAT on the devcontainer figure
+  (no Docker socket); guide step 1 (`make services-up`) and the password-protected Redis path
+  (trap 2) remain unexercised.
+
+- **Re-homed `out` findings carry six pending todos** in `.planning/todos/pending/` (DF-06, DF-16,
+  DF-18 incl. the 109-site deprecated `gpt-4` literal sweep, DF-20, DF-34, DF-36). v0.11.1 ships
+  the Quickstart `.model("gpt-4")` line unchanged by owner decision.
+
+- **Phase 56 work is on `claude/laughing-dirac-e0h2ax`, not yet merged to `main`** — a PR is the
+  maintainer's step before Phase 57 builds on it.
+
+**Phase 54 close (2026-11-01, 54-VERIFICATION `passed` 5/5, 54-UAT 3/3, 54-SECURITY 0 open):**
+
+- **Pre-existing, environment-specific test failure** — `run_api_wiring::tests::build_run_api_persists_no_run_traces_by_default` and `..._persists_run_traces_when_trace_persist_is_set` fail in the sandbox (`the run never reached a terminal status`, 10 s deadline) on base `8b23cb4c5` too; CI was green at the PR #62 merge. No Phase 54 change touches that file. Phase 55 TESTS-01 (hermetic scripted port) is the owner.
+- **CR-01: `make release` commits and tags without running `check-version-strings.sh`** (CONTEXT D-12 chose check-only). Phase 58's bump PR must carry the string edits and run the gate before the tag; recorded in 54-VERIFICATION `deferred` and 54-FIRST-EVIDENCE "Carry-forward to Phase 58".
+- **Review follow-ups (advisory, not WINDOWS rows):** WR-01 copy-paste Cargo snippets name non-existent features (`storage-sqlite`, `llm-openai`); WR-04 the Treasurer webhook `secret` placeholder is not refused; WR-05 Python < 3.11 traceback from the gate; IN-02 worker pods mount admin API keys they never use. Cheap fixes for the next doc pass or Phase 57.
+- **Phase 54 work is on `claude/laughing-dirac-e0h2ax`, not yet merged to `main`** — a PR is the maintainer's step before Phase 55 builds on it.
+
 **Phase 53 close (2026-10-31, 53-VERIFICATION `passed` 5/5, 53-UAT 2/2, 53-SECURITY 0 open):**
 
 - **WINDOWS rows 85-87 are open** (53-REVIEW WR-01…03, owner-accepted follow-ups): a newer-schema run row
@@ -731,7 +959,10 @@ Four pending todos were acknowledged as deferred at the v0.11.0 close (see *Defe
   transfers to whoever submitted the latest run, including an Admin fork or an unattributed schedule run
   (row 87). Proposed owner Phase 55 (correctness fixes); `open_count` is now 16, and the `v0.11.1` exit
   criterion needs 0, so Phase 55 or Phase 57 must fix or waive them.
-- **Phase 53 work is on `claude/laughing-dirac-e0h2ax`, not yet merged to `main`.**
+
+- ~~**Phase 53 work is on `claude/laughing-dirac-e0h2ax`, not yet merged to `main`.**~~ — **merged by the
+  maintainer** (PR #62, merge commit `8b23cb4c5` on `main`, 2026-10-31); the branch was restarted from that
+  merge for Phase 54.
 
 **Phase 52 close (2026-10-30, 52-VERIFICATION `passed` 5/5, 52-UAT 3/3, 52-SECURITY 0 open):**
 
@@ -758,7 +989,7 @@ Four pending todos were acknowledged as deferred at the v0.11.0 close (see *Defe
 - **`CODEQL-DISMISSALS.md` rows 40 and 49 carry stale line anchors** (left per D-14; logged in
   deferred-items) — fix when those files are next touched.
 
-- **H-06 (local `make coverage` reproduction) deferred again** to the maintainer on a Docker-capable
+- ~~**H-06 (local `make coverage` reproduction) deferred again**~~ — **closed in Phase 56** (todo in `completed/`, 92.79 % local vs 92.86 % CI, run `41703614636`). Was: deferred to the maintainer on a Docker-capable
   machine; the pending todo stays with `resolves_phase: 56`.
 
 **v0.11.1 roadmap-time findings (2026-10-27, measured against the tree while drafting the roadmap):**
@@ -778,11 +1009,13 @@ Four pending todos were acknowledged as deferred at the v0.11.0 close (see *Defe
 - **Phase 55, FIXES-04:** `paladin-eval`'s `RunStatusValue` is not `#[non_exhaustive]`, so adding `Cancelled` trips the
   patch-level semver gate Phase 52 arms; settle shape-or-break at discuss-phase.
 
-- **Phase 56 depends on external inputs** (the maintainer's runs, the web3sec return, a Docker-capable machine for
+- ~~**Phase 56 depends on external inputs**~~ — **all three arrived and were triaged in Phase 56** (DF-10..DF-26 from the walks, DF-27..DF-36 from the web3sec return). Was: (the maintainer's runs, the web3sec return, a Docker-capable machine for
   DOGF-05) that the roadmap cannot schedule; an unreturned DOGF-02 is held or re-homed with an owner and date.
 
-- **Phase 57:** `open_count: 0` also needs rows 64-66 (accepted ADR-0057 contracts) and 77 (Grok deferral) waived with a
-  reason or re-homed; no requirement names them beyond REG-02's closing clause.
+- ~~**Phase 57:** `open_count: 0` also needs rows 64-66 (accepted ADR-0057 contracts) and 77 (Grok deferral) waived with a
+  reason or re-homed; no requirement names them beyond REG-02's closing clause.~~ — **resolved in Phase 57
+  (2026-11-05)**: every open row waived or re-homed with owner and date, `WINDOWS.md` sealed at `open_count: 0` by 57-11
+  (57-VERIFICATION criterion 1).
 
 **No blockers at the v0.11.0 close (2026-10-27).** All 15 phases `passed`; audit `tech_debt`
 with 0 gaps, 8/8 seams, 8/8 flows; `WINDOWS.md` `open_count: 13` (the rows are dispositioned as
@@ -882,6 +1115,10 @@ close notes this section carried for Phases 38-51 are archived with their phases
   Phase 52 (2026-10-30, plans 52-01/52-05/52-07):** baseline `0.11.0` at `--release-type patch` by flag, 12/12
   packages at 223 checks pass, a scratch-branch leaf break turned the job red, and `Semver Checks (vs v0.11.0)`
   is a required context in ruleset 20868126. Original text: cargo-semver-checks 0.50.0's CI-pinned --baseline-version 0.9.0 job is currently a no-op for every one of the 11 checked packages -- confirmed 2026-09-26 during Phase 38 plan 38-09's closeout measurement. The in-tree workspace version (0.10.1, the last real release) already differs from that two-milestones-old baseline by a pre-1.0 "major-equivalent" bump, so the tool skips all lint evaluation (0 checks, 254 skip) unconditionally. This will remain true for every plan in every phase of the v0.11.0 milestone until the version is bumped at the eventual release commit. Not fixed in 38-09 (ci.yml is not in that plan's files_modified) -- flag for whichever phase next touches ci.yml's semver job or performs the v0.11.0 version bump. **Still a no-op at v0.11.0** (Phase 47 re-seal row 57, 2026-10-25: `0 checks, 254 skip` for 10 of 11 packages against 0.9.0; `paladin-web` attributed to its CI twin); now that `0.11.0` is published the baseline can move to it -- a v0.12 hygiene item.
+
+- Phase 58: 7 crate changelogs lack an [Unreleased] anchor or [0.11.1] section before finalize; the check-version-strings gate must go green in the bump commit -- see 54-FIRST-EVIDENCE.md Carry-forward to Phase 58
+- Pre-existing, environment-specific: infrastructure::web::run_api_wiring::tests::build_run_api_persists_no_run_traces_by_default and build_run_api_persists_run_traces_when_trace_persist_is_set fail in this container (run never reached a terminal status, run_api_wiring.rs:3036; make test reports 1479 passed, 2 failed), identically on base 8b23cb4c5; cause undiagnosed, a later phase should diagnose -- see 54-FIRST-EVIDENCE.md Known residuals
+- Phase 55 carry-forward: 6 crate changelogs still lack an [Unreleased] anchor before the 0.11.1 finalize; WINDOWS row 56 can close on the recorded rustdoc measurement (Phase 57); rows 85-87 await a 56.x phase -- see 55-CORRECTNESS-EVIDENCE.md Carry-forward. **Update 2026-11-05:** row 56 and rows 85-87 closed in Phase 57 (57-02/57-03 fixes, 57-11 seal); the changelog anchors remain Phase 58's
 
 ### Quick Tasks Completed
 
@@ -1057,16 +1294,30 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-10-31T18:10:00.000Z
-Stopped at: Phase 53 complete, ready to plan Phase 54
+Last session: 2026-11-06T01:47:45.175Z
+Stopped at: Completed 58-10-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
 
+- **Phase 57 is complete (2026-11-05):** verification `passed` 5/5 (6/6 requirements), UAT 17/17 human
+  checkpoints plus 2 coverage auto-passes, security 0 open, validation `validated`, no new ADR (ADR-0063 and
+  ADR-0058 amended in place). `WINDOWS.md` reads `open_count: 0` and the strict review-dispositions checker
+  reads 0 failures, so the Phase 58 pre-tag audit can read `passed`. Carried to Phase 58: 57-REVIEW CR-01,
+  WR-01, WR-02 and the two orphaned Phase 55 deferrals (see Blockers/Concerns). Phases 54-57 are on
+  `claude/laughing-dirac-e0h2ax`, 358 commits ahead of `main`; open a PR to `main` before the bump commit.
+  Next: `/clear` then `/gsd-discuss-phase 58` (Crate Release — settle the bump mechanics, the
+  `MIGRATION.md` consumer statement and the maintainer-gated tag checkpoints there).
+
+- **Phase 54 is complete (2026-11-01):** verification `passed` 5/5, UAT 3/3, security 0 open (32 threats, 3 accepted
+  risks), no new ADR. The work is on `claude/laughing-dirac-e0h2ax`; open a PR to `main` before Phase 55 builds on
+  it. Next: `/clear` then `/gsd-discuss-phase 55` (Correctness Fixes, Test Hygiene & Lint Bar — settle the
+  `RunStatusValue::Cancelled` semver question and the WINDOWS rows 85-87 owner there).
+
 - **Phase 53 is complete (2026-10-31):** verification `passed`, UAT 2/2, security 0 open, ADR-0063 minted,
   `v0.11.1` stays a patch. Review warnings WR-01…03 are open WINDOWS rows 85-87 for a later phase. The work
-  is on `claude/laughing-dirac-e0h2ax` (not yet on `main`). Next: `/clear` then `/gsd-discuss-phase 54`
-  (First-Run Usability).
+  merged to `main` (PR #62, `8b23cb4c5`, 2026-10-31). Phase 54 context gathered 2026-10-31
+  (`54-CONTEXT.md`); next: `/gsd-plan-phase 54`.
 
 - **Phase 52 is complete (2026-10-30):** verification `passed`, UAT 3/3, security 0 open. PR #61 is merged
   (`84686acfb` on `main`, 2026-10-30); the one maintainer act still ahead is the `v0.11.1` tag in Phase 58. Next: `/clear` then `/gsd-discuss-phase 53` (Tenant Isolation Closure — verify Phase 40's

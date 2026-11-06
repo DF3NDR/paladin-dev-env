@@ -64,7 +64,7 @@ Let me execute each step..."#
              You decompose complex analysis tasks into clear, sequential steps.",
         )
         .name("PerformanceAnalyst")
-        .model("gpt-4")
+        .model("gpt-4o-mini")
         .temperature(0.6)
         .max_loops(5) // Note: In fully integrated version, would use MaxLoops::Auto
         .enable_planning(true) // Enables autonomous planning via config
@@ -135,7 +135,7 @@ Let me execute each step..."#
     let simple_paladin = PaladinBuilder::new(simple_llm.clone() as Arc<dyn LlmPort>)
         .system_prompt("You are a helpful assistant")
         .name("SimpleAssistant")
-        .model("gpt-4")
+        .model("gpt-4o-mini")
         .max_loops(2) // Simpler task needs fewer loops
         .enable_planning(true)
         .build()

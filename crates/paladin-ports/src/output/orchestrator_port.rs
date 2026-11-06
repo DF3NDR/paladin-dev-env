@@ -1,6 +1,6 @@
 //! Agent → Orchestrator bridge port.
 //!
-//! This module defines the [`OrchestratorPort`] abstraction that lets a Paladin
+//! This module defines the [`OrchestratorPort`](crate::output::orchestrator_port::OrchestratorPort) abstraction that lets a Paladin
 //! agent, during execution, trigger a narrow, guarded set of orchestration
 //! actions: schedule a job, enqueue a content item, fire an event, or send a
 //! notification. It completes the *agent → orchestrator* direction of the
@@ -14,7 +14,7 @@
 //! - **Option A — `OrchestratorPort` (chosen):** a port trait injected into the
 //!   execution service alongside `LlmPort`/`ArsenalPort`. It maximizes
 //!   decoupling and testability (mockable), and allows centralized safety
-//!   enforcement via [`BridgePolicy`] *before* any orchestrator call is made.
+//!   enforcement via [`BridgePolicy`](crate::output::orchestrator_port::BridgePolicy) *before* any orchestrator call is made.
 //! - **Option B — Arsenal tool (`OrchestratorArmament`):** register the
 //!   capabilities as an LLM-discoverable tool. This is self-describing to the
 //!   model but couples the capability to the tool-call format and spreads

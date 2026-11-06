@@ -32,6 +32,8 @@ The Treasurer keeps three responsibilities deliberately separate:
   and after each model response in the agent loop, the same ceiling evaluation runs again. The
   next boundary after a ceiling is reached halts the run resumably with its checkpoint kept; a
   ledger that cannot be read halts the run too (`ledger_unavailable`), never a silent continue.
+  An agent-kind run whose model has no price row when the worker dispatches it halts with
+  `model_unpriced` beside `ledger_unavailable`, and the model is not called.
   ([ADR-0052](https://github.com/DF3NDR/paladin-dev-env/blob/main/.planning/decisions/0052-mid-run-treasurer-enforcement.md),
   [ADR-0057](https://github.com/DF3NDR/paladin-dev-env/blob/main/.planning/decisions/0057-mid-run-halt-contract.md))
 
@@ -96,6 +98,20 @@ and one warning is logged per model name, and a principal with a ceiling that ca
 such a model is refused `422 model_unpriced`. The key format, the numeric limits and the unpriced
 cases are in the [Treasurer pricing](../getting-started/configuration.md#treasurer-pricing)
 reference.
+
+**Boot warning.** At boot, when an allowance is configured, the server logs one warning under the
+log target `paladin::pricing` for every code-registered agent model and every stored agent-kind
+assistant model that has no row. Every stored version of each agent-kind assistant present at
+boot is checked, including pinned older ones, because a run or schedule can pin any version.
+Boot continues, and workflow assistants are not refused. The warning does not check workflow
+graph-node models (the assistant resolver cannot list them), agents provisioned at runtime, or
+agent-kind assistants or versions created after boot. Graph-node pricing
+coverage is an accepted, documented gap (`.planning/WINDOWS.md` row 67), so price every model a
+graph can reach. One line looks like this:
+
+```text
+model `example-model` is reachable by a metered principal but has no treasurer.pricing row: agent-kind calls on it are refused at admission (422 model_unpriced) or halted at dispatch (model_unpriced); workflow assistants are not refused; every stored version (including pinned older ones) of the agent-kind assistants stored at boot is checked, but workflow graph-node models, runtime-provisioned agents and agent-kind assistants or versions created after boot are not checked here -- add a treasurer.pricing row for it
+```
 
 ## Rate pacing (Cadence)
 

@@ -2,7 +2,7 @@
 //! `node_cache::contract_tests` and `waypoint::contract_tests`).
 //!
 //! One `pub async fn` per contract rule, each taking `&dyn CadencePort` and the
-//! [`CadencePolicy`] the port was built with, and asserting inside. Every
+//! [`CadencePolicy`](paladin_ports::output::cadence_port::CadencePolicy) the port was built with, and asserting inside. Every
 //! backend (`InMemoryCadence` today; `RedisCadence` and `ResilientCadence` in
 //! plans 43-07 and 43-08) invokes these unchanged from its own tests, so
 //! "identical rules across backends" is enforced by construction rather than
@@ -20,7 +20,7 @@
 //!   (`wait <= min(max, base * 2^(streak - 1))`) that hold for every jitter
 //!   fraction. A backend runs the suite once with jitter `0.0` (proving the
 //!   floor) and once near `1.0` (proving the ceiling).
-//! * The caller passes the same [`CadencePolicy`] the port holds. Pick small
+//! * The caller passes the same [`CadencePolicy`](paladin_ports::output::cadence_port::CadencePolicy) the port holds. Pick small
 //!   values (a base of tens of milliseconds, a maximum of at least eight times
 //!   the base, a base of at least 8 ms) so the clauses finish quickly in real
 //!   time against a live server.
@@ -36,7 +36,7 @@
 //!
 //! Against a live server the time between a `record_*` call and the reading it
 //! returns is not zero, and a server may keep millisecond resolution. The
-//! tolerance is therefore half the base back-off ([`slack`]): wide enough for a
+//! tolerance is therefore half the base back-off (`slack`): wide enough for a
 //! round trip, narrow enough that a gate of zero or a gate that has been
 //! lowered still fails. Exact values are asserted only by the `_paused` clause.
 

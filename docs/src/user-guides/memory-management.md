@@ -156,7 +156,7 @@ let garrison = InMemoryGarrison::new(
 );
 
 // Token counting is a separate concern from GarrisonConfig — GarrisonEntry.token_count
-// is populated by a `TokenCounterPort` implementation (the exact `TiktokenCounter::new("gpt-4")`,
+// is populated by a `TokenCounterPort` implementation (the exact `TiktokenCounter::new("gpt-4o-mini")`,
 // or the ungated default `HeuristicTokenCounter`), there is no `GarrisonConfig::with_token_counter`
 // method.
 ```

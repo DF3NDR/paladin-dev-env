@@ -1,13 +1,32 @@
 # Upgrading
 
-This page orients an operator or library consumer for two upgrades: **v0.10.1 to v0.11.0**
-(first, below) and **v0.9.x to v0.10.0** (kept further down). It condenses and links; it is not
-a second register. The authoritative, exhaustive record of every behavioral change, Rust API
+This page orients an operator or library consumer for three upgrades: **v0.11.0 to v0.11.1**
+(first, below), **v0.10.1 to v0.11.0** and **v0.9.x to v0.10.0** (kept further down). It condenses
+and links; it is not a second register. The authoritative, exhaustive record of every behavioral change, Rust API
 change, schema migration, configuration surface, HTTP surface change and upgrade checklist is
 the root
 [`MIGRATION.md`](https://github.com/DF3NDR/paladin-dev-env/blob/main/MIGRATION.md) file:
-section 10 for v0.11.0, section 9 for v0.10.0. Read this page first, then consult `MIGRATION.md`
+section 11 for v0.11.1, section 10 for v0.11.0, section 9 for v0.10.0. Read this page first, then consult `MIGRATION.md`
 for the full text of any row named here, including the worked code examples.
+
+## Upgrading from v0.11.0 to v0.11.1
+
+v0.11.1 is the Dogfood Cleanup release: a patch release that closes the security, correctness,
+release-process and first-run gaps v0.11.0 left behind, with no new features. Every change is
+additive, so a library consumer moves from v0.11.0 to v0.11.1 without changing source
+(`scripts/check-semver.sh` reports no failure at `--release-type patch` for all twelve published
+packages, and the Rust API register has no row). Some run-time behaviour does change, and a
+few credential-bearing config types stop writing their secrets when serialised or `Debug`-printed.
+
+- **Operators:** follow the operator checklist in
+  [`MIGRATION.md` section 11.8](https://github.com/DF3NDR/paladin-dev-env/blob/main/MIGRATION.md#118-upgrade-checklist).
+- **Library consumers:** read the subsection
+  [Library consumers: v0.11.0 → v0.11.1](https://github.com/DF3NDR/paladin-dev-env/blob/main/MIGRATION.md#library-consumers-v0110--v0111)
+  in the same section; it names the measured semver result and the behaviour rows that apply.
+- **Run-time changes:** every behaviour change you can observe without touching your code is a
+  row in
+  [`MIGRATION.md` section 11.1](https://github.com/DF3NDR/paladin-dev-env/blob/main/MIGRATION.md#111-behavioral-changes-user-visible-without-code-changes),
+  with its "who is affected" and "required action" cells. No rows are copied here.
 
 ## Upgrading from v0.10.1 to v0.11.0
 
@@ -97,6 +116,14 @@ holds the replacement code, and each row cites its section 10.2 register row.
 **Rate pacing and decorators**
 
 - [DR-7][mig-108]: `LlmError::RateLimitExceeded` becomes a `#[non_exhaustive]` struct variant `{ retry_after, hints }`; build with `LlmError::rate_limited(..)`. A directly built adapter has no 429 pacing unless Cadence is composed, and an `LlmPort` decorator must forward `model_profile` and `check_reasoning` (both in the "Library consumers" subsection of section 10.8).
+- **Cadence is pacing, not a retry.** Section 10.8 says a pin before `v0.10.0` meets 0 retries on a 429 "unless
+  Cadence is composed". Read that as pacing only. Before `v0.10.0` the DeepSeek adapter made up to 4 calls and the
+  Anthropic adapter up to 3 on a 429, inside the adapter. Composing Cadence restores the back-pressure (the next call to
+  that provider and model waits out the gate) but not the retry: the call that received the 429 returns
+  `LlmError::RateLimitExceeded` unchanged and the provider is hit once. A retry has to come from the caller, since
+  `RetryPolicy` and `FallbackLlmAdapter` are the only retry owners. A gate longer than `max_wait` (default 300 s,
+  `treasurer.cadence.max_wait_secs`) is not slept on either: the call returns `RateLimitExceeded` at once, carrying the
+  remaining gate in `retry_after`, without calling the provider. A gate of `max_wait` or less is waited out.
 
 ### Operator checklist
 

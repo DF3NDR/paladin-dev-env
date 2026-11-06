@@ -111,7 +111,7 @@
 #         times Phase 19 observed. --poll-interval must be a positive
 #         integer; --poll-timeout must be >= --poll-interval; either
 #         violation is a usage error before any network call. --crates-file
-#         overrides the built-in eleven-crate dependency order with a
+#         overrides the built-in crate dependency order with a
 #         newline-delimited file -- purely a harness seam; a file resolving
 #         to zero entries is the named zero-crates failure, same as a
 #         corrupted default list.

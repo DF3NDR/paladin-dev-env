@@ -74,7 +74,7 @@ relevant `seq` range, and — for `node_executed` — a full visit table).
 | `node_not_executed` | a node never ran | `{ kind: node_not_executed, node: fallback_handler }` |
 | `edge_fired` | a specific edge fired at least once, distinguishing "evaluated but did not fire" from "never evaluated" | `{ kind: edge_fired, from: review, to: writer }` |
 | `route_taken` | a node-id list is a subsequence (not necessarily contiguous) of the executed route | `{ kind: route_taken, nodes: [writer, review, writer] }` |
-| `run_status` | the run's terminal status | `{ kind: run_status, status: completed }` |
+| `run_status` | the run's terminal status (a run that finished `cancelled` matches no value until the next minor; FIXES-04) | `{ kind: run_status, status: completed }` |
 | `total_tokens_max` | total tokens consumed does not exceed a bound | `{ kind: total_tokens_max, max: 5000 }` |
 | `supersteps_max` | total supersteps executed does not exceed a bound | `{ kind: supersteps_max, max: 10 }` |
 | `parley_raised` | a Parley of a given kind was raised by a given node | `{ kind: parley_raised, node: review, parley_kind: approval }` |

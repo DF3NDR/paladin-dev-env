@@ -41,7 +41,7 @@ nodes:
             "audience": "description",
             "outline": ["section1", "section2"]
           }
-        model: "gpt-4"
+        model: "gpt-4o-mini"
         temperature: 0.7
         max_loops: 2
         timeout_seconds: 180
@@ -57,7 +57,7 @@ nodes:
           You are a research specialist. Take the content plan and gather
           relevant information, facts, and data to support each section.
           Cite sources when possible.
-        model: "gpt-4"
+        model: "gpt-4o-mini"
         temperature: 0.5
         max_loops: 3
         timeout_seconds: 300
@@ -72,7 +72,7 @@ nodes:
         system_prompt: |
           You are a technical writer. Write clear, precise technical content
           based on the research. Use diagrams and code examples when appropriate.
-        model: "gpt-4"
+        model: "gpt-4o-mini"
         temperature: 0.6
         max_loops: 2
         timeout_seconds: 240
@@ -87,7 +87,7 @@ nodes:
         system_prompt: |
           You are a creative writer. Write engaging, narrative-style content
           based on the research. Use storytelling techniques and vivid language.
-        model: "gpt-4"
+        model: "gpt-4o-mini"
         temperature: 0.8
         max_loops: 2
         timeout_seconds: 240
@@ -103,7 +103,7 @@ nodes:
           You are an editor. Review both technical and creative versions.
           Combine the best elements of both to create a polished final piece
           that is both accurate and engaging.
-        model: "gpt-4"
+        model: "gpt-4o-mini"
         temperature: 0.5
         max_loops: 2
         timeout_seconds: 240
@@ -123,7 +123,7 @@ nodes:
           - Target audience appropriateness
 
           Provide a quality score (1-10) and list any issues.
-        model: "gpt-4"
+        model: "gpt-4o-mini"
         temperature: 0.3
         max_loops: 1
         timeout_seconds: 180

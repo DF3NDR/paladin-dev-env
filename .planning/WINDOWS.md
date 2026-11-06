@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 16
-waived_count: 39
-fixed_count: 32
-total_count: 87
-last_updated: 2026-10-31T17:57:36.724Z
+open_count: 0
+waived_count: 53
+fixed_count: 55
+total_count: 108
+last_updated: 2026-11-04T23:19:41.387Z
 ---
 
 # Broken Windows Ledger
@@ -70,38 +70,59 @@ last_updated: 2026-10-31T17:57:36.724Z
 | 53 | 35 | unmet-truth | docs/src/appendix/battalion-patterns-guide.md | 134 | One of four battalion-patterns-guide.md example bodies Phase 35 plan 35-09 flagged as carrying pre-existing API-shape drift (D-07 fallback): the body at line 134 fails the D-00e throwaway scratch-compile probe (examples/_scratch.rs + cargo check --example _scratch --features llm-openai) even after the OpenAIAdapter casing fix -- missing Arc/OpenAIAdapter imports, an un-awaited async .build(), and further per-body Campaign/Phalanx/ChainOfCommand builder API drift. Probed, not rewritten, per D-07 scope. Recorded in .planning/phases/36.1-deferred-items-closure/36.1-evidence/36.1-04-scratch-probe.txt. | waived | appendix sample fenced `rust,ignore`, does not compile against the shipped API (see 36.1-04 probe); Owner: v0.11.0 docs-currency pass. Re-check: that milestone's discuss step. | 2026-09-18T05:30:54.314Z | 2026-09-18T05:30:54.536Z |
 | 54 | 35 | unmet-truth | docs/src/appendix/battalion-patterns-guide.md | 232 | One of four battalion-patterns-guide.md example bodies Phase 35 plan 35-09 flagged as carrying pre-existing API-shape drift (D-07 fallback): the body at line 232 fails the D-00e throwaway scratch-compile probe (examples/_scratch.rs + cargo check --example _scratch --features llm-openai) even after the OpenAIAdapter casing fix -- missing Arc/OpenAIAdapter imports, an un-awaited async .build(), and further per-body Campaign/Phalanx/ChainOfCommand builder API drift. Probed, not rewritten, per D-07 scope. Recorded in .planning/phases/36.1-deferred-items-closure/36.1-evidence/36.1-04-scratch-probe.txt. | waived | appendix sample fenced `rust,ignore`, does not compile against the shipped API (see 36.1-04 probe); Owner: v0.11.0 docs-currency pass. Re-check: that milestone's discuss step. | 2026-09-18T05:30:54.731Z | 2026-09-18T05:30:54.994Z |
 | 55 | 35 | unmet-truth | docs/src/appendix/battalion-patterns-guide.md | 354 | One of four battalion-patterns-guide.md example bodies Phase 35 plan 35-09 flagged as carrying pre-existing API-shape drift (D-07 fallback): the body at line 354 fails the D-00e throwaway scratch-compile probe (examples/_scratch.rs + cargo check --example _scratch --features llm-openai) even after the OpenAIAdapter casing fix -- missing Arc/OpenAIAdapter imports, an un-awaited async .build(), and further per-body Campaign/Phalanx/ChainOfCommand builder API drift. Probed, not rewritten, per D-07 scope. Recorded in .planning/phases/36.1-deferred-items-closure/36.1-evidence/36.1-04-scratch-probe.txt. | waived | appendix sample fenced `rust,ignore`, does not compile against the shipped API (see 36.1-04 probe); Owner: v0.11.0 docs-currency pass. Re-check: that milestone's discuss step. | 2026-09-18T05:30:55.190Z | 2026-09-18T05:30:55.444Z |
-| 56 | 38 | lint-warning | crates/paladin-core/src/platform/container/cost.rs |  | Pre-existing rustdoc broken_intra_doc_links (Cost/CurrencyCode/PriceRow unresolved in module doc comment); introduced by plan 38-02, out of scope for 38-04, logged to phase deferred-items.md | open |  | 2026-09-26T02:43:14.297Z |  |
+| 56 | 38 | lint-warning | crates/paladin-core/src/platform/container/cost.rs |  | Pre-existing rustdoc broken_intra_doc_links (Cost/CurrencyCode/PriceRow unresolved in module doc comment); introduced by plan 38-02, out of scope for 38-04, logged to phase deferred-items.md | fixed | Closed by Phase 57 (57-11, D-05): cargo doc -p paladin-ai-core --no-deps prints 0 warning lines and cargo doc --workspace --all-features --no-deps with RUSTDOCFLAGS set to -D warnings exits 0 on 7ab20afba (first measured in 55-CORRECTNESS-EVIDENCE.md); see 57-REGISTER-EVIDENCE.md | 2026-09-26T02:43:14.297Z | 2026-11-04T22:11:52.312Z |
 | 57 | 40 | deviation | docs/src/deployment-topologies/http-service-host.md |  | 40-03: plan Task 2 negated grep '^\\s*api_keys\\s*:' over src/application/cli is a false positive on a Rust parameter (env.rs:22); intent verified by refined grep, not fixed | waived | Plan-text issue, not a code defect: 40-03's negated acceptance grep '^\\s*api_keys\\s*:' over src/application/cli matched a Rust parameter 'api_keys: &HashMap<K, String>' in src/application/cli/templates/env.rs; the intent (the onboarding template emits no tenantless api_keys YAML key) was verified by a refined grep in 40-03 and the template needed no change. Waived in 40-06 as directed by the phase orchestrator. | 2026-09-29T00:00:16.256Z | 2026-09-29T11:49:59.820Z |
 | 58 | 40 | deviation | crates/paladin-web/src/thread_controller.rs |  | (Phase 40 D-14 deferral, T-40-23) The /v1/threads routes -- GET /threads (lists every thread), GET /threads/{id}, GET /threads/{id}/state, GET /threads/{id}/history, POST /threads/{id}/resume, POST /threads/{id}/fork, DELETE /threads/{id} -- are not tenant-scoped because threads carry no tenant, so an authenticated principal can enumerate another tenant's threads and read their Waypoint state and history although that tenant's /runs routes answer 404. Closing condition: record a tenant on the thread (or derive it from the thread's runs) and route every /threads/{id}* handler through one shared visibility gate like run_controller::load_visible_run. Owner: Phase 41 planning if allowance enforcement needs thread ownership, else a v0.11 hygiene phase. | fixed | Closed by Phase 53 (plans 53-03 and 53-04, ADR-0063): every /v1/threads/{id} route enters load_visible_thread and a thread belongs to the tenant of its latest run; evidence thread_controller::tests::every_thread_id_route_hides_foreign_threads_behind_the_missing_thread_404 and the list_threads_ tests (53-TENANT-EVIDENCE.md). | 2026-09-29T11:49:59.678Z | 2026-10-31T14:18:13.197Z |
 | 59 | 40 | deviation | .project/current-exports.txt |  | (40-06 Task 2) The plan's acceptance grep for RunReadScope/TenantId in .project/current-exports.txt cannot pass by the tool's design: cargo-public-api lists a re-exported foreign-crate module as one 'pub use paladin::core::platform::container::principal' line (exactly as the existing cost and treasury_ledger lines), never its items. The refreshed baseline does carry every facade-visible Phase 40 item (execute_scoped, execute_stream_scoped, ApiKeyConfig.tenant, BearerTokenAuthConfig.tenant, AuthConfig::validate, the principal re-export, cancel's Option<principal::PrincipalRef>) and make api-surface exits 0. Plan-text issue, not a code defect; left open for the operator to waive. | waived | Tool-design limitation, not a defect: cargo-public-api lists the re-exported principal module as a single pub-use line, so item-level names cannot appear in current-exports.txt. Every facade-visible Phase 40 item is present in the baseline (execute_scoped, execute_stream_scoped, ApiKeyConfig.tenant, AuthConfig::validate, principal re-export); the 40-06 SUMMARY records the measured evidence. | 2026-09-29T11:49:59.952Z | 2026-09-29T12:16:51.627Z |
 | 60 | 45 | deviation | src/application/services/run/worker.rs |  | Closing condition of row 31 (WR-02) is met: run_agent's success and failure return paths now bind the live event bus, emit through map_trace_event (RunStarted/NodeStarted/NodeFinished/RunFinished via a per-run TraceDispatcher) and enqueue webhook deliveries via webhook_delivery_for_outcome; the pinning test is inverted to agent_kind_run_with_a_webhook_enqueues_a_delivery, with agent_kind_run_streams_done_live and agent_kind_run_emits_exactly_one_terminal_event as sibling evidence. Row 31 itself stays waived (only open->fixed\|waived transitions exist). Phase 45 plan 45-02 (PLAT-08). | fixed |  | 2026-09-29T22:37:02.721Z | 2026-09-29T22:37:06.572Z |
 | 61 | 45 | deviation | .planning/phases/45-rustfs-swap-platform-observability-deviations/45-BENCH-EVIDENCE.md |  | Amends row 35 (Phase 28 tracing-overhead deviation): OBS-05 re-measure at Phase 45 point C, paladin::trace target enabled, after the D-17 fixes (enablement guard, per-thread buffer reuse, CompositeSink last-child move) did NOT meet the <=3% bar: log_sink +19.36%, composite +16.19% against a 120.00us untraced baseline (maintainer's machine, 2026-09-30, 45-BENCH-EVIDENCE.md; Verdict: AMEND). Serialisation-skipped _target_off rows still cost +16.24%/+18.57%, so the remaining cost is not serialisation. Amended closing condition: accepted-pending at +19.36%/+16.19% after the D-17 fixes, 2026-09-30, 45-BENCH-EVIDENCE.md; the maintainer accepts this figure at Phase 45 UAT, then gsd-tools windows waive <id> with the acceptance text. The I/O-bound re-scope stays deferred (no I/O-bound bench added in Phase 45, D-19). Row 35 itself stays waived. | waived | Maintainer accepted at Phase 45 UAT (test 4, 2026-09-30): +19.36% (log_sink) / +16.19% (composite) tracing overhead at point C recorded as the new figure in place of the <=3% PRD 07 bar; remaining cost sits in the dispatcher/sink path, not serialisation; I/O-bound re-scope stays deferred per D-19. | 2026-09-30T16:44:57.003Z | 2026-09-30T19:52:30.554Z |
-| 62 | 41 | deviation | config.example.yml |  | The config loader performs no ${VAR} expansion (pinned by src/config/treasurer.rs::yaml_env_placeholder_is_not_expanded; no expansion code exists under src/ or crates/), so the http.auth.api_keys[].key: "${PALADIN_API_KEY_CI}" examples in config.example.yml (lines 161, 165) and k8s/server/configmap.yaml (lines 36, 40; its header also claims the server expands them at load time) would load the literal placeholder as the key value unless the deployment substitutes it before the file is read. Closing condition: document the substitution step or replace the examples with env-override guidance. Owner: Phase 46 docs currency. | open |  | 2026-10-03T22:52:46.178Z |  |
+| 62 | 41 | deviation | config.example.yml |  | The config loader performs no ${VAR} expansion (pinned by src/config/treasurer.rs::yaml_env_placeholder_is_not_expanded; no expansion code exists under src/ or crates/), so the http.auth.api_keys[].key: "${PALADIN_API_KEY_CI}" examples in config.example.yml (lines 161, 165) and k8s/server/configmap.yaml (lines 36, 40; its header also claims the server expands them at load time) would load the literal placeholder as the key value unless the deployment substitutes it before the file is read. Closing condition: document the substitution step or replace the examples with env-override guidance. Owner: Phase 46 docs currency. | fixed | Closed by Phase 54 (plans 54-01, 54-02, 54-06; FIRST-01): a key containing ${ is refused at config load naming the entry (validate_refuses_an_unexpanded_placeholder_key; boot path build_auth_config_refuses_an_unexpanded_placeholder_key); config.example.yml ships api_keys: [] with commented key: "" entries (shipped_example_* tests); the k8s/server config is a Secret with key: "" entries and configmap.yaml is retired; Docker and compose mount a literal-key config. No expansion path was added. Evidence: 54-FIRST-EVIDENCE.md. | 2026-10-03T22:52:46.178Z | 2026-11-01T01:19:43.391Z |
 | 63 | 41 | deviation | crates/paladin-storage/migrations/sqlite/010_add_run_schedule_created_by.sql |  | Schedules created before Phase 41 have a NULL created_by (run_schedules.tenant_id and api_key_id both NULL) and keep firing unattributed and ungated by any allowance (D-08). Closing condition: an operator re-creates them through POST /v1/schedules so the creator is stamped; a backfill and PATCH re-assignment of created_by are deferred ideas in 41-CONTEXT. | fixed | Closed by Phase 53 (plan 53-06, TENANT-10, MIGRATION 11.8): boot now logs one warn naming every schedule with no recorded creator, proven by run_api_wiring::tests::schedule_scan_reports_every_unattributed_schedule_ascending_in_one_line; operators re-create them via POST /v1/schedules, no backfill is claimed. | 2026-10-03T23:46:40.147Z | 2026-10-31T14:18:13.284Z |
-| 64 | 42 | deviation | src/application/services/run/worker.rs |  | D-08: worker-dispatched Runnable::Agent runs write no Waypoint, so a Treasurer-halted agent-kind run cannot be forked from a checkpoint; it is resumed by a fresh POST /v1/runs that re-executes from the start, and the HTTP agent routes have no run row at all. ALLOW-03 continue-from-checkpoint is met on the engine path and not applicable by construction on the agent loop. | open |  | 2026-10-07T00:52:04.918Z |  |
-| 65 | 42 | deviation | src/application/services/treasurer/guard.rs |  | D-01 (ADR-0057): the mid-run boundary check is a check-only balance read with no reservation, so runs admitted in the same instant can all start and each one halts at its first boundary after the allowance is exhausted; overshoot is bounded to one superstep's spend per run (not per principal). Owner: the Treasurer maintainers; rationale: a reservation hold per superstep would need an estimate rule ADR-0057 records as missing, so the race is accepted and bounded rather than prevented. Closing condition: the deferred per-superstep reservation hold ships, or an operator sizes each ceiling with headroom for concurrent runs times one superstep. | open |  | 2026-10-07T02:02:07.590Z |  |
-| 66 | 42 | deviation | src/application/services/paladin/paladin_execution_service.rs |  | G2 (ADR-0057 group e, D-12, 42-01 option-b gate): a true streamed execute/stream call is one provider call with no after_model, so the derived budget cannot cut it mid-flight; admission (including the model_unpriced and zero-budget refusals) is its only gate and its overshoot is that one streamed call. Under the recorded option-b its terminal done carries an informational halt_reason when the terminal usage crossed the derived figure (a crossing report, not a halt: the call had already finished; implemented in 42-08), and is otherwise unchanged, so the done is NOT byte-identical in all cases; D-12's 'the agent stream's terminal done carries the same object' holds for the buffered fallback always and for a true stream when its terminal usage crossed the figure. Owner: the Treasurer maintainers; closing condition: mid-stream usage accounting that can cut a single streamed call. | open |  | 2026-10-07T02:02:07.736Z |  |
-| 67 | 42 | deviation | crates/paladin-battalion/src/engine/settlement.rs |  | G15: a graph Paladin node on a model with no treasurer.pricing row settles nothing (an unpriced call has no cost and nothing is fabricated, D-00c), so the superstep-boundary check cannot see that node's spend and an allowance cannot bound it; workflow assistants are not refused at admission for an unpriced model (only agent routes and agent-kind runs are, 422 model_unpriced). Owner: the operator; rationale: pricing is operator-supplied configuration and the engine has no source for a price it was not given. Operators must price every model a metered principal can reach; closing condition: a pricing-coverage check at graph registration, deferred. | open |  | 2026-10-07T02:02:08.278Z |  |
-| 68 | 48 | unrun-verify | Makefile |  | 48-09: make security (cargo-audit, cargo-deny) not run locally, tools absent; CI Security Audit and License & Dependency Policy jobs are red on the branch before and after Phase 48 with Cargo.lock unchanged | open |  | 2026-10-14T00:14:54.346Z |  |
-| 69 | 48 | unrun-verify | scripts/coverage.sh |  | 48-09: workspace coverage percentage not measured locally (no Docker daemon, no object store, 3 GB free); CI Coverage job passed the 82 percent gate on dcbcb63 but its figure was not retrievable (artifact download denied) | open |  | 2026-10-14T00:14:54.479Z |  |
+| 64 | 42 | deviation | src/application/services/run/worker.rs |  | D-08: worker-dispatched Runnable::Agent runs write no Waypoint, so a Treasurer-halted agent-kind run cannot be forked from a checkpoint; it is resumed by a fresh POST /v1/runs that re-executes from the start, and the HTTP agent routes have no run row at all. ALLOW-03 continue-from-checkpoint is met on the engine path and not applicable by construction on the agent loop. | waived | Re-homed: owner=Treasurer maintainers (next feature milestone roadmap), revisit=when worker-dispatched agent-kind runs gain a Waypoint or ALLOW-03 is re-scoped for the agent loop, basis=ADR-0057 D-08 (agent-loop no-Waypoint contract) and v0.11.1 inventory section H. Accepted contract under Phase 57 D-03 and D-00e: a halted agent-kind run resumes by a fresh POST /v1/runs. | 2026-10-07T00:52:04.918Z | 2026-11-04T22:34:11.831Z |
+| 65 | 42 | deviation | src/application/services/treasurer/guard.rs |  | D-01 (ADR-0057): the mid-run boundary check is a check-only balance read with no reservation, so runs admitted in the same instant can all start and each one halts at its first boundary after the allowance is exhausted; overshoot is bounded to one superstep's spend per run (not per principal). Owner: the Treasurer maintainers; rationale: a reservation hold per superstep would need an estimate rule ADR-0057 records as missing, so the race is accepted and bounded rather than prevented. Closing condition: the deferred per-superstep reservation hold ships, or an operator sizes each ceiling with headroom for concurrent runs times one superstep. | waived | Re-homed: owner=Treasurer maintainers (next feature milestone roadmap), revisit=a per-superstep reservation hold with an estimate rule is designed, basis=ADR-0057 D-01 (check-only mid-run boundary) and v0.11.1 inventory section H. Accepted contract under Phase 57 D-03 and D-00e: overshoot stays bounded to one superstep of spend per run. | 2026-10-07T02:02:07.590Z | 2026-11-04T22:34:12.091Z |
+| 66 | 42 | deviation | src/application/services/paladin/paladin_execution_service.rs |  | G2 (ADR-0057 group e, D-12, 42-01 option-b gate): a true streamed execute/stream call is one provider call with no after_model, so the derived budget cannot cut it mid-flight; admission (including the model_unpriced and zero-budget refusals) is its only gate and its overshoot is that one streamed call. Under the recorded option-b its terminal done carries an informational halt_reason when the terminal usage crossed the derived figure (a crossing report, not a halt: the call had already finished; implemented in 42-08), and is otherwise unchanged, so the done is NOT byte-identical in all cases; D-12's 'the agent stream's terminal done carries the same object' holds for the buffered fallback always and for a true stream when its terminal usage crossed the figure. Owner: the Treasurer maintainers; closing condition: mid-stream usage accounting that can cut a single streamed call. | waived | Re-homed: owner=Treasurer maintainers (next feature milestone roadmap), revisit=a provider streaming path reports usage mid-stream or ADR-0057 group e is reopened, basis=ADR-0057 group e (G2, D-12, 42-01 option-b) and v0.11.1 inventory section H. Accepted contract under Phase 57 D-03 and D-00e: the overshoot of a true streamed call is that one call. | 2026-10-07T02:02:07.736Z | 2026-11-04T22:34:12.187Z |
+| 67 | 42 | deviation | crates/paladin-battalion/src/engine/settlement.rs |  | G15: a graph Paladin node on a model with no treasurer.pricing row settles nothing (an unpriced call has no cost and nothing is fabricated, D-00c), so the superstep-boundary check cannot see that node's spend and an allowance cannot bound it; workflow assistants are not refused at admission for an unpriced model (only agent routes and agent-kind runs are, 422 model_unpriced). Owner: the operator; rationale: pricing is operator-supplied configuration and the engine has no source for a price it was not given. Operators must price every model a metered principal can reach; closing condition: a pricing-coverage check at graph registration, deferred. | waived | Waived by Phase 55 (FIXES-06, D-07, milestone decision B4): the operator contract stands -- price every model a metered principal can reach; boot now warns once per unpriced code-registered or stored agent-kind model (unpriced_reachable_models_table, plan 55-09) and workflow assistants are not refused; graph-node model pricing coverage is the accepted, documented contract (treasurer.md); a registration-time check needs a listing method on AssistantResolver and is a later minor. See 55-CORRECTNESS-EVIDENCE.md. | 2026-10-07T02:02:08.278Z | 2026-11-01T19:15:36.167Z |
+| 68 | 48 | unrun-verify | Makefile |  | 48-09: make security (cargo-audit, cargo-deny) not run locally, tools absent; CI Security Audit and License & Dependency Policy jobs are red on the branch before and after Phase 48 with Cargo.lock unchanged | fixed | Closed by Phase 57 (57-01, 57-11, D-05): make security exits 0 on 4b115d511 after the RUSTSEC-2026-0429 row (both legs, advisories ok, bans ok, licenses ok, sources ok); CI Security Audit job 126917997616 and License & Dependency Policy job 126917997392 succeeded in run 41927940508 on 4b115d511; see 57-REGISTER-EVIDENCE.md | 2026-10-14T00:14:54.346Z | 2026-11-04T23:19:40.919Z |
+| 69 | 48 | unrun-verify | scripts/coverage.sh |  | 48-09: workspace coverage percentage not measured locally (no Docker daemon, no object store, 3 GB free); CI Coverage job passed the 82 percent gate on dcbcb63 but its figure was not retrievable (artifact download denied) | fixed | Closed by Phase 57 (57-11, D-05): CI Coverage job 126153522434 succeeded in run 41703614636 on d9a48cfc6 (after the 48-09 cause) and passed the 82 percent gate with 92.74 percent measured on 70657919 (47-CI-EVIDENCE.md) and 92.79 percent locally in Phase 56 (DOGF-05); pushed head 4b115d511: Coverage job 126917997573 succeeded in run 41927940508 and measured 92.86 percent (172187 of 185431 lines); see 57-REGISTER-EVIDENCE.md | 2026-10-14T00:14:54.479Z | 2026-11-04T22:38:20.907Z |
 | 70 | 50 | unrun-verify | Cargo.toml |  | 50-01: full 'cargo test --workspace' not run to completion: the workspace test build exhausted the sandbox disk quota (No space left on device while linking); targeted verifies all passed instead (provider_swap_matrix --features llm-all, paladin-llm --all-features --lib 651 tests, cargo clippy --all-targets --features llm-all -D warnings, cargo fmt --check, make check-consumer-surface, make api-surface) | fixed |  | 2026-10-15T14:44:02.279Z | 2026-10-16T21:57:01.717Z |
 | 71 | 50 | skipped-test | tests/provider_swap_matrix.rs |  | 50-01: 19 provider_swap_matrix cases are #[ignore = 'red until plan 50-NN'] by design (50-03: 7, 50-05: 3, 50-12: 7, 50-13: 1, 50-14: 1); each fixing plan must un-ignore the cases it names; none may remain ignored at phase close | fixed |  | 2026-10-15T14:44:02.458Z | 2026-10-16T21:57:01.844Z |
 | 72 | 50 | unrun-verify | Makefile | 367 | 50-02: make clean-code stops at lint-shell (shellcheck not installed in the sandbox); fmt, clippy -D warnings and workspace check passed separately | fixed |  | 2026-10-15T16:23:35.635Z | 2026-10-16T21:57:01.946Z |
-| 73 | 50 | unrun-verify | src/infrastructure/web/run_api_wiring.rs | 2369 | Wave 1 post-merge gate (plans 50-02, 50-04): cargo test --workspace --lib --bins passes 1348 tests but build_run_api_persists_no_run_traces_by_default and build_run_api_persists_run_traces_when_trace_persist_is_set fail with 'the run never reached a terminal status' (10 s worker deadline). Reproduced identically at the pre-wave-1 commit 28b6a69b in a throwaway worktree, so it is pre-existing and sandbox-specific, not a Phase 50 regression; CI on the pushed branch is the proof of record. | open |  | 2026-10-15T17:13:24.980Z |  |
+| 73 | 50 | unrun-verify | src/infrastructure/web/run_api_wiring.rs | 2369 | Wave 1 post-merge gate (plans 50-02, 50-04): cargo test --workspace --lib --bins passes 1348 tests but build_run_api_persists_no_run_traces_by_default and build_run_api_persists_run_traces_when_trace_persist_is_set fail with 'the run never reached a terminal status' (10 s worker deadline). Reproduced identically at the pre-wave-1 commit 28b6a69b in a throwaway worktree, so it is pre-existing and sandbox-specific, not a Phase 50 regression; CI on the pushed branch is the proof of record. | fixed | Closed by Phase 55 plan 55-09 (TESTS-01, D-08): build_run_api_persists_run_traces_when_trace_persist_is_set and build_run_api_persists_no_run_traces_by_default inject a scripted PaladinPort through the crate-private build_run_api_with_engine_port seam and pass with every proxy variable and OPENAI_API_KEY unset; see 55-CORRECTNESS-EVIDENCE.md Hermetic and flake proofs. | 2026-10-15T17:13:24.980Z | 2026-11-01T19:15:36.078Z |
 | 74 | 50 | deviation | crates/paladin-llm/src/compat/engine.rs |  | 50-12: vendor total_tokens not copied into TokenUsage (D-02 invariant kept; plan truth 'never recomputed' unimplemented); owner decision pending | fixed |  | 2026-10-16T16:30:20.647Z | 2026-10-19T00:23:33.046Z |
 | 75 | 50 | deviation | crates/paladin-llm/src/openai/adapter.rs |  | 50-16 closeout: the OpenAI adapter sends max_tokens, which gpt-5.4-nano (the probed default model) rejects with HTTP 400 (it wants max_completion_tokens; 50-SEED-PROBE.md probe 11). The ModelProfile has no field for the token-limit parameter name. Carried unfixed from 50-06, 50-08 and 50-09; documented in the Switching providers page and the CHANGELOG known limitations. Needs an owner decision on the profile field or an adapter fix | fixed |  | 2026-10-16T21:57:02.053Z | 2026-10-17T18:32:44.959Z |
 | 76 | 50 | deviation | crates/paladin-llm/src/kimi/adapter.rs |  | 50-16 closeout: the Kimi adapter-wide fallback profile (temperature Fixed(1.0), top_p Fixed(0.95), declared range (1.0, 1.0)) comes from the 2026-08-22 measurement and contradicts the 2026-10-15 probe (kimi-k2.6 and kimi-k3 accept only 0.6 and reject top_p). Applies to unseeded Kimi ids only; carried unreconciled from 50-06 and 50-15; labelled unverified on the Switching providers page. Owner decision pending | fixed |  | 2026-10-16T21:57:02.159Z | 2026-10-17T18:55:35.713Z |
-| 77 | 50 | deviation | crates/paladin-llm/src/grok/adapter.rs |  | G-50-5a remainder (c): Grok's vendor-computed cost_in_usd_ticks and num_sources_used are not parsed or compared with the Treasurer price; owner-accepted deferral, 2026-10-17, kept open; plan 50-22's probe (live_vendor_smoke --usage, 50-USAGE-PROBE.md) recorded the cross-check data; closing condition: parse both fields on the Grok wire and compare cost_in_usd_ticks with the Treasurer price under the ADR-0061 visibility rule, with fixture tests | open |  | 2026-10-19T00:23:33.273Z |  |
+| 77 | 50 | deviation | crates/paladin-llm/src/grok/adapter.rs |  | G-50-5a remainder (c): Grok's vendor-computed cost_in_usd_ticks and num_sources_used are not parsed or compared with the Treasurer price; owner-accepted deferral, 2026-10-17, kept open; plan 50-22's probe (live_vendor_smoke --usage, 50-USAGE-PROBE.md) recorded the cross-check data; closing condition: parse both fields on the Grok wire and compare cost_in_usd_ticks with the Treasurer price under the ADR-0061 visibility rule, with fixture tests | waived | Re-homed: owner=DF3NDR, revisit=when the Grok adapter parses cost_in_usd_ticks and num_sources_used and compares them with the Treasurer price, basis=ADR-0061 and milestone decision B9 (cross-check data in 50-USAGE-PROBE.md). Owner-accepted vendor-cost deferral of 2026-10-17, kept under Phase 57 D-03 and D-00e. | 2026-10-19T00:23:33.273Z | 2026-11-04T22:34:12.371Z |
 | 78 | 50 | deviation | crates/paladin-ports/src/output/spend_scope.rs |  | 50-REVIEW WR-03 (G-50-5a remainder (b)): a hopped-past fallback bill reached ATTEMPT_SPEND only when its whole model call returned, so a Battalion attempt dropped by its deadline or idle bound while a later hop was in flight was not charged for the earlier hop's billed refusal; commit 0cdbc302 documented it as a limit; closing condition: the bill is priced and counted into the attempt scope at its hop, proven by paused-clock drop tests (plan 50-32). | fixed |  | 2026-10-19T13:00:16.400Z | 2026-10-19T15:50:15.480Z |
-| 79 | 50.1 | deviation | .planning/phases/50.1-consumer-surface-readiness/50.1-SEED-PROBE.md |  | 50.1-07: probe was run by Claude at operator direction in the devcontainer (plan assumed an operator-machine run); grok-4.7 and 7 default-rejected candidates are not measured end to end and must not be seeded | open |  | 2026-10-20T16:26:47.433Z |  |
+| 79 | 50.1 | deviation | .planning/phases/50.1-consumer-surface-readiness/50.1-SEED-PROBE.md |  | 50.1-07: probe was run by Claude at operator direction in the devcontainer (plan assumed an operator-machine run); grok-4.7 and 7 default-rejected candidates are not measured end to end and must not be seeded | waived | Re-homed: owner=DF3NDR, revisit=an operator-machine seed-probe run before the next model-seed change, basis=50.1-SEED-PROBE.md (probe run in the devcontainer at operator direction). grok-4.7 and the 7 default-rejected candidates stay unseeded until measured end to end (Phase 57 D-03, D-00e). | 2026-10-20T16:26:47.433Z | 2026-11-04T22:34:12.491Z |
 | 80 | 46 | todo | crates/paladin-battalion/src/engine/superstep.rs |  | Deferred debt line (ROADMAP tech-debt list): oversized service files. Measured 2026-10-24 with wc -l: engine/superstep.rs 16,018 raw / ~5,363 production (first #[cfg(test)] mod at line 5364); engine/mod.rs 14,324 / ~3,251 (test module from line 3258 plus three cfg(test) import lines); paladin_execution_service.rs 10,858 / ~4,419 (ten cfg(test) modules, first at line 4382). The audit's 2,757 / 2,294 / 1,840 figures were for since-reshaped files. | waived | Waived at Phase 46 (D-18): decomposition is a multi-phase refactor with no requirement behind it and no consumer-visible effect; deferred as a candidate phase for the next milestone's roadmap. Figures are measured, raw and production-only, so the debt is not overstated. | 2026-10-24T13:47:00.421Z | 2026-10-24T13:47:07.513Z |
 | 81 | 46 | todo | benches/engine_benchmarks.rs |  | Deferred debt line: clone/lock-contention work (383 .clone() calls and nine orchestrator locks at ingest), previously blocked on benchmark evidence. | waived | Waived at Phase 46 (D-19): the benchmark blocker is gone -- benches/engine_benchmarks.rs (bench_waypoint_save, bench_superstep_cost, bench_superstep_cost_sink_variants) and benches/config_benchmarks.rs exist and run. No benchmark attributes a regression to cloning or lock wait; this is not proof that no contention exists. The one standing overhead, the accepted tracing cost in WINDOWS rows 35/61 (+19.36% log_sink / +16.19% composite against a 120.00us untraced baseline, row 61), sits in the dispatcher/sink path, the first place a clone, channel or lock cost would show and the first place to look. Re-open when a bench regression is attributed to cloning or lock wait. | 2026-10-24T13:47:11.673Z | 2026-10-24T13:47:17.245Z |
 | 82 | 46 | deviation | .planning/decisions/0015-core-ports-dependency-allowlist.md |  | Deferred debt line: paladin-core / paladin-ports dependency allowlists (declared 6 / 7, shipping 14 / 10 at ingest). Fixed: ADR-0015 rebaselined to the measured sets with the purity invariant; Phase 46 (D-20/D-21) re-measured 14 / 12 (log added to paladin-ports, ADR-0015 amendment 2026-10-24) and pinned them with scripts/check-dependency-allowlist.sh in make check-gates and CI's cargo-deny job. | fixed |  | 2026-10-24T13:47:17.331Z | 2026-10-24T13:47:20.422Z |
-| 83 | 52 | unrun-verify | .github/workflows/ci.yml |  | actionlint not runnable in sandbox; CI Workflow Lint job gates the 52-01 ci.yml edits (A-52-03) | open |  | 2026-10-28T19:29:42.085Z |  |
-| 84 | 52 | unrun-verify | .github/workflows/ci.yml |  | actionlint not installed in sandbox; 52-06 ci.yml edits (labeled type, e2e/publish-dry-run conditions) await CI Workflow Lint job | open |  | 2026-10-29T01:38:56.452Z |  |
-| 85 | 53 | deviation | crates/paladin-web/src/thread_controller.rs | 815 | 53-REVIEW WR-01, owner-accepted follow-up (53-UAT test 2): a run row with UnknownSchemaVersion on any tenant's thread falls into the Err(other) arm of visible_thread_page and aborts the walk, so every non-admin GET /v1/threads returns 500 until the row is repaired (likely after a downgrade). Fix: skip-and-log UnknownSchemaVersion in the list walk like Serialization; consider making it hideable in run_repo_error_for_scope. Proposed owner: Phase 55 (correctness fixes). | open |  | 2026-10-31T17:57:36.525Z |  |
-| 86 | 53 | deviation | crates/paladin-web/src/thread_controller.rs | 739 | 53-REVIEW WR-02, owner-accepted follow-up (53-UAT test 2): the latest-run lookup uses list(limit: 1), and the SQLite/Postgres list decodes limit+1 rows, so one corrupt OLDER run row returns Serialization and locks tenant A out of its own thread (404 on every gated route, 500 for Admin and on submit/fork via ensure_thread_visible in submission.rs:289). Fix: a port method that reads exactly the newest run (LIMIT 1), used in both places. Proposed owner: Phase 55 (correctness fixes). | open |  | 2026-10-31T17:57:36.623Z |  |
-| 87 | 53 | deviation | crates/paladin-core/src/platform/container/principal.rs | 325 | 53-REVIEW WR-03, owner-accepted follow-up (53-UAT test 2): thread ownership is the latest run's submitted_by, so an Admin fork/submit onto tenant A's thread, or an unattributed (schedule-fired, submitted_by None) run, transfers or hides the thread and tenant A gets 404 on a thread it created. Matches SPEC AC-04 as written. Fix: derive ownership from the first or earliest attributed run, or keep the original tenant's attribution on admin forks; at minimum document the transfer in ADR-0063 and parley-and-chronicle.md. Proposed owner: Phase 55 (correctness fixes). | open |  | 2026-10-31T17:57:36.724Z |  |
+| 83 | 52 | unrun-verify | .github/workflows/ci.yml |  | actionlint not runnable in sandbox; CI Workflow Lint job gates the 52-01 ci.yml edits (A-52-03) | fixed | Closed by Phase 57 (57-11, D-05): CI Workflow Lint job 124029754795 succeeded in run 41045889697 on PR 61 merge 84686acfb and job 124670697434 succeeded in main run 41246424413 on 8b23cb4c5, both after the 52-01 ci.yml edits (be5867729, bd1665e4b); pushed head 4b115d511: Workflow Lint job 126917997309 succeeded in run 41927940508; see 57-REGISTER-EVIDENCE.md | 2026-10-28T19:29:42.085Z | 2026-11-04T22:38:21.015Z |
+| 84 | 52 | unrun-verify | .github/workflows/ci.yml |  | actionlint not installed in sandbox; 52-06 ci.yml edits (labeled type, e2e/publish-dry-run conditions) await CI Workflow Lint job | fixed | Closed by Phase 57 (57-11, D-05): CI Workflow Lint job 124670697434 succeeded in main run 41246424413 on 8b23cb4c5 and job 126363067412 succeeded in branch run 41765477891 on 69de7c285, both containing the 52-06 ci.yml edits (2644b974c); pushed head 4b115d511: Workflow Lint job 126917997309 succeeded in run 41927940508; see 57-REGISTER-EVIDENCE.md | 2026-10-29T01:38:56.452Z | 2026-11-04T22:38:21.123Z |
+| 85 | 53 | deviation | crates/paladin-web/src/thread_controller.rs | 815 | 53-REVIEW WR-01, owner-accepted follow-up (53-UAT test 2): a run row with UnknownSchemaVersion on any tenant's thread falls into the Err(other) arm of visible_thread_page and aborts the walk, so every non-admin GET /v1/threads returns 500 until the row is repaired (likely after a downgrade). Fix: skip-and-log UnknownSchemaVersion in the list walk like Serialization; consider making it hideable in run_repo_error_for_scope. Proposed owner: Phase 55 (correctness fixes). | fixed | Closed by Phase 57 (57-03, 57-04, D-02): on d0b0022ec thread_controller::tests::list_threads_skips_a_newer_schema_thread_for_a_tenant and newer_schema_owner_row_hides_the_thread_from_a_tenant ok (cargo test -p paladin-web --lib thread_controller::, 56 passed); owner rule recorded in ADR-0063 and MIGRATION by 57-04; see 57-REGISTER-EVIDENCE.md | 2026-10-31T17:57:36.525Z | 2026-11-04T22:38:21.236Z |
+| 86 | 53 | deviation | crates/paladin-web/src/thread_controller.rs | 739 | 53-REVIEW WR-02, owner-accepted follow-up (53-UAT test 2): the latest-run lookup uses list(limit: 1), and the SQLite/Postgres list decodes limit+1 rows, so one corrupt OLDER run row returns Serialization and locks tenant A out of its own thread (404 on every gated route, 500 for Admin and on submit/fork via ensure_thread_visible in submission.rs:289). Fix: a port method that reads exactly the newest run (LIMIT 1), used in both places. Proposed owner: Phase 55 (correctness fixes). | fixed | Closed by Phase 57 (57-02, 57-03, D-02): on d0b0022ec owner_run_for_thread_decodes_only_the_owner_row ok on the in-memory and SQLite legs, the PostgreSQL owner-query shape guard ok, and http_surface_tests::thread_owner_is_the_earliest_attributed_run_over_sqlite ok; see 57-REGISTER-EVIDENCE.md | 2026-10-31T17:57:36.623Z | 2026-11-04T22:38:21.352Z |
+| 87 | 53 | deviation | crates/paladin-core/src/platform/container/principal.rs | 325 | 53-REVIEW WR-03, owner-accepted follow-up (53-UAT test 2): thread ownership is the latest run's submitted_by, so an Admin fork/submit onto tenant A's thread, or an unattributed (schedule-fired, submitted_by None) run, transfers or hides the thread and tenant A gets 404 on a thread it created. Matches SPEC AC-04 as written. Fix: derive ownership from the first or earliest attributed run, or keep the original tenant's attribution on admin forks; at minimum document the transfer in ADR-0063 and parley-and-chronicle.md. Proposed owner: Phase 55 (correctness fixes). | fixed | Closed by Phase 57 (57-02, 57-03, D-02): on d0b0022ec owner_run_for_thread_ignores_later_admin_and_unattributed_runs and owner_run_for_thread_returns_the_earliest_attributed_run ok on the in-memory and SQLite legs, thread_controller admin_run_on_a_tenant_thread_does_not_move_its_owner and unattributed_run_on_a_tenant_thread_does_not_move_its_owner ok, and submission::tests::submit_guard_reads_the_owner_run_not_the_newest_run ok; see 57-REGISTER-EVIDENCE.md | 2026-10-31T17:57:36.724Z | 2026-11-04T22:38:21.456Z |
+| 88 | 45 | deviation | src/application/services/run/worker.rs | 1995 | 45-REVIEW WR-05 (found live by the Phase 57 sweep, D-14): persist_failure stores the agent/engine failure text verbatim on the run row and the failed-persist warn! logs it, so a provider response body or key embedded in an error reaches GET /v1/runs/{id} and the log; worker_tests pinned the raw marker as readable. Fix: redact then bound (plan 57-05). | fixed | Closed by Phase 57 (57-05, D-14): on d0b0022ec worker_tests::bounded_run_error_redacts_before_bounding and agent_kind_run_emits_exactly_one_terminal_event ok (cargo test --lib --features web-server, fix commit 43d740c34); see 57-REGISTER-EVIDENCE.md | 2026-11-04T14:12:20.397Z | 2026-11-04T22:38:21.559Z |
+| 89 | 41 | deviation | src/infrastructure/web/run_api_wiring.rs | 1352 | 41-REVIEW WR-05 (found live by the Phase 57 sweep, D-14): an operator webhook configured without a secret (or with APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET="") is signed with the empty key, so X-Paladin-Signature authenticates nothing, and boot gives no signal. Fix: empty is absent plus one boot warning (plan 57-05). | fixed | Closed by Phase 57 (57-05, D-14): on d0b0022ec config::treasurer::tests::empty_env_operator_webhook_secret_is_treated_as_absent and run_api_wiring::tests::operator_webhook_secret_warning_line_names_the_key_and_never_the_url and operator_webhook_secret_warning_line_is_silent_with_a_secret ok (fix commit d26c871d8); see 57-REGISTER-EVIDENCE.md | 2026-11-04T14:19:23.050Z | 2026-11-04T22:38:21.665Z |
+| 90 | 45 | deviation | crates/paladin-storage/src/minio.rs | 551 | 45-REVIEW CR-01 (found live by the Phase 57 sweep, D-14): list_files passes ListOptions.limit to rust-s3 Bucket::list as the delimiter, so the limit is ignored and every key containing the limit's digits is rolled into CommonPrefixes and dropped; health_check repeats it. Fix: list_page with max_keys plus continuation (plan 57-06). | fixed | Closed by Phase 57 (57-06, 57-11, D-14): minio::tests::list_request_sends_the_limit_as_max_keys_never_as_a_delimiter ok on d0b0022ec (fix commit b5ba82365); CI Integration Tests job 126917997844 in run 41927940508 on 4b115d511 ran test_list_files_honours_limit_and_drops_no_keys ok against RustFS; see 57-REGISTER-EVIDENCE.md | 2026-11-04T16:13:05.569Z | 2026-11-04T23:19:41.120Z |
+| 91 | 45 | deviation | crates/paladin-storage/src/minio.rs | 999 | 45-REVIEW WR-02 (found live by the Phase 57 sweep, D-14): every non-2xx S3 response reaches callers as HttpFailWithBody and the map_err closures format it with Display, embedding the raw body (access-key id, request detail) in FileStorageError text. Fix: one s3_err_summary helper (plan 57-06). | fixed | Closed by Phase 57 (57-06, D-14): on d0b0022ec minio::tests::s3_err_summary_never_echoes_the_response_body and retry_exhaustion_text_never_echoes_the_response_body ok (cargo test -p paladin-storage --features s3 --lib, fix commit 6d0de8905); see 57-REGISTER-EVIDENCE.md | 2026-11-04T16:16:35.635Z | 2026-11-04T22:38:21.770Z |
+| 92 | 45 | deviation | crates/paladin-storage/src/minio.rs | 1008 | 45-REVIEW WR-01 (found live by the Phase 57 sweep, D-14): upload_part / complete_multipart_upload / abort_multipart_upload rustdoc claims rust-s3 auto-aborts a rejected part; with fail-on-err that branch is unreachable, so callers who trust the doc leak open multipart uploads. Fix: correct the docs (plan 57-06). | fixed | Closed by Phase 57 (57-06, D-14): doc-only fix 6d0de8905, the rustdoc on upload_part, complete_multipart_upload and abort_multipart_upload says a rejected part leaves the upload open and the caller must abort (read on d0b0022ec), and RUSTDOCFLAGS set to -D warnings cargo doc --workspace --all-features --no-deps exits 0 on 7ab20afba with no code change since; see 57-REGISTER-EVIDENCE.md | 2026-11-04T16:16:35.722Z | 2026-11-04T22:38:21.875Z |
+| 93 | 45 | deviation | tests/integration/file_storage_integration_tests.rs | 407 | 45-REVIEW WR-03 (found live by the Phase 57 sweep, D-14): the presigned-URL test converts reqwest::Error with ? and its Display includes the full signed URL (X-Amz-Credential, X-Amz-Signature), so a connection failure prints a live presigned URL into CI logs. Fix: map every reqwest error with without_url (plan 57-06). | fixed | Closed by Phase 57 (57-06, 57-11, D-14): the integration target compiles with --features integration-tests,s3-storage on d0b0022ec (fix commit ac7841931, five without_url sites); CI Integration Tests job 126917997844 in run 41927940508 on 4b115d511 ran test_presigned_urls ok; see 57-REGISTER-EVIDENCE.md | 2026-11-04T16:19:09.532Z | 2026-11-04T23:19:41.268Z |
+| 94 | 51 | deviation | src/application/services/paladin/paladin_builder.rs | 1202 | 51-REVIEW WR-01 (found live by the Phase 57 sweep, D-14): effort_refusal renders the whole LlmError into a ConfigurationError, so a check_reasoning error carrying vendor text (ProcessingError, ProviderError message), forwarded unchanged by FallbackLlmAdapter, reaches the caller unredacted. Fix: a fixed per-variant label, no payload (plan 57-12). | fixed | Closed by Phase 57 (57-12, D-14): on d0b0022ec effort_refusal_renders_only_the_error_kind_for_a_failed_check and effort_refusal_through_a_fallback_chain_renders_only_the_error_kind and effort_refusal_for_an_unsupported_parameter_names_model_provider_value_and_reason ok (cargo test --lib --features web-server effort_refusal_, fix commit f55ff310e); see 57-REGISTER-EVIDENCE.md | 2026-11-04T18:38:31.139Z | 2026-11-04T22:38:21.980Z |
+| 95 | 45 | deviation | src/application/services/run/worker.rs | 1793 | 45-REVIEW WR-04 (found live by the Phase 57 sweep, D-14): run_agent emits the terminal RunFinished (Completed at :1793, Failed at :1844) before update_status/record_outcome/ack and before persist_failure, whose repository-error branch nacks, so subscribers, the herald and the trace see done or error for a run whose row stays running and is redelivered. Fix: emit only after the durable write and ack, on every exit (plan 57-13). | fixed | Closed by Phase 57 (57-13, D-14): on d0b0022ec the five worker_tests cases agent_completion_whose_status_write_fails and outcome_write_fails and ack_fails and agent_failure_whose_persist_fails and agent_budget::agent_kind_halt_whose_outcome_write_fails emit no terminal event ok (cargo test --lib --features web-server _emits_no_terminal_event, fix commit 2d15a0bdd); see 57-REGISTER-EVIDENCE.md | 2026-11-04T18:59:44.917Z | 2026-11-04T22:38:22.087Z |
+| 96 | 45 | deviation | src/application/services/run/worker.rs | 1838 | 45-REVIEW WR-06 (found live by the Phase 57 sweep, D-14): the run_agent Err arm emits NodeFinished with TokenUsage::default() and cost None, so a failed agent run reports zero usage and no cost to RunFinished, the herald and the persisted trace although its loop billed calls before failing. Fix: read the run's ATTEMPT_SPEND scope on the Err arm (plan 57-13). | fixed | Closed by Phase 57 (57-13, D-14): on d0b0022ec worker_tests::failed_agent_run_reports_the_spend_it_incurred_before_failing and failed_agent_run_with_no_billed_call_reports_zero_spend ok, plus agent_loop_cost_tests::non_llm_failure_after_billed_calls_reports_their_spend ok (fix commit 25536a97c); see 57-REGISTER-EVIDENCE.md | 2026-11-04T19:04:46.983Z | 2026-11-04T22:38:22.195Z |
+| 97 | 41 | deviation | src/application/services/treasurer/mod.rs | 251 | 41-REVIEW WR-01 (found live by the Phase 57 sweep, D-14): a won once-per-window operator allowance notice is lost with no recovery when enqueue_operator_delivery fails (logged and swallowed, the notice row is not given back) or when the submission or confirm future is dropped before confirm or abandon completes. Fix: give back on enqueue failure, cancellation-safe confirm and abandon, a submission drop guard (plan 57-14). | fixed | Closed by Phase 57 (57-14, D-14): on d0b0022ec treasurer::tests::enqueue_failure_gives_the_notice_back_so_the_next_admission_wins_it and confirm_completes_when_its_caller_is_dropped_mid_enqueue ok and submission::tests::a_submission_dropped_before_its_row_is_written_gives_the_notice_back and a_submission_dropped_after_its_row_is_written_confirms_the_notice ok (fix commits e4563971a and 78951d7ec); see 57-REGISTER-EVIDENCE.md | 2026-11-04T19:43:48.535Z | 2026-11-04T22:38:22.304Z |
+| 98 | 43 | deviation | crates/paladin-llm/src/cadence.rs | 291 | 43-REVIEW WR-05 (found live by the Phase 57 sweep, D-14): minimum_delay returns err.retry_after() unfiltered, so Retry-After 0, a past HTTP-date or a zero reset reaches CadencePolicy::delay_for as Some(0) and opens a zero-length gate with the streak incremented; a gateway answering every 429 with Retry-After 0 disables pacing. Fix: a zero provider delay is no provider delay (plan 57-15). | fixed | Closed by Phase 57 (57-15, D-14): on d0b0022ec cadence::tests::a_zero_retry_after_gates_at_least_the_base_delay and a_past_http_date_retry_after_gates_at_least_the_base_delay and a_zero_reset_gates_at_least_the_base_delay and repeated_zero_delay_429s_escalate_the_streak and a_nonzero_retry_after_below_base_is_still_honoured_exactly ok (cargo test -p paladin-llm --lib cadence::, 35 passed, fix commit 5adfda4d9); see 57-REGISTER-EVIDENCE.md | 2026-11-04T20:34:28.135Z | 2026-11-04T22:38:22.412Z |
+| 99 | 43 | deviation | crates/paladin-llm/src/cadence.rs | 275 | 43-REVIEW WR-04 (found live by the Phase 57 sweep, D-14): note_failure awaits record_rate_limited inline after the provider's 429, so a caller future dropped in the Redis round trip (outer timeout, run cancel, grace-deadline abort) never records the 429 and the fleet keeps sending into the limit. Fix: record in a spawned task the caller awaits (plan 57-15). | fixed | Closed by Phase 57 (57-15, D-14): on d0b0022ec cadence::tests::a_429_is_recorded_when_the_generate_future_is_dropped_mid_record and a_429_is_recorded_when_the_stream_future_is_dropped_mid_record ok (fix commit a10f57c7e); see 57-REGISTER-EVIDENCE.md | 2026-11-04T20:51:02.196Z | 2026-11-04T22:38:22.520Z |
+| 100 | 43 | deviation | crates/paladin-storage/src/node_cache/redis.rs | 306 | 43-REVIEW WR-01 (found live by the Phase 57 sweep, D-14): the node-cache fence marker TTL max(2 x entry ttl, 1 h) can outlive the cadence fencing counter max(10 x lock ttl, 1 h); for an entry ttl above 30 min the counter expires first, the next lock restarts at token 1 and put_fenced silently refuses every valid write until the marker expires. Fix: one shared definition and a marker capped below the counter (plan 57-16). | fixed | Closed by Phase 57 (57-16, 57-11, D-14): fence_marker_never_outlives_the_counter_that_numbers_it ok on d0b0022ec (fix commit f0898155f, test commit aec444449); CI Redis Node Cache Contract Suite job 126917997409 in run 41927940508 on 4b115d511 ran fenced_write_after_the_counter_expires_is_accepted ok with no SKIP line (21 passed, 0 failed); see 57-REGISTER-EVIDENCE.md | 2026-11-04T21:14:43.257Z | 2026-11-04T23:19:41.387Z |
+| 101 | 38 | deviation | crates/paladin-core/src/platform/container/cost.rs | 147 | 38-REVIEW WR-01 (found live by the Phase 57 sweep, D-14): Cost::new and Add/AddAssign still accept a negative amount and the Cost rustdoc does not say so (latent: no current producer builds a negative Cost) | waived | Re-homed: owner=owner (am0rfu5@protonmail.com), revisit=when any producer can build a negative Cost (refunds, credits), basis=38-REVIEW WR-01; register row 38 WR-01 (latent: no current producer builds a negative Cost). Class other, waived at the 57-10 triage (option-a, D-14) on 2026-11-04 and re-homed under Phase 57 D-03. | 2026-11-04T22:34:42.640Z | 2026-11-04T22:34:42.727Z |
+| 102 | 38 | deviation | crates/paladin-llm/src/pricing.rs | 69 | 38-REVIEW WR-02 (found live by the Phase 57 sweep, D-14): the unpriced-model warning capacity is a fixed process-wide 256 (only a suppressed log line) | waived | Re-homed: owner=owner (am0rfu5@protonmail.com), revisit=when multi-tenant pricing or hot price reload is added, basis=38-REVIEW WR-02; pricing.rs doc comment (D-08, process-wide dedup is deliberate). Class other, waived at the 57-10 triage (option-a, D-14) on 2026-11-04 and re-homed under Phase 57 D-03. | 2026-11-04T22:34:42.817Z | 2026-11-04T22:34:42.915Z |
+| 103 | 51 | deviation | src/infrastructure/web/agent_host.rs | 201 | 51-REVIEW WR-02 (found live by the Phase 57 sweep, D-14): check_block_reasoning is a hand-rolled copy of the check_reasoning verdict and the fallback-hint wording lives in three places (verdicts agree on is_ok, wording and maintenance drift only) | waived | Re-homed: owner=owner (am0rfu5@protonmail.com), revisit=next change to check_reasoning or the reasoning refusal wording, basis=51-REVIEW WR-02; register row 51 WR-02 (verdicts agree on is_ok, wording and maintenance drift only). Class other, waived at the 57-10 triage (option-a, D-14) on 2026-11-04 and re-homed under Phase 57 D-03. | 2026-11-04T22:34:42.997Z | 2026-11-04T22:34:43.078Z |
+| 104 | 41 | deviation | src/infrastructure/web/run_api_wiring.rs | 1106 | 41-REVIEW WR-02 (found live by the Phase 57 sweep, D-14): a transient DNS failure on the optional operator webhook host refuses boot | waived | Re-homed: owner=owner (am0rfu5@protonmail.com), revisit=when boot-time DNS availability is reported as an operator issue, basis=41-REVIEW WR-02; T-41-38 (fail-closed at boot is the recorded intent, the send-time guard re-checks). Class other, waived at the 57-10 triage (option-a, D-14) on 2026-11-04 and re-homed under Phase 57 D-03. | 2026-11-04T22:34:43.161Z | 2026-11-04T22:34:43.245Z |
+| 105 | 41 | deviation | src/config/treasurer.rs | 865 | 41-REVIEW WR-03 (found live by the Phase 57 sweep, D-14): an unparsable APP_TREASURER_ALLOWANCE_WARN_AT is silently ignored | waived | Re-homed: owner=owner (am0rfu5@protonmail.com), revisit=next configuration-docs pass over docs/src/getting-started/configuration.md lines 405-416, basis=41-REVIEW WR-03; MIGRATION M-B-38 (an unparsable env value is ignored, project-wide convention). Class other, waived at the 57-10 triage (option-a, D-14) on 2026-11-04 and re-homed under Phase 57 D-03. | 2026-11-04T22:34:43.328Z | 2026-11-04T22:34:43.415Z |
+| 106 | 41 | deviation | src/application/services/treasurer/mod.rs | 289 | 41-REVIEW WR-04 (found live by the Phase 57 sweep, D-14): the operator delivery is scheduled with the store clock and claimed with the process clock | waived | Re-homed: owner=owner (am0rfu5@protonmail.com), revisit=when a PostgreSQL store clock skew is observed on operator notices, basis=41-REVIEW WR-04; register row 41 WR-04 (bounded delay of a best-effort alert). Class other, waived at the 57-10 triage (option-a, D-14) on 2026-11-04 and re-homed under Phase 57 D-03. | 2026-11-04T22:34:43.501Z | 2026-11-04T22:34:43.588Z |
+| 107 | 43 | deviation | docs/src/getting-started/configuration.md | 632 | 43-REVIEW WR-02 (found live by the Phase 57 sweep, D-14): the docs and the CadenceConfig module docs say enabled: false restores the previous behaviour, which no longer retries a 429 | waived | Re-homed: owner=owner (am0rfu5@protonmail.com), revisit=next docs pass (a two-sentence fix), basis=43-REVIEW WR-02; crates/paladin-llm/CHANGELOG.md lines 295-301. Class other, waived at the 57-10 triage (option-a, D-14) on 2026-11-04 and re-homed under Phase 57 D-03. | 2026-11-04T22:34:43.672Z | 2026-11-04T22:34:43.755Z |
+| 108 | 43 | deviation | crates/paladin-storage/src/node_cache/redis.rs | 160 | 43-REVIEW WR-07 (found live by the Phase 57 sweep, D-14): the node-cache fence marker key {entry key}:fence can collide with an entry key (unreachable from in-tree key producers) | waived | Re-homed: owner=owner (am0rfu5@protonmail.com), revisit=when a caller can hand-compose a NodeCacheKey, or the marker key is next changed, basis=43-REVIEW WR-07; ADR-0058 line 273 (marker location, unreachable from in-tree key producers). Class other, waived at the 57-10 triage (option-a, D-14) on 2026-11-04 and re-homed under Phase 57 D-03. | 2026-11-04T22:34:43.839Z | 2026-11-04T22:34:43.922Z |
 
 ````json
 [
@@ -772,10 +793,10 @@ last_updated: 2026-10-31T17:57:36.724Z
     "file": "crates/paladin-core/src/platform/container/cost.rs",
     "line": null,
     "description": "Pre-existing rustdoc broken_intra_doc_links (Cost/CurrencyCode/PriceRow unresolved in module doc comment); introduced by plan 38-02, out of scope for 38-04, logged to phase deferred-items.md",
-    "status": "open",
-    "reason": "",
+    "status": "fixed",
+    "reason": "Closed by Phase 57 (57-11, D-05): cargo doc -p paladin-ai-core --no-deps prints 0 warning lines and cargo doc --workspace --all-features --no-deps with RUSTDOCFLAGS set to -D warnings exits 0 on 7ab20afba (first measured in 55-CORRECTNESS-EVIDENCE.md); see 57-REGISTER-EVIDENCE.md",
     "recorded_at": "2026-09-26T02:43:14.297Z",
-    "resolved_at": null
+    "resolved_at": "2026-11-04T22:11:52.312Z"
   },
   {
     "id": 57,
@@ -844,10 +865,10 @@ last_updated: 2026-10-31T17:57:36.724Z
     "file": "config.example.yml",
     "line": null,
     "description": "The config loader performs no ${VAR} expansion (pinned by src/config/treasurer.rs::yaml_env_placeholder_is_not_expanded; no expansion code exists under src/ or crates/), so the http.auth.api_keys[].key: \"${PALADIN_API_KEY_CI}\" examples in config.example.yml (lines 161, 165) and k8s/server/configmap.yaml (lines 36, 40; its header also claims the server expands them at load time) would load the literal placeholder as the key value unless the deployment substitutes it before the file is read. Closing condition: document the substitution step or replace the examples with env-override guidance. Owner: Phase 46 docs currency.",
-    "status": "open",
-    "reason": "",
+    "status": "fixed",
+    "reason": "Closed by Phase 54 (plans 54-01, 54-02, 54-06; FIRST-01): a key containing ${ is refused at config load naming the entry (validate_refuses_an_unexpanded_placeholder_key; boot path build_auth_config_refuses_an_unexpanded_placeholder_key); config.example.yml ships api_keys: [] with commented key: \"\" entries (shipped_example_* tests); the k8s/server config is a Secret with key: \"\" entries and configmap.yaml is retired; Docker and compose mount a literal-key config. No expansion path was added. Evidence: 54-FIRST-EVIDENCE.md.",
     "recorded_at": "2026-10-03T22:52:46.178Z",
-    "resolved_at": null
+    "resolved_at": "2026-11-01T01:19:43.391Z"
   },
   {
     "id": 63,
@@ -868,10 +889,10 @@ last_updated: 2026-10-31T17:57:36.724Z
     "file": "src/application/services/run/worker.rs",
     "line": null,
     "description": "D-08: worker-dispatched Runnable::Agent runs write no Waypoint, so a Treasurer-halted agent-kind run cannot be forked from a checkpoint; it is resumed by a fresh POST /v1/runs that re-executes from the start, and the HTTP agent routes have no run row at all. ALLOW-03 continue-from-checkpoint is met on the engine path and not applicable by construction on the agent loop.",
-    "status": "open",
-    "reason": "",
+    "status": "waived",
+    "reason": "Re-homed: owner=Treasurer maintainers (next feature milestone roadmap), revisit=when worker-dispatched agent-kind runs gain a Waypoint or ALLOW-03 is re-scoped for the agent loop, basis=ADR-0057 D-08 (agent-loop no-Waypoint contract) and v0.11.1 inventory section H. Accepted contract under Phase 57 D-03 and D-00e: a halted agent-kind run resumes by a fresh POST /v1/runs.",
     "recorded_at": "2026-10-07T00:52:04.918Z",
-    "resolved_at": null
+    "resolved_at": "2026-11-04T22:34:11.831Z"
   },
   {
     "id": 65,
@@ -880,10 +901,10 @@ last_updated: 2026-10-31T17:57:36.724Z
     "file": "src/application/services/treasurer/guard.rs",
     "line": null,
     "description": "D-01 (ADR-0057): the mid-run boundary check is a check-only balance read with no reservation, so runs admitted in the same instant can all start and each one halts at its first boundary after the allowance is exhausted; overshoot is bounded to one superstep's spend per run (not per principal). Owner: the Treasurer maintainers; rationale: a reservation hold per superstep would need an estimate rule ADR-0057 records as missing, so the race is accepted and bounded rather than prevented. Closing condition: the deferred per-superstep reservation hold ships, or an operator sizes each ceiling with headroom for concurrent runs times one superstep.",
-    "status": "open",
-    "reason": "",
+    "status": "waived",
+    "reason": "Re-homed: owner=Treasurer maintainers (next feature milestone roadmap), revisit=a per-superstep reservation hold with an estimate rule is designed, basis=ADR-0057 D-01 (check-only mid-run boundary) and v0.11.1 inventory section H. Accepted contract under Phase 57 D-03 and D-00e: overshoot stays bounded to one superstep of spend per run.",
     "recorded_at": "2026-10-07T02:02:07.590Z",
-    "resolved_at": null
+    "resolved_at": "2026-11-04T22:34:12.091Z"
   },
   {
     "id": 66,
@@ -892,10 +913,10 @@ last_updated: 2026-10-31T17:57:36.724Z
     "file": "src/application/services/paladin/paladin_execution_service.rs",
     "line": null,
     "description": "G2 (ADR-0057 group e, D-12, 42-01 option-b gate): a true streamed execute/stream call is one provider call with no after_model, so the derived budget cannot cut it mid-flight; admission (including the model_unpriced and zero-budget refusals) is its only gate and its overshoot is that one streamed call. Under the recorded option-b its terminal done carries an informational halt_reason when the terminal usage crossed the derived figure (a crossing report, not a halt: the call had already finished; implemented in 42-08), and is otherwise unchanged, so the done is NOT byte-identical in all cases; D-12's 'the agent stream's terminal done carries the same object' holds for the buffered fallback always and for a true stream when its terminal usage crossed the figure. Owner: the Treasurer maintainers; closing condition: mid-stream usage accounting that can cut a single streamed call.",
-    "status": "open",
-    "reason": "",
+    "status": "waived",
+    "reason": "Re-homed: owner=Treasurer maintainers (next feature milestone roadmap), revisit=a provider streaming path reports usage mid-stream or ADR-0057 group e is reopened, basis=ADR-0057 group e (G2, D-12, 42-01 option-b) and v0.11.1 inventory section H. Accepted contract under Phase 57 D-03 and D-00e: the overshoot of a true streamed call is that one call.",
     "recorded_at": "2026-10-07T02:02:07.736Z",
-    "resolved_at": null
+    "resolved_at": "2026-11-04T22:34:12.187Z"
   },
   {
     "id": 67,
@@ -904,10 +925,10 @@ last_updated: 2026-10-31T17:57:36.724Z
     "file": "crates/paladin-battalion/src/engine/settlement.rs",
     "line": null,
     "description": "G15: a graph Paladin node on a model with no treasurer.pricing row settles nothing (an unpriced call has no cost and nothing is fabricated, D-00c), so the superstep-boundary check cannot see that node's spend and an allowance cannot bound it; workflow assistants are not refused at admission for an unpriced model (only agent routes and agent-kind runs are, 422 model_unpriced). Owner: the operator; rationale: pricing is operator-supplied configuration and the engine has no source for a price it was not given. Operators must price every model a metered principal can reach; closing condition: a pricing-coverage check at graph registration, deferred.",
-    "status": "open",
-    "reason": "",
+    "status": "waived",
+    "reason": "Waived by Phase 55 (FIXES-06, D-07, milestone decision B4): the operator contract stands -- price every model a metered principal can reach; boot now warns once per unpriced code-registered or stored agent-kind model (unpriced_reachable_models_table, plan 55-09) and workflow assistants are not refused; graph-node model pricing coverage is the accepted, documented contract (treasurer.md); a registration-time check needs a listing method on AssistantResolver and is a later minor. See 55-CORRECTNESS-EVIDENCE.md.",
     "recorded_at": "2026-10-07T02:02:08.278Z",
-    "resolved_at": null
+    "resolved_at": "2026-11-01T19:15:36.167Z"
   },
   {
     "id": 68,
@@ -916,10 +937,10 @@ last_updated: 2026-10-31T17:57:36.724Z
     "file": "Makefile",
     "line": null,
     "description": "48-09: make security (cargo-audit, cargo-deny) not run locally, tools absent; CI Security Audit and License & Dependency Policy jobs are red on the branch before and after Phase 48 with Cargo.lock unchanged",
-    "status": "open",
-    "reason": "",
+    "status": "fixed",
+    "reason": "Closed by Phase 57 (57-01, 57-11, D-05): make security exits 0 on 4b115d511 after the RUSTSEC-2026-0429 row (both legs, advisories ok, bans ok, licenses ok, sources ok); CI Security Audit job 126917997616 and License & Dependency Policy job 126917997392 succeeded in run 41927940508 on 4b115d511; see 57-REGISTER-EVIDENCE.md",
     "recorded_at": "2026-10-14T00:14:54.346Z",
-    "resolved_at": null
+    "resolved_at": "2026-11-04T23:19:40.919Z"
   },
   {
     "id": 69,
@@ -928,10 +949,10 @@ last_updated: 2026-10-31T17:57:36.724Z
     "file": "scripts/coverage.sh",
     "line": null,
     "description": "48-09: workspace coverage percentage not measured locally (no Docker daemon, no object store, 3 GB free); CI Coverage job passed the 82 percent gate on dcbcb63 but its figure was not retrievable (artifact download denied)",
-    "status": "open",
-    "reason": "",
+    "status": "fixed",
+    "reason": "Closed by Phase 57 (57-11, D-05): CI Coverage job 126153522434 succeeded in run 41703614636 on d9a48cfc6 (after the 48-09 cause) and passed the 82 percent gate with 92.74 percent measured on 70657919 (47-CI-EVIDENCE.md) and 92.79 percent locally in Phase 56 (DOGF-05); pushed head 4b115d511: Coverage job 126917997573 succeeded in run 41927940508 and measured 92.86 percent (172187 of 185431 lines); see 57-REGISTER-EVIDENCE.md",
     "recorded_at": "2026-10-14T00:14:54.479Z",
-    "resolved_at": null
+    "resolved_at": "2026-11-04T22:38:20.907Z"
   },
   {
     "id": 70,
@@ -976,10 +997,10 @@ last_updated: 2026-10-31T17:57:36.724Z
     "file": "src/infrastructure/web/run_api_wiring.rs",
     "line": 2369,
     "description": "Wave 1 post-merge gate (plans 50-02, 50-04): cargo test --workspace --lib --bins passes 1348 tests but build_run_api_persists_no_run_traces_by_default and build_run_api_persists_run_traces_when_trace_persist_is_set fail with 'the run never reached a terminal status' (10 s worker deadline). Reproduced identically at the pre-wave-1 commit 28b6a69b in a throwaway worktree, so it is pre-existing and sandbox-specific, not a Phase 50 regression; CI on the pushed branch is the proof of record.",
-    "status": "open",
-    "reason": "",
+    "status": "fixed",
+    "reason": "Closed by Phase 55 plan 55-09 (TESTS-01, D-08): build_run_api_persists_run_traces_when_trace_persist_is_set and build_run_api_persists_no_run_traces_by_default inject a scripted PaladinPort through the crate-private build_run_api_with_engine_port seam and pass with every proxy variable and OPENAI_API_KEY unset; see 55-CORRECTNESS-EVIDENCE.md Hermetic and flake proofs.",
     "recorded_at": "2026-10-15T17:13:24.980Z",
-    "resolved_at": null
+    "resolved_at": "2026-11-01T19:15:36.078Z"
   },
   {
     "id": 74,
@@ -1024,10 +1045,10 @@ last_updated: 2026-10-31T17:57:36.724Z
     "file": "crates/paladin-llm/src/grok/adapter.rs",
     "line": null,
     "description": "G-50-5a remainder (c): Grok's vendor-computed cost_in_usd_ticks and num_sources_used are not parsed or compared with the Treasurer price; owner-accepted deferral, 2026-10-17, kept open; plan 50-22's probe (live_vendor_smoke --usage, 50-USAGE-PROBE.md) recorded the cross-check data; closing condition: parse both fields on the Grok wire and compare cost_in_usd_ticks with the Treasurer price under the ADR-0061 visibility rule, with fixture tests",
-    "status": "open",
-    "reason": "",
+    "status": "waived",
+    "reason": "Re-homed: owner=DF3NDR, revisit=when the Grok adapter parses cost_in_usd_ticks and num_sources_used and compares them with the Treasurer price, basis=ADR-0061 and milestone decision B9 (cross-check data in 50-USAGE-PROBE.md). Owner-accepted vendor-cost deferral of 2026-10-17, kept under Phase 57 D-03 and D-00e.",
     "recorded_at": "2026-10-19T00:23:33.273Z",
-    "resolved_at": null
+    "resolved_at": "2026-11-04T22:34:12.371Z"
   },
   {
     "id": 78,
@@ -1048,10 +1069,10 @@ last_updated: 2026-10-31T17:57:36.724Z
     "file": ".planning/phases/50.1-consumer-surface-readiness/50.1-SEED-PROBE.md",
     "line": null,
     "description": "50.1-07: probe was run by Claude at operator direction in the devcontainer (plan assumed an operator-machine run); grok-4.7 and 7 default-rejected candidates are not measured end to end and must not be seeded",
-    "status": "open",
-    "reason": "",
+    "status": "waived",
+    "reason": "Re-homed: owner=DF3NDR, revisit=an operator-machine seed-probe run before the next model-seed change, basis=50.1-SEED-PROBE.md (probe run in the devcontainer at operator direction). grok-4.7 and the 7 default-rejected candidates stay unseeded until measured end to end (Phase 57 D-03, D-00e).",
     "recorded_at": "2026-10-20T16:26:47.433Z",
-    "resolved_at": null
+    "resolved_at": "2026-11-04T22:34:12.491Z"
   },
   {
     "id": 80,
@@ -1096,10 +1117,10 @@ last_updated: 2026-10-31T17:57:36.724Z
     "file": ".github/workflows/ci.yml",
     "line": null,
     "description": "actionlint not runnable in sandbox; CI Workflow Lint job gates the 52-01 ci.yml edits (A-52-03)",
-    "status": "open",
-    "reason": "",
+    "status": "fixed",
+    "reason": "Closed by Phase 57 (57-11, D-05): CI Workflow Lint job 124029754795 succeeded in run 41045889697 on PR 61 merge 84686acfb and job 124670697434 succeeded in main run 41246424413 on 8b23cb4c5, both after the 52-01 ci.yml edits (be5867729, bd1665e4b); pushed head 4b115d511: Workflow Lint job 126917997309 succeeded in run 41927940508; see 57-REGISTER-EVIDENCE.md",
     "recorded_at": "2026-10-28T19:29:42.085Z",
-    "resolved_at": null
+    "resolved_at": "2026-11-04T22:38:21.015Z"
   },
   {
     "id": 84,
@@ -1108,10 +1129,10 @@ last_updated: 2026-10-31T17:57:36.724Z
     "file": ".github/workflows/ci.yml",
     "line": null,
     "description": "actionlint not installed in sandbox; 52-06 ci.yml edits (labeled type, e2e/publish-dry-run conditions) await CI Workflow Lint job",
-    "status": "open",
-    "reason": "",
+    "status": "fixed",
+    "reason": "Closed by Phase 57 (57-11, D-05): CI Workflow Lint job 124670697434 succeeded in main run 41246424413 on 8b23cb4c5 and job 126363067412 succeeded in branch run 41765477891 on 69de7c285, both containing the 52-06 ci.yml edits (2644b974c); pushed head 4b115d511: Workflow Lint job 126917997309 succeeded in run 41927940508; see 57-REGISTER-EVIDENCE.md",
     "recorded_at": "2026-10-29T01:38:56.452Z",
-    "resolved_at": null
+    "resolved_at": "2026-11-04T22:38:21.123Z"
   },
   {
     "id": 85,
@@ -1120,10 +1141,10 @@ last_updated: 2026-10-31T17:57:36.724Z
     "file": "crates/paladin-web/src/thread_controller.rs",
     "line": 815,
     "description": "53-REVIEW WR-01, owner-accepted follow-up (53-UAT test 2): a run row with UnknownSchemaVersion on any tenant's thread falls into the Err(other) arm of visible_thread_page and aborts the walk, so every non-admin GET /v1/threads returns 500 until the row is repaired (likely after a downgrade). Fix: skip-and-log UnknownSchemaVersion in the list walk like Serialization; consider making it hideable in run_repo_error_for_scope. Proposed owner: Phase 55 (correctness fixes).",
-    "status": "open",
-    "reason": "",
+    "status": "fixed",
+    "reason": "Closed by Phase 57 (57-03, 57-04, D-02): on d0b0022ec thread_controller::tests::list_threads_skips_a_newer_schema_thread_for_a_tenant and newer_schema_owner_row_hides_the_thread_from_a_tenant ok (cargo test -p paladin-web --lib thread_controller::, 56 passed); owner rule recorded in ADR-0063 and MIGRATION by 57-04; see 57-REGISTER-EVIDENCE.md",
     "recorded_at": "2026-10-31T17:57:36.525Z",
-    "resolved_at": null
+    "resolved_at": "2026-11-04T22:38:21.236Z"
   },
   {
     "id": 86,
@@ -1132,10 +1153,10 @@ last_updated: 2026-10-31T17:57:36.724Z
     "file": "crates/paladin-web/src/thread_controller.rs",
     "line": 739,
     "description": "53-REVIEW WR-02, owner-accepted follow-up (53-UAT test 2): the latest-run lookup uses list(limit: 1), and the SQLite/Postgres list decodes limit+1 rows, so one corrupt OLDER run row returns Serialization and locks tenant A out of its own thread (404 on every gated route, 500 for Admin and on submit/fork via ensure_thread_visible in submission.rs:289). Fix: a port method that reads exactly the newest run (LIMIT 1), used in both places. Proposed owner: Phase 55 (correctness fixes).",
-    "status": "open",
-    "reason": "",
+    "status": "fixed",
+    "reason": "Closed by Phase 57 (57-02, 57-03, D-02): on d0b0022ec owner_run_for_thread_decodes_only_the_owner_row ok on the in-memory and SQLite legs, the PostgreSQL owner-query shape guard ok, and http_surface_tests::thread_owner_is_the_earliest_attributed_run_over_sqlite ok; see 57-REGISTER-EVIDENCE.md",
     "recorded_at": "2026-10-31T17:57:36.623Z",
-    "resolved_at": null
+    "resolved_at": "2026-11-04T22:38:21.352Z"
   },
   {
     "id": 87,
@@ -1144,10 +1165,262 @@ last_updated: 2026-10-31T17:57:36.724Z
     "file": "crates/paladin-core/src/platform/container/principal.rs",
     "line": 325,
     "description": "53-REVIEW WR-03, owner-accepted follow-up (53-UAT test 2): thread ownership is the latest run's submitted_by, so an Admin fork/submit onto tenant A's thread, or an unattributed (schedule-fired, submitted_by None) run, transfers or hides the thread and tenant A gets 404 on a thread it created. Matches SPEC AC-04 as written. Fix: derive ownership from the first or earliest attributed run, or keep the original tenant's attribution on admin forks; at minimum document the transfer in ADR-0063 and parley-and-chronicle.md. Proposed owner: Phase 55 (correctness fixes).",
-    "status": "open",
-    "reason": "",
+    "status": "fixed",
+    "reason": "Closed by Phase 57 (57-02, 57-03, D-02): on d0b0022ec owner_run_for_thread_ignores_later_admin_and_unattributed_runs and owner_run_for_thread_returns_the_earliest_attributed_run ok on the in-memory and SQLite legs, thread_controller admin_run_on_a_tenant_thread_does_not_move_its_owner and unattributed_run_on_a_tenant_thread_does_not_move_its_owner ok, and submission::tests::submit_guard_reads_the_owner_run_not_the_newest_run ok; see 57-REGISTER-EVIDENCE.md",
     "recorded_at": "2026-10-31T17:57:36.724Z",
-    "resolved_at": null
+    "resolved_at": "2026-11-04T22:38:21.456Z"
+  },
+  {
+    "id": 88,
+    "kind": "deviation",
+    "phase": "45",
+    "file": "src/application/services/run/worker.rs",
+    "line": 1995,
+    "description": "45-REVIEW WR-05 (found live by the Phase 57 sweep, D-14): persist_failure stores the agent/engine failure text verbatim on the run row and the failed-persist warn! logs it, so a provider response body or key embedded in an error reaches GET /v1/runs/{id} and the log; worker_tests pinned the raw marker as readable. Fix: redact then bound (plan 57-05).",
+    "status": "fixed",
+    "reason": "Closed by Phase 57 (57-05, D-14): on d0b0022ec worker_tests::bounded_run_error_redacts_before_bounding and agent_kind_run_emits_exactly_one_terminal_event ok (cargo test --lib --features web-server, fix commit 43d740c34); see 57-REGISTER-EVIDENCE.md",
+    "recorded_at": "2026-11-04T14:12:20.397Z",
+    "resolved_at": "2026-11-04T22:38:21.559Z"
+  },
+  {
+    "id": 89,
+    "kind": "deviation",
+    "phase": "41",
+    "file": "src/infrastructure/web/run_api_wiring.rs",
+    "line": 1352,
+    "description": "41-REVIEW WR-05 (found live by the Phase 57 sweep, D-14): an operator webhook configured without a secret (or with APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET=\"\") is signed with the empty key, so X-Paladin-Signature authenticates nothing, and boot gives no signal. Fix: empty is absent plus one boot warning (plan 57-05).",
+    "status": "fixed",
+    "reason": "Closed by Phase 57 (57-05, D-14): on d0b0022ec config::treasurer::tests::empty_env_operator_webhook_secret_is_treated_as_absent and run_api_wiring::tests::operator_webhook_secret_warning_line_names_the_key_and_never_the_url and operator_webhook_secret_warning_line_is_silent_with_a_secret ok (fix commit d26c871d8); see 57-REGISTER-EVIDENCE.md",
+    "recorded_at": "2026-11-04T14:19:23.050Z",
+    "resolved_at": "2026-11-04T22:38:21.665Z"
+  },
+  {
+    "id": 90,
+    "kind": "deviation",
+    "phase": "45",
+    "file": "crates/paladin-storage/src/minio.rs",
+    "line": 551,
+    "description": "45-REVIEW CR-01 (found live by the Phase 57 sweep, D-14): list_files passes ListOptions.limit to rust-s3 Bucket::list as the delimiter, so the limit is ignored and every key containing the limit's digits is rolled into CommonPrefixes and dropped; health_check repeats it. Fix: list_page with max_keys plus continuation (plan 57-06).",
+    "status": "fixed",
+    "reason": "Closed by Phase 57 (57-06, 57-11, D-14): minio::tests::list_request_sends_the_limit_as_max_keys_never_as_a_delimiter ok on d0b0022ec (fix commit b5ba82365); CI Integration Tests job 126917997844 in run 41927940508 on 4b115d511 ran test_list_files_honours_limit_and_drops_no_keys ok against RustFS; see 57-REGISTER-EVIDENCE.md",
+    "recorded_at": "2026-11-04T16:13:05.569Z",
+    "resolved_at": "2026-11-04T23:19:41.120Z"
+  },
+  {
+    "id": 91,
+    "kind": "deviation",
+    "phase": "45",
+    "file": "crates/paladin-storage/src/minio.rs",
+    "line": 999,
+    "description": "45-REVIEW WR-02 (found live by the Phase 57 sweep, D-14): every non-2xx S3 response reaches callers as HttpFailWithBody and the map_err closures format it with Display, embedding the raw body (access-key id, request detail) in FileStorageError text. Fix: one s3_err_summary helper (plan 57-06).",
+    "status": "fixed",
+    "reason": "Closed by Phase 57 (57-06, D-14): on d0b0022ec minio::tests::s3_err_summary_never_echoes_the_response_body and retry_exhaustion_text_never_echoes_the_response_body ok (cargo test -p paladin-storage --features s3 --lib, fix commit 6d0de8905); see 57-REGISTER-EVIDENCE.md",
+    "recorded_at": "2026-11-04T16:16:35.635Z",
+    "resolved_at": "2026-11-04T22:38:21.770Z"
+  },
+  {
+    "id": 92,
+    "kind": "deviation",
+    "phase": "45",
+    "file": "crates/paladin-storage/src/minio.rs",
+    "line": 1008,
+    "description": "45-REVIEW WR-01 (found live by the Phase 57 sweep, D-14): upload_part / complete_multipart_upload / abort_multipart_upload rustdoc claims rust-s3 auto-aborts a rejected part; with fail-on-err that branch is unreachable, so callers who trust the doc leak open multipart uploads. Fix: correct the docs (plan 57-06).",
+    "status": "fixed",
+    "reason": "Closed by Phase 57 (57-06, D-14): doc-only fix 6d0de8905, the rustdoc on upload_part, complete_multipart_upload and abort_multipart_upload says a rejected part leaves the upload open and the caller must abort (read on d0b0022ec), and RUSTDOCFLAGS set to -D warnings cargo doc --workspace --all-features --no-deps exits 0 on 7ab20afba with no code change since; see 57-REGISTER-EVIDENCE.md",
+    "recorded_at": "2026-11-04T16:16:35.722Z",
+    "resolved_at": "2026-11-04T22:38:21.875Z"
+  },
+  {
+    "id": 93,
+    "kind": "deviation",
+    "phase": "45",
+    "file": "tests/integration/file_storage_integration_tests.rs",
+    "line": 407,
+    "description": "45-REVIEW WR-03 (found live by the Phase 57 sweep, D-14): the presigned-URL test converts reqwest::Error with ? and its Display includes the full signed URL (X-Amz-Credential, X-Amz-Signature), so a connection failure prints a live presigned URL into CI logs. Fix: map every reqwest error with without_url (plan 57-06).",
+    "status": "fixed",
+    "reason": "Closed by Phase 57 (57-06, 57-11, D-14): the integration target compiles with --features integration-tests,s3-storage on d0b0022ec (fix commit ac7841931, five without_url sites); CI Integration Tests job 126917997844 in run 41927940508 on 4b115d511 ran test_presigned_urls ok; see 57-REGISTER-EVIDENCE.md",
+    "recorded_at": "2026-11-04T16:19:09.532Z",
+    "resolved_at": "2026-11-04T23:19:41.268Z"
+  },
+  {
+    "id": 94,
+    "kind": "deviation",
+    "phase": "51",
+    "file": "src/application/services/paladin/paladin_builder.rs",
+    "line": 1202,
+    "description": "51-REVIEW WR-01 (found live by the Phase 57 sweep, D-14): effort_refusal renders the whole LlmError into a ConfigurationError, so a check_reasoning error carrying vendor text (ProcessingError, ProviderError message), forwarded unchanged by FallbackLlmAdapter, reaches the caller unredacted. Fix: a fixed per-variant label, no payload (plan 57-12).",
+    "status": "fixed",
+    "reason": "Closed by Phase 57 (57-12, D-14): on d0b0022ec effort_refusal_renders_only_the_error_kind_for_a_failed_check and effort_refusal_through_a_fallback_chain_renders_only_the_error_kind and effort_refusal_for_an_unsupported_parameter_names_model_provider_value_and_reason ok (cargo test --lib --features web-server effort_refusal_, fix commit f55ff310e); see 57-REGISTER-EVIDENCE.md",
+    "recorded_at": "2026-11-04T18:38:31.139Z",
+    "resolved_at": "2026-11-04T22:38:21.980Z"
+  },
+  {
+    "id": 95,
+    "kind": "deviation",
+    "phase": "45",
+    "file": "src/application/services/run/worker.rs",
+    "line": 1793,
+    "description": "45-REVIEW WR-04 (found live by the Phase 57 sweep, D-14): run_agent emits the terminal RunFinished (Completed at :1793, Failed at :1844) before update_status/record_outcome/ack and before persist_failure, whose repository-error branch nacks, so subscribers, the herald and the trace see done or error for a run whose row stays running and is redelivered. Fix: emit only after the durable write and ack, on every exit (plan 57-13).",
+    "status": "fixed",
+    "reason": "Closed by Phase 57 (57-13, D-14): on d0b0022ec the five worker_tests cases agent_completion_whose_status_write_fails and outcome_write_fails and ack_fails and agent_failure_whose_persist_fails and agent_budget::agent_kind_halt_whose_outcome_write_fails emit no terminal event ok (cargo test --lib --features web-server _emits_no_terminal_event, fix commit 2d15a0bdd); see 57-REGISTER-EVIDENCE.md",
+    "recorded_at": "2026-11-04T18:59:44.917Z",
+    "resolved_at": "2026-11-04T22:38:22.087Z"
+  },
+  {
+    "id": 96,
+    "kind": "deviation",
+    "phase": "45",
+    "file": "src/application/services/run/worker.rs",
+    "line": 1838,
+    "description": "45-REVIEW WR-06 (found live by the Phase 57 sweep, D-14): the run_agent Err arm emits NodeFinished with TokenUsage::default() and cost None, so a failed agent run reports zero usage and no cost to RunFinished, the herald and the persisted trace although its loop billed calls before failing. Fix: read the run's ATTEMPT_SPEND scope on the Err arm (plan 57-13).",
+    "status": "fixed",
+    "reason": "Closed by Phase 57 (57-13, D-14): on d0b0022ec worker_tests::failed_agent_run_reports_the_spend_it_incurred_before_failing and failed_agent_run_with_no_billed_call_reports_zero_spend ok, plus agent_loop_cost_tests::non_llm_failure_after_billed_calls_reports_their_spend ok (fix commit 25536a97c); see 57-REGISTER-EVIDENCE.md",
+    "recorded_at": "2026-11-04T19:04:46.983Z",
+    "resolved_at": "2026-11-04T22:38:22.195Z"
+  },
+  {
+    "id": 97,
+    "kind": "deviation",
+    "phase": "41",
+    "file": "src/application/services/treasurer/mod.rs",
+    "line": 251,
+    "description": "41-REVIEW WR-01 (found live by the Phase 57 sweep, D-14): a won once-per-window operator allowance notice is lost with no recovery when enqueue_operator_delivery fails (logged and swallowed, the notice row is not given back) or when the submission or confirm future is dropped before confirm or abandon completes. Fix: give back on enqueue failure, cancellation-safe confirm and abandon, a submission drop guard (plan 57-14).",
+    "status": "fixed",
+    "reason": "Closed by Phase 57 (57-14, D-14): on d0b0022ec treasurer::tests::enqueue_failure_gives_the_notice_back_so_the_next_admission_wins_it and confirm_completes_when_its_caller_is_dropped_mid_enqueue ok and submission::tests::a_submission_dropped_before_its_row_is_written_gives_the_notice_back and a_submission_dropped_after_its_row_is_written_confirms_the_notice ok (fix commits e4563971a and 78951d7ec); see 57-REGISTER-EVIDENCE.md",
+    "recorded_at": "2026-11-04T19:43:48.535Z",
+    "resolved_at": "2026-11-04T22:38:22.304Z"
+  },
+  {
+    "id": 98,
+    "kind": "deviation",
+    "phase": "43",
+    "file": "crates/paladin-llm/src/cadence.rs",
+    "line": 291,
+    "description": "43-REVIEW WR-05 (found live by the Phase 57 sweep, D-14): minimum_delay returns err.retry_after() unfiltered, so Retry-After 0, a past HTTP-date or a zero reset reaches CadencePolicy::delay_for as Some(0) and opens a zero-length gate with the streak incremented; a gateway answering every 429 with Retry-After 0 disables pacing. Fix: a zero provider delay is no provider delay (plan 57-15).",
+    "status": "fixed",
+    "reason": "Closed by Phase 57 (57-15, D-14): on d0b0022ec cadence::tests::a_zero_retry_after_gates_at_least_the_base_delay and a_past_http_date_retry_after_gates_at_least_the_base_delay and a_zero_reset_gates_at_least_the_base_delay and repeated_zero_delay_429s_escalate_the_streak and a_nonzero_retry_after_below_base_is_still_honoured_exactly ok (cargo test -p paladin-llm --lib cadence::, 35 passed, fix commit 5adfda4d9); see 57-REGISTER-EVIDENCE.md",
+    "recorded_at": "2026-11-04T20:34:28.135Z",
+    "resolved_at": "2026-11-04T22:38:22.412Z"
+  },
+  {
+    "id": 99,
+    "kind": "deviation",
+    "phase": "43",
+    "file": "crates/paladin-llm/src/cadence.rs",
+    "line": 275,
+    "description": "43-REVIEW WR-04 (found live by the Phase 57 sweep, D-14): note_failure awaits record_rate_limited inline after the provider's 429, so a caller future dropped in the Redis round trip (outer timeout, run cancel, grace-deadline abort) never records the 429 and the fleet keeps sending into the limit. Fix: record in a spawned task the caller awaits (plan 57-15).",
+    "status": "fixed",
+    "reason": "Closed by Phase 57 (57-15, D-14): on d0b0022ec cadence::tests::a_429_is_recorded_when_the_generate_future_is_dropped_mid_record and a_429_is_recorded_when_the_stream_future_is_dropped_mid_record ok (fix commit a10f57c7e); see 57-REGISTER-EVIDENCE.md",
+    "recorded_at": "2026-11-04T20:51:02.196Z",
+    "resolved_at": "2026-11-04T22:38:22.520Z"
+  },
+  {
+    "id": 100,
+    "kind": "deviation",
+    "phase": "43",
+    "file": "crates/paladin-storage/src/node_cache/redis.rs",
+    "line": 306,
+    "description": "43-REVIEW WR-01 (found live by the Phase 57 sweep, D-14): the node-cache fence marker TTL max(2 x entry ttl, 1 h) can outlive the cadence fencing counter max(10 x lock ttl, 1 h); for an entry ttl above 30 min the counter expires first, the next lock restarts at token 1 and put_fenced silently refuses every valid write until the marker expires. Fix: one shared definition and a marker capped below the counter (plan 57-16).",
+    "status": "fixed",
+    "reason": "Closed by Phase 57 (57-16, 57-11, D-14): fence_marker_never_outlives_the_counter_that_numbers_it ok on d0b0022ec (fix commit f0898155f, test commit aec444449); CI Redis Node Cache Contract Suite job 126917997409 in run 41927940508 on 4b115d511 ran fenced_write_after_the_counter_expires_is_accepted ok with no SKIP line (21 passed, 0 failed); see 57-REGISTER-EVIDENCE.md",
+    "recorded_at": "2026-11-04T21:14:43.257Z",
+    "resolved_at": "2026-11-04T23:19:41.387Z"
+  },
+  {
+    "id": 101,
+    "kind": "deviation",
+    "phase": "38",
+    "file": "crates/paladin-core/src/platform/container/cost.rs",
+    "line": 147,
+    "description": "38-REVIEW WR-01 (found live by the Phase 57 sweep, D-14): Cost::new and Add/AddAssign still accept a negative amount and the Cost rustdoc does not say so (latent: no current producer builds a negative Cost)",
+    "status": "waived",
+    "reason": "Re-homed: owner=owner (am0rfu5@protonmail.com), revisit=when any producer can build a negative Cost (refunds, credits), basis=38-REVIEW WR-01; register row 38 WR-01 (latent: no current producer builds a negative Cost). Class other, waived at the 57-10 triage (option-a, D-14) on 2026-11-04 and re-homed under Phase 57 D-03.",
+    "recorded_at": "2026-11-04T22:34:42.640Z",
+    "resolved_at": "2026-11-04T22:34:42.727Z"
+  },
+  {
+    "id": 102,
+    "kind": "deviation",
+    "phase": "38",
+    "file": "crates/paladin-llm/src/pricing.rs",
+    "line": 69,
+    "description": "38-REVIEW WR-02 (found live by the Phase 57 sweep, D-14): the unpriced-model warning capacity is a fixed process-wide 256 (only a suppressed log line)",
+    "status": "waived",
+    "reason": "Re-homed: owner=owner (am0rfu5@protonmail.com), revisit=when multi-tenant pricing or hot price reload is added, basis=38-REVIEW WR-02; pricing.rs doc comment (D-08, process-wide dedup is deliberate). Class other, waived at the 57-10 triage (option-a, D-14) on 2026-11-04 and re-homed under Phase 57 D-03.",
+    "recorded_at": "2026-11-04T22:34:42.817Z",
+    "resolved_at": "2026-11-04T22:34:42.915Z"
+  },
+  {
+    "id": 103,
+    "kind": "deviation",
+    "phase": "51",
+    "file": "src/infrastructure/web/agent_host.rs",
+    "line": 201,
+    "description": "51-REVIEW WR-02 (found live by the Phase 57 sweep, D-14): check_block_reasoning is a hand-rolled copy of the check_reasoning verdict and the fallback-hint wording lives in three places (verdicts agree on is_ok, wording and maintenance drift only)",
+    "status": "waived",
+    "reason": "Re-homed: owner=owner (am0rfu5@protonmail.com), revisit=next change to check_reasoning or the reasoning refusal wording, basis=51-REVIEW WR-02; register row 51 WR-02 (verdicts agree on is_ok, wording and maintenance drift only). Class other, waived at the 57-10 triage (option-a, D-14) on 2026-11-04 and re-homed under Phase 57 D-03.",
+    "recorded_at": "2026-11-04T22:34:42.997Z",
+    "resolved_at": "2026-11-04T22:34:43.078Z"
+  },
+  {
+    "id": 104,
+    "kind": "deviation",
+    "phase": "41",
+    "file": "src/infrastructure/web/run_api_wiring.rs",
+    "line": 1106,
+    "description": "41-REVIEW WR-02 (found live by the Phase 57 sweep, D-14): a transient DNS failure on the optional operator webhook host refuses boot",
+    "status": "waived",
+    "reason": "Re-homed: owner=owner (am0rfu5@protonmail.com), revisit=when boot-time DNS availability is reported as an operator issue, basis=41-REVIEW WR-02; T-41-38 (fail-closed at boot is the recorded intent, the send-time guard re-checks). Class other, waived at the 57-10 triage (option-a, D-14) on 2026-11-04 and re-homed under Phase 57 D-03.",
+    "recorded_at": "2026-11-04T22:34:43.161Z",
+    "resolved_at": "2026-11-04T22:34:43.245Z"
+  },
+  {
+    "id": 105,
+    "kind": "deviation",
+    "phase": "41",
+    "file": "src/config/treasurer.rs",
+    "line": 865,
+    "description": "41-REVIEW WR-03 (found live by the Phase 57 sweep, D-14): an unparsable APP_TREASURER_ALLOWANCE_WARN_AT is silently ignored",
+    "status": "waived",
+    "reason": "Re-homed: owner=owner (am0rfu5@protonmail.com), revisit=next configuration-docs pass over docs/src/getting-started/configuration.md lines 405-416, basis=41-REVIEW WR-03; MIGRATION M-B-38 (an unparsable env value is ignored, project-wide convention). Class other, waived at the 57-10 triage (option-a, D-14) on 2026-11-04 and re-homed under Phase 57 D-03.",
+    "recorded_at": "2026-11-04T22:34:43.328Z",
+    "resolved_at": "2026-11-04T22:34:43.415Z"
+  },
+  {
+    "id": 106,
+    "kind": "deviation",
+    "phase": "41",
+    "file": "src/application/services/treasurer/mod.rs",
+    "line": 289,
+    "description": "41-REVIEW WR-04 (found live by the Phase 57 sweep, D-14): the operator delivery is scheduled with the store clock and claimed with the process clock",
+    "status": "waived",
+    "reason": "Re-homed: owner=owner (am0rfu5@protonmail.com), revisit=when a PostgreSQL store clock skew is observed on operator notices, basis=41-REVIEW WR-04; register row 41 WR-04 (bounded delay of a best-effort alert). Class other, waived at the 57-10 triage (option-a, D-14) on 2026-11-04 and re-homed under Phase 57 D-03.",
+    "recorded_at": "2026-11-04T22:34:43.501Z",
+    "resolved_at": "2026-11-04T22:34:43.588Z"
+  },
+  {
+    "id": 107,
+    "kind": "deviation",
+    "phase": "43",
+    "file": "docs/src/getting-started/configuration.md",
+    "line": 632,
+    "description": "43-REVIEW WR-02 (found live by the Phase 57 sweep, D-14): the docs and the CadenceConfig module docs say enabled: false restores the previous behaviour, which no longer retries a 429",
+    "status": "waived",
+    "reason": "Re-homed: owner=owner (am0rfu5@protonmail.com), revisit=next docs pass (a two-sentence fix), basis=43-REVIEW WR-02; crates/paladin-llm/CHANGELOG.md lines 295-301. Class other, waived at the 57-10 triage (option-a, D-14) on 2026-11-04 and re-homed under Phase 57 D-03.",
+    "recorded_at": "2026-11-04T22:34:43.672Z",
+    "resolved_at": "2026-11-04T22:34:43.755Z"
+  },
+  {
+    "id": 108,
+    "kind": "deviation",
+    "phase": "43",
+    "file": "crates/paladin-storage/src/node_cache/redis.rs",
+    "line": 160,
+    "description": "43-REVIEW WR-07 (found live by the Phase 57 sweep, D-14): the node-cache fence marker key {entry key}:fence can collide with an entry key (unreachable from in-tree key producers)",
+    "status": "waived",
+    "reason": "Re-homed: owner=owner (am0rfu5@protonmail.com), revisit=when a caller can hand-compose a NodeCacheKey, or the marker key is next changed, basis=43-REVIEW WR-07; ADR-0058 line 273 (marker location, unreachable from in-tree key producers). Class other, waived at the 57-10 triage (option-a, D-14) on 2026-11-04 and re-homed under Phase 57 D-03.",
+    "recorded_at": "2026-11-04T22:34:43.839Z",
+    "resolved_at": "2026-11-04T22:34:43.922Z"
   }
 ]
 ````

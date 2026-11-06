@@ -7,17 +7,16 @@
 //!
 //! | Flag | Enables |
 //! |------|---------|
-//! | `sqlite` | [`sqlite_content_repository`], [`sqlite_user_repository`] |
-//! | `mysql`  | [`mysql_content_repository`] |
-//! | `s3`     | [`minio`] (MinIO / S3 file storage) |
-//! | `redis-queue` | [`redis`] (Redis-backed queue) |
-//! | `redis-cadence` | [`cadence::redis`] (fleet-wide rate pacing through Redis) |
-//! | `scheduler` | [`scheduler`] (`tokio-cron-scheduler`-backed `SchedulerPort`) |
+//! | `sqlite` | `sqlite_content_repository`, `sqlite_user_repository` |
+//! | `mysql`  | `mysql_content_repository` |
+//! | `s3`     | `minio` (MinIO / S3 file storage) |
+//! | `redis-queue` | `redis` (Redis-backed queue) |
+//! | `redis-cadence` | `cadence::redis` (fleet-wide rate pacing through Redis) |
+//! | `scheduler` | `scheduler` (`tokio-cron-scheduler`-backed `SchedulerPort`) |
 //!
 //! Enable only the backends your deployment actually uses.
 
 #![warn(missing_docs)]
-#![allow(rustdoc::broken_intra_doc_links)]
 
 /// `WaypointPort` storage adapters. The in-memory backend is always
 /// available (D-01, no feature gate); durable backends are added by later
@@ -39,6 +38,11 @@ pub mod cadence;
 /// cadence adapter). Crate-private.
 #[cfg(any(feature = "redis-queue", feature = "redis-cadence"))]
 pub(crate) mod redis_url;
+
+/// The fencing counter's and the node-cache fence marker's time-to-live rules, defined once so the
+/// marker can never outlive the counter that numbers it (43-REVIEW WR-01). Crate-private.
+#[cfg(any(feature = "redis-cache", feature = "redis-cadence"))]
+pub(crate) mod redis_fence;
 
 /// `NodeCachePort` storage adapters (Doc 04 FT-FR-18…20, D-27). The
 /// in-memory backend is always available (no feature gate, mirroring

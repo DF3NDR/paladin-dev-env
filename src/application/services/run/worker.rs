@@ -9,9 +9,9 @@
 //! ## Dispatch (D-09)
 //!
 //! The worker has ONE entry point that branches on the thread's latest
-//! Waypoint: absent -> [`WarEngine::start`]; present with pending responses
-//! parked on the `Run` -> [`WarEngine::resume_with`]; present otherwise ->
-//! [`WarEngine::resume`]. [`WorkerDispatch::decide`] is the pure decision
+//! Waypoint: absent -> [`WarEngine::start`](paladin_battalion::engine::WarEngine::start); present with pending responses
+//! parked on the `Run` -> [`WarEngine::resume_with`](paladin_battalion::engine::WarEngine::resume_with); present otherwise ->
+//! [`WarEngine::resume`](paladin_battalion::engine::WarEngine::resume). [`WorkerDispatch::decide`] is the pure decision
 //! function; `run_once` is the only caller.
 //!
 //! ## Heartbeat (D-10)
@@ -23,7 +23,7 @@
 //!
 //! ## Outcome mapping (D-16, D-22, D-13)
 //!
-//! `map_outcome` is the one place a [`RunOutcome`] becomes a status
+//! `map_outcome` is the one place a [`RunOutcome`](paladin_battalion::engine::RunOutcome) becomes a status
 //! transition (or, for a shutdown-halted run, a requeue instead). The
 //! `Halted`/`Cancelled` vocabulary split is deliberate: the *waypoint*
 //! halted, but the *run* is recorded `Cancelled` only when a caller asked
@@ -54,7 +54,6 @@ use paladin_core::platform::container::run::{
     ForkSpec, Run, RunEventKind, RunId, RunStatus, RunStreamEventKind, RunStreamMode,
 };
 use paladin_core::platform::container::run_scope::RunScope;
-use paladin_core::platform::container::token_usage::TokenUsage;
 use paladin_core::platform::container::trace::{RunFinishStatus, TraceEvent};
 use paladin_core::platform::container::treasury_ledger::{LedgerScope, SettlementContext};
 use paladin_core::platform::container::waypoint::{NodeId, NodeOutcomeKind, Waypoint, WaypointId};
@@ -67,6 +66,7 @@ use paladin_ports::output::run_repository_port::{
     RunOutcomeRecord, RunRepositoryError, RunRepositoryPort,
 };
 use paladin_ports::output::run_trace_port::RunTracePort;
+use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope};
 use paladin_ports::output::trace_sink_port::{
     CompositeSink, RUN_TRACE_EMITTER, TraceEmitter, TraceSink,
 };
@@ -137,6 +137,25 @@ fn run_model_label(graph: &WarGraph) -> String {
 }
 
 /// The `graph_fingerprint` an agent run's `TraceEvent::RunStarted` carries.
+/// Character budget for a failed run's persisted `error` (and the matching
+/// failed-persist `warn!` line). A run's error is user-facing through
+/// `GET /v1/runs/{id}`, so it gets more room than the 256-character webhook
+/// `last_error` diagnostic, but it is still bounded.
+pub(super) const RUN_ERROR_CHAR_BUDGET: usize = 2048;
+
+/// Redact-then-bound an agent or engine failure text before it is persisted
+/// on the run row or logged (45-REVIEW WR-05, `security.instructions.md`).
+///
+/// The failure text can embed a provider response body or an API key (an
+/// echoed header, a leaked key in an error page). Secret-shaped substrings
+/// are redacted FIRST and the result is bounded SECOND: truncating first
+/// could slice a secret across the budget boundary and leak its tail. This
+/// mirrors `bounded_error` in `webhook/service.rs` (D-43).
+pub(super) fn bounded_run_error(text: &str) -> String {
+    let redacted = paladin_llm::redaction::redact_secret_patterns(text);
+    paladin_llm::redaction::bounded_excerpt(&redacted, RUN_ERROR_CHAR_BUDGET)
+}
+
 /// A legacy `Runnable::Agent` run has no `WarGraph`, hence no fingerprint;
 /// this sentinel stands in. Every sink accepts any string here -- the
 /// bus sink maps `RunStarted` to no wire event at all (D-24), and the
@@ -182,6 +201,11 @@ fn compose_run_sink(
 /// run" invariant auditable: the usage and cost totals always come from the dispatcher's own
 /// tallies, and an agent loop has no superstep, so `total_supersteps` and the dropped count are
 /// always zero here.
+///
+/// **Called only once the exit's durable writes and `ack` have succeeded** (45-REVIEW WR-04): the
+/// terminal event reaches the bus, the herald and the persisted trace, so it must never describe
+/// a run whose row is still `running`. A failed write or a nack therefore emits no terminal event,
+/// and the attempt that finally commits emits the run's one terminal event.
 fn emit_agent_run_finished(
     dispatcher: &TraceDispatcher,
     status: RunFinishStatus,
@@ -438,12 +462,10 @@ enum DispatchBudget {
     Unbounded,
     /// The run executes under this budget, carried on its `RunScope`.
     Derived(DerivedTokenBudget),
-    /// The allowance cannot cover a call: the run is recorded `Halted` with this reason and the
-    /// LLM is never called.
+    /// The allowance or the price table cannot cover a call (a spent or zero allowance, an
+    /// unreadable ledger, or a model that lost its `treasurer.pricing` row since admission): the
+    /// run is recorded `Halted` with this reason and the LLM is never called.
     Halt(HaltReason),
-    /// The model lost its `treasurer.pricing` row between admission and dispatch: the run is
-    /// recorded `Failed` with a typed error naming the model and the LLM is never called.
-    Unpriced(String),
 }
 
 /// Map a terminal/suspension [`RunStatus`] to the [`RunEventKind`] a
@@ -809,12 +831,12 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// to every in-flight per-run engine, exactly as the shared-engine path
     /// already does) -- registered in [`RunWorkerPool::local_tokens`] for
     /// the duration of dispatch, so
-    /// [`RunSubmissionService::cancel`](super::submission::RunSubmissionService::cancel)
+    /// [`RunSubmissionService::cancel`](paladin_ports::input::run_submission_port::RunSubmissionPort::cancel)
     /// can fire it directly when this same instance holds the run.
     ///
     /// The caller's closure is responsible for wiring whatever
     /// `CancellationProbe` (typically a shared
-    /// [`DbCancellationProbe`](super::cancel::DbCancellationProbe)), node
+    /// [`DbCancellationProbe`]), node
     /// cache, vault, etc. the production engine needs -- this pool has no
     /// visibility into `WarEngine`'s private construction fields beyond
     /// what the closure itself captures.
@@ -1577,6 +1599,10 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// **Exactly one terminal wire event.** A failure emits `RunFinished
     /// { Failed }`, which maps to the single `error` event with `message:
     /// null` -- the same shape a graph run's engine-emitted failure has.
+    /// Every terminal event is emitted only after its exit's durable writes and
+    /// `ack` succeeded (45-REVIEW WR-04): a failed write nacks the message (or
+    /// propagates the error for a halt or a failed `ack`) and emits nothing, so
+    /// the attempt that commits emits the run's one terminal event.
     /// This method makes no direct bus publish of its own and does not go
     /// through `record_engine_failure` (whose own publish would be a second
     /// `error`); it calls `persist_failure` instead. The failure text stays
@@ -1600,7 +1626,8 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// object, `error: null` and the partial output kept, and the one terminal event carries the
     /// reason. A zero or exhausted figure at dispatch records the same halt, and an unreadable
     /// ledger records `ledger_unavailable`, both without calling the LLM; a model that lost its
-    /// price row records `Failed` naming the model, also without calling the LLM. An agent-kind
+    /// price row records the same `Halted` with the `model_unpriced` reason naming the model, also
+    /// without calling the LLM. An agent-kind
     /// run writes no Waypoint (D-08), so a halted one is resumed by resubmission.
     async fn run_agent(
         &self,
@@ -1670,7 +1697,8 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         // never from a figure persisted at submit time -- the allowance may have been spent while
         // the run sat in the queue. The three no-call outcomes (a zero or exhausted figure, an
         // unreadable ledger, a model that lost its price row) are decided before the LLM is
-        // reached, and each is recorded through the same one-terminal-event path as a call.
+        // reached, and all three are recorded as halts through the same one-terminal-event path
+        // as a call.
         let derived_budget = self.derive_dispatch_budget(run, &paladin.data.model).await;
         dispatcher.emit(TraceEvent::RunStarted {
             run_id: Some(run.run_id.clone()),
@@ -1678,24 +1706,17 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         });
         let derived_budget = match derived_budget {
             DispatchBudget::Halt(reason) => {
-                emit_agent_run_finished(
-                    &dispatcher,
-                    RunFinishStatus::Halted,
-                    Some(reason.clone()),
-                    0,
-                );
-                let persisted = self.persist_agent_halt(leased, run, None, reason).await;
-                self.unbind_after_drain(run).await;
-                return persisted;
-            }
-            DispatchBudget::Unpriced(model) => {
-                emit_agent_run_finished(&dispatcher, RunFinishStatus::Failed, None, 0);
+                // 45-REVIEW WR-04: the terminal event follows the halt's committed writes.
+                let finished_reason = reason.clone();
                 let persisted = self
-                    .persist_failure(
-                        leased,
-                        run,
-                        format!("model {model} has no treasurer.pricing row"),
-                    )
+                    .persist_agent_halt(leased, run, None, reason, || {
+                        emit_agent_run_finished(
+                            &dispatcher,
+                            RunFinishStatus::Halted,
+                            Some(finished_reason),
+                            0,
+                        );
+                    })
                     .await;
                 self.unbind_after_drain(run).await;
                 return persisted;
@@ -1731,16 +1752,19 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         if let Some(budget) = derived_budget {
             run_scope = run_scope.with_derived_token_budget(budget);
         }
-        let call = with_run_trace_scope(
+        // 45-REVIEW WR-06: a fresh attempt spend scope around the agent call. The production
+        // port records every billed call into the active scope (the 50-29 `ATTEMPT_SPEND`
+        // carrier), so a loop that is billed and then fails still leaves its figures here.
+        // Following the carrier's rule it is read on failure only: the success arm keeps
+        // `PaladinResult.usage`/`cost`, so each outcome has exactly one source and nothing is
+        // counted twice. A port that records nothing still reports zero, as before.
+        let spend = SpendScope::new();
+        let heartbeat = HeartbeatHandle::new();
+        let traced_call = with_run_trace_scope(
             &emitter,
-            paladin_port.execute_scoped(
-                paladin.as_ref(),
-                &input_text,
-                &HeartbeatHandle::new(),
-                &run_scope,
-            ),
-        )
-        .await;
+            paladin_port.execute_scoped(paladin.as_ref(), &input_text, &heartbeat, &run_scope),
+        );
+        let call = ATTEMPT_SPEND.scope(spend.clone(), traced_call).await;
 
         let persisted = match call {
             Ok(result) => {
@@ -1771,45 +1795,76 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                 // the one terminal event carries the reason (SSE `done`, the `halted` webhook).
                 if let StopReason::AllowanceHalted(refusal) = &result.stop_reason {
                     let reason = HaltReason::AllowanceExhausted(refusal.clone());
-                    emit_agent_run_finished(
-                        &dispatcher,
-                        RunFinishStatus::Halted,
-                        Some(reason.clone()),
-                        duration_ms,
-                    );
+                    // 45-REVIEW WR-04: the terminal event follows the halt's committed writes.
+                    let finished_reason = reason.clone();
                     let persisted = self
-                        .persist_agent_halt(leased, run, Some(result.output), reason)
+                        .persist_agent_halt(leased, run, Some(result.output), reason, || {
+                            emit_agent_run_finished(
+                                &dispatcher,
+                                RunFinishStatus::Halted,
+                                Some(finished_reason),
+                                duration_ms,
+                            );
+                        })
                         .await;
                     self.unbind_after_drain(run).await;
                     return persisted;
                 }
-                emit_agent_run_finished(&dispatcher, RunFinishStatus::Completed, None, duration_ms);
                 async {
-                    self.repository
-                        .update_status(
-                            &run.run_id,
-                            RunStatus::Running,
-                            RunStatus::Completed,
-                            chrono::Utc::now(),
-                        )
-                        .await?;
-                    self.repository
-                        .record_outcome(
-                            &run.run_id,
-                            RunOutcomeRecord {
-                                error: None,
-                                output: Some(serde_json::Value::String(result.output)),
-                                final_waypoint_id: None,
-                                halt_reason: None,
-                            },
-                        )
-                        .await?;
-                    self.queue.ack(&leased.token).await?;
-                    // D-40, D-15: strictly AFTER the status write and ack;
-                    // logged and never propagated (P2).
-                    self.enqueue_webhook_delivery(run, RunStatus::Completed, None, None)
-                        .await;
-                    Ok(true)
+                    let written: Result<(), RunRepositoryError> = async {
+                        self.repository
+                            .update_status(
+                                &run.run_id,
+                                RunStatus::Running,
+                                RunStatus::Completed,
+                                chrono::Utc::now(),
+                            )
+                            .await?;
+                        self.repository
+                            .record_outcome(
+                                &run.run_id,
+                                RunOutcomeRecord {
+                                    error: None,
+                                    output: Some(serde_json::Value::String(result.output)),
+                                    final_waypoint_id: None,
+                                    halt_reason: None,
+                                },
+                            )
+                            .await?;
+                        Ok(())
+                    }
+                    .await;
+                    match written {
+                        Ok(()) => {
+                            self.queue.ack(&leased.token).await?;
+                            // 45-REVIEW WR-04: the one terminal event follows the committed
+                            // status, outcome and ack -- never a row that is still `running`.
+                            emit_agent_run_finished(
+                                &dispatcher,
+                                RunFinishStatus::Completed,
+                                None,
+                                duration_ms,
+                            );
+                            // D-40, D-15: strictly AFTER the status write and ack;
+                            // logged and never propagated (P2).
+                            self.enqueue_webhook_delivery(run, RunStatus::Completed, None, None)
+                                .await;
+                            Ok(true)
+                        }
+                        Err(repo_err) => {
+                            // The run is redelivered, so no terminal event is emitted for an
+                            // outcome that never committed (PD-13-3). Only the run id and the
+                            // repository error are logged, never the output (P-13-3).
+                            log::warn!(
+                                "run worker: failed to record the completion of run {}: {repo_err}",
+                                run.run_id
+                            );
+                            self.queue
+                                .nack(&leased.token, Duration::from_secs(1))
+                                .await?;
+                            Ok(true)
+                        }
+                    }
                 }
                 .await
             }
@@ -1819,22 +1874,34 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                 // -> `map_trace_event` (`message: null`, exactly like a graph
                 // run's engine-emitted failure); this arm makes no direct bus
                 // publish of its own. The failure text is persisted on the
-                // run row below and stays readable through `GET /runs/{id}`.
+                // run row below (redacted then bounded, 45-REVIEW WR-05) and
+                // stays diagnosable through `GET /runs/{id}`.
                 let duration_ms = elapsed_ms(started);
+                // 45-REVIEW WR-06: what the loop was billed before it failed.
+                let incurred = spend.snapshot();
                 dispatcher.emit(TraceEvent::NodeFinished {
                     superstep: 0,
                     node_id,
                     attempt,
                     outcome: NodeOutcomeKind::Failed,
                     duration_ms,
-                    usage: TokenUsage::default(),
-                    cost: None,
+                    usage: incurred.usage().clone(),
+                    cost: incurred.cost(),
                     reasoning_requested: None,
                     reasoning_effective: None,
                     cache_hit: false,
                 });
-                emit_agent_run_finished(&dispatcher, RunFinishStatus::Failed, None, duration_ms);
-                self.persist_failure(leased, run, error.to_string()).await
+                // 45-REVIEW WR-04: `RunFinished { Failed }` follows the committed failure
+                // writes and ack, from inside `persist_failure`, never its nack branch.
+                self.persist_failure(leased, run, error.to_string(), || {
+                    emit_agent_run_finished(
+                        &dispatcher,
+                        RunFinishStatus::Failed,
+                        None,
+                        duration_ms,
+                    );
+                })
+                .await
             }
         };
 
@@ -1868,8 +1935,9 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// - A backend error, or any error this code does not name (`AdmissionError` is
     ///   `#[non_exhaustive]`), halts `ledger_unavailable` -- fail closed (D-03). Logged at
     ///   `error` with the run id only, never a key value.
-    /// - `ModelUnpriced` records `Failed` naming the model: a deployment incoherence (the model
-    ///   lost its price row since admission), not quota exhaustion.
+    /// - `ModelUnpriced` halts with `model_unpriced` naming the model: the model lost its price
+    ///   row since admission, which is a resume point once the operator adds the row, not quota
+    ///   exhaustion.
     async fn derive_dispatch_budget(&self, run: &Run, model: &str) -> DispatchBudget {
         let (Some(treasurer), Some(attribution)) = (&self.treasurer, run.submitted_by.as_ref())
         else {
@@ -1881,7 +1949,9 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
             Err(AdmissionError::Refused(refusal)) => {
                 DispatchBudget::Halt(HaltReason::AllowanceExhausted(refusal))
             }
-            Err(AdmissionError::ModelUnpriced { model }) => DispatchBudget::Unpriced(model),
+            Err(AdmissionError::ModelUnpriced { model }) => {
+                DispatchBudget::Halt(HaltReason::ModelUnpriced { model })
+            }
             Err(AdmissionError::Backend { message }) => {
                 log::error!(
                     "run worker: allowance derivation failed at dispatch for run {}: {message}; \
@@ -1909,12 +1979,17 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// `halted` webhook delivery carrying the reason (D-19; an enqueue error is logged and never
     /// changes the run's status, P2). An agent-kind run writes no Waypoint (D-08), so there is
     /// no `final_waypoint_id`; it is resumed by resubmission.
+    ///
+    /// `on_committed` publishes the run's one terminal event; it runs only after both writes and
+    /// the `ack` succeeded, before the webhook enqueue (45-REVIEW WR-04). A failed write or ack
+    /// returns the error without calling it.
     async fn persist_agent_halt(
         &self,
         leased: &LeasedRun,
         run: &Run,
         output: Option<String>,
         reason: HaltReason,
+        on_committed: impl FnOnce() + Send,
     ) -> Result<bool, WorkerError> {
         self.repository
             .record_outcome(
@@ -1936,6 +2011,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
             )
             .await?;
         self.queue.ack(&leased.token).await?;
+        on_committed();
         self.enqueue_webhook_delivery(run, RunStatus::Halted, None, Some(&reason))
             .await;
         Ok(true)
@@ -1990,23 +2066,35 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
             .await;
             bus.unbind(&run.thread_id).await;
         }
-        self.persist_failure(leased, run, error_text).await
+        // The graph path's wire event is published above (or by the engine), so there is no
+        // terminal event left to emit once the failure commits.
+        self.persist_failure(leased, run, error_text, || {}).await
     }
 
     /// Persist a run's failure: status `Running -> Failed`, the outcome record
-    /// carrying `error_text`, then `ack` -- or, on a repository error, log at
+    /// carrying `error_text` (redacted then bounded by [`bounded_run_error`]),
+    /// then `ack` -- or, on a repository error, log at
     /// `warn` and `nack` with a 1s delay so the run is retried rather than
     /// lost. On the ack path ONLY, enqueues the run's subscribed `failed`
     /// webhook delivery (D-40 ordering: strictly after the status write and
     /// ack; a delivery error is logged and never changes the run's status,
     /// prohibition P2). Publishes nothing on the bus -- callers own their
     /// wire event.
+    ///
+    /// `on_committed` is the caller's terminal-event hook (45-REVIEW WR-04): it runs after the
+    /// status and outcome writes and the `ack` succeeded, before the webhook enqueue, and never
+    /// on the repository-error nack branch, so no terminal event describes a run whose row stays
+    /// `running` and is redelivered.
     async fn persist_failure(
         &self,
         leased: &LeasedRun,
         run: &Run,
         error_text: String,
+        on_committed: impl FnOnce() + Send,
     ) -> Result<bool, WorkerError> {
+        // 45-REVIEW WR-05: the stored `error` and the failed-persist `warn!`
+        // below both carry only the redacted, bounded text.
+        let error_text = bounded_run_error(&error_text);
         let now = chrono::Utc::now();
         let record_result: Result<(), RunRepositoryError> = async {
             self.repository
@@ -2030,6 +2118,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         match record_result {
             Ok(()) => {
                 self.queue.ack(&leased.token).await?;
+                on_committed();
                 self.enqueue_webhook_delivery(run, RunStatus::Failed, None, None)
                     .await;
             }

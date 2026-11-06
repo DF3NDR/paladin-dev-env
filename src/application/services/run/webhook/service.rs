@@ -180,9 +180,13 @@ impl WebhookDeliveryService {
     /// an operator delivery names no run, so it cannot read a signing value from a run's own
     /// `WebhookSpec`. `None` signs with the empty key, exactly like a run webhook that
     /// carries no secret. Every other event keeps signing with its own run's secret.
+    ///
+    /// An empty secret is treated as absent (41-REVIEW WR-05): it is stored as `None` and
+    /// still signs with the empty key, as before -- the signature bytes are identical, and
+    /// nothing is refused. The boot wiring warns when the operator webhook has no secret.
     #[must_use]
     pub fn with_operator_notice_secret(mut self, secret: Option<String>) -> Self {
-        self.operator_notice_secret = secret;
+        self.operator_notice_secret = secret.filter(|s| !s.is_empty());
         self
     }
 

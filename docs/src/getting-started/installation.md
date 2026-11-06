@@ -45,25 +45,25 @@ Windows users should use [rustup-init.exe](https://rustup.rs/) or WSL 2.
 
 ### Cargo.toml -- choose your crates
 
-Paladin v0.10.0 is published as a workspace of focused crates. Add only what you need:
+Paladin is published as a workspace of focused crates. Add only what you need:
 
 ```toml
 [dependencies]
 # Core framework -- always required
-paladin-ai-core   = "0.10.0"
-paladin-ports     = "0.10.0"
+paladin-ai-core   = "0.11.1"
+paladin-ports     = "0.11.1"
 
 # LLM providers (pick one or more)
-paladin-llm       = { version = "0.10.0", features = ["llm-openai"] }
+paladin-llm       = { version = "0.11.1", features = ["openai"] }
 
 # Multi-agent orchestration (optional)
-paladin-battalion = "0.10.0"
+paladin-battalion = "0.11.1"
 
 # Memory / Garrison (optional)
-paladin-memory    = "0.10.0"
+paladin-memory    = "0.11.1"
 
 # Storage adapters (optional)
-paladin-storage   = "0.10.0"
+paladin-storage   = "0.11.1"
 
 # Async runtime (required)
 tokio = { version = "1", features = ["full"] }
@@ -71,11 +71,11 @@ tokio = { version = "1", features = ["full"] }
 
 ### Umbrella crate
 
-The `paladin-ai` umbrella crate (v0.10.0) re-exports everything and accepts workspace feature flags:
+The `paladin-ai` umbrella crate re-exports everything and accepts workspace feature flags:
 
 ```toml
 [dependencies]
-paladin-ai = { version = "0.10.0", features = ["redis-queue", "s3-storage"] }
+paladin-ai = { version = "0.11.1", features = ["redis-queue", "s3-storage"] }
 tokio      = { version = "1", features = ["full"] }
 ```
 
@@ -133,6 +133,13 @@ forwards into, and what it gates. `default = ["llm-openai", "llm-anthropic", "ll
 The `paladin-cli` binary carries `required-features = ["cli"]` in `Cargo.toml`, so it is **not**
 built by a default `cargo build` -- pass `--features cli` (or `--bin paladin-cli --features cli`)
 to build it.
+
+To install the CLI from crates.io, enable the `cli` feature; `--locked` builds against the lockfile
+published with the crate:
+
+```bash
+cargo install paladin-ai --features cli --locked --bin paladin-cli
+```
 
 ### Verification
 

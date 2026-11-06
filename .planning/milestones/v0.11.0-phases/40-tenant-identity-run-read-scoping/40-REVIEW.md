@@ -167,3 +167,7 @@ Positive checks, for the record:
 _Reviewed: 2026-09-29_
 _Reviewer: gsd-code-reviewer_
 _Depth: standard_
+
+## Dispositions (Phase 57)
+
+Every WR/CR finding above, plus IN-01 and IN-04, is dispositioned in `.planning/phases/57-register-hygiene-close-out/57-REVIEW-DISPOSITIONS.md` (REG-05, D-10). This section is the only addition to this file.

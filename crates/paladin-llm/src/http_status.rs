@@ -1,12 +1,12 @@
-//! One shared HTTP-status-to-[`LlmError`] mapping for every provider adapter
+//! One shared HTTP-status-to-[`LlmError`](paladin_ports::output::llm_port::LlmError) mapping for every provider adapter
 //! in this crate (Doc 04 FT-FR-01, Phase 25 D-03).
 //!
 //! Before this module, nine adapters each carried a private
 //! `match status { .. }` block, and five of them erased a `5xx` or an
 //! unknown `4xx` into a `ProcessingError` whose text read `HTTP <status>: <body>`
 //! — exactly the string-encoded status the transience taxonomy
-//! ([`LlmError::transience`]) cannot classify without parsing text.
-//! [`map_http_status`] is now the single place a status becomes a typed
+//! ([`LlmError::transience`](paladin_ports::output::llm_port::LlmError::transience)) cannot classify without parsing text.
+//! [`map_http_status`](crate::http_status::map_http_status) is now the single place a status becomes a typed
 //! variant, so a future RT-06 (Phase 26) re-verifies three paths instead of
 //! rebuilding nine.
 //!

@@ -182,7 +182,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "`run_status`: the run's terminal status equals this value.",
+          "description": "`run_status`: the run's terminal status equals this value. A cancelled run matches\nno value (see [`RunStatusValue`]).",
           "properties": {
             "run_status": {
               "$ref": "#/$defs/RunStatusValue"
@@ -460,7 +460,7 @@
       "type": "object"
     },
     "RunStatusValue": {
-      "description": "The vocabulary [`Assertion::RunStatus`] compares against.\n\nMirrors `paladin_core::platform::container::trace::RunFinishStatus` field-for-field.\nThat core type carries no `schemars::JsonSchema` derive (ADR-0015: `paladin-core`\ndoes not take the `schemars` dependency), so this crate mirrors the vocabulary\nlocally -- exactly the pattern `WarGraphDoc`'s `NodeKindDoc` uses for `NodeSpec`.",
+      "description": "The vocabulary [`Assertion::RunStatus`] compares against.\n\nMirrors every status of `paladin_core::platform::container::trace::RunFinishStatus`\nexcept `Cancelled`.\nThat core type carries no `schemars::JsonSchema` derive (ADR-0015: `paladin-core`\ndoes not take the `schemars` dependency), so this crate mirrors the vocabulary\nlocally -- exactly the pattern `WarGraphDoc`'s `NodeKindDoc` uses for `NodeSpec`.\n\nA run that finished `cancelled` matches no `run_status` value until the next minor,\nwhich adds `Cancelled` together with a schema refresh. A variant cannot be added in\nv0.11.1, because this enum and [`Assertion`] are exhaustive public enums of a\npublished crate and the patch-level semver gate treats either change as major\n(FIXES-04, re-homed).",
       "oneOf": [
         {
           "const": "completed",

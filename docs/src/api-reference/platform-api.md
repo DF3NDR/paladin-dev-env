@@ -61,7 +61,7 @@ POST /v1/runs
   "webhook": {                // optional; validated by the SSRF guard before anything is persisted
     "url": "https://example.com/hooks/paladin",
     "secret": "whsec_...",
-    "events": ["completed", "failed", "awaiting_input"]
+    "events": ["completed", "failed", "halted", "cancelled", "awaiting_input"]
   }
 }
 ```
@@ -71,7 +71,7 @@ repository insert and one queue enqueue, with no engine work on the request path
 p99 ≤ 250ms budget is an architectural property of that fact, not a number to tune).
 
 `GET /v1/runs/{run_id}` returns the full `Run`: `run_id`, `thread_id`, `assistant_id`, `version`,
-`status`, `submitted_at`/`started_at`/`finished_at`, `error` (the engine's error, when `Failed`),
+`status`, `submitted_at`/`started_at`/`finished_at`, `error` (the engine's error, when `Failed`; secret-shaped substrings are redacted and the text is bounded to 2,048 characters before it is stored),
 `final_waypoint_id` (the final Waypoint the run reached; `null` until it records one) and
 `halt_reason` (why a run halted on spend; `null` otherwise) -- see [Halted runs](#halted-runs).
 
@@ -159,7 +159,10 @@ ceiling's own figures -- the same keys, built by the same function, as the `deta
 `window_start`/`window_end` are RFC 3339 and `null` for a lifetime ceiling. When the spend ledger
 could not be read at the boundary, or one of the run's own superstep charges could not be written
 to it (so the run's balance can no longer be trusted), the run halts fail-closed and `halt_reason`
-is exactly `{ "reason": "ledger_unavailable" }`. The object never carries another scope's figures, a tenant
+is exactly `{ "reason": "ledger_unavailable" }`. When an agent-kind run's model has no
+`treasurer.pricing` row at dispatch (the row was removed after the run was admitted), the model is
+not called and `halt_reason` is `{ "reason": "model_unpriced", "model": "gpt-4o-mini" }`; the run resumes
+once an operator adds the row. The object never carries another scope's figures, a tenant
 id, or an API key name or value.
 
 The reason is written to the run row before the status flips to `halted`, so a reader never sees
@@ -226,7 +229,8 @@ and a `halt_reason` object -- the same object `GET /v1/runs/{run_id}` returns (s
 `{ "reason": "allowance_exhausted", "scope", "kind", "balance", "ceiling", "window_start",
 "window_end" }`; for a ledger that could not be read or written it is exactly
 `{ "reason": "ledger_unavailable" }` and is still a `done`, never an `error` (`error` is reserved
-for a `failed` run). A halt with no spend reason (a caller cancel or a token halt) keeps the
+for a `failed` run); for a model with no `treasurer.pricing` row at dispatch it is
+`{ "reason": "model_unpriced", "model": ... }`. A halt with no spend reason (a caller cancel or a token halt) keeps the
 payload without a `halt_reason` key. The live, degraded and replay paths agree on `status` and
 `halt_reason` for the same run, so a streaming client never needs a follow-up read to learn why a
 run stopped; a replayed stream takes both from the run row once the row is terminal, and
@@ -251,9 +255,12 @@ A 15-second heartbeat comment line is emitted on **both** paths to defeat idle-p
 ## Threads
 
 Every thread route is tenant-scoped, by the same rule as the run routes. A thread belongs to the
-tenant of its **latest run** (newest `submitted_at`); a `user`-role principal sees only its own
-tenant's threads, an `admin`-role key sees every thread, and a thread with no run is visible to
-`admin` keys only. A thread the caller may not see answers the same `404` as a thread that does
+tenant of its **earliest attributed run** (the earliest run that recorded a submitting principal,
+by `submitted_at`); a run added later by an `admin` key, by a schedule or by another tenant never
+moves it. A `user`-role principal sees only its own tenant's threads, an `admin`-role key sees
+every thread, and a thread with no run, or one that holds only scheduled runs, is visible to
+`admin` keys only. A thread whose owner row was written by a newer build is skipped from a
+`user`-role principal's list and answers that principal the missing-thread `404`. A thread the caller may not see answers the same `404` as a thread that does
 not exist -- never `403`, on every route below, including `resume` and `delete` -- and the tenant
 is derived from the credential alone (no header, query parameter or body field can name one).
 `GET /v1/threads` therefore lists a `user`-role principal only its own tenant's threads: a page
@@ -576,14 +583,18 @@ for a tenant-scope notice. `timestamp` is the ledger store's clock when the noti
 `allowance_halted`) and `X-Paladin-Delivery: <delivery id>`. If a `secret` is configured it is signed exactly like a run
 webhook -- `X-Paladin-Signature: sha256=<hex>`, HMAC-SHA256 over the raw request body bytes -- with
 `treasurer.allowance.webhook.secret` (or `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET`). Verify it over
-the raw bytes you received, as above. Without a secret the body is signed with the empty key.
+the raw bytes you received, as above. An empty secret is treated as absent. Without a secret the body is signed with the empty key,
+which any receiver can reproduce, so the signature authenticates nothing; boot logs one warning naming
+`treasurer.allowance.webhook.secret` when the webhook has none (it never contains the URL).
 
 **Delivery semantics.** At most one notice of each kind is recorded per scope, limit kind, window
 and ceiling (raising a ceiling re-arms it), so at most one delivery is enqueued for each; the
 delivery itself is at-least-once. A replica running an older build cannot parse the
 `allowance_halted` event, so enable this on every replica before relying on it. Omitting `treasurer.allowance.webhook` disables only this leg -- the durable notice
 row, the trace event and the herald allowance line still occur. If the operator notice cannot be
-enqueued the failure is logged and not retried, and the run is unaffected. A private or loopback
+enqueued the failure is logged and the notice is given back, so the next admission in the same
+window records it again and enqueues the delivery; a client that disconnects mid-submission does
+not lose the notice either. The run is unaffected either way. A private or loopback
 target needs `webhooks.allow_private: true`; the cloud metadata address is always rejected, and
 `paladin-server` refuses to start on a rejected target.
 
@@ -656,9 +667,9 @@ tenant's run. `RunResponse.submitted_by` shows the recording tenant and API key 
 key value or the role. A client that used to read other principals' runs must use an
 admin-role key.
 
-`/v1/threads/*` routes follow the same rule through the thread's latest run: another tenant's
-thread answers the same `404` as a missing one, a thread with no run is visible to `admin` keys
-only, and `GET /threads` lists a `user`-role principal only its own tenant's threads (see
+`/v1/threads/*` routes follow the same rule through the thread's earliest attributed run: another
+tenant's thread answers the same `404` as a missing one (also when its owner row was written by a
+newer build), a thread with no run is visible to `admin` keys only, and `GET /threads` lists a `user`-role principal only its own tenant's threads (see
 [Threads](#threads)).
 
 ### Allowance refusals
@@ -759,8 +770,8 @@ that cannot be metered cannot be bounded:
 {
   "error": {
     "code": "model_unpriced",
-    "message": "model 'gpt-4' has no treasurer.pricing row, so its spend cannot be metered under an allowance",
-    "details": { "model": "gpt-4" }
+    "message": "model 'gpt-4o-mini' has no treasurer.pricing row, so its spend cannot be metered under an allowance",
+    "details": { "model": "gpt-4o-mini" }
   }
 }
 ```
@@ -795,8 +806,9 @@ the model response that crosses the figure and is recorded `halted`, not `comple
 - A zero or exhausted figure at dispatch records the same halt, and an unreadable ledger records
   `halt_reason: { "reason": "ledger_unavailable" }` (fail closed); in both cases the model is not
   called.
-- A model that lost its `treasurer.pricing` row between admission and dispatch records `failed`
-  with an error naming the model; the model is not called.
+- A model that lost its `treasurer.pricing` row between admission and dispatch records `halted`
+  with `halt_reason: { "reason": "model_unpriced", "model": ... }` naming the model; the model is
+  not called. Nothing resumes it: once an operator adds the row, resubmit the run (see below).
 
 **Agent-kind runs have no checkpoint.** The agent loop writes no Waypoint, so a halted agent-kind
 run has `final_waypoint_id: null` and cannot be forked from a checkpoint. Resume it by submitting a

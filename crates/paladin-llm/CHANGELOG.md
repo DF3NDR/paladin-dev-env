@@ -5,6 +5,16 @@ All notable changes to `paladin-llm` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows lockstep workspace versioning.
 
+## [Unreleased]
+
+## [0.11.1] - 2026-11-06
+
+### Fixed
+
+- `CadenceLlmAdapter` treats a zero provider delay (`Retry-After: 0`, a past HTTP-date, a zero reset header) as no provider delay, so the gate is at least the base back-off and the streak escalates. Before, the zero reached the port as `Some(0)` and opened a zero-length gate, so a gateway answering every 429 with `Retry-After: 0` disabled pacing. A non-zero provider delay is still honoured exactly (43-REVIEW WR-05, WINDOWS row 98, Phase 57 plan 57-15; `MIGRATION.md` section 11.1 `M-B-45`).
+
+- `CadenceLlmAdapter` records a 429 in a task spawned on the current tokio runtime that the call awaits, so dropping the call's future after the provider's response (an outer timeout, a run cancel, a grace-deadline abort) no longer loses the record and the fleet gate. A call that completes still returns only after the 429 is recorded (43-REVIEW WR-04, WINDOWS row 99, Phase 57 plan 57-15; `MIGRATION.md` section 11.1 `M-B-46`).
+
 ## [0.11.0] - 2026-10-26
 
 ### Added

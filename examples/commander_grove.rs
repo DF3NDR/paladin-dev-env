@@ -222,7 +222,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Configuration:");
     println!("   • Strategy: Grove");
     println!("   • Routing: LlmRouting");
-    println!("   • LLM Model: gpt-4");
+    println!("   • LLM Model: gpt-4o-mini");
     println!("   • Temperature: 0.3 (more deterministic)");
     println!("   • Fallback: Backend Specialists");
     println!();
@@ -235,8 +235,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .config(GroveConfig {
             routing_strategy: RoutingStrategy::LlmRouting,
             // Required under LlmRouting (CLOSE-01/D-01/D-02): routing hard-errors if this is
-            // absent. Matches the "LLM Model: gpt-4" configuration printed above.
-            routing_model: Some("gpt-4".to_string()),
+            // absent. Matches the "LLM Model: gpt-4o-mini" configuration printed above.
+            routing_model: Some("gpt-4o-mini".to_string()),
             fallback_tree: Some("Backend Specialists".to_string()),
             similarity_threshold: 0.7,
             routing_fallback: "keyword".to_string(),

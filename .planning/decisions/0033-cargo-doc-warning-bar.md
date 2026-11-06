@@ -241,6 +241,54 @@ planning kickoff, 2026-10-16**.
 committed — confirmed by re-reading each site this session — and `cargo doc --workspace --no-deps`
 was re-run immediately after writing this amendment and still emits zero `warning:` lines.
 
+**Amendment, 2026-11-01, Phase 55 / CIREL-08 -- the eight crate-level suppressions are removed.**
+This amendment closes the "kept and justified, not cleared, for v0.10.0" disposition recorded
+above. All eight `#![allow(rustdoc::...)]` attributes are gone, the diagnostics they hid were fixed
+at the doc comment that wrote each link, and the zero-warning bar now measures the tree with no
+rustdoc suppression in force at crate, module or item level. The only rustdoc lint attribute left
+in the workspace is `paladin-ports`' own `#![warn(rustdoc::broken_intra_doc_links)]`.
+
+Re-measured at the start of each crate's plan, with that crate's attributes lifted, as
+`cargo doc --workspace --no-deps` (default bar) and `cargo doc --workspace --all-features
+--no-deps` (all-features bar, run without `-D` so every diagnostic is listed). The 309 figure of
+2026-09-17 is **superseded** by these counts: it was measured per crate against an older tree, with
+the facade's three attributes sharing one total.
+
+| Crate | File:line removed | Default bar before | All-features bar before | Classes | After |
+|---|---|---|---|---|---|
+| `paladin-ports` | `crates/paladin-ports/src/lib.rs:51-52` | 187 | 187 | 170 unresolved link, 17 redundant explicit link target | 0 / 0 (`309774be8`) |
+| `paladin-llm` | `crates/paladin-llm/src/lib.rs:49` | 117 | 105 | unresolved link | 0 / 0 (`8ea9f1357`) |
+| `paladin-storage` | `crates/paladin-storage/src/lib.rs:20` (`:19` in the 2026-09-18 table; the line moved) | 27 | 28 | unresolved link | 0 / 0 (`d53d4233c`) |
+| `paladin-notifications` | `crates/paladin-notifications/src/lib.rs:14` | 3 | 0 | unresolved link | 0 / 0 (`23b6426d8`) |
+| `paladin-ai` (facade) | `src/lib.rs:117-119` | 140 | 135 | 127 unresolved link + 13 redundant explicit link target (default); 122 + 13 (all-features); 0 `invalid_html_tags` | 0 / 0 (`14ee125e7`) |
+
+Totals: **474** diagnostics under the default bar and **455** under the all-features bar before,
+**0** and **0** after. These are the same totals the pre-planning measurement read at commit
+`a78338ddb` (474 / 455), so the per-plan re-measurements and the research measurement agree. The
+two classes that surfaced are `rustdoc::broken_intra_doc_links` (444 under the default bar) and
+`rustdoc::redundant_explicit_links` (30 in all: 17 in `paladin-ports`, 13 in the facade). The
+facade's `#![allow(rustdoc::invalid_html_tags)]` hid **zero** diagnostics and was removed with
+nothing to fix.
+
+**Fix rules used.** Each diagnostic was fixed where it was written, and no doc sentence was
+deleted. A target that is public and unconditional got an explicit path to the item (`crate::...`
+for the crate's own items, `paladin_ports::...`, `paladin_core::...` or `paladin_battalion::...`
+for another workspace crate's), keeping the label. A link that resolved from the label alone lost
+its redundant explicit target. A target that exists under one feature set only, is private or
+`pub(crate)`, lives in a `#[cfg(test)]` module, or sits in a higher layer than the document that
+mentions it became a plain code span. A method that exists only as a trait implementation links to
+the trait's method. Headings written as `## [name]` read as references, so their brackets are
+escaped. The reason so many links broke is the one the 2026-09-18 amendment names: a module's own
+`//!` documentation resolves links in its parent's scope, so a bare name that looks in scope is
+not. The edits are rustdoc-only; `make api-surface` still reads unchanged.
+
+**No suppression is needed, and none returns.** `make doc-check` (both bars plus
+`cargo test --workspace --doc`) exits 0 on `14ee125e7` with every workspace member documented and
+no `allow(rustdoc` or `expect(rustdoc` anywhere in `crates/*/src` or `src`. Re-adding a rustdoc
+lint suppression at any level requires a reason recorded in this ADR, and any such entry must name
+the diagnostics it hides and the owner and date at which it is re-checked. The measurement itself
+is recorded in `docs/src/appendix/doc-coverage-report.md`.
+
 ## Decision
 
 Under the D-00b precedence order (ADR → shipped tree → `.planning/codebase/` map →

@@ -622,25 +622,40 @@ impl MigrationManager for MySqlContentRepository {
     }
 }
 
+/// The one typed refusal every unfinished `ContentListRepository` method returns on the
+/// mysql backend. Built in one place so the ten methods cannot drift apart.
+fn unfinished_content_list(method: &str) -> RepositoryError {
+    RepositoryError::QueryError(format!(
+        "ContentListRepository::{method} is unfinished for the mysql backend: content lists are not persisted"
+    ))
+}
+
+/// The content-list half of the mysql adapter is unfinished scaffolding of the
+/// content / general-data system (G3): content lists are not persisted.
+///
+/// Every method refuses with `RepositoryError::QueryError`, naming the method and the
+/// mysql backend, and never panics. The refusal text carries no backend error
+/// text, URL or key material. Whether this half is kept or fenced off is recorded in
+/// `.planning/phases/55-correctness-fixes-test-hygiene-lint-bar/55-BASE-LAYER-REVIEW.md`.
 impl ContentListRepository for MySqlContentRepository {
     fn get_by_id(&self, _id: Uuid) -> Result<Option<ContentList>, RepositoryError> {
-        todo!("Implement content list retrieval")
+        Err(unfinished_content_list("get_by_id"))
     }
 
     fn get_by_name(&self, _name: &str) -> Result<Option<ContentList>, RepositoryError> {
-        todo!("Implement content list retrieval by name")
+        Err(unfinished_content_list("get_by_name"))
     }
 
     fn save(&self, _content_list: &ContentList) -> Result<(), RepositoryError> {
-        todo!("Implement content list saving")
+        Err(unfinished_content_list("save"))
     }
 
     fn update(&self, _content_list: &ContentList) -> Result<(), RepositoryError> {
-        todo!("Implement content list updating")
+        Err(unfinished_content_list("update"))
     }
 
     fn delete(&self, _id: Uuid) -> Result<(), RepositoryError> {
-        todo!("Implement content list deletion")
+        Err(unfinished_content_list("delete"))
     }
 
     fn find_all(
@@ -648,7 +663,7 @@ impl ContentListRepository for MySqlContentRepository {
         _limit: Option<u32>,
         _offset: Option<u32>,
     ) -> Result<Vec<ContentList>, RepositoryError> {
-        todo!("Implement content list finding")
+        Err(unfinished_content_list("find_all"))
     }
 
     fn find_by_date_range(
@@ -656,19 +671,19 @@ impl ContentListRepository for MySqlContentRepository {
         _start: DateTime<Utc>,
         _end: DateTime<Utc>,
     ) -> Result<Vec<ContentList>, RepositoryError> {
-        todo!("Implement content list date range finding")
+        Err(unfinished_content_list("find_by_date_range"))
     }
 
     fn count(&self) -> Result<u64, RepositoryError> {
-        todo!("Implement content list counting")
+        Err(unfinished_content_list("count"))
     }
 
     fn add_item_to_list(&self, _list_id: Uuid, _item: &ContentItem) -> Result<(), RepositoryError> {
-        todo!("Implement adding item to list")
+        Err(unfinished_content_list("add_item_to_list"))
     }
 
     fn remove_item_from_list(&self, _list_id: Uuid, _item_id: Uuid) -> Result<(), RepositoryError> {
-        todo!("Implement removing item from list")
+        Err(unfinished_content_list("remove_item_from_list"))
     }
 }
 
@@ -776,5 +791,61 @@ mod tests {
         assert_eq!(content_item.uuid(), uuid);
         assert_eq!(content_item.created(), now);
         assert_eq!(content_item.title(), Some(&"Test Item".to_string()));
+    }
+
+    /// Asserts `result` is the exact typed refusal the unfinished
+    /// `ContentListRepository` method named `method` returns on the mysql backend.
+    fn assert_refused<T: std::fmt::Debug>(result: Result<T, RepositoryError>, method: &str) {
+        let expected = format!(
+            "ContentListRepository::{method} is unfinished for the mysql backend: content lists are not persisted"
+        );
+        match result {
+            Err(RepositoryError::QueryError(message)) => assert_eq!(message, expected),
+            other => panic!("{method}: expected the typed QueryError refusal, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn content_list_repository_refuses_every_method_on_mysql() {
+        // `connect_lazy` contacts no server until a query runs, and the refusals
+        // never run one.
+        let pool = MySqlPoolOptions::new()
+            .connect_lazy("mysql://localhost/paladin_unused")
+            .expect("a lazy MySQL pool builds without a server");
+        let store = MySqlContentRepository { pool };
+        let list = ContentList::new();
+        let item = ContentItem::new(ContentType::Text(
+            TextContent::new(None, Some("refusal fixture".to_string()))
+                .expect("a pathless text content builds"),
+        ))
+        .expect("a text content item builds");
+        let id = Uuid::nil();
+        let now = Utc::now();
+
+        assert_refused(ContentListRepository::get_by_id(&store, id), "get_by_id");
+        assert_refused(
+            ContentListRepository::get_by_name(&store, "any"),
+            "get_by_name",
+        );
+        assert_refused(ContentListRepository::save(&store, &list), "save");
+        assert_refused(ContentListRepository::update(&store, &list), "update");
+        assert_refused(ContentListRepository::delete(&store, id), "delete");
+        assert_refused(
+            ContentListRepository::find_all(&store, Some(10), Some(0)),
+            "find_all",
+        );
+        assert_refused(
+            ContentListRepository::find_by_date_range(&store, now, now),
+            "find_by_date_range",
+        );
+        assert_refused(ContentListRepository::count(&store), "count");
+        assert_refused(
+            ContentListRepository::add_item_to_list(&store, id, &item),
+            "add_item_to_list",
+        );
+        assert_refused(
+            ContentListRepository::remove_item_from_list(&store, id, id),
+            "remove_item_from_list",
+        );
     }
 }

@@ -88,11 +88,49 @@ fn cadence_boot_summary(config: &CadenceConfig) -> String {
     format!("Rate pacing enabled (treasurer.cadence.backend: {backend})")
 }
 
-/// Load config, build the agent host, and serve until a shutdown signal.
-async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let config_path = config_path();
-    info!("Loading configuration from '{config_path}'");
-    let settings = Settings::load_from_file(&config_path)?;
+/// Load the server configuration and refuse, at boot, any value the config types reject.
+///
+/// Runs first in [`run`], before any store, provider, registry or listener is built, so a
+/// refusal reaches `main()`'s `paladin-server failed to start: {e}` line, the same path every
+/// other boot refusal takes. It runs, in order: [`Settings::load_from_file`]; the three overlays
+/// through [`Settings::get_trace_config`], [`Settings::get_agent_runtime_config`] and
+/// [`Settings::get_web_server_config`], written back into the returned [`Settings`]; the
+/// treasurer check (the boot-time half of PRICE-01, message
+/// `invalid treasurer configuration: ...`, unchanged and still first); then
+/// [`Settings::validate`], mapped to `invalid configuration: <key> ...`.
+///
+/// Why (DF-08): before this, the server booted on a configuration its own
+/// `Settings::validate()` rejects. `trace.channel_capacity: 0` was silently clamped to 1 and
+/// `trace.otel.enabled: true` on a build without the `otel` feature silently exported
+/// nothing. Each validator message names its full key and echoes no secret value (never an
+/// `otel.headers` entry).
+///
+/// Double validation is deliberate and harmless (PD-12-2): `Settings::validate()` re-runs
+/// `TreasurerConfig::validate()`, which is pure and reads the same environment in the same
+/// process, so it cannot fail once the standalone check above it passed. `agent_runtime` is
+/// validated nowhere else on the server path (`validate_config` in `agent_host.rs` walks only
+/// `agents`), so this is its only boot check.
+///
+/// Why the overlays come first (DF-26): the documented `PALADIN_TRACE_*`, `APP_AGENT_RUNTIME_*`
+/// and `APP_WEB_SERVER_*` overlays (MIGRATION.md section 9.5) are applied before any check, so
+/// the judged values are the running values: `PALADIN_TRACE_CHANNEL_CAPACITY=0` is refused, not
+/// booted. An overlay cannot itself fail, because an unset or unparsable variable leaves the
+/// file value, so the treasurer refusal is still first. The treasurer applies its own
+/// `APP_TREASURER_*` through [`Settings::get_treasurer_config`]. The direct readers in
+/// `run_api_wiring`, `agent_host` and `facade_provisioner` receive the overlaid values.
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be loaded, the treasurer section is invalid, or any
+/// section checked by [`Settings::validate`] is invalid.
+fn load_settings(config_path: &str) -> Result<Settings, Box<dyn std::error::Error>> {
+    let mut settings = Settings::load_from_file(config_path)?;
+
+    // DF-26: apply the documented PALADIN_TRACE_*, APP_AGENT_RUNTIME_* and APP_WEB_SERVER_*
+    // overlays before any check, so the values judged below are the values the server runs on.
+    settings.trace = settings.get_trace_config();
+    settings.agent_runtime = settings.get_agent_runtime_config();
+    settings.web_server = settings.get_web_server_config();
 
     // Boot-time half of PRICE-01: a bad treasurer.pricing entry (or APP_TREASURER_CURRENCY
     // override) stops the server here, before any agent, provider or engine is built.
@@ -100,6 +138,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .get_treasurer_config()
         .validate()
         .map_err(|e| format!("invalid treasurer configuration: {e}"))?;
+
+    settings
+        .validate()
+        .map_err(|e| format!("invalid configuration: {e}"))?;
+    Ok(settings)
+}
+
+/// Load config, build the agent host, and serve until a shutdown signal.
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let config_path = config_path();
+    info!("Loading configuration from '{config_path}'");
+    let settings = load_settings(&config_path)?;
 
     // 39-07/D-08: `RunStoreConfig` moved ahead of the agent registry so the Treasurer's
     // spend ledger can be built ONCE, from the SAME backend selection `RunApiConfigs` uses
@@ -706,6 +756,7 @@ mod tests {
     use paladin::config::agents::{ApiKeyConfig, BearerTokenAuthConfig};
     use paladin_core::platform::container::principal::RunReadScope;
     use paladin_core::platform::container::user::UserRole;
+    use serial_test::serial;
     use std::sync::{Mutex, Once};
     use tower::ServiceExt; // for `Router::oneshot`
 
@@ -768,6 +819,283 @@ mod tests {
         }
     }
 
+    /// Read the shipped `config.example.yml`, apply each `(from, to)` edit, and write the result
+    /// to a `.yml`-suffixed temp file (`Settings::load_from_file` picks YAML by suffix).
+    ///
+    /// Each `from` must occur exactly once, so an edit can never silently miss.
+    fn example_with(edits: &[(&str, &str)]) -> tempfile::NamedTempFile {
+        let mut text =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/config.example.yml"))
+                .expect("config.example.yml must be readable");
+        for (from, to) in edits {
+            assert_eq!(
+                text.matches(from).count(),
+                1,
+                "edit target must occur exactly once in config.example.yml: {from:?}"
+            );
+            text = text.replace(from, to);
+        }
+        let mut file = tempfile::Builder::new()
+            .suffix(".yml")
+            .tempfile()
+            .expect("temp config file");
+        std::io::Write::write_all(&mut file, text.as_bytes()).expect("write temp config");
+        file
+    }
+
+    /// The environment-variable prefixes `load_settings` now overlays onto `trace`,
+    /// `agent_runtime` and `web_server` (DF-26, MIGRATION.md section 9.5).
+    const OVERLAY_PREFIXES: [&str; 3] = ["PALADIN_TRACE_", "APP_AGENT_RUNTIME_", "APP_WEB_SERVER_"];
+
+    fn overlay_vars() -> Vec<(String, String)> {
+        std::env::vars()
+            .filter(|(name, _)| OVERLAY_PREFIXES.iter().any(|p| name.starts_with(p)))
+            .collect()
+    }
+
+    /// Restores the overlay-prefixed environment captured before a test touched it. The restore
+    /// runs in `Drop`, so it also runs when the test body panics and a failed assertion cannot
+    /// leak a variable into the next test (T-56-56).
+    struct OverlayEnvGuard {
+        snapshot: Vec<(String, String)>,
+    }
+
+    impl OverlayEnvGuard {
+        fn clear_prefixed() {
+            for (name, _) in overlay_vars() {
+                // SAFETY: every test that sets or reads these prefixes is `#[serial]`, so no
+                // other thread of this test binary reads or writes the process environment for
+                // these names concurrently (the house pattern in `src/config/trace.rs`).
+                unsafe { std::env::remove_var(name) };
+            }
+        }
+    }
+
+    impl Drop for OverlayEnvGuard {
+        fn drop(&mut self) {
+            Self::clear_prefixed();
+            for (name, value) in &self.snapshot {
+                // SAFETY: as in `clear_prefixed` -- `#[serial]` serialises every env toucher.
+                unsafe { std::env::set_var(name, value) };
+            }
+        }
+    }
+
+    /// Run `f` with the three overlay prefixes cleared and only `vars` set, then restore the
+    /// prior environment. Callers must be `#[serial]`.
+    fn with_overlay_env<R>(vars: &[(&str, &str)], f: impl FnOnce() -> R) -> R {
+        let _guard = OverlayEnvGuard {
+            snapshot: overlay_vars(),
+        };
+        OverlayEnvGuard::clear_prefixed();
+        for (name, value) in vars {
+            // SAFETY: as in `clear_prefixed` -- `#[serial]` serialises every env toucher.
+            unsafe { std::env::set_var(name, value) };
+        }
+        f()
+    }
+
+    fn path_of(file: &tempfile::NamedTempFile) -> &str {
+        file.path().to_str().expect("utf-8 temp path")
+    }
+
+    fn load_error(file: &tempfile::NamedTempFile) -> String {
+        match load_settings(file.path().to_str().expect("utf-8 temp path")) {
+            Ok(_) => panic!("load_settings accepted a configuration it should refuse"),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn load_settings_refuses_a_zero_trace_channel_capacity() {
+        let file = example_with(&[("  channel_capacity: 1024", "  channel_capacity: 0")]);
+        let err = with_overlay_env(&[], || load_error(&file));
+        assert!(
+            err.contains("invalid configuration: trace.channel_capacity must be greater than 0"),
+            "got: {err}"
+        );
+    }
+
+    /// DF-26: a documented `PALADIN_TRACE_*` variable reaches the `Settings` the server runs on.
+    /// The file says `persist: false`, so `true` can only come from the overlay.
+    #[test]
+    #[serial]
+    fn load_settings_applies_a_trace_env_overlay() {
+        let file = example_with(&[]);
+        let from_file = with_overlay_env(&[], || {
+            Settings::load_from_file(path_of(&file)).expect("example loads")
+        });
+        assert!(
+            !from_file.trace.persist,
+            "premise: the shipped example says persist: false"
+        );
+        let loaded = with_overlay_env(&[("PALADIN_TRACE_PERSIST", "true")], || {
+            load_settings(path_of(&file))
+        });
+        let settings = loaded.expect("a valid overlay must boot");
+        assert!(
+            settings.trace.persist,
+            "PALADIN_TRACE_PERSIST=true was ignored"
+        );
+    }
+
+    /// DF-26 x DF-08: the overlay is applied BEFORE `validate()`, so an invalid overlaid value
+    /// refuses boot on the same line a bad file value does.
+    #[test]
+    #[serial]
+    fn load_settings_refuses_a_zero_trace_channel_capacity_from_the_environment() {
+        let file = example_with(&[]);
+        let err = with_overlay_env(&[("PALADIN_TRACE_CHANNEL_CAPACITY", "0")], || {
+            load_error(&file)
+        });
+        assert!(
+            err.contains("invalid configuration: trace.channel_capacity must be greater than 0"),
+            "got: {err}"
+        );
+    }
+
+    /// DF-26: an `APP_AGENT_RUNTIME_*` variable reaches the running `agent_runtime`. The shipped
+    /// example says token-budget `enabled: false` (with `max_tokens: 100000`, which keeps it valid).
+    #[test]
+    #[serial]
+    fn load_settings_applies_an_agent_runtime_env_overlay() {
+        let file = example_with(&[]);
+        let from_file = with_overlay_env(&[], || {
+            Settings::load_from_file(path_of(&file)).expect("example loads")
+        });
+        assert!(
+            !from_file.agent_runtime.token_budget.enabled,
+            "premise: the shipped example says token_budget.enabled: false"
+        );
+        let loaded = with_overlay_env(
+            &[("APP_AGENT_RUNTIME_TOKEN_BUDGET_ENABLED", "true")],
+            || load_settings(path_of(&file)),
+        );
+        let settings = loaded.expect("a valid overlay must boot");
+        assert!(
+            settings.agent_runtime.token_budget.enabled,
+            "APP_AGENT_RUNTIME_TOKEN_BUDGET_ENABLED=true was ignored"
+        );
+    }
+
+    /// DF-26 x DF-08: an invalid overlaid `agent_runtime` value is refused at boot.
+    #[test]
+    #[serial]
+    fn load_settings_refuses_an_invalid_agent_runtime_value_from_the_environment() {
+        let file = example_with(&[]);
+        let err = with_overlay_env(
+            &[
+                ("APP_AGENT_RUNTIME_MODEL_CALL_LIMIT_ENABLED", "true"),
+                ("APP_AGENT_RUNTIME_MODEL_CALL_LIMIT_MAX_CALLS", "0"),
+            ],
+            || load_error(&file),
+        );
+        assert!(
+            err.contains(
+                "invalid configuration: agent_runtime.model_call_limit.max_calls must be greater than 0 when enabled"
+            ),
+            "got: {err}"
+        );
+    }
+
+    /// DF-26: the `APP_WEB_SERVER_*` overlay is applied for parity with MIGRATION.md section 9.5
+    /// (it still changes nothing at run time: the server mounts no inspector, DF-09).
+    #[test]
+    #[serial]
+    fn load_settings_applies_a_web_server_env_overlay() {
+        let file = example_with(&[]);
+        let loaded = with_overlay_env(
+            &[(
+                "APP_WEB_SERVER_DEV_UI_MERMAID_URL",
+                "/static/mermaid.esm.min.mjs",
+            )],
+            || load_settings(path_of(&file)),
+        );
+        let settings = loaded.expect("a valid overlay must boot");
+        assert_eq!(
+            settings.web_server.dev_ui.mermaid_url,
+            "/static/mermaid.esm.min.mjs"
+        );
+    }
+
+    /// DF-26 guard (T-56-55): with no overlay variable set the overlay is a no-op, so an
+    /// existing deployment's behaviour is unchanged. Passes before and after the fix.
+    #[test]
+    #[serial]
+    fn load_settings_leaves_file_values_when_no_overlay_is_set() {
+        let file = example_with(&[]);
+        let (loaded, from_file) = with_overlay_env(&[], || {
+            (
+                load_settings(path_of(&file)).expect("example boots"),
+                Settings::load_from_file(path_of(&file)).expect("example loads"),
+            )
+        });
+        assert_eq!(loaded.trace, from_file.trace);
+        assert_eq!(loaded.agent_runtime, from_file.agent_runtime);
+        assert_eq!(loaded.web_server, from_file.web_server);
+    }
+
+    #[cfg(not(feature = "otel"))]
+    #[test]
+    #[serial]
+    fn load_settings_refuses_otel_enabled_without_the_otel_feature() {
+        const SENTINEL: &str = "Bearer test-key-not-a-secret-df08-otel";
+        let file = example_with(&[
+            ("  otel:\n    enabled: false", "  otel:\n    enabled: true"),
+            (
+                "    headers: {}",
+                "    headers:\n      authorization: \"Bearer test-key-not-a-secret-df08-otel\"",
+            ),
+        ]);
+        let err = with_overlay_env(&[], || load_error(&file));
+        assert!(err.contains("trace.otel.enabled"), "got: {err}");
+        assert!(err.contains("otel"), "got: {err}");
+        assert!(
+            !err.contains(SENTINEL),
+            "the refusal must never echo an otel.headers value: {err}"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn load_settings_refuses_an_invalid_agent_runtime_value() {
+        let file = example_with(&[(
+            "  model_call_limit:\n    enabled: false\n    max_calls: 10",
+            "  model_call_limit:\n    enabled: true\n    max_calls: 0",
+        )]);
+        let err = with_overlay_env(&[], || load_error(&file));
+        assert!(
+            err.contains(
+                "agent_runtime.model_call_limit.max_calls must be greater than 0 when enabled"
+            ),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn load_settings_accepts_the_shipped_example_config() {
+        let file = example_with(&[]);
+        let result = with_overlay_env(&[], || load_settings(path_of(&file)));
+        assert!(
+            result.is_ok(),
+            "the shipped example must boot: {:?}",
+            result.err().map(|e| e.to_string())
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn load_settings_keeps_the_treasurer_refusal_first() {
+        let file = example_with(&[("  currency: \"USD\"", "  currency: \"usd\"")]);
+        let err = with_overlay_env(&[], || load_error(&file));
+        assert!(
+            err.starts_with("invalid treasurer configuration: treasurer.currency"),
+            "got: {err}"
+        );
+    }
+
     #[test]
     fn build_auth_config_warns_when_in_process_token_store_is_wired() {
         install_capturing_logger();
@@ -815,6 +1143,39 @@ mod tests {
             "authentication enabled with no API keys and the token store disabled must refuse \
              to start, not silently build an unauthenticated-but-enabled config"
         );
+    }
+
+    /// FIRST-01, D-03: an unexpanded `${...}` key is refused. `run()` calls
+    /// `build_auth_config` before `TcpListener::bind`, so this refusal happens before any
+    /// listener binds.
+    #[test]
+    fn build_auth_config_refuses_an_unexpanded_placeholder_key() {
+        let mut key = api_key("ci-runner");
+        key.key = "${PALADIN_API_KEY_CI}".to_string();
+        key.tenant = "platform-ops".to_string();
+        let cfg = AuthConfig {
+            enabled: true,
+            api_keys: vec![key],
+            bearer_token: BearerTokenAuthConfig {
+                enabled: false,
+                tenant: None,
+            },
+        };
+
+        match build_auth_config(&cfg) {
+            Ok(_) => panic!("a placeholder API key must refuse boot, not build an auth config"),
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    msg.starts_with("http.auth.api_keys[ci-runner]"),
+                    "the refusal names the entry: {msg}"
+                );
+                assert!(
+                    !msg.contains("PALADIN_API_KEY_CI"),
+                    "the refusal never prints the variable name: {msg}"
+                );
+            }
+        }
     }
 
     // --- Phase 40 (TENANT-01, D-05): api_keys[].tenant / bearer_token.tenant fail-closed ---

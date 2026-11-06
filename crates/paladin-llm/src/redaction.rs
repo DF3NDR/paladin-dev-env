@@ -9,13 +9,13 @@
 //! **Ordering is load-bearing: redact, then bound.** Bounding a response body
 //! before redaction can slice a secret in half at the truncation boundary and
 //! leak the surviving prefix. Every call site in this crate MUST call
-//! [`redact_credentials`] before [`bounded_excerpt`], never the reverse.
+//! [`redact_credentials`](crate::redaction::redact_credentials) before [`bounded_excerpt`](crate::redaction::bounded_excerpt), never the reverse.
 //!
-//! [`redact_secret_patterns`] (D-34) is the key-less pattern half of
-//! [`redact_credentials`], factored out for a caller with no specific
+//! [`redact_secret_patterns`](crate::redaction::redact_secret_patterns) (D-34) is the key-less pattern half of
+//! [`redact_credentials`](crate::redaction::redact_credentials), factored out for a caller with no specific
 //! configured key to redact against — e.g. `ToolResultFormatter::format_error`
 //! sanitizing a failed tool's error text before it reaches the model. The same
-//! ordering rule applies: call it before [`bounded_excerpt`], never after.
+//! ordering rule applies: call it before [`bounded_excerpt`](crate::redaction::bounded_excerpt), never after.
 
 /// Character budget for a diagnostic excerpt of a response body.
 pub const RESPONSE_EXCERPT_CHAR_BUDGET: usize = 512;

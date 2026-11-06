@@ -9,12 +9,12 @@
 //! turn could plant a directive inside a stored note, hoping a LATER prompt
 //! that recalls it treats the directive as an instruction (prompt injection
 //! via a durable side-channel, T-26-02). The mitigation is structural, not
-//! just worded: recalled entries render in their OWN [`super::PromptSection`]
+//! just worded: recalled entries render in their OWN [`PromptSection`](crate::application::services::paladin::middleware::PromptSection)
 //! (never concatenated into the system prompt), placed after retrieved RAG
 //! context and before conversation history, with a fixed preamble stating
 //! plainly that the entries are stored notes, not instructions. That
 //! preamble is a single named constant
-//! ([`STORED_NOTES_NOT_INSTRUCTIONS`]) so a test can assert the
+//! (`STORED_NOTES_NOT_INSTRUCTIONS`) so a test can assert the
 //! implementation emits the EXACT sentence, not an approximation of it.
 //!
 //! # No auto-write middleware ships (PRD 05 §5, D-25)
@@ -32,7 +32,7 @@
 //!
 //! - No Vault grant on this run (`cx.vault.is_none()`): skip silently. "This
 //!   run has no Vault" is a configuration fact, not an anomaly -- no warning.
-//! - [`VaultError::Unsupported`]: the configured adapter cannot search at
+//! - [`VaultError::Unsupported`](paladin_core::platform::container::vault::VaultError::Unsupported): the configured adapter cannot search at
 //!   all (e.g. `InMemoryVault`, `SqliteVault` before Sanctum composition).
 //!   This is a DEPLOYMENT fact, true for every run through this service
 //!   instance, not a per-run event -- warn exactly ONCE per middleware
@@ -47,12 +47,12 @@
 //! # Search fires once per run; the section persists across every iteration
 //!
 //! The reasoning loop rebuilds `cx.assembly` FRESH every iteration (a new
-//! [`super::PromptAssembly`], with an empty `sections` list) from the same
+//! [`PromptAssembly`](crate::application::services::paladin::middleware::PromptAssembly), with an empty `sections` list) from the same
 //! recalled Garrison window -- so a section pushed on loop 0 does NOT
 //! automatically survive into loop 1's freshly-built assembly. This
 //! middleware performs the actual `search` only on `cx.loop_index == 0`
 //! (D-25's literal requirement) and caches the rendered section body in
-//! [`super::ModelCallContext::scratch`] (per-run state that DOES survive
+//! [`ModelCallContext::scratch`](crate::application::services::paladin::middleware::ModelCallContext::scratch) (per-run state that DOES survive
 //! across iterations); every call to `before_model`, including loop 0
 //! itself, re-pushes the cached section if one exists. This is what makes
 //! "the section persists in the assembly because the assembly is per-run"

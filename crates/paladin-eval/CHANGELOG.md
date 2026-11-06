@@ -5,6 +5,18 @@ All notable changes to `paladin-eval` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows lockstep workspace versioning.
 
+## [Unreleased]
+
+## [0.11.1] - 2026-11-06
+
+### Changed
+
+- Phase 55 (FIXES-04, `f70f03deb`): the rustdoc on `RunStatusValue`, `Assertion::RunStatus` and
+  `run_status_matches` states that a run that finished `cancelled` matches no `run_status` value
+  until the next minor adds one; the generated scenario schema's description strings and the eval
+  guide's `run_status` row carry the same note. Documentation only; no public item is added or
+  changed.
+
 ## [0.11.0] - 2026-10-26
 
 ### Changed

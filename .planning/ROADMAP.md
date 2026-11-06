@@ -649,7 +649,7 @@ Plans:
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
-- [ ] 58-10-PLAN.md — pre-merge: PR CI evidence (required contexts, Coverage, semver counts, E2E, SDK smoke), the scoped milestone audit `v0.11.1-MILESTONE-AUDIT.md`, the tag-day decision (SHIP-08, SHIP-10)
+- [x] 58-10-PLAN.md — pre-merge: PR CI evidence (required contexts, Coverage, semver counts, E2E, SDK smoke), the scoped milestone audit `v0.11.1-MILESTONE-AUDIT.md`, the tag-day decision (SHIP-08, SHIP-10)
 
 **Wave 9** *(blocked on Wave 8 completion)*
 

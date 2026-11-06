@@ -5,15 +5,15 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 58
 current_phase_name: Crate Release
 status: executing
-stopped_at: Completed 58-09-PLAN.md (paused on CI for SHA-A0; resume at 58-10 Task 1)
-last_updated: "2026-11-05T23:51:40.179Z"
+stopped_at: Completed 58-10-PLAN.md
+last_updated: "2026-11-06T01:47:45.201Z"
 last_activity: 2026-11-05
 last_activity_desc: Phase 58 execution started
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 84
-  completed_plans: 79
+  completed_plans: 80
 ---
 
 # Project State
@@ -53,11 +53,11 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 ## Current Position
 
 Phase: 58 (Crate Release) — EXECUTING
-Plan: 12 of 14
+Plan: 11 of 14
 Status: Ready to execute
 Last activity: 2026-11-05 — Phase 58 execution started
 
-Progress: [█████████████████░░░] 6/7 phases (v0.11.1) — plans [████████████████████] 68/68 ([█████████░] 94%)
+Progress: [█████████████████░░░] 6/7 phases (v0.11.1) — plans [████████████████████] 68/68 ([██████████] 95%)
 
 ## Performance Metrics
 
@@ -441,6 +441,7 @@ Progress: [█████████████████░░░] 6/7 pha
 | Phase 58 P07 | 15min | 3 tasks | 54 files |
 | Phase 58 P08 | 65min | 3 tasks | 4 files |
 | Phase 58 P09 | 2h20m | 3 tasks | 3 files |
+| Phase 58 P10 | 1h | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -871,6 +872,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 58-16: R-95 config types fixed before the tag (second D-07 amendment, Fix before tag): skip_serializing on five secret fields with no serde default, redacting hand-written Debug for RedisQueueConfig and MinioConfig via a module-private RedactedSecret per file
 - [Phase 58]: plan 58-07: pointer-list consumer statement reconciled with M-B-48..M-B-52 (nine config types stop serialising credential fields); M-B-27 and M-B-36 surfaced for maintainer at 58-08; SHA-C1 96eb49d38, SHA-C2 d88c519ab, SHA-C3 ac9411ea0, STAMP 2026-11-05, nothing pushed
 - [Phase 58]: 58-08: re-seal green on SHA-R 48146bc99 (row 4: 12 packages, 223 checks each, 0 failure(s)); D-10 correction SHA-R1 073bdd9ce (MIGRATION.md only); row 6 needed one disk-full infrastructure re-run (both outcomes recorded); row 5 and Coverage CI-attributed; acceptance-audit box left unticked
+- [Phase 58]: 58-10: tag day redated to 2026-11-06 (STAMP 2026-11-05); CODEQL=dismiss-now (eight F-58-08 alerts, governed rows in 58-11); AUDIT=validate-first (Phases 54 and 56 validated, milestone audit re-read as passed)
 
 ### Pending Todos
 
@@ -1292,9 +1294,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-11-05T23:51:40.118Z
-Stopped at: Completed 58-09-PLAN.md (paused on CI for SHA-A0; resume at 58-10 Task 1)
-Resume file: .planning/phases/58-crate-release/.continue-here.md
+Last session: 2026-11-06T01:47:45.175Z
+Stopped at: Completed 58-10-PLAN.md
+Resume file: None
 
 ## Operator Next Steps
 

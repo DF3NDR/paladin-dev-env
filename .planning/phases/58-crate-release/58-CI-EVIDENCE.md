@@ -41,6 +41,17 @@ RESEARCH.md that was not re-measured is labelled as a research figure.
 - SHA-R1: 073bdd9ce13bbdb6241f39a632712f96b6789dc2
 - SHA-A0: 801dd237ef8100e2208d7b1f311923861a19f120
 - PR: 64
+- SHA-A1: e56d4d4ae10b5b0793d020b4c362306f20dd8003
+- SHA-A2: dffa996fa84c7b35c69f95987231426296f864b2
+- SHA-B: 251303bcd143c5529c737afe8a2c61b05688f018
+
+Tick, merge and tag (plan 58-13 Task 1, read 2026-11-06 after the tag; `chore/58-close` is cut at `SHA-B`):
+
+- **Tick:** `SHA-A2` is the maintainer's tick commit, the last commit of the release branch `claude/laughing-dirac-e0h2ax` that reached the remote; PR 64 head.
+- **Merge:** PR 64 reads `merged: true`, `merged_at` 2026-11-06T18:36:15Z, `merge_commit_sha` `SHA-B`; `SHA-B` has exactly two parents, `8b23cb4c55a10fcf0b08fab1af595e1f184e5f2e` (old `main`) and `SHA-A2`. Its tree is identical to `SHA-A2`'s (`git diff 251303bcd dffa996fa` empty).
+- **Tag:** `v0.11.1` is an annotated tag object `65b13ed08e4e0be06bc0db390e5f682748db6941` (`git cat-file -t` prints `tag`), tagger `Am0rfu5`, tagger date 2026-11-06 22:22:39 +0000, message `v0.11.1`; `git rev-parse 'v0.11.1^{commit}'` = `SHA-B`.
+- **Equality, not ancestry (two-SHA rule, D-00c):** the peeled tag commit EQUALS the PR's `merge_commit_sha` and equals `origin/main` (`git rev-parse origin/main`); `git merge-base --is-ancestor` of it in `origin/main` holds. No mismatch.
+- **Tagger date vs changelog headings (D-00n):** all twelve changelog headings at `SHA-B` read `## [0.11.1] - 2026-11-06`; the tagger date is 2026-11-06. Match; no finding.
 
 Machine-readable SHA lines added by plans use the exact form `- SHA-<label>: <40-hex>` on their own line.
 
@@ -1273,3 +1284,263 @@ moves `Declared dismissals` and the heading from 37 to 45, and adds a Phase 58 b
 ### Push (D-04)
 
 `SHA-A1` is the commit this section lands in (`docs(58-11): evidence before the sign-off`), pushed plain (no force) to `claude/laughing-dirac-e0h2ax` after `main` was re-read at `8b23cb4c5`. Its hash is recorded in Provenance as `- SHA-A1:` in the **working tree only, uncommitted by design**: nothing is committed on the release branch after the push, so the maintainer's tick commit (`SHA-A2`) is its next and last commit. The same holds for this plan's push read-back and the plan 58-11 SUMMARY; they land on `chore/58-close` (plan 58-13).
+
+### The maintainer's tick, verified read-only on origin (D-04, Task 3)
+
+Maintainer's reply to the Task 2 checkpoint (`checkpoint:human-action`, `blocking-human`), verbatim, 2026-11-06T15:13Z (UTC):
+
+```
+ticked
+```
+
+Read once by this plan on 2026-11-06 after `git fetch origin` (all read-only; the agent ticked nothing, edited no box and pushed nothing):
+
+| Check | Result |
+|-------|--------|
+| `git rev-parse origin/claude/laughing-dirac-e0h2ax` (`SHA-A2`) | `dffa996fa84c7b35c69f95987231426296f864b2` |
+| `git rev-list --parents -n 1 SHA-A2` | exactly one parent, `e56d4d4ae10b5b0793d020b4c362306f20dd8003` (`SHA-A1`) |
+| `git log -1 --format='%an %cI %s' SHA-A2` | `Am0rfu5`, `2026-11-06T14:48:58+00:00`, `docs(58): sign off the v0.11.1 tag` |
+| `git diff --name-only SHA-A1 SHA-A2` | exactly `.planning/phases/58-crate-release/58-ACCEPTANCE-AUDIT.md` |
+| `git diff --stat SHA-A1 SHA-A2` | 1 file, 1 insertion, 1 deletion (line 43) |
+| `git diff -U0 --word-diff=porcelain SHA-A1 SHA-A2` | the only changed token is `[ ]` to `[x]` |
+| line 43 at `SHA-A2` | starts `- [x] **The `v0.11.1` tag may be cut**` |
+| PR 64 (`gh api repos/DF3NDR/paladin-dev-env/pulls/64`) | `open`, base `main`, head `dffa996fa84c7b35c69f95987231426296f864b2` (equals `SHA-A2`) |
+| `main` (D-02) | `8b23cb4c55a10fcf0b08fab1af595e1f184e5f2e`, unmoved |
+| `git ls-remote --tags origin 'v0.11.1*'` | empty: no `v0.11.1*` tag |
+
+The local branch was fast-forwarded to `SHA-A2` (`git merge --ff-only`), keeping the two uncommitted records.
+
+**Verifier-script note.** The plan's automated check counts changed lines with `grep -c '^[-+][^-+]'`; for this one-line diff the removed line begins `-- [ ]`, so that pattern matches 0 lines, not 2. The substance was checked directly instead (stat 1/1, word-diff `[ ]` to `[x]`). The text after the box on line 43 still reads "Unticked, as designed ..." because the maintainer changed the one character only, as the hand-off prescribed; it is left as the maintainer wrote it.
+
+**CodeQL dismissal state (alerts 93-100).** The code-scanning endpoints answer 403 from this sandbox, so the platform state cannot be read here. The maintainer's single reply `ticked` is taken to cover both steps of the checkpoint (dismiss 93-100 as `false positive`, and tick the box); the platform dismissal is recorded on their word and is reconciled by the register's own manual command (`make check-codeql-dismissals` covers the register, not the platform).
+
+**Stop (D-00i).** The phase now waits for CI on `SHA-A2`: every run on `SHA-A2` must show `status: completed` before plan 58-12 Task 1 reads them. Nothing was pushed, merged, tagged, labelled or dispatched by this plan after `SHA-A1`.
+
+---
+
+### Plan 58-12 — every run on SHA-A2 (the tick commit)
+
+Executed 2026-11-06 (UTC). Every read below is a live, unauthenticated REST read from this sandbox, made once between 17:08Z and 17:10Z, per run and per job (never an aggregate or rollup status). Nothing was waited for, polled or watched (D-00i); nothing was re-run, merged, tagged, labelled, dispatched, published or yanked. `--paginate` is blocked through the proxy, so lists were paged by hand with `per_page=100&page=N` until a page came back empty.
+
+**Step 1 re-check (2026-11-06T17:08Z).**
+
+| Check | Result |
+|-------|--------|
+| `main` (D-02) — `gh api repos/DF3NDR/paladin-dev-env/branches/main --jq .commit.sha` | `8b23cb4c55a10fcf0b08fab1af595e1f184e5f2e` (unmoved) |
+| remote branch tip — `git ls-remote origin refs/heads/claude/laughing-dirac-e0h2ax` | `dffa996fa84c7b35c69f95987231426296f864b2` (= `SHA-A2`) |
+| PR 64 — `gh api repos/DF3NDR/paladin-dev-env/pulls/64` | `state` open, `base` `main`, `head.sha` `dffa996fa84c7b35c69f95987231426296f864b2` (= `SHA-A2`), label `release`, `mergeable_state` `clean`, title `release: v0.11.1 — Dogfood Cleanup` |
+| PR `merge_commit_sha` (GitHub's test merge, not the merge commit; it changes with `main` and is read again by plan 58-13) | `844793d29492a7bf712553af3ec8bf7c952d945b` |
+| `git ls-remote --tags origin 'refs/tags/v0.11.1*'` | empty |
+| `gh api repos/DF3NDR/paladin-dev-env/tags?per_page=100` | newest tag `v0.11.0`; no `v0.11.1*` |
+
+**Runs on `SHA-A2`** (`gh api "repos/DF3NDR/paladin-dev-env/actions/runs?head_sha=dffa996fa84c7b35c69f95987231426296f864b2&per_page=100"`, `total_count` 9, all nine listed). Every run is `status: completed`, `run_attempt` 1 (never re-run); none is `failure` or `cancelled`. Jobs read with `actions/runs/<id>/jobs?per_page=100&page=1..2` (page 2 empty on every run; 124 jobs in all).
+
+| Workflow | Run id | Event | Created (UTC) | Conclusion | Jobs |
+|----------|--------|-------|---------------|------------|------|
+| `ci.yml` (**the deciding run**: newest by `created_at`, then `id`) | [`42240455496`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496) | pull_request | 2026-11-06T15:09:48Z | **success** | 39: 39 success |
+| `ci.yml` | [`42240450924`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924) | push | 2026-11-06T15:09:46Z | **success** | 39: 37 success, 2 skipped |
+| `pre-commit` | [`42240455539`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455539) | pull_request | 2026-11-06T15:09:48Z | success | 1: 1 success |
+| `pre-commit` | [`42240450982`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450982) | push | 2026-11-06T15:09:46Z | success | 1: 1 success |
+| `Docs` | [`42240455438`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455438) | pull_request | 2026-11-06T15:09:48Z | success | 2: 1 success, 1 skipped |
+| `codeql.yml` | [`42240455493`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455493) | pull_request | 2026-11-06T15:09:48Z | success | 1: 1 success |
+| `codeql.yml` | [`42240450806`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450806) | push | 2026-11-06T15:09:46Z | success | 1: 1 success |
+| `feature-flags.yml` | [`42240455520`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455520) | pull_request | 2026-11-06T15:09:48Z | success | 20: 20 success |
+| `feature-flags.yml` | [`42240450977`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450977) | push | 2026-11-06T15:09:46Z | success | 20: 20 success |
+
+The only non-success jobs on `SHA-A2` are three `skipped` ones, none of them the deciding run of a required context:
+
+| Job | Run | Conclusion | URL |
+|-----|-----|------------|-----|
+| End-to-End Tests | `42240450924` (push) | skipped (only the `labeled`/pull-request event runs it; it **ran and passed** on the pull-request run, job `127983357816`) | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127992791201 |
+| Benchmark Regression Signal (Non-Blocking) | `42240450924` (push) | skipped (the pull-request run's own copy ran and passed) | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969860480 |
+| Deploy to GitHub Pages | `42240455438` (`Docs`) | skipped (not a PR deploy) | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455438/job/127975165615 |
+
+**Whole-run `ci.yml` conclusions (D-05 as reworded, Research Pitfall 2).** Both `ci.yml` runs on `SHA-A2` concluded `success` as whole runs, and the deciding run `42240455496` (the pull-request run, created 2026-11-06T15:09:48Z, two seconds after the push run) is `success` with all 39 jobs `success`; no step of any job in either run has a conclusion other than `success` or `skipped`. The `Generated SDK Clients (Python + TypeScript) smoke` job is `success` in both: [`127969751114`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751114) (pull-request run, 17 of 17 steps `success`) and [`127969859153`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859153) (push run, 17 of 17 steps `success`).
+
+**Check runs on `SHA-A2`** (`commits/dffa996fa84c7b35c69f95987231426296f864b2/check-runs?per_page=100&page=1..3`, `total_count` 128, page 3 empty): 125 success, 3 skipped (the three jobs above), **0 failure, 0 cancelled**. The Code Scanning check run `CodeQL` ([`127975979676`](https://github.com/DF3NDR/paladin-dev-env/runs/127975979676), app `github-advanced-security`), which was the one red signal on `SHA-A0` (F-58-08), is now `success`, consistent with the maintainer's platform dismissal of alerts 93-100 (taken on their word in plan 58-11; the alerts endpoint still answers 403 from this sandbox, so the alert list itself is not read). `Socket Security: Project Report` `127969067120`, `Socket Security: Pull Request Alerts` `127969118419` and `osv-scanner` `127978524218` are `success`.
+
+**Coverage and semver on `SHA-A2`** (read from the job logs, `gh api repos/DF3NDR/paladin-dev-env/actions/jobs/<id>/logs`, deciding pull-request run): `Coverage` job `127969751643`, `Lines: 172383/185625 = 92.87%`, `Functions: 17811/20598 = 86.47%` (floor 82 %); `SHA-A0`'s labelled run read 92.86 % (172380 of 185625); the two readings differ by three covered lines over the same 185,625-line denominator, and the cause (run-to-run variation in the integration-backed measurement) is not investigated. The figure the maintainer decision cites is `SHA-A0`'s 92.86 %, with this 92.87 % beside it. `Semver Checks (vs v0.11.0)` job `127969751255`: `semver: 12 package(s) checked against 0.11.0 at --release-type patch; 0 failure(s)`.
+
+#### Jobs of `ci.yml`, pull_request run `42240455496` (the deciding run, `SHA-A2`)
+
+| Job | Conclusion | URL |
+|-----|------------|-----|
+| License & Dependency Policy | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969750428 |
+| Unit Tests (stable) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969750710 |
+| API Surface Tracking | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969750919 |
+| Benchmark Regression Signal (Non-Blocking) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751003 |
+| Code Quality | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751030 |
+| Crate Isolation (paladin-llm) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751035 |
+| Redis Cadence Contract Suite (live server) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751038 |
+| Integration Tests | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751093 |
+| Generated SDK Clients (Python + TypeScript) smoke | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751114 |
+| Redis Run Queue Contract Suite (live server) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751143 |
+| Benchmark Compile Check | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751158 |
+| Crate Isolation (paladin-memory) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751170 |
+| E2E Platform API (PRD 06 acceptance-1 lifecycle + SHIP-02 boot proof) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751205 |
+| Security Audit | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751241 |
+| Semver Checks (vs v0.11.0) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751255 |
+| Workflow Lint | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751267 |
+| Crate Isolation (paladin-ai-core) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751276 |
+| Unit Tests (beta) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751288 |
+| Postgres Storage Contract Suites (live server) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751308 |
+| Crate Isolation (paladin-ports) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751351 |
+| Ollama Integration Tests (live server) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751360 |
+| Crate Isolation (paladin-battalion) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751362 |
+| Redis Node Cache Contract Suite (live server) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751404 |
+| Consumer-Surface Muster | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751426 |
+| Crate Isolation (paladin-storage) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751454 |
+| Docker Integration Tests | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751462 |
+| Crate Isolation (paladin-ai) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751523 |
+| CLI Snapshot Tests | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751527 |
+| MSRV (Rust 1.88) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751565 |
+| OSV Scanner | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751580 |
+| Coverage | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751643 |
+| Crate Isolation (paladin-notifications) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751741 |
+| Crate Isolation (paladin-web) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751811 |
+| Crate Isolation (paladin-content) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969752172 |
+| End-to-End Tests | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127983357816 |
+| Docker Build | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127984099326 |
+| Publish Dry Run | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127984099355 |
+| Example Muster (Feature Matrix) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127984099399 |
+| Kubernetes Smoke Test | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/128026696655 |
+
+#### Jobs of `ci.yml`, push run `42240450924` (`SHA-A2`)
+
+| Job | Conclusion | URL |
+|-----|------------|-----|
+| API Surface Tracking | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969858398 |
+| Coverage | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969858756 |
+| CLI Snapshot Tests | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969858795 |
+| License & Dependency Policy | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969858891 |
+| Security Audit | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969858907 |
+| Ollama Integration Tests (live server) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969858912 |
+| Docker Integration Tests | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969858932 |
+| Consumer-Surface Muster | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969858996 |
+| OSV Scanner | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859011 |
+| Workflow Lint | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859052 |
+| Code Quality | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859075 |
+| Postgres Storage Contract Suites (live server) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859102 |
+| Redis Run Queue Contract Suite (live server) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859124 |
+| Semver Checks (vs v0.11.0) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859141 |
+| Generated SDK Clients (Python + TypeScript) smoke | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859153 |
+| Crate Isolation (paladin-ai) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859182 |
+| Integration Tests | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859228 |
+| Crate Isolation (paladin-battalion) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859234 |
+| Unit Tests (beta) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859256 |
+| MSRV (Rust 1.88) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859263 |
+| Benchmark Compile Check | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859291 |
+| Crate Isolation (paladin-llm) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859323 |
+| Crate Isolation (paladin-storage) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859338 |
+| Redis Cadence Contract Suite (live server) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859341 |
+| E2E Platform API (PRD 06 acceptance-1 lifecycle + SHIP-02 boot proof) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859348 |
+| Crate Isolation (paladin-web) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859382 |
+| Crate Isolation (paladin-content) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859400 |
+| Unit Tests (stable) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859403 |
+| Crate Isolation (paladin-ports) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859458 |
+| Crate Isolation (paladin-notifications) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859486 |
+| Crate Isolation (paladin-ai-core) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859533 |
+| Redis Node Cache Contract Suite (live server) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859551 |
+| Crate Isolation (paladin-memory) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859565 |
+| Benchmark Regression Signal (Non-Blocking) | skipped | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969860480 |
+| Example Muster (Feature Matrix) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127980402650 |
+| Docker Build | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127984097891 |
+| Publish Dry Run | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127984098047 |
+| End-to-End Tests | skipped | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127992791201 |
+| Kubernetes Smoke Test | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/128028081342 |
+
+The other seven runs hold: `feature-flags.yml` 20 jobs each (`42240455520`, `42240450977`), all `success`; `pre-commit` 1 job each (`pre-commit run --all-files`: `127969038841` pull-request, `127969022631` push), `success`; `codeql.yml` 1 job each (`CodeQL Analysis (Rust)`: `127969038896` pull-request, `127969025145` push), `success`; `Docs` 2 jobs (`Build MDBook` `127969038796` `success`, `Deploy to GitHub Pages` `127975165615` `skipped`).
+
+#### Required-context tally (D-04, the live ruleset)
+
+`gh api repos/DF3NDR/paladin-dev-env/rules/branches/main`, read 2026-11-06T17:09Z: four rules, `deletion`, `non_fast_forward`, `pull_request`, `required_status_checks`; the last lists **46 contexts** (the same 46 as `SHA-A0`'s tally; `strict_required_status_checks_policy` is `true`, and the PR is `mergeable_state: clean`, i.e. up to date with `main`). Each context is matched by name against the 128 check runs on `SHA-A2`. Where one name has several check runs, all are shown; the deciding run is the newest non-skipped one (a `skipped` run satisfies a required context in GitHub's evaluation, and the only name with a `skipped` run, `End-to-End Tests`, also has a `success`). **46 of 46 contexts have a concluded check run on `SHA-A2`; 46 of 46 deciding runs are `success`; 0 missing, 0 red.**
+
+| # | Required context | Deciding conclusion | Deciding job URL | All check runs of that name |
+|---|------------------|---------------------|------------------|-----------------------------|
+| 1 | API Surface Tracking | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969750919 | success (42240455496), success (42240450924) |
+| 2 | Benchmark Compile Check | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751158 | success (42240455496), success (42240450924) |
+| 3 | Build & Test (all-features) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455520/job/127969040437 | success (42240455520), success (42240450977) |
+| 4 | Build & Test (cli) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455520/job/127969040497 | success (42240455520), success (42240450977) |
+| 5 | Build & Test (content-processing) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455520/job/127969040949 | success (42240455520), success (42240450977) |
+| 6 | Build & Test (default) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455520/job/127969040520 | success (42240455520), success (42240450977) |
+| 7 | Build & Test (full) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455520/job/127969040299 | success (42240455520), success (42240450977) |
+| 8 | Build & Test (llm-all) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455520/job/127969040652 | success (42240455520), success (42240450977) |
+| 9 | Build & Test (llm-anthropic) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455520/job/127969040423 | success (42240455520), success (42240450977) |
+| 10 | Build & Test (llm-deepseek) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455520/job/127969040726 | success (42240455520), success (42240450977) |
+| 11 | Build & Test (llm-openai) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455520/job/127969040587 | success (42240455520), success (42240450977) |
+| 12 | Build & Test (no-default-features) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455520/job/127969040435 | success (42240455520), success (42240450977) |
+| 13 | Build & Test (notifications) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455520/job/127969040905 | success (42240455520), success (42240450977) |
+| 14 | Build & Test (redis-queue) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455520/job/127969040769 | success (42240455520), success (42240450977) |
+| 15 | Build & Test (s3-storage) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455520/job/127969040637 | success (42240455520), success (42240450977) |
+| 16 | Build & Test (vision) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455520/job/127969040638 | success (42240455520), success (42240450977) |
+| 17 | Build & Test (web-server) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455520/job/127969040975 | success (42240455520), success (42240450977) |
+| 18 | Build MDBook | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455438/job/127969038796 | success (42240455438) |
+| 19 | CLI Isolation (library without cli feature) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455520/job/127969040473 | success (42240455520), success (42240450977) |
+| 20 | CLI Snapshot Tests | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751527 | success (42240455496), success (42240450924) |
+| 21 | Code Quality | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751030 | success (42240455496), success (42240450924) |
+| 22 | Coverage | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751643 | success (42240455496), success (42240450924) |
+| 23 | Crate Isolation (paladin-ai) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859182 | success (42240450924), success (42240455496) |
+| 24 | Crate Isolation (paladin-ai-core) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859533 | success (42240450924), success (42240455496) |
+| 25 | Crate Isolation (paladin-battalion) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859234 | success (42240450924), success (42240455496) |
+| 26 | Crate Isolation (paladin-content) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859400 | success (42240450924), success (42240455496) |
+| 27 | Crate Isolation (paladin-llm) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859323 | success (42240450924), success (42240455496) |
+| 28 | Crate Isolation (paladin-memory) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859565 | success (42240450924), success (42240455496) |
+| 29 | Crate Isolation (paladin-notifications) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859486 | success (42240450924), success (42240455496) |
+| 30 | Crate Isolation (paladin-ports) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751351 | success (42240455496), success (42240450924) |
+| 31 | Crate Isolation (paladin-storage) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859338 | success (42240450924), success (42240455496) |
+| 32 | Crate Isolation (paladin-web) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859382 | success (42240450924), success (42240455496) |
+| 33 | Docker Integration Tests | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751462 | success (42240455496), success (42240450924) |
+| 34 | End-to-End Tests | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127983357816 | success (42240455496), skipped (42240450924) |
+| 35 | Example Muster (Feature Matrix) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127984099399 | success (42240455496), success (42240450924) |
+| 36 | Feature Matrix Summary | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455520/job/127981286039 | success (42240455520), success (42240450977) |
+| 37 | Integration Tests | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859228 | success (42240450924), success (42240455496) |
+| 38 | License & Dependency Policy | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969750428 | success (42240455496), success (42240450924) |
+| 39 | OSV Scanner | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751580 | success (42240455496), success (42240450924) |
+| 40 | Publish Dry Run | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127984099355 | success (42240455496), success (42240450924) |
+| 41 | Security Audit | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751241 | success (42240455496), success (42240450924) |
+| 42 | Semver Checks (vs v0.11.0) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751255 | success (42240455496), success (42240450924) |
+| 43 | Unit Tests (beta) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859256 | success (42240450924), success (42240455496) |
+| 44 | Unit Tests (stable) | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240450924/job/127969859403 | success (42240450924), success (42240455496) |
+| 45 | Workflow Lint | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455496/job/127969751267 | success (42240455496), success (42240450924) |
+| 46 | pre-commit run --all-files | success | https://github.com/DF3NDR/paladin-dev-env/actions/runs/42240455539/job/127969038841 | success (42240455539), success (42240450982) |
+
+#### Runs on `SHA-A1` cancelled by the tick push: superseded by `SHA-A2`
+
+`gh api "repos/DF3NDR/paladin-dev-env/actions/runs?head_sha=e56d4d4ae10b5b0793d020b4c362306f20dd8003&per_page=100"` (`total_count` 9, read 2026-11-06T17:08Z). The maintainer's tick push (`SHA-A2`, 2026-11-06T15:09Z) cancelled the two `ci.yml` runs through the workflow's concurrency group. They are **not red**; they are **superseded by SHA-A2**, whose own `ci.yml` runs above are `success`. The seven other `SHA-A1` runs had already concluded `success` before the tick and are listed for completeness.
+
+| Workflow | Run id | Event | Conclusion | Label |
+|----------|--------|-------|------------|-------|
+| `ci.yml` | [`42231164538`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42231164538) | pull_request | cancelled (updated 2026-11-06T15:11:08Z) | superseded by SHA-A2 |
+| `ci.yml` | [`42231157064`](https://github.com/DF3NDR/paladin-dev-env/actions/runs/42231157064) | push | cancelled (updated 2026-11-06T15:11:21Z) | superseded by SHA-A2 |
+| `codeql.yml` | `42231167954` (pull_request), `42231157045` (push) | | success | completed before the tick |
+| `feature-flags.yml` | `42231164530` (pull_request), `42231156993` (push) | | success | completed before the tick |
+| `pre-commit` | `42231164500` (pull_request), `42231157235` (push) | | success | completed before the tick |
+| `Docs` | `42231164603` (pull_request) | | success | completed before the tick |
+
+#### Pre-tag guard (SHIP-08 adjacency, T-58-123)
+
+| Check | Command | Result (2026-11-06T17:09Z) |
+|-------|---------|-----------------------------|
+| Registry, every derived crate absent at `0.11.1` | `bash .planning/phases/58-crate-release/58-registry-probe.sh --version 0.11.1 --mode absent` | exit 0; last line `probe: 12 crate(s), mode absent, version 0.11.1: OK` |
+| Remote tags | `git ls-remote --tags origin 'refs/tags/v0.11.1*'` | empty (exit 0, no output); no `v0.11.1*` tag on the remote |
+
+Per-crate probe lines (sparse index, no credential, only the mandatory `User-Agent`, D-00g):
+
+```
+paladin-ai	ABSENT
+paladin-ai-core	ABSENT
+paladin-battalion	ABSENT
+paladin-content	ABSENT
+paladin-eval	ABSENT
+paladin-herald	ABSENT
+paladin-llm	ABSENT
+paladin-memory	ABSENT
+paladin-notifications	ABSENT
+paladin-ports	ABSENT
+paladin-storage	ABSENT
+paladin-web	ABSENT
+```
+
+**Verdict for Task 1 (plan 58-12).** No red required context, no red SDK job, no non-`success` `ci.yml` run, no `SHA-A2` run unfinished; D-00j did not trip and **nothing was re-run** (neither the F-58-03 named rule nor an infrastructure re-run was needed). `main`, the remote tip and the PR head are as D-02/D-04 require; the version is unclaimed on the registry and as a tag. The hand-off may be presented once the maintainer answers the one-way decision (Task 2).
+
+**What stays uncommitted.** This section and the rewritten `.continue-here.md` are working-tree changes only (plan 58-12 commits nothing; plan 58-13 commits them on `chore/58-close`). The local branch is still two commits ahead of `origin/claude/laughing-dirac-e0h2ax` (`75f36c72d`, `83af6d02d`, plan 58-11 records); they are recorded in the resume file, never pushed, never dropped.

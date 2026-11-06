@@ -653,11 +653,11 @@ Plans:
 
 **Wave 9** *(blocked on Wave 8 completion)*
 
-- [ ] 58-11-PLAN.md — pre-merge: optional redate, push `SHA-A1`, the maintainer's tick, the tick verified on origin (SHIP-08)
+- [x] 58-11-PLAN.md — pre-merge: optional redate, push `SHA-A1`, the maintainer's tick, the tick verified on origin (SHIP-08)
 
 **Wave 10** *(blocked on Wave 9 completion)*
 
-- [ ] 58-12-PLAN.md — merge + tag: checks on the tick commit, the pre-tag guard, the one-way door, the maintainer's merge and annotated tag (SHIP-08)
+- [x] 58-12-PLAN.md — merge + tag: checks on the tick commit, the pre-tag guard, the one-way door, the maintainer's merge and annotated tag (SHIP-08)
 
 **Wave 11** *(blocked on Wave 10 completion)*
 

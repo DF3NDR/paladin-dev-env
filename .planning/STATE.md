@@ -5,15 +5,15 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 58
 current_phase_name: Crate Release
 status: executing
-stopped_at: Completed 58-10-PLAN.md
-last_updated: "2026-11-06T01:47:45.201Z"
+stopped_at: "Completed 58-12-PLAN.md; tag v0.11.1 pushed on SHA-B 251303bcd; release.yml run 42304251278 in progress (next: plan 58-13 Task 1 after it concludes)"
+last_updated: "2026-11-06T22:30:00.000Z"
 last_activity: 2026-11-05
 last_activity_desc: Phase 58 execution started
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 84
-  completed_plans: 80
+  completed_plans: 82
 ---
 
 # Project State
@@ -53,11 +53,11 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 ## Current Position
 
 Phase: 58 (Crate Release) — EXECUTING
-Plan: 11 of 14
+Plan: 13 of 14
 Status: Ready to execute
 Last activity: 2026-11-05 — Phase 58 execution started
 
-Progress: [█████████████████░░░] 6/7 phases (v0.11.1) — plans [████████████████████] 68/68 ([██████████] 95%)
+Progress: [█████████████████░░░] 6/7 phases (v0.11.1) — plans [████████████████████] 68/68 ([██████████] 98%)
 
 ## Performance Metrics
 
@@ -442,6 +442,8 @@ Progress: [█████████████████░░░] 6/7 pha
 | Phase 58 P08 | 65min | 3 tasks | 4 files |
 | Phase 58 P09 | 2h20m | 3 tasks | 3 files |
 | Phase 58 P10 | 1h | 3 tasks | 6 files |
+| Phase 58 P11 | about 1h50m incl. checkpoint pause | 3 tasks | 17 files |
+| Phase 58 P12 | about 5h20m incl. checkpoint pauses | 3 tasks | 0 files committed (plan forbids commits) |
 
 ## Accumulated Context
 
@@ -873,6 +875,8 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 58]: plan 58-07: pointer-list consumer statement reconciled with M-B-48..M-B-52 (nine config types stop serialising credential fields); M-B-27 and M-B-36 surfaced for maintainer at 58-08; SHA-C1 96eb49d38, SHA-C2 d88c519ab, SHA-C3 ac9411ea0, STAMP 2026-11-05, nothing pushed
 - [Phase 58]: 58-08: re-seal green on SHA-R 48146bc99 (row 4: 12 packages, 223 checks each, 0 failure(s)); D-10 correction SHA-R1 073bdd9ce (MIGRATION.md only); row 6 needed one disk-full infrastructure re-run (both outcomes recorded); row 5 and Coverage CI-attributed; acceptance-audit box left unticked
 - [Phase 58]: 58-10: tag day redated to 2026-11-06 (STAMP 2026-11-05); CODEQL=dismiss-now (eight F-58-08 alerts, governed rows in 58-11); AUDIT=validate-first (Phases 54 and 56 validated, milestone audit re-read as passed)
+- [Phase 58]: [58-11] Tag day 2026-11-06 applied; maintainer's tick dffa996fa (SHA-A2) verified read-only on origin as a one-token change on SHA-A1 and the PR 64 head; CodeQL dismissal of 93-100 taken on the maintainer's word (403 from sandbox)
+- [Phase 58]: [58-12] Maintainer `proceed` at the one-way door; PR 64 merged with a merge commit (SHA-B 251303bcd); annotated tag v0.11.1 (65b13ed08) on SHA-B on 2026-11-06, equal to merge_commit_sha; release.yml run 42304251278 in progress; nothing committed (58-13 carries it)
 
 ### Pending Todos
 
@@ -1294,9 +1298,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-11-06T01:47:45.175Z
-Stopped at: Completed 58-10-PLAN.md
-Resume file: None
+Last session: 2026-11-06T22:30:00.000Z
+Stopped at: Completed 58-12-PLAN.md; tag v0.11.1 pushed on SHA-B 251303bcd; release.yml run 42304251278 in progress (next: plan 58-13 Task 1 after it concludes)
+Resume file: .planning/phases/58-crate-release/.continue-here.md
 
 ## Operator Next Steps
 

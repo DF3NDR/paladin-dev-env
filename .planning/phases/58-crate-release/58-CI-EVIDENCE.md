@@ -1799,3 +1799,14 @@ documentation-only assertion). No label, reviewer, auto-merge or merge was set b
 stored ends with a harness-appended attribution footer in place of the two attribution lines the plan names; it is
 recorded here as read, not edited. Commits added after the open (this record, the plan summary and the tracking
 files) ride the same branch and are pushed before the plan returns.
+
+#### Post-close CI on `chore/58-close` (orchestrator, 2026-11-06T23:40:35Z)
+
+After the phase-closing commits (`1068e8d0a` review, `c4c69e7c3` completion, `d2c74c0e3` PROJECT.md) were pushed, head `d2c74c0e38da5f9f39c0fdad11f42bfe5cfbe051`:
+
+| Run | Event | Conclusion | Note |
+|-----|-------|------------|------|
+| `feature-flags.yml` 42310773494 | pull_request | failure | `Build & Test (full)` job 128211490315: `local_cancel_signals_token` panicked at `cancel_tests.rs:366` (`was_local must be true`), 1764 passed / 1 failed; `Feature Matrix Summary` red as its aggregate |
+| others on `d2c74c0e3` | push / pull_request | in progress at the read | superseded by the next push |
+
+Disposition: not this PR's. The diff against `main` is `.planning/`-only; the code tree equals `main` at SHA-B, where `feature-flags.yml` run 42272241351 concluded `success`. The failing test and its sibling `cross_instance_cancel_probe` (which hit its 30 s timeout in the local Phase 58 regression gate and passed in isolation in 19 s) are pre-existing timing races from Phase 55; todo `2026-11-06-cancel-tests-timing-races.md` carries the fix proposal for a test-only code PR. Standing-down comment posted on PR 65 (comment 6698758484). The fresh runs on the head carrying this record are the one re-run; a second failure there is treated as real.

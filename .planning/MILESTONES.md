@@ -1,5 +1,20 @@
 # Milestones
 
+## v0.11.1 Dogfood Cleanup — release record (tag cut 2026-11-06)
+
+**Release:** `v0.11.1` on merge commit `251303bc` (2026-11-06; release run `42304251278` green; all 12
+publishable crates registry-verified on crates.io at `0.11.1` via Trusted Publishing, none yanked; the
+GitHub Release body is 17049 characters against the 125,000 limit, no truncation — registry table in
+`phases/58-crate-release/58-CI-EVIDENCE.md`).
+**Release PR:** #64 from `claude/laughing-dirac-e0h2ax`, merged with a merge commit; 443 commits / 709 files
+per GitHub.
+**Sign-off:** `58-ACCEPTANCE-AUDIT.md`, ticked by the maintainer at `dffa996f`.
+**Audit:** `v0.11.1-MILESTONE-AUDIT.md`, `passed`, Phases 52-57.
+**Requirements closed by the release:** SHIP-08, SHIP-09, SHIP-10.
+
+*Milestone closeout fields (Shipped date, phase/plan/task totals, Closeout type) are written by
+`/gsd-complete-milestone v0.11.1`, which inserts its own entry; fold this release record into it then.*
+
 ## v0.11.0 Treasurer Spend Governance (Shipped: 2026-10-27)
 
 **Phases completed:** 15 phases (38-51, including the inserted 50.1; Phases 48-51 were added

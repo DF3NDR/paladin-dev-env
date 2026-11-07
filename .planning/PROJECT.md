@@ -147,14 +147,23 @@ trustworthy enough to anchor a gate.
 
 ## Current State
 
-**Milestone v0.11.1 "Dogfood Cleanup" in progress — opened 2026-10-27, 6 of 7 phases complete
-(52-57; 68/68 plans, every `VERIFICATION.md` `passed`).** Phase 57 sealed the registers on
-2026-11-05: `WINDOWS.md` `open_count: 0` (108 rows), zero undispositioned review warnings held by
+**Milestone v0.11.1 "Dogfood Cleanup" — all 7 phases complete (52-58; 84/84 plans, every
+`VERIFICATION.md` `passed`); `v0.11.1` shipped 2026-11-06.** Phase 58 "Crate Release" completed
+2026-11-06: the lockstep bump to `0.11.1` held by `check-version-strings`, `MIGRATION.md` §11.8
+consumer statement (SHIP-09), the pre-tag milestone audit `passed` (SHIP-10), release PR #64 merged
+by the maintainer as merge commit `251303bc`, annotated tag `v0.11.1` on it, `release.yml` run
+`42304251278` green 12/12 with all twelve crates registry-verified at `0.11.1` through Trusted
+Publishing and the GitHub Release published with 10 assets (SHIP-08). Post-release follow-ups:
+`58-REVIEW.md` (0 critical, 5 warnings) and 44 pending todos with `recheck_by: 2026-11-09`.
+Remaining acts are the maintainer's: merge the documentation-only PR #65 (`chore/58-close`), then
+`/gsd-complete-milestone v0.11.1` (see `58-READY-TO-CLOSE.md`).
+
+Before Phase 58, Phase 57 sealed the registers on 2026-11-05: `WINDOWS.md` `open_count: 0` (108 rows), zero undispositioned review warnings held by
 `scripts/check-review-dispositions.sh`, the three diagnosed debug sessions archived, the Phase 40
 judgment read recorded, the four `zip` RustSec exceptions re-dated to 2027-03-31, `make security`
 green, `make test` 5593/0 on the head. Open items carried into Phase 58: code-review CR-01 (run
 worker status-before-outcome write order), WR-01/WR-02, and the red `Generated SDK Clients smoke`
-CI job. **Next: Phase 58 "Crate Release"** — `/gsd-discuss-phase 58` (no `58-CONTEXT.md` yet).
+CI job. Those carried items were dispositioned in Phase 58 (`58-AUDIT-DISPOSITIONS.md`, 135 rows, 0 failures).
 
 **Milestone v0.11.0 "Treasurer Spend Governance" shipped — closed 2026-10-27.** 15 phases
 (38-51, with 50.1 inserted; Phases 48-51 added mid-milestone from a code survey and three web3sec
@@ -2855,7 +2864,7 @@ carried phase-level decisions; Constraints updated for `paladin-eval` and MSRV 1
 (`/gsd-new-milestone`): *Next Milestone Goals* replaced by *Current Milestone*; Active re-seeded;
 new phases start at Phase 38.*
 
-*Last updated: 2026-10-27 at the start of milestone v0.11.1 "Dogfood Cleanup"
+*Last updated: 2026-11-06 after Phase 58 "Crate Release" completed and `v0.11.1` shipped
 (`/gsd-new-milestone`): *Next Milestone: not yet defined* replaced by *Current Milestone*; Active
 re-seeded from `.project/v0.11.1/`; the four shape decisions (Responses API out, `${VAR}` refused at
 boot, research skipped, smaller decisions per the outline) recorded; new phases start at Phase 52.*

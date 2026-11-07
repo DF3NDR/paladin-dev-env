@@ -260,7 +260,7 @@ Phase artifacts: `milestones/v0.11.0-phases/`
 - [x] **Phase 55: Correctness Fixes, Test Hygiene & Lint Bar** - No `todo!()` reachable in a published crate (held by a grep guard), the unfinished content/base-layer items each given a keep/fence/remove decision, the Failed-vs-Halted, `Cancelled`, `claude-opus-4-8` seed and unpriced-model-warning fixes, hermetic and non-flaky tests, and a warning-free lint and rustdoc bar with the eight crate-level rustdoc allows removed (completed 2026-11-02)
 - [x] **Phase 56: Dogfood Findings** - Triage the maintainer's runs, the web3sec return and two deliberate walk-throughs into the findings log, disposition every `DF-nn`, and fix every promoted S1/S2 finding before the tag (detailed scope is unknown today and is filled from `.project/v0.11.1/02-dogfood-findings-log.md`) (completed 2026-11-04)
 - [x] **Phase 57: Register Hygiene Close-Out** - `WINDOWS.md` at `open_count: 0`, zero undispositioned review warnings across Phases 38-51, SUMMARY frontmatter and debug sessions reconciled, the Phase 40 judgment-tier read recorded, and the three `zip` RustSec exceptions re-checked, so the audit can read `passed` (completed 2026-11-05)
-- [ ] **Phase 58: Crate Release** - Lockstep version bump held by the gate, `MIGRATION.md` consumer statement, a pre-tag milestone audit that reads `passed`, and the `v0.11.1` tag through `release.yml` with no manual step and all twelve crates on crates.io
+- [x] **Phase 58: Crate Release** - Lockstep version bump held by the gate, `MIGRATION.md` consumer statement, a pre-tag milestone audit that reads `passed`, and the `v0.11.1` tag through `release.yml` with no manual step and all twelve crates on crates.io (completed 2026-11-06)
 
 **v0.11.1 exit criteria (the milestone's definition of done — carried by Phase 58 and re-read at the tag):**
 
@@ -653,19 +653,19 @@ Plans:
 
 **Wave 9** *(blocked on Wave 8 completion)*
 
-- [ ] 58-11-PLAN.md — pre-merge: optional redate, push `SHA-A1`, the maintainer's tick, the tick verified on origin (SHIP-08)
+- [x] 58-11-PLAN.md — pre-merge: optional redate, push `SHA-A1`, the maintainer's tick, the tick verified on origin (SHIP-08)
 
 **Wave 10** *(blocked on Wave 9 completion)*
 
-- [ ] 58-12-PLAN.md — merge + tag: checks on the tick commit, the pre-tag guard, the one-way door, the maintainer's merge and annotated tag (SHIP-08)
+- [x] 58-12-PLAN.md — merge + tag: checks on the tick commit, the pre-tag guard, the one-way door, the maintainer's merge and annotated tag (SHIP-08)
 
 **Wave 11** *(blocked on Wave 10 completion)*
 
-- [ ] 58-13-PLAN.md — post-tag: tag equals the PR merge commit, `chore/58-close`, release run and GitHub Release read, twelve-crate registry table with Trusted Publishing, keyless scratch-crate smoke (SHIP-08)
+- [x] 58-13-PLAN.md — post-tag: tag equals the PR merge commit, `chore/58-close`, release run and GitHub Release read, twelve-crate registry table with Trusted Publishing, keyless scratch-crate smoke (SHIP-08)
 
 **Wave 12** *(blocked on Wave 11 completion)*
 
-- [ ] 58-14-PLAN.md — post-tag: MILESTONES release record, SHIP-08/09/10 ticked on the registry table, web3sec and ready-to-close hand-offs, the documentation-only close PR (SHIP-08, SHIP-09, SHIP-10)
+- [x] 58-14-PLAN.md — post-tag: MILESTONES release record, SHIP-08/09/10 ticked on the registry table, web3sec and ready-to-close hand-offs, the documentation-only close PR (SHIP-08, SHIP-09, SHIP-10)
 
 **Scope notes**:
 
@@ -700,7 +700,7 @@ Plans:
 | 55. Correctness Fixes, Test Hygiene & Lint Bar | v0.11.1 | 13/13 | Complete    | 2026-11-02 |
 | 56. Dogfood Findings | v0.11.1 | 14/14 | Complete    | 2026-11-04 |
 | 57. Register Hygiene Close-Out | v0.11.1 | 16/16 | Complete    | 2026-11-05 |
-| 58. Crate Release | v0.11.1 | 0/TBD | Not started | - |
+| 58. Crate Release | v0.11.1 | 16/16 | Complete    | 2026-11-06 |
 
 **v0.8.0 shipped 2026-08-24:** 14 phases, 149 plans, 65/65 requirements, 1,014 commits
 (`be2ff05..48ac11a5`). Audit status `tech_debt` — no blockers; see

@@ -3,17 +3,17 @@ gsd_state_version: 1.0
 milestone: v0.11.1
 milestone_name: Dogfood Cleanup (Phases 52-58) — in progress
 current_phase: 58
-current_phase_name: Crate Release
-status: executing
-stopped_at: Completed 58-10-PLAN.md
-last_updated: "2026-11-06T01:47:45.201Z"
-last_activity: 2026-11-05
-last_activity_desc: Phase 58 execution started
+status: completed
+stopped_at: Completed 58-14-PLAN.md; Phase 58 ready to close (58-READY-TO-CLOSE.md); close PR 65 open
+last_updated: "2026-11-06T23:13:16.354Z"
+last_activity: 2026-11-06
+last_activity_desc: Phase 58 complete
 progress:
   total_phases: 7
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 84
-  completed_plans: 80
+  completed_plans: 84
+current_phase_name: Crate Release
 ---
 
 # Project State
@@ -52,18 +52,18 @@ v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived under `miles
 
 ## Current Position
 
-Phase: 58 (Crate Release) — EXECUTING
-Plan: 11 of 14
-Status: Ready to execute
-Last activity: 2026-11-05 — Phase 58 execution started
+Phase: 58
+Plan: Not started
+Status: All phases complete
+Last activity: 2026-11-06 — Phase 58 complete
 
-Progress: [█████████████████░░░] 6/7 phases (v0.11.1) — plans [████████████████████] 68/68 ([██████████] 95%)
+Progress: [█████████████████░░░] 6/7 phases (v0.11.1) — plans [████████████████████] 68/68 ([██████████] 100%)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 657
+- Total plans completed: 673
 - Average duration: —
 - Total execution time: —
 
@@ -130,6 +130,7 @@ Progress: [█████████████████░░░] 6/7 pha
 | 55 | 13 | - | - |
 | 56 | 14 | - | - |
 | 57 | 16 | - | - |
+| 58 | 16 | - | - |
 
 *Updated after each plan completion*
 
@@ -442,6 +443,10 @@ Progress: [█████████████████░░░] 6/7 pha
 | Phase 58 P08 | 65min | 3 tasks | 4 files |
 | Phase 58 P09 | 2h20m | 3 tasks | 3 files |
 | Phase 58 P10 | 1h | 3 tasks | 6 files |
+| Phase 58 P11 | about 1h50m incl. checkpoint pause | 3 tasks | 17 files |
+| Phase 58 P12 | about 5h20m incl. checkpoint pauses | 3 tasks | 0 files committed (plan forbids commits) |
+| Phase 58 P13 | 10min | 3 tasks | 3 files |
+| Phase 58 P14 | 20min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -873,6 +878,9 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 58]: plan 58-07: pointer-list consumer statement reconciled with M-B-48..M-B-52 (nine config types stop serialising credential fields); M-B-27 and M-B-36 surfaced for maintainer at 58-08; SHA-C1 96eb49d38, SHA-C2 d88c519ab, SHA-C3 ac9411ea0, STAMP 2026-11-05, nothing pushed
 - [Phase 58]: 58-08: re-seal green on SHA-R 48146bc99 (row 4: 12 packages, 223 checks each, 0 failure(s)); D-10 correction SHA-R1 073bdd9ce (MIGRATION.md only); row 6 needed one disk-full infrastructure re-run (both outcomes recorded); row 5 and Coverage CI-attributed; acceptance-audit box left unticked
 - [Phase 58]: 58-10: tag day redated to 2026-11-06 (STAMP 2026-11-05); CODEQL=dismiss-now (eight F-58-08 alerts, governed rows in 58-11); AUDIT=validate-first (Phases 54 and 56 validated, milestone audit re-read as passed)
+- [Phase 58]: [58-11] Tag day 2026-11-06 applied; maintainer's tick dffa996fa (SHA-A2) verified read-only on origin as a one-token change on SHA-A1 and the PR 64 head; CodeQL dismissal of 93-100 taken on the maintainer's word (403 from sandbox)
+- [Phase 58]: [58-12] Maintainer `proceed` at the one-way door; PR 64 merged with a merge commit (SHA-B 251303bcd); annotated tag v0.11.1 (65b13ed08) on SHA-B on 2026-11-06, equal to merge_commit_sha; release.yml run 42304251278 in progress; nothing committed (58-13 carries it)
+- [Phase 58]: v0.11.1 released: tag `v0.11.1` on merge commit `251303bcd143c5529c737afe8a2c61b05688f018`, release run `42304251278`, 12/12 crates registry-verified at `0.11.1`, Trusted Publishing; milestone audit over Phases 52-57 `passed` — Ticked on the sparse-index table and the keyless smoke, not on the merge
 
 ### Pending Todos
 
@@ -1294,8 +1302,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-Last session: 2026-11-06T01:47:45.175Z
-Stopped at: Completed 58-10-PLAN.md
+Last session: 2026-11-06T22:50:46.560Z
+Stopped at: Completed 58-14-PLAN.md; Phase 58 ready to close (58-READY-TO-CLOSE.md); close PR 65 open
 Resume file: None
 
 ## Operator Next Steps

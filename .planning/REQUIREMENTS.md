@@ -247,14 +247,14 @@ fails is rebuilt.*
 
 ### Release (SHIP, continuing from v0.10.0's SHIP-01…07)
 
-- [ ] **SHIP-08**: `v0.11.1` is tagged on `main` and ships through `release.yml` end to end with no
+- [x] **SHIP-08**: `v0.11.1` is tagged on `main` and ships through `release.yml` end to end with no
       manual step; all 12 publishable crates are on crates.io at `0.11.1`
 
-- [ ] **SHIP-09**: `MIGRATION.md` states that a `0.11.0` consumer takes `0.11.1` without adaptation,
+- [x] **SHIP-09**: `MIGRATION.md` states that a `0.11.0` consumer takes `0.11.1` without adaptation,
       or records the one deliberate break (in which case the version is `v0.12.0`, not a quietly
       breaking patch)
 
-- [ ] **SHIP-10**: The milestone audit reads `passed`, not `tech_debt`: every carried item either
+- [x] **SHIP-10**: The milestone audit reads `passed`, not `tech_debt`: every carried item either
       fixed, waived with a reason, or re-homed with an owner and a date
 
 ## v2 Requirements
@@ -374,9 +374,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REG-04 | Phase 57 | Complete |
 | REG-05 | Phase 57 | Complete |
 | REG-06 | Phase 57 | Complete |
-| SHIP-08 | Phase 58 | Pending |
-| SHIP-09 | Phase 58 | Pending |
-| SHIP-10 | Phase 58 | Pending |
+| SHIP-08 | Phase 58 | Complete |
+| SHIP-09 | Phase 58 | Complete |
+| SHIP-10 | Phase 58 | Complete |
 
 **Coverage:**
 

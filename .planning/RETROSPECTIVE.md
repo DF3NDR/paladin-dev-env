@@ -549,6 +549,152 @@ both release blockers reproduced offline first.
   consumer-driven phases (49, 50, 50.1, 51: 64 plans) were 37 % of the milestone's plans and
   were not in the roadmap when it was written.
 
+## Milestone: v0.11.1 — Dogfood Cleanup
+
+**Shipped:** 2026-11-06 (closed 2026-11-07; `v0.11.1` tagged and published 2026-11-06)
+**Phases:** 7 (52-58, integer phases only — no insertion, no extension) | **Plans:** 84 | **Commits:** 443 on the release PR #64 per GitHub (591 reachable between the two tags in the shallow sandbox clone)
+
+### What Was Built
+
+A patch release that pays down the debt v0.11.0 shipped around, with nothing new for a consumer to
+learn. The CI and release gates were re-armed against the published baseline (semver at patch with a
+zero-check tripwire, allowlist, dry-run and end-to-end before merge, a release body of any size);
+the tenant-isolation holes in `/v1/threads/*`, submit, fork, cancel and job reads were closed behind
+one visibility gate with a thread's owner fixed as its earliest attributed run (ADR-0063); an
+unexpanded `${VAR}` API key and an invalid configuration are refused at boot; every copyable
+install pin, version label and model id in the docs is held to the tree by a gate; no published
+crate can panic from an unfinished stub; the startup log and the config types' `Debug` are
+credential-free and nine config types no longer serialise secrets; all eight crate-level rustdoc
+suppressions are gone; 36 dogfood findings from the maintainer's runs, two first-run walks on the
+published crates and the consumer's return were dispositioned and the seven S1/S2 fixed; and the
+three registers — `WINDOWS.md` (108 rows, `open_count: 0`), the review-warning register (51
+findings, 0 open) and the pre-tag disposition register (135 rows, 0 failures) — read closed at the
+tag, so the milestone audit read `passed` for the first time. Twelve crates shipped on one tag.
+
+### What Worked
+
+- **A roadmap that held its shape.** Seven integer phases, no insertion, no extension, eleven days
+  from roadmap to tag — against v0.11.0's four extensions and five weeks of a guide that could not
+  freeze (lesson 2 of that retrospective). Phase 56 was left as a frame to be filled from the
+  findings log, and that is exactly what happened, inside the phase.
+- **Registers that cannot pass vacuously.** Every gate added this milestone — `check-semver.sh`
+  (zero checks is a failure), `check-version-strings.sh` (an empty scan or an unmatched class is a
+  failure), `check-no-stub-panics.sh`, `check-findings-log.sh`, `check-review-dispositions.sh`
+  (ids derived from the archived reviews, never from the register), `check-doc-models`,
+  `58-check-register.sh` — was proven red on a planted defect before it was trusted, and the one
+  that accepted near-miss evidence tokens (57 WR-02) was tightened in Phase 58. Lesson 2 of v0.8.0
+  ("a gate that cannot fail is worse than no gate") is now the house shape of a gate.
+- **Fix, waive with a reason, or re-home with an owner and a date — nothing else.** The
+  v0.11.0 retrospective's lesson 3 ("a gate you release around is not a gate") was answered
+  directly: `WINDOWS.md` went from `open_count: 13` to `0` through dispositions (55 fixed, 53
+  waived with owner, revisit and basis), and Phase 58's 135-row register gave every carried
+  finding one of three verdicts with the re-homes written as dated todos. The audit read `passed`
+  because the debt was owned, not hidden.
+- **Dogfooding on the published crates, not the tree.** The keyless and keyed first-run walks were
+  run in a scratch crate against crates.io `0.11.0`, outside any repository, and found what no
+  in-tree test could: a README snippet resolving `paladin-ai 0.5.1`, a nonexistent feature name in
+  the installation guide, a CLI binary with two names, and a startup line printing five
+  credentials. The web3sec return was triaged from the relayed verbatim text with the triage
+  choice left to the maintainer.
+- **The release phase as a register, then a bump, then a tag.** Phase 58 repeated v0.11.0's shape
+  (everything non-bump lands first; the bump is the last three commits; the maintainer alone
+  merges, tags and ticks) and added the pre-tag audit and disposition register in front of it.
+  Both release blockers of the last two milestones stayed fixed; the tag published 12/12 first
+  time again, with the registry read and a keyless smoke as the proof rather than the workflow
+  log.
+- **Decisions quoted verbatim, including the maintainer's typo.** `KEY=rotated:2026-11-07` was
+  recorded as written, clarified to 2026-11-05 in a second part, and the resolved value stated
+  beside both — the v0.11.0 pattern, applied to a credential rotation where the exact date
+  matters.
+
+### What Was Inefficient
+
+- **Security findings arrived from outside the register, late.** The complete `sk-proj-…` key
+  literal in a 2026-07 archival document was found by Phase 56's tree scan, not by any of the
+  twelve earlier milestones' security passes or by the advisory CodeQL run, and the DF-07
+  credential-printing startup line had shipped in `0.11.0`. Both were fixed before the tag, but a
+  tracked-tree key-shape scan and a "what does the first log line print" probe belong in
+  `check-gates`, not in a dogfood phase.
+- **Forty-one re-homes is a lot of owed work for one patch.** The disposition register is honest,
+  but 33 of the 45 pending todos are addressed to `v0.12.0 Phase 1` with the same recheck date, and
+  several are real defects (the worker `nack`-and-redeliver outcome loss CR-01, the
+  `AdmissionSettlement::drop` refund, two racing `cancel_tests`). The next roadmap inherits a
+  first phase that is already full before it is written.
+- **The gap-closure plans still arrive after the first verification.** Phase 57 added five fix
+  plans from its own 57-10 triage and Phase 58 two (58-15, 58-16) from the maintainer's "fix before
+  tag" calls; Phase 55 needed five fix iterations on one gate. None was a failed verification,
+  but the pattern — plan, execute, review, then discover the fixes — cost each of those phases a
+  second wave.
+- **The sandbox could not run the whole suite, again.** `make test` and the MSRV leg were
+  CI-attributed by decision (D-00e) in Phase 58, as they were in v0.11.0; the local coverage walk
+  (DOGF-05) was accepted on a devcontainer figure with the bare-host path unwalked. The disk-full
+  re-run on re-seal row 6 was the same failure shape as v0.11.0's six.
+- **The Codecov upload and the §11 sign-off boxes are at their third close unactioned.** Both were
+  listed as maintainer-only items at the v0.10.0 and v0.11.0 closes and are re-homed again here
+  (R-72, R-73) with a recheck date three days out.
+- **`gpt-4` had to be retired twice.** DF-18 found the Quickstart's deprecated model id (109
+  sites), the owner kept it at S3, and Phase 58 then swept 116 copyable sites and added the
+  `check-doc-models` gate anyway — the sweep that was deferred at UAT was done nine days later in
+  the release phase, under more pressure.
+
+### Patterns Established
+
+- **A gate is proven red on a planted defect before it is trusted, and fails on an empty scan.**
+  Every new script gate ships with a fixture harness under `make test-shell-guards` that plants
+  the failure it exists to catch; a scan that matches nothing is a failure, not a pass.
+- **Three verdicts for a carried finding, and a dated todo for the third.** Fixed (commit and
+  test named), waived (owner, revisit date, basis) or re-homed (owner, `recheck_by`, a pending
+  todo). A register verifier (`58-check-register.sh`, `check-review-dispositions.sh`) derives the
+  expected ids from the source documents, never from the register itself.
+- **Dogfood on the published artefact.** A first-run walk runs in a scratch crate against
+  crates.io, keyless first and keyed second, with the redacted transcript on the record and every
+  stumble filed as a `DF-nn` entry with a disposition.
+- **Additive-or-bump, decided when the break is known.** Phase 53 recorded the patch-versus-minor
+  decision at the moment the first security fix was designed (`53-VERSION-DECISION.md`), with
+  cargo-semver-checks at `--release-type patch` as the arbiter; FIXES-04 was re-homed rather than
+  argued.
+- **Hidden equals missing, written once in core.** Every tenant-visibility rule
+  (`RunReadScope::permits_thread`, `owner_run_for_thread`, `redact_store_error_for_scope`) lives in
+  one place and is called by every route, and a foreign object answers byte-for-byte as an absent
+  one.
+- **Maintainer-only acts are named, dated and never performed by the agent.** The merge, the tag,
+  the sign-off tick, the CodeQL platform dismissal, the key rotation and the purge decision are
+  each recorded as the maintainer's statement with its date, and anything not re-provable from the
+  repository says so.
+
+### Key Lessons
+
+1. **Scope a cleanup milestone from an inventory and freeze it.** The carried-gaps inventory and
+   the findings log were the research; the roadmap did not move for eleven days and the audit
+   read `passed`. Consumer-driven feature work and cleanup should not share a milestone (the
+   converse of v0.11.0's lesson 2).
+2. **Put the credential probes in the gates.** A tracked-tree key-shape scan and a first-log-line
+   credential probe would have caught both S1 findings at any of the previous twelve closes. Add
+   them to `check-gates` before the next feature work, not after the next dogfood run.
+3. **A re-home is a promise with a date, so count them.** Forty-one re-homes with one recheck date
+   is a backlog, not a disposition; the next milestone's first phase should be planned from the
+   register before anything new is roadmapped, and the recheck date should be a phase, not a day.
+4. **Triage the review findings before the plan wave, not after.** The seven gap-closure plans of
+   Phases 57 and 58 and Phase 55's five iterations were all discoverable from the review and the
+   evidence page before execution; a short triage checkpoint between plan and execute would have
+   folded them into the first wave.
+5. **Decide the deferral once.** Deferring the `gpt-4` sweep at UAT and then doing it in the
+   release phase cost more than doing it at UAT; when an owner keeps a finding at S3, record where
+   it will land and do not reopen it under the tag.
+6. **The sandbox's limits are a standing cost — budget for them.** Three milestones running have
+   CI-attributed the full suite and the MSRV leg; either the devcontainer gets the disk and the
+   Docker socket, or the attribution rule stays and stops being listed as inefficiency.
+
+### Cost Observations
+
+- Model mix: not tracked per-milestone
+- Sessions: not tracked per-milestone
+- Notable: 443 commits over 11 days for 84 plans — the smallest milestone since v0.9.0 by plans and
+  the shortest by wall-clock since v0.9.0, with 7 phases, 6 code reviews, 6 security passes, 6 UAT
+  records and one new ADR (0063). Phase 57 (16 plans, five gap-closure) and Phase 58 (16 plans, two
+  gap-closure, the 135-row register) were the largest phases; Phase 53 (8 plans) carried the only S1
+  cluster. 45 pending todos leave the milestone, against 4 at the v0.11.0 close.
+
 ## Cross-Milestone Trends
 
 ### Process Evolution
@@ -560,6 +706,7 @@ both release blockers reproduced offline first.
 | v0.9.0 | — | 4 | First milestone proven by live pipeline rehearsals (five throwaway rc tags, three real release runs); first fully-green release run; standing publish credential eliminated. Zero failed verification passes. |
 | v0.10.0 | — | 19 | Largest milestone by every measure (231 plans, 1,678 commits, 23 days). First with three inserted phases and a dedicated deferred-items closure phase before the tag; first real release to stall mid-publish (3/12) and be finished by a patch release through the same pipeline; first milestone extended twice after its phases were declared complete. Four re-verification passes. |
 | v0.11.0 | — | 15 | First milestone whose every phase opened or closed with an ADR plan (eleven ADRs, all `conforms`); first to seed adapter behaviour only from committed, dated live probes with drift tests; first release since 0.9.0 to publish 12/12 on one tag, with both blockers reproduced offline first. Extended four times after its roadmap from downstream handoffs (five of fifteen phases); 15/15 Nyquist-compliant at close after a same-day validation sweep. Zero failed verification passes on the first attempt for 13 of 15 phases (Phases 50 and 51 needed gap-closure plans). |
+| v0.11.1 | — | 7 | First cleanup-only milestone and the first whose audit read `passed` (not `tech_debt`); first since v0.9.0 with no inserted or added phase and the shortest since (11 days roadmap to tag). First milestone to dogfood the published crates in a scratch crate and to close `WINDOWS.md` at `open_count: 0` through dispositions rather than around them; every new gate fixture-proven red before use; a 135-row pre-tag disposition register with 41 dated re-home todos. 7/7 verification passes on the first attempt (gap-closure plans in Phases 57 and 58 came from triage and maintainer calls, not failed verification); second consecutive 12/12 single-tag release. |
 
 ### Cumulative Quality
 
@@ -570,6 +717,7 @@ both release blockers reproduced offline first.
 | v0.9.0 | +294 shell-harness assertions (177 Phase 20 + 117 Phase 21) over the release tooling | unchanged (floor 82, ADR-0006 — no first-party `.rs` changes required it) | 0 new runtime dependencies (workflow + script work) |
 | v0.10.0 | 3,708 workspace tests passing (Phase 37.1 sweep, 0 failed); 462 doctests at Phase 34; 101/101 public-API entry points with `# Examples`; `cargo doc` 0 warnings under both ADR-0033 bars | 90.44% (CI, PR #56; floor 82, ADR-0006) | 1 new publishable crate (`paladin-eval`); one new lateral crate edge (`paladin-memory` → `paladin-llm`); external additions (OTel export, Redis cache/queue) feature-gated and recorded in `MIGRATION.md` §9.3 |
 | v0.11.0 | Workspace totals CI-attributed (the sandbox could not complete `cargo test --workspace` in several plans, WINDOWS rows 68/69/73); 153 generated provider-conformance tests (17 × 9) plus a 24-case effort suite; every ADR `conforms` with cited tests | 92.74% (CI, merge commit `70657919`; floor 82, ADR-0006) | 0 new publishable crates; new runtime deps feature-gated (Redis Cadence behind the existing `redis` feature); three `zip` RustSec advisories via `utoipa-swagger-ui` carried as dated exceptions, not fixes |
+| v0.11.1 | `make test` 5593 passed / 0 failed, 14 suites on the Phase 57 head (full workspace and MSRV legs CI-attributed at the release re-seal, D-00e); 56 `thread_controller` tests across three adapters; 14 `config_example_roundtrip` tests; 20 full-binary runs of the de-flaked cancel test; eight new fixture harnesses under `make test-shell-guards` (70 + 88 + 43 + 25 assertions and the rest); `paladin-llm` clippy-clean across 13 feature combinations; rustdoc 0 diagnostics under both ADR-0033 bars with no crate-level suppression | 92.86% (CI, release PR head `801dd237e`, `Lines: 172380/185625`; floor 82, ADR-0006; local devcontainer walk 92.79 % on the D-17 rule) | 0 new publishable crates, 0 new runtime dependencies (a patch release: no public Rust signature or type changed, 223 semver checks per package at patch with 0 failures); four `zip` RustSec advisories (0367/0368/0369/0429) carried as exceptions re-dated to 2027-03-31 |
 
 ### Top Lessons (Verified Across Milestones)
 
@@ -595,7 +743,12 @@ both release blockers reproduced offline first.
    and the probe that caught them ran second to last. The dated, committed measurement is the
    first plan of any adapter work — the same rule that made the publish-order gate real in
    v0.10.0, applied to the vendor instead of the registry.
+7. **Own the debt or the audit owns you.** New in v0.11.1, and the direct answer to v0.11.0's
+   lesson 3: the first `passed` audit in six milestones came from giving every carried finding one
+   of three dated verdicts (fixed, waived, re-homed) under a verifier that cannot pass vacuously —
+   not from having less debt. The corollary is lesson 3 of this milestone: forty-one re-homes with
+   one recheck date is a plan the next roadmap must honour first.
 
 ---
 
-*Next milestone: not yet defined — run `/gsd-new-milestone`; new phases start at Phase 52.*
+*Next milestone: not yet defined — run `/gsd-new-milestone`; new phases start at Phase 59.*

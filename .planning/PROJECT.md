@@ -70,6 +70,21 @@ legacy Battalion error/retry/timeout surfaces are gone in favour of `BattalionCo
 dev/test object store is RustFS, and `MIGRATION.md` section 10 (v0.10.1 → v0.11.0) sits above the
 frozen §9 record. The only downstream consumer's surface is pinned by a compile-time muster.
 
+**Amended at the v0.11.1 close, 2026-11-07:** the workspace reads `0.11.1` and all twelve
+publishable crates are live on crates.io at `0.11.1` on one tag (`v0.11.1`, merge commit
+`251303bcd`, release run `42304251278`) — a patch release: no public Rust signature or type
+changed, and `MIGRATION.md` §11.8 tells a `0.11.0` consumer it moves without changing source (the
+one runtime caveat: nine config types no longer serialise their credential fields, M-B-48…M-B-52).
+What changed is what a first user meets: tenant isolation now covers threads, forks, cancels and
+job reads as well as runs (a thread belongs to the tenant of its earliest attributed run,
+ADR-0063); the server refuses an unexpanded `${VAR}` API key, an invalid configuration and a
+configured-but-unattached Treasurer at boot; the startup log and every config type's `Debug` are
+credential-free; no published crate panics from an unfinished stub; every copyable install pin,
+version label and model id in README, `docs/src`, `k8s/` and `examples/` is held to the tree by a
+gate (`check-version-strings`, `check-doc-models`); the CI semver job checks all twelve crates
+against the published baseline at patch; and the release body can be any size. The "22 runnable
+examples" and provider counts above remain amended as noted; nothing else in this section drifted.
+
 ## What This Planning Corpus Is
 
 **A historical record of twelve shipped milestones, plus a verified-defect and deferred-work
@@ -147,16 +162,27 @@ trustworthy enough to anchor a gate.
 
 ## Current State
 
-**Milestone v0.11.1 "Dogfood Cleanup" — all 7 phases complete (52-58; 84/84 plans, every
-`VERIFICATION.md` `passed`); `v0.11.1` shipped 2026-11-06.** Phase 58 "Crate Release" completed
-2026-11-06: the lockstep bump to `0.11.1` held by `check-version-strings`, `MIGRATION.md` §11.8
-consumer statement (SHIP-09), the pre-tag milestone audit `passed` (SHIP-10), release PR #64 merged
-by the maintainer as merge commit `251303bc`, annotated tag `v0.11.1` on it, `release.yml` run
-`42304251278` green 12/12 with all twelve crates registry-verified at `0.11.1` through Trusted
-Publishing and the GitHub Release published with 10 assets (SHIP-08). Post-release follow-ups:
-`58-REVIEW.md` (0 critical, 5 warnings) and 44 pending todos with `recheck_by: 2026-11-09`.
-Remaining acts are the maintainer's: merge the documentation-only PR #65 (`chore/58-close`), then
-`/gsd-complete-milestone v0.11.1` (see `58-READY-TO-CLOSE.md`).
+**Milestone v0.11.1 "Dogfood Cleanup" shipped — tag 2026-11-06, closed 2026-11-07.** 7 phases
+(52-58, integer phases only; no insertion, no mid-milestone extension), 84 plans, 172 tasks, 11 days
+from roadmap to tag (2026-10-27 → 2026-11-06; 443 commits on the release PR #64 per GitHub after
+PRs #61 and #62, `70657919` → `84686acfb` → `8b23cb4c5` → `251303bcd` → `6082a787e`). 52/53
+requirements satisfied; FIXES-04 (`RunStatusValue::Cancelled`) re-homed to the next minor by Phase
+55 D-05 and deliberately unticked. All 7 `VERIFICATION.md` files `passed`; audit **`passed`** —
+the first in this corpus — 0 gaps, 6/6 integration seams, 4/4 E2E flows, 6/6 pre-tag phases
+Nyquist-compliant, `tech_debt: []`, with the 135-row disposition register at 52 fixed / 37 waived /
+46 re-homed and 0 failures. Released on **one tag**: `v0.11.1` on merge commit `251303bcd`
+(2026-11-06, run `42304251278`) published all twelve crates at `0.11.1` through Trusted Publishing,
+GitHub Release with 10 assets, keyless scratch-crate smoke green — the second consecutive release
+needing no patch. Closeout type `override_closeout` (0 unverified phases; 45 open artifacts
+acknowledged, all pending todos, 41 of them the dated re-home register Phase 58 wrote by design).
+Archived: `milestones/v0.11.1-ROADMAP.md`, `v0.11.1-REQUIREMENTS.md`,
+`v0.11.1-MILESTONE-AUDIT.md`, `v0.11.1-phases/`. Quality at close: CI line coverage 92.86 % on the
+release PR head (floor 82 %, ADR-0006), `make test` 5593/0 on the Phase 57 head (full workspace
+and MSRV legs CI-attributed at the re-seal), `make security` green with four `zip` RustSec
+advisories carried as exceptions re-dated to 2027-03-31, one new ADR (0063) plus ADR-0033/0056/0058
+amended in place, `WINDOWS.md` `open_count: 0` (108 rows), review register 51 findings / 0 open,
+rustdoc 0 diagnostics with no crate-level suppression, MSRV 1.88. Full record: `MILESTONES.md`.
+Next: `/gsd-new-milestone` — new phases start at **Phase 59**.
 
 Before Phase 58, Phase 57 sealed the registers on 2026-11-05: `WINDOWS.md` `open_count: 0` (108 rows), zero undispositioned review warnings held by
 `scripts/check-review-dispositions.sh`, the three diagnosed debug sessions archived, the Phase 40
@@ -625,7 +651,26 @@ What v0.9.0 settled, in one paragraph each:
   proven end-to-end on `v0.8.1-rc.5`, the first fully-green release run in this project's
   history, with every declared human check closed by recorded UAT.
 
-## Current Milestone: v0.11.1 Dogfood Cleanup
+## Next Milestone: not yet defined
+
+Run `/gsd-new-milestone` (questioning → research → requirements → roadmap). New phases start at
+**Phase 59**. Candidate inputs already on file, none decided: the 45 pending todos in
+`.planning/todos/pending/` (33 addressed to `v0.12.0 Phase 1` by the Phase 58 re-home register —
+the worker `nack`-and-redeliver outcome loss CR-01, the `AdmissionSettlement::drop` refund, the two
+`cancel_tests` timing races, the semver baseline re-pin to `0.11.1`, the base-layer retirement
+behind ENTITY-04, the `#[ignore]` inventory, FIXES-04's `RunStatusValue::Cancelled`; 12 to the
+maintainer); the v2 list carried in `milestones/v0.11.1-REQUIREMENTS.md` (PROV-05 OpenAI Responses
+API for the pro tier — the stated first item of the next feature milestone — PROV-06…08,
+TENANT-11, PACE-06/07, CIREL-10 all-features CI job, DOCS-09); the FUT-01…07, FUT-11…13 register;
+the `zip` RustSec exceptions due 2027-03-31; the tracing-overhead bar (rows 35/61, accepted at two
+closes, lesson 6 of the v0.11.0 retrospective); and the two credential probes the v0.11.1
+retrospective asks for in `check-gates` before new feature work (a tracked-tree key-shape scan and
+a first-log-line credential probe).
+
+## Previous Milestone: v0.11.1 Dogfood Cleanup (shipped 2026-11-06, closed 2026-11-07)
+
+<details>
+<summary>Scope, decisions at open and scope guards as they stood — preserved verbatim; the shipped record is in <code>MILESTONES.md</code> and <code>milestones/v0.11.1-*</code></summary>
 
 **Goal:** Close the security, correctness, release-process and first-run gaps v0.11.0 left behind,
 plus whatever dogfooding v0.11.0 (the maintainer's own runs and the web3sec consumer's return against
@@ -686,6 +731,8 @@ security fix; stubs that panic are fenced with an `Err`, never finished; accepte
 OBS-05 waiver, the aggregate spend route, the FUT register) stay out; measurement work (Ollama /
 OpenAI-compatible probes, quota-body capture, retry-counter unification — C9) stays out unless a
 dogfood run on that provider hands over a captured body.
+
+</details>
 
 ## Previous Milestone: v0.11.0 Treasurer Spend Governance (shipped 2026-10-27)
 
@@ -917,8 +964,11 @@ unless a phase adopts them):
 
 ### Validated
 
-**Dogfood Cleanup — v0.11.1, in progress (opened 2026-10-27).** Phase records in
-`.planning/phases/`; requirements in `.planning/REQUIREMENTS.md`.
+**Dogfood Cleanup — shipped v0.11.1 (tag 2026-11-06), closed 2026-11-07; crates at `0.11.1`**
+(Phases 52-58, 84 plans, 52/53 requirements verified, FIXES-04 re-homed). Archive:
+`.planning/milestones/v0.11.1-ROADMAP.md`. Requirements:
+`.planning/milestones/v0.11.1-REQUIREMENTS.md`. Audit: `.planning/milestones/v0.11.1-MILESTONE-AUDIT.md`
+(`passed`, 0 gaps). Phase records: `.planning/milestones/v0.11.1-phases/`.
 
 - ✓ Release-process and CI repair — semver gate re-pinned to the published `0.11.0` baseline at
   `--release-type patch` through a tested `scripts/check-semver.sh` (12/12 crates incl. `paladin-eval`,
@@ -1005,6 +1055,28 @@ unless a phase adopts them):
   redelivery (CR-01) — plus an empty `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET` wiping a YAML
   secret (WR-01) and lenient evidence tokens in the disposition checker (WR-02). The
   `Generated SDK Clients smoke` CI job is red on the phase head and owned by no row.
+- ✓ Crate release — the Phase 57 carry-overs dispositioned first (the SDK smoke fixed CI-side
+  in 58-01 by building the generated TypeScript client in its own directory; CR-01 and WR-01
+  re-homed as dated todos, WR-02 fixed by tightening the disposition checker's evidence rule); a
+  135-row pre-tag disposition register (`58-AUDIT-DISPOSITIONS.md`: 52 fixed, 37 waived, 46
+  re-homed, verifier `58-check-register.sh` at 0 failures) with one owner-named,
+  `recheck_by: 2026-11-09` todo per re-home (D-09); the `check-doc-models` gate retiring `gpt-4`
+  from 116 copyable sites; the credential fields of nine config types no longer serialised and
+  `RedisQueueConfig` / `MinioConfig` given a redacting `Debug` (M-B-48…M-B-52, the maintainer's
+  "fix before tag" on 56 WR-03/04/09 and R-95); the `sk-proj-…` literal scrubbed, the key rotated
+  2026-11-05 on the maintainer's statement, no history purge; the eight F-58-08 CodeQL alerts
+  (`rust/cleartext-logging`, false positives) governed in `CODEQL-DISMISSALS.md`; the lockstep
+  bump to `0.11.1` as three commits held by `check-version-strings` (52 strings, a one-line
+  `openapi.json` diff), twelve changelogs stamped to the tag day; MIGRATION §11.8
+  `### Library consumers: v0.11.0 → v0.11.1` in the maintainer's pointer-list wording; the pre-tag
+  audit `passed` after `AUDIT=validate-first` validated Phases 54 and 56; and the release itself —
+  PR #64 merged by the maintainer with a merge commit, annotated tag `v0.11.1` on `251303bcd`,
+  `release.yml` 12/12 jobs, 12/12 crates registry-verified with `trustpub_data`, a keyless
+  scratch-crate smoke, SHIP-08…10 ticked on a live re-read (SHIP-08 … SHIP-10) — Phase 58,
+  verified 2026-11-06 (5/5), no new ADR. Advisory residuals (`58-REVIEW.md`, 0 critical, 5
+  warnings): §11.8's "without changing source" is true at compile time while a
+  serialise-then-deserialise round trip of `MinioConfig` / `EmailAdapterConfig` no longer works
+  (WR-02, stated in M-B-50/51); `OtelConfig.headers` still serialises (WR-01).
 
 **Treasurer Spend Governance — shipped v0.11.0, closed 2026-10-27; crates at `0.11.0`**
 (Phases 38-51, 174 plans, 63/66 requirements verified, ADOPT-01…03 superseded). Archive:
@@ -1462,26 +1534,53 @@ while the code ships):
 
 ### Active
 
-**Milestone v0.11.1 "Dogfood Cleanup" (opened 2026-10-27).** Requirement IDs are minted in
-`.planning/REQUIREMENTS.md`; the themes below are the scope (inventory rows in parentheses):
+**No active milestone — v0.11.1 closed 2026-11-07.** Requirement IDs are minted in
+`.planning/REQUIREMENTS.md` by `/gsd-new-milestone`; nothing below is decided.
 
-- [x] All six requirement themes validated (Phases 52-57, see Validated above). Phase 58 "Crate
-      Release" (the lockstep bump, `MIGRATION.md` consumer statement, pre-tag audit and the
-      `v0.11.1` tag) carries release work, not requirement themes.
+Candidates for the next milestone (see *Next Milestone* above for the full list):
+
+- [ ] The Phase 58 re-home register's `v0.12.0 Phase 1` items (33 pending todos, `recheck_by:
+      2026-11-09`), led by the three correctness defects re-homed from the Phase 57 review — the
+      worker `nack`-and-redeliver outcome loss (CR-01), the `AdmissionSettlement::drop` refund of a
+      committed run (IN-03) and the two `cancel_tests` timing races — plus FIXES-04
+      (`RunStatusValue::Cancelled`, a minor-version change) and the semver baseline re-pin to `0.11.1`.
+- [ ] PROV-05 OpenAI Responses API for the pro tier (`gpt-5.5-pro` and siblings), the stated first
+      item of the next feature milestone; PROV-06…08 provider parity and measurement.
+- [ ] Two credential probes in `check-gates` (a tracked-tree key-shape scan; a first-log-line
+      credential probe), asked for by the v0.11.1 retrospective before new feature work.
+- [ ] The base-layer retirement behind ENTITY-04 (`55-BASE-LAYER-REVIEW.md` options B/C), the
+      `#[ignore]` inventory (DOCS-09), CIREL-10 (`cargo test --workspace --all-features` in CI).
 
 Carried-in open items (tracked, not requirements):
 
-- Pending todos: the user-owned local coverage-reproduction walkthrough (carried since v0.8.0;
-  fits this milestone as dogfooding of the testing guide), the web3sec single bump to `v0.11.0`
-  (the consumer's step — its return feeds the dogfood findings log), the OpenAI Responses API
-  (**out** of v0.11.1 by decision), the base-item review (folded into the correctness theme as
-  review-and-fence).
-- Nyquist validation unreconciled for archived Phases 05-21.
-- The four `zip 3.0.0` RustSec exceptions (RUSTSEC-2026-0367/0368/0369/0429) — re-checked in
-  Phase 57 (REG-06): `utoipa-swagger-ui` 10.0.2 still pins `zip ^9` behind a utoipa 6 migration,
-  so all four are re-dated to 2027-03-31 with the check recorded in `SECURITY-EXCEPTIONS.md`.
+- Pending todos: 45 (12 maintainer-owned — Codecov `CODECOV_TOKEN` R-72, the §11 sign-off boxes
+  R-73, the three ungoverned OSV-Scanner alerts, the bare-host coverage walk, the empty
+  webhook-secret override, the OpenAI Responses API, and six smaller items), all listed with owner
+  and recheck date in STATE.md *Deferred Items*.
+- Nyquist validation unreconciled for archived Phases 05-21 (coverage TODO, not a failure);
+  `58-VALIDATION.md` `draft` (release phase, no requirement-bearing tasks beyond SHIP-08…10).
+- The four `zip 3.0.0` RustSec exceptions (RUSTSEC-2026-0367/0368/0369/0429), re-dated to
+  2027-03-31 in Phase 57; the lift waits on the utoipa 6 migration.
+- Maintainer statements on the record, not re-provable from the repository: the `sk-proj-…` key
+  rotated 2026-11-05 (R-84), no history purge (R-85), the eight F-58-08 CodeQL alerts dismissed on
+  the platform.
 
 ### Out of Scope
+
+**Audited at the v0.11.1 close (2026-11-07).** Every item below was re-read; none is reopened and
+none is deleted. The v0.11.1 milestone's own exclusions held as written: no new port, adapter or
+HTTP route shipped (the tenant fixes were additive and `v0.11.1` stayed a patch, 223 semver checks
+per crate at patch with 0 failures); stubs were fenced, not finished (the twenty storage stubs are
+typed refusals, the base-layer items carry rustdoc saying they are unfinished and a dated review);
+the ADR-0057 check-only contracts (rows 64/65/66), the OBS-05 overhead waiver (rows 35/61), the
+aggregate HTTP spend route (G1), the `TokenUsage.total_tokens` rule (D-02) and the FUT register
+were not touched. Two exclusions were tightened by the milestone's own decisions rather than
+reversed: `LlmRequest` built directly still gets omit-plus-`warn!` (B8, unchanged); and FIXES-04
+joined the deferred list by decision because the additive shape does not exist at patch level —
+it is a next-minor item, not an exclusion. The Snyk, CodeQL-advisory-only and no-Rust-SAST positions
+below still describe the shipped posture (CodeQL's eight F-58-08 `rust/cleartext-logging` alerts on
+the release head were all false positives on triage, which is the measured FP cost those positions
+predicted).
 
 **Audited at the v0.11.0 close (2026-10-27).** Every item below was re-read. Two positions the
 v0.11.0 milestone itself overturned are amended in place rather than deleted (the record stays
@@ -1579,6 +1678,31 @@ Three positions the v0.10.0 milestone itself settled are added:
   benchmark baselines would be guesswork. Tracked as v2.
 
 ## Context
+
+**Current state stamp (v0.11.1 close, 2026-11-07):** 7 shipped planning milestones (v0.7.1,
+v0.8.0, v0.9.0, v0.10.0 — released as `0.10.1` — v0.11.0 and v0.11.1, on top of the twelve
+historical ones), 62 phases / 701 plans completed, ~422k lines across the first-party `.rs` files
+under `crates/` and `src/` (tests, fixtures and generated conformance cases included), twelve
+publishable crates at `0.11.1`, toolchain pinned 1.97.1, MSRV 1.88. Quality: CI line coverage
+92.86 % on the release PR head (floor 82 %; local devcontainer walk 92.79 % on the D-17 rule, the
+bare-host path unwalked), `make test` 5593/0 on the Phase 57 head with the full workspace and MSRV
+legs CI-attributed at the re-seal, `make security` green with four `zip` RustSec advisories as
+dated exceptions (2027-03-31), one new ADR (0063, `conforms`) and three amended in place
+(0033, 0056, 0058), `WINDOWS.md` `open_count: 0` / 108 rows (55 fixed, 53 waived), review register
+51 findings / 0 open, rustdoc 0 diagnostics under both ADR-0033 bars with no crate-level
+suppression, `cargo clippy --tests -D warnings` clean on `paladin-llm` across 13 feature
+combinations. Runtime posture: everything v0.11.0 had, with tenant isolation extended to threads,
+forks, cancels and job reads (thread owner = earliest attributed run), boot refusals for `${VAR}`
+API keys, invalid configuration and an unattached Treasurer, credential-free startup log and config
+`Debug`, secrets excluded from config `Serialize`, an unpriced agent-kind run halting resumably,
+and no reachable stub panic in a published crate. Release posture: two consecutive one-tag
+twelve-crate releases; semver at patch against the published baseline, allowlist, dry-run,
+end-to-end, version-string, model-id and stub-panic gates all before merge; the release body
+fitted, not capped. Known accepted deviations: tracing overhead +19.36 % / +16.19 % vs the ≤ 3 %
+bar (row 61, waived at two closes); HTTP spend is per-run only (G1); Anthropic `Budget(n)`
+override-only and Gemini 2.5 `Unmeasured` (REASON-06); the fence-marker TTL cap's 28-minute
+residual (EA-57-20); DNS-rebinding pinning not implemented (FUT-13). Open debt is the 45 pending
+todos (41 with `recheck_by: 2026-11-09`), none a verification gap.
 
 **Current state stamp (v0.11.0 close, 2026-10-27):** 6 shipped planning milestones (v0.7.1,
 v0.8.0, v0.9.0, v0.10.0 — released as `0.10.1` — and v0.11.0, on top of the twelve historical
@@ -2423,7 +2547,36 @@ the maintainer's (D-15/D-16 — ✓ Good, P1/P4/P11 confirmed at UAT 2026-11-04)
 passes on integer-truncated same-commit figures (D-17 — ✓ Good, 92.79 % / 92.86 % on a devcontainer,
 bare-host path unwalked); DF-18's Quickstart `gpt-4` literal kept at S3 / re-homed to the 109-site
 sweep (UAT 2026-11-04 — ⚠️ Revisit: the first copied program exits 1 on a working key until that
-todo lands). Phase 57's owner decisions (no ADR minted; ADR-0063 and ADR-0058 amended in place; 57-CONTEXT D-01…D-43, PD-nn plan decisions): a thread's owner is its earliest attributed run, read through one defaulted `RunRepositoryPort::owner_run_for_thread` single-row method, additive so `v0.11.1` stays a patch (option-a, D-02 — ✓ Good, a later Admin or scheduled run never moves a thread; 56 `thread_controller` tests, three adapters); the review-disposition register is gated by `scripts/check-review-dispositions.sh`, which derives every expected id from the archived `NN-REVIEW.md` headings and never from the register, kept manual and outside `check-gates` (D-11/D-12 — ✓ Good, 0 failures over 51 findings; ⚠️ Revisit: 57-REVIEW WR-02, it accepts a non-evidence pointer as a closed row); the live findings the sweep turned up were triaged option-a — seven correctness/security items fixed in phase (WINDOWS rows 94-100) and eight other-class items waived with owner, revisit and basis (rows 101-108) (D-14 — ✓ Good, `open_count: 0` on 108 rows); RUSTSEC-2026-0429 joins the three `zip 3.0.0` exceptions under the same compensating control, the lift deferred to the utoipa 6 migration because `utoipa-swagger-ui` 10.0.2 also requires `utoipa ^6`, all four re-dated to 2027-03-31 (D-30/D-31/PD-01-2 — ✓ Good, `make security` exit 0); the Phase 40 judgment-tier read is the owner's blanket `confirm all` over 26 rows with the test/code split derived from evidence as 13/7, not copied from D-20 (D-20…D-22 — ✓ Good); an empty operator-webhook secret is treated as absent with one boot warning and nothing refused (PD-05-3 — ⚠️ Revisit: 57-REVIEW WR-01, an empty `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET` silently wipes a YAML-configured secret, carried to Phase 58); the worker emits its terminal event only after the durable write and ack, and a failed second write on the success arm nacks with a 1 s delay (PD-13-2/PD-13-3 — ⚠️ Revisit: 57-REVIEW CR-01, the run's outcome is lost when only the second write fails, carried to Phase 58); the node-cache fence marker is capped at clamp(2 × entry ttl, 5 min, 30 min) rather than lengthening the counter (PD-16-1 — ✓ Good; residual EA-57-20, a holder more than 28 minutes late can still outlive the counter).
+todo lands). Phase 57's owner decisions (no ADR minted; ADR-0063 and ADR-0058 amended in place; 57-CONTEXT D-01…D-43, PD-nn plan decisions): a thread's owner is its earliest attributed run, read through one defaulted `RunRepositoryPort::owner_run_for_thread` single-row method, additive so `v0.11.1` stays a patch (option-a, D-02 — ✓ Good, a later Admin or scheduled run never moves a thread; 56 `thread_controller` tests, three adapters); the review-disposition register is gated by `scripts/check-review-dispositions.sh`, which derives every expected id from the archived `NN-REVIEW.md` headings and never from the register, kept manual and outside `check-gates` (D-11/D-12 — ✓ Good, 0 failures over 51 findings; ⚠️ Revisit: 57-REVIEW WR-02, it accepts a non-evidence pointer as a closed row); the live findings the sweep turned up were triaged option-a — seven correctness/security items fixed in phase (WINDOWS rows 94-100) and eight other-class items waived with owner, revisit and basis (rows 101-108) (D-14 — ✓ Good, `open_count: 0` on 108 rows); RUSTSEC-2026-0429 joins the three `zip 3.0.0` exceptions under the same compensating control, the lift deferred to the utoipa 6 migration because `utoipa-swagger-ui` 10.0.2 also requires `utoipa ^6`, all four re-dated to 2027-03-31 (D-30/D-31/PD-01-2 — ✓ Good, `make security` exit 0); the Phase 40 judgment-tier read is the owner's blanket `confirm all` over 26 rows with the test/code split derived from evidence as 13/7, not copied from D-20 (D-20…D-22 — ✓ Good); an empty operator-webhook secret is treated as absent with one boot warning and nothing refused (PD-05-3 — ⚠️ Revisit: 57-REVIEW WR-01, an empty `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET` silently wipes a YAML-configured secret, carried to Phase 58); the worker emits its terminal event only after the durable write and ack, and a failed second write on the success arm nacks with a 1 s delay (PD-13-2/PD-13-3 — ⚠️ Revisit: 57-REVIEW CR-01, the run's outcome is lost when only the second write fails, carried to Phase 58); the node-cache fence marker is capped at clamp(2 × entry ttl, 5 min, 30 min) rather than lengthening the counter (PD-16-1 — ✓ Good; residual EA-57-20, a holder more than 28 minutes late can still outlive the counter). Phase 58's owner decisions (no ADR; the Phase 47 release
+rules D-00a…D-00s carried as locked, 58-CONTEXT D-01…D-17, the maintainer's 58-05 and 58-10
+answers recorded verbatim in `58-CI-EVIDENCE.md`): one release PR from `claude/laughing-dirac-e0h2ax`
+with `main` frozen at `8b23cb4c5` until it merged, the merge commit as the tag target and the
+`release` label applied once after the bump push (D-01…D-03 — ✓ Good, tag equal to
+`merge_commit_sha`, not merely a descendant); one disposition register with three verdicts and a
+dated todo per re-home, `DATE=2026-11-09` (D-06/D-09 — ✓ Good, 135 rows / 0 failures, 41 todos;
+⚠️ Revisit: the same recheck date for all 41 is a backlog the next roadmap must plan first);
+`FLAKE=named-rerun` — exactly one re-run, only for the named `treasury_spend` failure, never in
+`release.yml` (amends D-00j — ✓ Good, 0/40 local failures and the flake filed as a todo);
+`WORDING=pointer-list` for the §11.8 consumer statement (D-10 — ✓ Good; ⚠️ Revisit: 58-REVIEW WR-02,
+"without changing source" is a compile-time truth with a runtime round-trip caveat stated in
+M-B-50/51); `KEY=rotated:2026-11-05` and `PURGE=none` — the literal stays in history, no
+force-push of `main` (R-84 fixed / R-85 waived on the maintainer's statement — ✓ Good, recorded as
+not re-provable); 56 WR-03/04/09 and R-95 fixed before the tag through inserted plans 58-15/58-16
+rather than re-homed (D-07 amended twice — ✓ Good, `skip_serializing` with no serde default, a
+redacting `Debug`, M-B-48…M-B-52); `CODEQL=dismiss-now` for the eight F-58-08
+`rust/cleartext-logging` alerts, the platform dismissal the maintainer's act (✓ Good, governed rows
+in `CODEQL-DISMISSALS.md`; the CodeQL advisory-only posture unchanged); `AUDIT=validate-first` —
+Phases 54 and 56 validated by a planning-only Nyquist audit so the milestone audit could read
+`passed` (✓ Good, recorded as planning-only, no human signature claimed); the SDK smoke treated as a
+tag precondition rather than a merge context and fixed CI-side (58-01 — ✓ Good); `check-doc-models`
+landed with the DF-18 sweep in the release phase rather than at Phase 56 UAT (58-03 — ✓ Good, 116
+sites; ⚠️ Revisit the deferral habit, v0.11.1 retrospective lesson 5). The Phase 52 PD-02-1
+release-body guard's first live use at the `v0.11.1` tag: a 17,049-character body against the
+125,000 limit, no fit triggered — the guard is proven only by its harness so far (— Pending).
+Phase 53's rows 85-87 closed in Phase 57 (57-02/57-03, option-a earliest-attributed-run owner) —
+the ⚠️ Revisit above is resolved. The v0.11.1 milestone decisions taken at open (2026-10-27 —
+Responses API out, `${VAR}` refused at boot, research skipped, patch bump unless a security fix
+forced a break) all held: ✓ Good, the milestone shipped as a patch with no feature item.
 
 ## Evolution
 
@@ -2443,6 +2596,20 @@ This document evolves at phase transitions and milestone boundaries.
 2. Core Value check — still the right priority?
 3. Audit Out of Scope — reasons still valid?
 4. Update Context with current state
+
+---
+*Last updated: 2026-11-07 after the **v0.11.1 "Dogfood Cleanup" milestone close** (Phases 52-58,
+84 plans, 172 tasks, 52/53 requirements — FIXES-04 re-homed to the next minor; audit **`passed`**,
+0 gaps, `tech_debt: []`; one tag `v0.11.1` on `251303bcd`, 12/12 crates at `0.11.1`, coverage
+92.86 %). Full PROJECT.md review: "What This Is" amended (the `0.11.1` patch posture, tenant
+isolation to threads/forks/cancels/jobs, boot refusals, credential-free logs and `Debug`, the
+version-string and model-id gates); Core Value unchanged; Business Context absent; "Crate release"
+added to Validated under the shipped v0.11.1 heading; *Current Milestone* moved to *Previous
+Milestone* in a `<details>` block and *Next Milestone: not yet defined* opened; Active reset to
+undecided candidates; Out of Scope audited (nothing reopened); Context stamped; Phase 58's owner
+decisions added to Key Decisions with outcomes and the Phase 53 rows 85-87 revisit resolved.
+Archived under `milestones/v0.11.1-*`; `REQUIREMENTS.md` removed. Next: `/gsd-new-milestone` —
+new phases start at Phase 59.*
 
 ---
 *Last updated: 2026-11-05 after **Phase 57: Register Hygiene Close-Out** completed and verified — 16

@@ -15,6 +15,7 @@
 //! | `deepseek` | DeepSeek | `deepseek::DeepSeekAdapter`, `deepseek::DeepSeekConfig` |
 //! | `kimi` | Kimi (Moonshot AI) | `kimi::KimiAdapter`, `kimi::KimiConfig` |
 //! | `qwen` | Qwen (Alibaba DashScope) | `qwen::QwenAdapter`, `qwen::QwenConfig` |
+//! | `zai` | Z.ai (Zhipu AI, GLM models) | `zai::ZaiAdapter`, `zai::ZaiConfig` |
 //! | `grok` | Grok (xAI) | `grok::GrokAdapter`, `grok::GrokConfig` |
 //! | `ollama` | Ollama (self-hosted, keyless) | `ollama::OllamaAdapter`, `ollama::OllamaConfig` |
 //! | `openai-compatible` | Any OpenAI-compatible endpoint (operator-configured) | `openai_compatible::OpenAiCompatibleAdapter`, `openai_compatible::OpenAiCompatibleConfig` |
@@ -71,6 +72,7 @@ pub mod config;
         feature = "deepseek",
         feature = "kimi",
         feature = "qwen",
+        feature = "zai",
         feature = "grok",
         feature = "ollama",
         feature = "openai-compatible",
@@ -137,6 +139,7 @@ pub mod usage_reconcile;
     feature = "deepseek",
     feature = "kimi",
     feature = "qwen",
+    feature = "zai",
     feature = "grok",
     feature = "ollama",
     feature = "gemini",
@@ -153,6 +156,7 @@ mod turn;
     feature = "deepseek",
     feature = "kimi",
     feature = "qwen",
+    feature = "zai",
     feature = "grok",
     feature = "ollama",
     feature = "openai-compatible"
@@ -167,6 +171,7 @@ mod response_guards;
     feature = "deepseek",
     feature = "kimi",
     feature = "qwen",
+    feature = "zai",
     feature = "grok",
     feature = "ollama",
     feature = "openai-compatible"
@@ -178,6 +183,7 @@ mod sse;
     feature = "deepseek",
     feature = "kimi",
     feature = "qwen",
+    feature = "zai",
     feature = "grok",
     feature = "ollama",
     feature = "openai-compatible"
@@ -198,12 +204,14 @@ mod test_support;
 #[cfg(any(
     feature = "kimi",
     feature = "qwen",
+    feature = "zai",
     feature = "grok",
     feature = "ollama",
     feature = "openai-compatible"
 ))]
 /// Shared OpenAI-compatible protocol engine (D-05) that thin provider
-/// presets sit on. Widen this `any(...)` list as later presets land.
+/// presets sit on (Kimi, Qwen, Grok, Z.ai, Ollama, OpenAI-compatible). Widen this `any(...)`
+/// list as later presets land.
 #[allow(missing_docs)]
 pub mod compat;
 
@@ -236,6 +244,11 @@ pub mod kimi;
 /// Qwen (Alibaba DashScope) provider adapter and related configuration.
 #[allow(missing_docs)]
 pub mod qwen;
+
+#[cfg(feature = "zai")]
+/// Z.ai (Zhipu AI international platform, GLM models) provider adapter and related configuration.
+#[allow(missing_docs)]
+pub mod zai;
 
 #[cfg(feature = "grok")]
 /// Grok (xAI) provider adapter and related configuration.
@@ -352,7 +365,8 @@ mod capability_invariants {
     /// singular global-clamp assumption the moment it lands.
     ///
     /// This module constructs the three adapters that need no feature beyond their own; the
-    /// six compat-era adapters (Kimi, Qwen, Grok, Gemini, Ollama, OpenAI-compatible) are
+    /// six compat-era adapters (Kimi, Qwen, Grok, Gemini, Ollama, OpenAI-compatible; plus Z.ai when
+    /// `zai` is on) are
     /// covered by `every_new_provider_declares_a_temperature_range` in
     /// `capability_invariants_new_providers` below.
     #[test]
@@ -422,6 +436,12 @@ mod capability_invariants_new_providers {
     };
     use crate::qwen::adapter::QWEN_DEFAULT_MODEL;
     use crate::qwen::{QwenAdapter, QwenConfig};
+    // Z.ai joins both invariants below without widening this module's `all(...)` gate, so the
+    // module still compiles (and the six-adapter invariants still run) in a build without `zai`.
+    #[cfg(feature = "zai")]
+    use crate::zai::adapter::ZAI_DEFAULT_MODEL;
+    #[cfg(feature = "zai")]
+    use crate::zai::{ZaiAdapter, ZaiConfig};
     use paladin_ports::output::llm_port::LlmPort;
 
     /// The temperature-range invariant for the six compat-era adapters, the counterpart of
@@ -442,6 +462,12 @@ mod capability_invariants_new_providers {
         let qwen = QwenAdapter::new(QwenConfig::new(
             "test-key".to_string(),
             QWEN_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
+        #[cfg(feature = "zai")]
+        let zai = ZaiAdapter::new(ZaiConfig::new(
+            "test-key".to_string(),
+            ZAI_DEFAULT_MODEL.to_string(),
         ))
         .unwrap();
         let grok = GrokAdapter::new(GrokConfig::new(
@@ -479,6 +505,8 @@ mod capability_invariants_new_providers {
         for (name, range) in [
             ("kimi", kimi.get_capabilities().temperature_range),
             ("qwen", qwen.get_capabilities().temperature_range),
+            #[cfg(feature = "zai")]
+            ("zai", zai.get_capabilities().temperature_range),
             ("grok", grok.get_capabilities().temperature_range),
             ("ollama", ollama.get_capabilities().temperature_range),
             ("gemini", gemini.get_capabilities().temperature_range),
@@ -535,6 +563,12 @@ mod capability_invariants_new_providers {
             QWEN_DEFAULT_MODEL.to_string(),
         ))
         .unwrap();
+        #[cfg(feature = "zai")]
+        let zai = ZaiAdapter::new(ZaiConfig::new(
+            "test-key".to_string(),
+            ZAI_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
         let grok = GrokAdapter::new(GrokConfig::new(
             "test-key".to_string(),
             GROK_DEFAULT_MODEL.to_string(),
@@ -580,6 +614,12 @@ mod capability_invariants_new_providers {
                 "qwen",
                 qwen.get_capabilities().supports_tool_calling,
                 qwen.get_capabilities().supports_function_calling,
+            ),
+            #[cfg(feature = "zai")]
+            (
+                "zai",
+                zai.get_capabilities().supports_tool_calling,
+                zai.get_capabilities().supports_function_calling,
             ),
             (
                 "grok",

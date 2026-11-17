@@ -522,6 +522,7 @@ mod redacted_key_tests {
         feature = "deepseek",
         feature = "kimi",
         feature = "qwen",
+        feature = "zai",
         feature = "grok",
         feature = "gemini",
         feature = "openai-compatible"

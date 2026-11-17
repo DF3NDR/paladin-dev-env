@@ -1240,12 +1240,13 @@ impl EnvOverridable for ModelFallbackConfig {
 /// feature-gated-off provider has no row in its registry at all and so is
 /// indistinguishable, from inside that crate, from a name that was never a
 /// provider (D-10's own "structurally absent" design in that crate).
-const KNOWN_PROVIDER_NAMES: [&str; 9] = [
+const KNOWN_PROVIDER_NAMES: [&str; 10] = [
     "openai",
     "deepseek",
     "anthropic",
     "kimi",
     "qwen",
+    "zai",
     "grok",
     "gemini",
     "openai-compatible",

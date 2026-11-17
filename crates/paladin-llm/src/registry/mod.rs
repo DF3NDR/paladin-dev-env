@@ -27,6 +27,7 @@
     not(any(
         feature = "kimi",
         feature = "qwen",
+        feature = "zai",
         feature = "grok",
         feature = "ollama",
         feature = "openai-compatible",
@@ -70,6 +71,7 @@ pub(crate) const REASONING_DEFAULT_TIMEOUT_SECONDS: u64 = 300;
 #[cfg(any(
     feature = "kimi",
     feature = "qwen",
+    feature = "zai",
     feature = "grok",
     feature = "ollama",
     feature = "openai-compatible",
@@ -83,6 +85,8 @@ fn seeded_table(provider: &str) -> &'static [SeededProfile] {
         "kimi" => seeded::KIMI,
         #[cfg(feature = "qwen")]
         "qwen" => seeded::QWEN,
+        #[cfg(feature = "zai")]
+        "zai" => seeded::ZAI,
         #[cfg(feature = "grok")]
         "grok" => seeded::GROK,
         #[cfg(feature = "ollama")]
@@ -107,6 +111,7 @@ fn seeded_table(provider: &str) -> &'static [SeededProfile] {
 #[cfg(any(
     feature = "kimi",
     feature = "qwen",
+    feature = "zai",
     feature = "grok",
     feature = "ollama",
     feature = "openai-compatible",
@@ -134,6 +139,7 @@ pub(crate) fn is_reasoning_model(
 #[cfg(any(
     feature = "kimi",
     feature = "qwen",
+    feature = "zai",
     feature = "grok",
     feature = "ollama",
     feature = "openai-compatible",
@@ -159,6 +165,7 @@ pub(crate) fn default_timeout_seconds(provider: &str, model: &str, compiled_defa
     feature = "openai",
     feature = "kimi",
     feature = "qwen",
+    feature = "zai",
     feature = "grok",
     feature = "ollama",
     feature = "openai-compatible",
@@ -573,6 +580,7 @@ pub(crate) struct SeededProfile {
     feature = "gemini",
     feature = "kimi",
     feature = "qwen",
+    feature = "zai",
     feature = "grok"
 ))]
 pub(crate) fn seeded_window(table: &[SeededProfile], model: &str) -> Option<u32> {
@@ -794,6 +802,7 @@ impl ModelRegistry {
 #[cfg(any(
     feature = "kimi",
     feature = "qwen",
+    feature = "zai",
     feature = "grok",
     feature = "ollama",
     feature = "openai-compatible"
@@ -1193,6 +1202,7 @@ mod tests {
     #[cfg(any(
         feature = "kimi",
         feature = "qwen",
+        feature = "zai",
         feature = "grok",
         feature = "ollama",
         feature = "openai-compatible"
@@ -1241,6 +1251,8 @@ mod seeded_tests {
         tables.push(("kimi", seeded::KIMI));
         #[cfg(feature = "qwen")]
         tables.push(("qwen", seeded::QWEN));
+        #[cfg(feature = "zai")]
+        tables.push(("zai", seeded::ZAI));
         #[cfg(feature = "grok")]
         tables.push(("grok", seeded::GROK));
         #[cfg(feature = "gemini")]
@@ -2337,6 +2349,7 @@ mod knob_tests {
     feature = "deepseek",
     feature = "kimi",
     feature = "qwen",
+    feature = "zai",
     feature = "grok",
     feature = "gemini",
     feature = "ollama",
@@ -2843,6 +2856,7 @@ mod switching_page_tests {
     feature = "deepseek",
     feature = "kimi",
     feature = "qwen",
+    feature = "zai",
     feature = "grok",
     feature = "gemini",
     feature = "ollama",
@@ -3671,6 +3685,13 @@ mod endpoint_builder_tests {
                 .with_timeout_seconds(7);
             assert_eq!((config.base_url.as_str(), config.timeout_seconds), (URL, 7));
         }
+        #[cfg(feature = "zai")]
+        {
+            let config = crate::zai::ZaiConfig::new("k".to_string(), "glm-5.3".to_string())
+                .with_base_url(URL)
+                .with_timeout_seconds(7);
+            assert_eq!((config.base_url.as_str(), config.timeout_seconds), (URL, 7));
+        }
         #[cfg(feature = "grok")]
         {
             let config = crate::grok::GrokConfig::new("k".to_string(), "grok-4.3".to_string())
@@ -3721,6 +3742,7 @@ mod endpoint_builder_tests {
         feature = "deepseek",
         feature = "kimi",
         feature = "qwen",
+        feature = "zai",
         feature = "grok",
         feature = "ollama",
         feature = "openai-compatible",
@@ -3807,6 +3829,11 @@ mod endpoint_builder_tests {
         probe!(
             "qwen",
             crate::qwen::QwenConfig::new(KEY.to_string(), "qwen-plus".to_string())
+        );
+        #[cfg(feature = "zai")]
+        probe!(
+            "zai",
+            crate::zai::ZaiConfig::new(KEY.to_string(), "glm-5.3".to_string())
         );
         #[cfg(feature = "grok")]
         probe!(

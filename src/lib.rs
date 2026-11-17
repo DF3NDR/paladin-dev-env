@@ -203,6 +203,9 @@ pub use paladin_llm::kimi::{KimiAdapter, KimiConfig};
 #[cfg(feature = "llm-qwen")]
 pub use paladin_llm::qwen::{QwenAdapter, QwenConfig};
 
+#[cfg(feature = "llm-zai")]
+pub use paladin_llm::zai::{ZaiAdapter, ZaiConfig};
+
 #[cfg(feature = "llm-grok")]
 pub use paladin_llm::grok::{GrokAdapter, GrokConfig};
 

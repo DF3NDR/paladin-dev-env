@@ -48,6 +48,7 @@
     not(any(
         feature = "kimi",
         feature = "qwen",
+        feature = "zai",
         feature = "grok",
         feature = "ollama",
         feature = "openai-compatible",

@@ -5,8 +5,8 @@ milestone_name: Dogfood Cleanup (Phases 52-58) — shipped v0.11.1 2026-11-06, c
 status: Awaiting next milestone
 stopped_at: Milestone v0.11.1 closed and archived 2026-11-07; next /gsd-new-milestone (new phases start at Phase 59)
 last_updated: "2026-11-07T14:37:15.353Z"
-last_activity: 2026-11-07
-last_activity_desc: Milestone v0.11.1 completed and archived
+last_activity: 2026-11-17
+last_activity_desc: Completed quick task 261117-t5c: z.ai provider adapter
 progress:
   total_phases: 7
   completed_phases: 7
@@ -54,7 +54,7 @@ v0.9.0 "Security Tooling" shipped 2026-09-01 (4 phases, 25 plans, 20/20; tag `v0
 Phase: Milestone v0.11.1 complete
 Plan: —
 Status: Awaiting next milestone
-Last activity: 2026-11-07 — Milestone v0.11.1 completed and archived
+Last activity: 2026-11-17 - Completed quick task 261117-t5c: z.ai provider adapter
 
 Progress: [████████████████████] 7/7 phases (v0.11.1) — plans [████████████████████] 84/84 ([██████████] 100%)
 
@@ -775,6 +775,7 @@ close notes this section carried for Phases 38-51 are archived with their phases
 | 260913-15w | Pin MinIO service image to quay.io last known-good release after Docker Hub minio/minio removal | 2026-09-13 | 06765765 | [260913-15w-pin-minio-service-image-to-quay-io-last-](./quick/260913-15w-pin-minio-service-image-to-quay-io-last-/) |
 | 260913-h7l | Replace dl.min.io mc download in ci.yml with checksum-verified pinned GitHub release asset after MinIO retired community downloads | 2026-09-13 | 9d0aa7a0 | [260913-h7l-replace-dl-min-io-mc-download-in-ci-yml-](./quick/260913-h7l-replace-dl-min-io-mc-download-in-ci-yml-/) |
 | 260916-h40 | Regenerate API surface baseline for Phase 32 window exports and add a local pre-push API surface gate | 2026-09-16 | cd185c9b | [260916-h40-regenerate-api-surface-baseline-for-phas](./quick/260916-h40-regenerate-api-surface-baseline-for-phas/) |
+| 261117-t5c | Add z.ai (GLM) LLM provider adapter (`paladin_llm::zai`, feature `zai` / facade `llm-zai`), env-var configured; `llm.zai` config block deferred to the next milestone | 2026-11-17 | 6858079 | [261117-t5c-we-need-to-create-a-new-ai-provider-adap](./quick/261117-t5c-we-need-to-create-a-new-ai-provider-adap/) |
 
 ### Roadmap Evolution
 

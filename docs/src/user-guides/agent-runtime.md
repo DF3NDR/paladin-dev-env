@@ -163,10 +163,14 @@ but it means a Guardrail rule or a token budget installed for `execute()` gives 
 | Provider | Native mode | Wire shape |
 |---|---|---|
 | OpenAI | yes | `response_format: { type: "json_object" }` or `{ type: "json_schema", json_schema: {...} }` in the chat-completions body |
-| OpenAI-compatible engine (Kimi / Qwen / Grok / Ollama / generic) | yes | same chat-completions `response_format` field |
+| OpenAI-compatible engine (Kimi / Qwen / Grok / Z.ai / Ollama / generic) | yes | same chat-completions `response_format` field |
 | DeepSeek | yes (JSON-object only) | `response_format: { type: "json_object" }` |
 | Gemini | yes | `generationConfig.responseMimeType: "application/json"` plus `responseSchema` for the schema case |
 | Anthropic | **none** | ignored — relies entirely on the prompt-level instruction block described above |
+
+For Z.ai the adapter-wide fallback profile applies (no model is seeded), which admits JSON-object
+mode and not JSON-schema mode. Whether docs.z.ai's chat-completion endpoint honours
+`response_format` was not read, so that is unverified.
 
 An absent `response_format` leaves every request body byte-identical to before this phase; no
 `ProviderCapabilities` field was added for it (a structured-output capability flag is a deferred

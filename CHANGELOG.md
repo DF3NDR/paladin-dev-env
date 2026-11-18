@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- z.ai (Zhipu AI, GLM) provider adapter `paladin_llm::zai` (`ZaiAdapter`, `ZaiConfig`, `ZAI_DEFAULT_BASE_URL`, `ZAI_DEFAULT_MODEL`, `ZAI_FALLBACK_MODELS`; feature `zai`; facade feature `llm-zai`, included in `llm-all` and not in the default set), a preset on the shared OpenAI-compatible engine, re-exported from the `paladin` facade as `ZaiAdapter` and `ZaiConfig`. It is configured through `ZAI_API_KEY`, `ZAI_BASE_URL`, `ZAI_MODEL` and `ZAI_TIMEOUT_SECONDS` only: there is no `llm.zai` config block yet, so an `llm.zai` section in `config.yml` loads without error and is not read, and z.ai is not in the provider swap matrix. An `llm.zai` block is planned for a later release. Facts come from docs.z.ai, accessed 2026-11-17; no live call, seed probe or effort probe has run, so every model is unprofiled and an explicit reasoning effort is refused. The `live_vendor_smoke` example gains a Z.ai row (`ZAI_API_KEY`) for an operator to produce that evidence.
+
+### Changed
+
+- `LlmConfig::validate` accepts a `default_provider` that this build's provider registry knows but that has no `llm.<name>` field (today: `zai`, when the `zai` feature is compiled in). Before, it rejected such a name as unknown. A name no build registers is still rejected, with the same message.
+
 ## [0.11.1] - 2026-11-06
 
 ### Added

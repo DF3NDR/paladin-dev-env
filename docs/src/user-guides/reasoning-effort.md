@@ -304,7 +304,7 @@ invalid value (`bogus-effort-51`) and with real levels, and prints numbers and v
 ```text
 OLLAMA_BASE_URL=http://localhost:11434 \
 cargo run -p paladin-llm --example live_vendor_smoke \
-  --features openai,anthropic,deepseek,kimi,qwen,grok,ollama,gemini,openai-compatible \
+  --features openai,anthropic,deepseek,kimi,qwen,grok,ollama,gemini,zai,openai-compatible \
   -- --effort --models ollama=my-local-model
 ```
 
@@ -469,6 +469,16 @@ How to read the table, vendor by vendor:
   (`low`, not `LOW`; the probe accepted both). `off` is `thinkingBudget: 0` and `auto` sends
   nothing. `minimal` is listed per model (six of twelve probed models accepted it). No native `Budget`
   is seeded: the vendor documents no maximum for the models probed.
+- **Z.ai.** No wire, so no model row can be `exact` and every explicit effort is refused before
+  any HTTP call. docs.z.ai documents two reasoning controls (accessed
+  2026-11-17): a `thinking: {type: enabled|disabled}` object and a top-level `reasoning_effort`
+  (for `glm-5.3`, `low`, `high` or `max`). They are *candidates*, not a wire: a wire ships only
+  after a dated live probe, and none has been run against Z.ai. The adapter sends neither field,
+  so the vendor's own default applies (the docs state thinking is enabled by default, and that
+  `glm-5.3` supports `enabled` only). Z.ai defaults to a 300 s timeout for every model for that
+  reason. Z.ai has no `llm.zai` block, so the YAML `reasoning_wire` and `models.<id>.effort` keys
+  are not available for it; the `--effort` mode of the live smoke harness
+  (`--models z.ai=<id>`) is the tool that produces the evidence a future wire would need.
 - **Ollama and OpenAI-compatible.** No wire, so no model row can be `exact`: see
   [Self-hosted endpoints](#self-hosted-endpoints).
 

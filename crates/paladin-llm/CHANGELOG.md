@@ -7,6 +7,14 @@ and this project follows lockstep workspace versioning.
 
 ## [Unreleased]
 
+### Added
+
+- z.ai (Zhipu AI, GLM) provider adapter `paladin_llm::zai` (`ZaiAdapter`, `ZaiConfig`, `ZAI_DEFAULT_BASE_URL`, `ZAI_DEFAULT_MODEL`, `ZAI_FALLBACK_MODELS`; feature `zai`), a preset on the shared OpenAI-compatible `CompatEngine` that passes the shared conformance suite. `LlmProviderFactory` builds it by the name `zai` from `ZAI_API_KEY`, `ZAI_BASE_URL`, `ZAI_MODEL` and `ZAI_TIMEOUT_SECONDS`. There is no `llm.zai` config block yet (`LlmConfig` is unchanged), so an `llm.zai` section is not read; it is planned for a later release. Facts come from docs.z.ai, accessed 2026-11-17; the seeded model table is empty and the reasoning wire is `Unsupported` because no live probe exists, so every model is unprofiled and an explicit reasoning effort is refused. `ZaiConfig` redacts its key in `Debug` and the adapter never follows a redirect.
+
+### Changed
+
+- `LlmConfig::validate` accepts a `default_provider` that the provider registry knows but that has no `llm.<name>` field (today: `zai`, when the `zai` feature is compiled in). Before, it rejected such a name as unknown.
+
 ## [0.11.1] - 2026-11-06
 
 ### Fixed

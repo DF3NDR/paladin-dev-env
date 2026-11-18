@@ -14,7 +14,10 @@ configuration alone, and either behaves equivalently or fails with an error that
 provider, the model and the parameter**. It never silently runs with a different setting.
 
 The nine providers, in the order every table on this page uses: `openai`, `anthropic`,
-`deepseek`, `kimi`, `qwen`, `grok`, `gemini`, `ollama` and `openai-compatible`.
+`deepseek`, `kimi`, `qwen`, `grok`, `gemini`, `ollama` and `openai-compatible`. A tenth, `zai`
+(Z.ai, GLM), was added later and is not one of the nine: it has no `llm.zai` config block, no
+seeded models and no row in the tables below. See [Z.ai (environment-only,
+unprofiled)](#zai-environment-only-unprofiled).
 
 Three mechanisms make that hold:
 
@@ -115,7 +118,7 @@ and the environment without building it.
 
 To construct one adapter directly, each provider has a `*Config` type (`OpenAIConfig`,
 `AnthropicConfig`, `DeepSeekConfig`, `KimiConfig`, `QwenConfig`, `GrokConfig`, `GeminiConfig`,
-`OllamaConfig`, `OpenAiCompatibleConfig`). All nine are `#[non_exhaustive]`: build one with its
+`OllamaConfig`, `OpenAiCompatibleConfig`, `ZaiConfig`). All ten are `#[non_exhaustive]`: build one with its
 `new(..)` or `from_env()` and set knobs through the builders `with_max_tokens`, `with_max_retries`,
 `with_context_window`, `with_model_overrides`, `with_timeout_seconds` and `with_base_url` (or by
 assigning the public fields):
@@ -133,9 +136,10 @@ let config = AnthropicConfig::new(api_key, "claude-haiku-5-5".to_string())
 let adapter = AnthropicAdapter::new(config)?;
 ```
 
-Seven of the nine construct with the same shape, `new(api_key, model)` (Phase 50.1, SURFACE-02,
-MIGRATION.md section 10.8 DR-19): `OpenAIConfig`, `AnthropicConfig`, `DeepSeekConfig`,
-`KimiConfig`, `QwenConfig`, `GrokConfig` and `GeminiConfig`. The first argument is the API key,
+Eight of the ten construct with the same shape, `new(api_key, model)` (Phase 50.1, SURFACE-02,
+MIGRATION.md section 10.8 DR-19, for the first seven; `ZaiConfig` was added with it): `OpenAIConfig`,
+`AnthropicConfig`, `DeepSeekConfig`, `KimiConfig`, `QwenConfig`, `GrokConfig`, `GeminiConfig` and
+`ZaiConfig`. The first argument is the API key,
 never a URL. The endpoint defaults to the vendor's own (`ANTHROPIC_DEFAULT_BASE_URL` and its
 siblings) and is replaced with `with_base_url`. The two endpoint-only configs keep their
 endpoint argument: `OllamaConfig::new(base_url, model)` and
@@ -149,10 +153,40 @@ A direct constructor applies the same 300 s default to a seeded reasoning model,
 a model marked reasoning only through `model_overrides`; call `with_timeout_seconds` yourself on the
 direct path in that case.
 
-All nine adapters are re-exported from the `paladin` facade, each behind its own feature:
+All ten adapters are re-exported from the `paladin` facade, each behind its own feature:
 `llm-openai`, `llm-anthropic`, `llm-deepseek`, `llm-kimi`, `llm-qwen`, `llm-grok`, `llm-gemini`,
-`llm-ollama` and `llm-openai-compatible` (`llm-all` enables every one). The default feature set is
-`openai`, `anthropic` and `deepseek` (ADR-0046); the other six compile in only when named.
+`llm-zai`, `llm-ollama` and `llm-openai-compatible` (`llm-all` enables every one). The default
+feature set is `openai`, `anthropic` and `deepseek` (ADR-0046); the other seven compile in only
+when named.
+
+## Z.ai (environment-only, unprofiled)
+
+Z.ai (Zhipu AI, GLM models; provider name `zai`, feature `zai`, facade feature `llm-zai`) is a
+preset on the shared OpenAI-compatible engine. It differs from the nine providers above in three
+ways, all of them deliberate for this release:
+
+- **It is configured through the environment only.** `ZAI_API_KEY` (required), `ZAI_BASE_URL`,
+  `ZAI_MODEL` and `ZAI_TIMEOUT_SECONDS`. There is no `llm.zai` block: `LlmConfig` ignores keys it
+  does not know, so an `llm.zai:` section in `config.yml` loads without error and is **not read**.
+  An `llm.zai` block is planned for a later release. Every by-name path still works with those
+  variables set: `default_provider: "zai"`, `LlmProviderFactory::create("zai")`,
+  `create_from_config(&config, "zai", Some(model))` and a `model_fallback` hop to `zai`.
+- **It is not in the provider swap matrix.** The matrix builds every provider from its `llm.<name>`
+  block, which Z.ai does not have, so the equivalence claim in "What switching providers means"
+  does not cover it. Moving an agent to `zai` is a configuration change you check yourself.
+- **Every model is unprofiled.** No operator live seed probe has been run against Z.ai, so its
+  registry table is empty and every model runs on the adapter-wide fallback profile. Each response
+  carries the `paladin.unprofiled_model` metadata entry, and the build logs one `warn!`. A
+  window, a maximum output or a per-model override can be supplied through `ZaiConfig`
+  (`with_context_window`, `with_model_overrides`). The `live_vendor_smoke` example is the tool that
+  produces the evidence a seeded row would need.
+
+Its endpoint, default model (`glm-5.3`), fallback model list and temperature range
+(`0.0` to `1.0`) were read on docs.z.ai on 2026-11-17 and are vendor-documented, not live-measured;
+the sources are in the module docs of `crates/paladin-llm/src/zai/adapter.rs`. The documented
+`stop` field is described in prose as taking one stop word but its schema allows four; the
+adapter reads that fail-closed as one, so a request with a second stop sequence omits `stop` and
+records `paladin.params_omitted`.
 
 ## Parameter policy (ADR-0061)
 
@@ -197,7 +231,7 @@ reach every caller, buffered and streamed:
 |---------|---------|
 | `LlmResponse.metadata` (each buffered call) | `paladin.params_omitted`, `paladin.unprofiled_model`, `paladin.response_format_adjusted`, `paladin.usage_unreconciled` (a call whose mapped usage disagrees with the vendor's own total or breaks containment; see [Responses](#responses)), and for a fallback chain `paladin.served_by` and `paladin.served_model`. `paladin.usage_unreconciled` follows the last-value rule below, so a run's `run_metadata` keeps the last call that recorded a disagreement. |
 | `PaladinResult.run_metadata` (a whole run) | The same keys merged across every model call of the run. `paladin.params_omitted` and `paladin.unprofiled_model` hold the de-duplicated union in first-seen order; every other key holds the last call's value; a key without the `paladin.` prefix is never copied. `paladin.served_by` keeps its own `PaladinResult.served_by` field. |
-| `StreamingResponse.metadata` (a stream) | The same keys on the stream's **terminal chunk only**, for all nine adapters; content chunks carry an empty map, and an error terminal item (refusal, empty completion) carries none. A fallback chain's stream names the serving hop with `paladin.served_by` and `paladin.served_model` on that chunk. |
+| `StreamingResponse.metadata` (a stream) | The same keys on the stream's **terminal chunk only**, for all ten adapters; content chunks carry an empty map, and an error terminal item (refusal, empty completion) carries none. A fallback chain's stream names the serving hop with `paladin.served_by` and `paladin.served_model` on that chunk. |
 | `ChunkMetadata.run_metadata` (a streamed run) | The terminal chunk's keys merged by the same rule, including `paladin.served_by`. |
 
 The values are provider names, model ids, parameter names and token counts only, never request
@@ -221,7 +255,7 @@ over HTTP is a separate decision about a published contract.
   refused key). Other OpenAI model ids, and any non-OpenAI server behind `OPENAI_BASE_URL`, are
   unmeasured; for a server that accepts only `max_tokens`, use the `openai-compatible` preset,
   which still sends it.
-- The retry counters are not unified: the compat presets (Kimi, Qwen, Grok, Ollama,
+- The retry counters are not unified: the compat presets (Kimi, Qwen, Grok, Z.ai, Ollama,
   OpenAI-compatible), OpenAI and DeepSeek retry that many times after the first attempt (`0` sends
   once); Anthropic and Gemini count total attempts (`0` and `1` both send once).
 - Grok's vendor-computed `cost_in_usd_ticks` and `num_sources_used` are not parsed, so xAI's own
@@ -540,7 +574,7 @@ seeded; a model measured only in part is not listed. Each registry entry carries
 date, and the table repeats it.
 
 To refresh a vendor, re-run the probe (`cargo run -p paladin-llm --example live_vendor_smoke
---features openai,anthropic,deepseek,kimi,qwen,grok,ollama,gemini,openai-compatible -- --probe`;
+--features openai,anthropic,deepseek,kimi,qwen,grok,ollama,gemini,zai,openai-compatible -- --probe`;
 a provider with no credential in the environment prints `SKIPPED`), update the vendor's table in `registry/seeded.rs` with
 the new date, and update the matching rows above. The drift test fails until the page and the
 registry agree, so a row cannot be edited on one side only. The live smoke run over all nine

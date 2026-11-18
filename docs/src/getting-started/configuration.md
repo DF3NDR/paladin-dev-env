@@ -16,15 +16,17 @@ let settings = paladin_ai_core::config::ApplicationSettings::from_file("config.y
 
 ## LLM Provider
 
-Nine providers are supported: `openai`, `anthropic`, `deepseek`, `kimi`, `qwen`, `grok`,
-`ollama`, `gemini`, and a generic operator-configured `openai-compatible` provider for any
-other OpenAI-compatible endpoint. Only the providers compiled in via the matching
+Ten providers are supported: `openai`, `anthropic`, `deepseek`, `kimi`, `qwen`, `grok`,
+`ollama`, `gemini`, `zai`, and a generic operator-configured `openai-compatible` provider for any
+other OpenAI-compatible endpoint. Nine of them have an `llm.<provider>` block; `zai` is
+configured through its `ZAI_*` environment variables only (see [Z.ai](#zai-environment-only)
+below). Only the providers compiled in via the matching
 `llm-<provider>` Cargo feature are usable at runtime; the compiled default remains
 `openai` + `anthropic` + `deepseek` (see [Feature Flags](../api-reference/feature-flags.md)).
 
 ```yaml
 llm:
-  default_provider: "openai"   # openai | anthropic | deepseek | kimi | qwen | grok | ollama | gemini | openai-compatible
+  default_provider: "openai"   # openai | anthropic | deepseek | kimi | qwen | grok | ollama | gemini | zai | openai-compatible
 
   openai:
     base_url: "https://api.openai.com/v1"
@@ -120,11 +122,33 @@ llm:
 | `XAI_API_KEY` | Grok |
 | — (none required) | Ollama — self-hosted, no vendor credential (D-12) |
 | `GEMINI_API_KEY` | Gemini |
+| `ZAI_API_KEY` | Z.ai (Zhipu AI, GLM) — environment only, see [Z.ai](#zai-environment-only) |
 | `OPENAI_COMPATIBLE_API_KEY` | Generic OpenAI-compatible provider — **not** the same variable as `OPENAI_API_KEY`, a different credential for a different provider; the two names are one word apart, read both character-by-character before exporting either |
 | `APP_LLM_DEFAULT_PROVIDER` | Override default provider at runtime |
 
 > **Security:** Never put API keys in `config.yml`. Use environment variables or
 > a secrets manager (AWS Secrets Manager, HashiCorp Vault, Kubernetes Secrets).
+
+### Z.ai (environment only)
+
+Z.ai (Zhipu AI, GLM models; provider name `zai`, Cargo feature `llm-zai`) has **no `llm.zai`
+block** in this release. `LlmConfig` ignores keys it does not know, so a `zai:` section under
+`llm:` loads without error and is silently **not read**. It is configured through these
+environment variables:
+
+| Variable | Required | Default |
+|----------|----------|---------|
+| `ZAI_API_KEY` | yes | — |
+| `ZAI_BASE_URL` | no | `https://api.z.ai/api/paas/v4` |
+| `ZAI_MODEL` | no | `glm-5.3` |
+| `ZAI_TIMEOUT_SECONDS` | no | `300` (the vendor documents thinking as enabled by default) |
+
+With those set, `default_provider: "zai"` (or `APP_LLM_DEFAULT_PROVIDER=zai`) selects it, and an
+agent or a `model_fallback` hop can name `zai`. `ZAI_BASE_URL` must start with `http://` or
+`https://`. Z.ai documents a second endpoint for its GLM Coding Plan
+(`https://api.z.ai/api/coding/paas/v4`) and says Standard and Coding Plan keys are managed
+separately, with the key type deciding how calls are billed; point `ZAI_BASE_URL` there only with
+a Coding Plan key. An `llm.zai` block is planned for a later release.
 
 ### Live verification status
 
@@ -137,6 +161,7 @@ above carry their own dated status:
 | Grok (xAI) | Live-verified 2026-08-22 (plan 17-18): model list + a `generate()` round trip against `api.x.ai`. |
 | Kimi (Moonshot) | Live-verified 2026-08-22 (plan 17-19): model list + a `generate()` round trip against `api.moonshot.ai`, including its measured fixed-temperature constraint. |
 | Qwen (DashScope) | Live-verified 2026-08-23 (plan 17-21 gap closure): a model-list fetch (162 models at the shipped Singapore endpoint) and a `generate()` round trip both succeeded. See the region-scoping note above `qwen:` for the mandatory override outside the Singapore region. |
+| Z.ai (GLM) | **Not live-verified.** The base URL, default model, model list and temperature range were read on docs.z.ai on 2026-11-17; no live call, seed probe or effort probe has been run, so every model is unprofiled and an explicit reasoning effort is refused. |
 | Ollama | Not applicable — self-hosted, no vendor endpoint to verify. Its live exercise is the Docker Tier 2 suite (UAT test 3), passed on a GitHub Actions runner 2026-08-19. |
 
 ### Running against a local Ollama server (RT-FR-22)

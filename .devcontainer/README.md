@@ -59,6 +59,7 @@ printf '%s' '<key>' > ~/.config/paladin/gemini_api_key       # -> GEMINI_API_KEY
 printf '%s' '<key>' > ~/.config/paladin/xai_api_key          # -> XAI_API_KEY        (Grok)
 printf '%s' '<key>' > ~/.config/paladin/moonshot_api_key     # -> MOONSHOT_API_KEY   (Kimi)
 printf '%s' '<key>' > ~/.config/paladin/dashscope_api_key    # -> DASHSCOPE_API_KEY  (Qwen)
+printf '%s' '<key>' > ~/.config/paladin/zai_api_key          # -> ZAI_API_KEY        (Z.ai)
 chmod 600 ~/.config/paladin/*
 ```
 
@@ -77,6 +78,7 @@ file, not a code change. Recognised today:
 | `xai_api_key` | `XAI_API_KEY` | Grok (xAI) |
 | `moonshot_api_key` | `MOONSHOT_API_KEY` | Kimi (Moonshot) |
 | `dashscope_api_key` | `DASHSCOPE_API_KEY` | Qwen (DashScope) |
+| `zai_api_key` | `ZAI_API_KEY` | Z.ai (Zhipu AI, GLM) |
 | `openai_compatible_api_key` | `OPENAI_COMPATIBLE_API_KEY` | generic provider |
 
 ### Precedence

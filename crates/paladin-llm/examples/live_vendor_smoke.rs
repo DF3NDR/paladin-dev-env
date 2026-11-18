@@ -1,8 +1,8 @@
-//! Live vendor smoke harness -- all nine providers, credential-gated (Phase 17 UAT test 4,
+//! Live vendor smoke harness -- all ten providers, credential-gated (Phase 17 UAT test 4,
 //! widened by Phase 50 PARITY-07).
 //!
 //! One table-driven harness ([`PROVIDERS`]) covers OpenAI, Anthropic, DeepSeek, Kimi
-//! (Moonshot), Qwen (DashScope), Grok (xAI), Gemini, Ollama and the generic
+//! (Moonshot), Qwen (DashScope), Grok (xAI), Gemini, Z.ai (GLM), Ollama and the generic
 //! OpenAI-compatible adapter. Every provider is behind the same credential gate:
 //!
 //! | Provider          | Runs only when                                          |
@@ -14,6 +14,7 @@
 //! | Qwen              | `DASHSCOPE_API_KEY`                                     |
 //! | Grok              | `XAI_API_KEY`                                           |
 //! | Gemini            | `GEMINI_API_KEY`                                        |
+//! | Z.ai              | `ZAI_API_KEY`                                           |
 //! | Ollama            | `OLLAMA_BASE_URL` (a local daemon has no key)           |
 //! | OpenAI-compatible | `OPENAI_COMPATIBLE_API_KEY` and `OPENAI_COMPATIBLE_BASE_URL` |
 //!
@@ -90,7 +91,7 @@
 //!
 //! ```text
 //! cargo run -p paladin-llm --example live_vendor_smoke \
-//!   --features openai,anthropic,deepseek,kimi,qwen,grok,ollama,gemini,openai-compatible
+//!   --features openai,anthropic,deepseek,kimi,qwen,grok,ollama,gemini,zai,openai-compatible
 //! ```
 //!
 //! Nothing here runs in CI: it needs real vendor credentials and reaches real vendor hosts.
@@ -124,6 +125,8 @@ use paladin_llm::openai_compatible::{OpenAiCompatibleAdapter, OpenAiCompatibleCo
 use paladin_llm::qwen::adapter::{QWEN_DEFAULT_BASE_URL, QWEN_DEFAULT_MODEL, QWEN_FALLBACK_MODELS};
 use paladin_llm::qwen::{QwenAdapter, QwenConfig};
 use paladin_llm::redaction::diagnostic_excerpt;
+use paladin_llm::zai::adapter::{ZAI_DEFAULT_BASE_URL, ZAI_DEFAULT_MODEL, ZAI_FALLBACK_MODELS};
+use paladin_llm::zai::{ZaiAdapter, ZaiConfig};
 use paladin_ports::output::llm_port::{
     FinishReason, LlmError, LlmPort, LlmRequest, ReasoningEffort,
 };
@@ -290,6 +293,7 @@ build_fn!(build_kimi, KimiConfig, KimiAdapter);
 build_fn!(build_qwen, QwenConfig, QwenAdapter);
 build_fn!(build_grok, GrokConfig, GrokAdapter);
 build_fn!(build_gemini, GeminiConfig, GeminiAdapter);
+build_fn!(build_zai, ZaiConfig, ZaiAdapter);
 build_fn!(
     build_openai_compatible,
     OpenAiCompatibleConfig,
@@ -321,8 +325,8 @@ fn build_ollama() -> Result<Built, String> {
     })
 }
 
-/// The nine providers. Order is the order of the run output.
-const PROVIDERS: [ProviderSpec; 9] = [
+/// The ten providers. Order is the order of the run output.
+const PROVIDERS: [ProviderSpec; 10] = [
     ProviderSpec {
         name: "OpenAI",
         cred_vars: &["OPENAI_API_KEY"],
@@ -422,6 +426,26 @@ const PROVIDERS: [ProviderSpec; 9] = [
         cap_field: "max_tokens",
         acceptance_extras: None,
         build: build_gemini,
+    },
+    ProviderSpec {
+        name: "Z.ai",
+        cred_vars: &["ZAI_API_KEY"],
+        default_base_url: Some(ZAI_DEFAULT_BASE_URL),
+        default_model: ZAI_DEFAULT_MODEL,
+        curated_models: ZAI_FALLBACK_MODELS,
+        // docs.z.ai documents no models-listing endpoint (the API-reference index has no
+        // `/models` page), so the adapter's answer is the curated list and a live fetch cannot be
+        // told apart from it. The half is reported NOT APPLICABLE rather than risk a vacuous
+        // pass; the first operator run may show a listing exists, and this flips to `true` then.
+        live_model_list: false,
+        wire: Wire::OpenAiChat,
+        auth: Auth::Bearer,
+        // Vendor-documented inclusive [0.0, 1.0] (docs.z.ai chat-completion `temperature`), not
+        // live-measured -- the next probe measures the span's ends and middle.
+        temperature_range: Some((0.0, 1.0)),
+        cap_field: "max_tokens",
+        acceptance_extras: None,
+        build: build_zai,
     },
     ProviderSpec {
         name: "Ollama",
@@ -626,7 +650,7 @@ enum Command {
 
 const USAGE: &str = "usage: live_vendor_smoke [--probe | --usage | --effort | --effort-smoke] [--dry-run] [--models <provider>=<id>[,<id>...]]... [--max-tokens <n>] [--timeout-seconds <s>] [-h|--help]\n\
 \n\
-  (no flag)   credential-gated smoke probes over all nine providers\n\
+  (no flag)   credential-gated smoke probes over all ten providers\n\
   --probe     record, per configured provider, the live models listing and what each candidate\n\
               model accepts (sampling, stop sequences, output cap, JSON-object and JSON-schema\n\
               modes, usage fields, quota-shaped errors); prints a markdown transcript\n\
@@ -648,11 +672,11 @@ const USAGE: &str = "usage: live_vendor_smoke [--probe | --usage | --effort | --
   --timeout-seconds <s>\n\
               with --effort-smoke: the adapter config's request timeout (optional)\n\
   --dry-run   print the probe (or, with --usage, --effort or --effort-smoke, that mode's) plan for\n\
-              all nine providers; no network access, no credential read\n\
+              all ten providers; no network access, no credential read\n\
   --models    extra candidate model ids for one provider (repeatable); needs --probe, --usage,\n\
               --effort, --effort-smoke or --dry-run\n\
 \n\
-providers: OpenAI, Anthropic, DeepSeek, Kimi, Qwen, Grok, Gemini, Ollama, OpenAI-compatible";
+providers: OpenAI, Anthropic, DeepSeek, Kimi, Qwen, Grok, Gemini, Z.ai, Ollama, OpenAI-compatible";
 
 fn add_models(options: &mut Options, value: &str) -> Result<(), String> {
     let (provider, ids) = value
@@ -1913,7 +1937,7 @@ fn write_probe_table_header(out: &mut String, with_outcome_columns: bool) {
     }
 }
 
-/// The offline plan: the same section skeleton as a live probe, for all nine providers, with no
+/// The offline plan: the same section skeleton as a live probe, for all ten providers, with no
 /// network access and no credential read.
 fn render_dry_run(models: &[(String, Vec<String>)]) -> String {
     let mut out = String::new();
@@ -2229,7 +2253,7 @@ fn write_usage_section_facts(out: &mut String, spec: &ProviderSpec, base_url: &s
     );
 }
 
-/// The offline `--usage` plan: every planned call for all nine providers, with no network access
+/// The offline `--usage` plan: every planned call for all ten providers, with no network access
 /// and no credential read.
 fn render_usage_dry_run(models: &[(String, Vec<String>)]) -> String {
     let mut out = String::new();
@@ -2645,6 +2669,50 @@ fn deepseek_effort_plan() -> Vec<EffortCall> {
     plan
 }
 
+/// The Z.ai plan. docs.z.ai documents two reasoning controls (accessed 2026-11-17): a
+/// `thinking: {type: enabled|disabled}` object and a top-level `reasoning_effort` (`glm-5.3`:
+/// `low`/`high`/`max`). Neither is live-measured, which is why the shipped wire is `Unsupported`
+/// and this plan exists: every Paladin level goes through `reasoning_effort` (including those the
+/// docs do not list, so the transcript shows which are accepted), the `thinking` toggle covers
+/// off and auto (the docs say `glm-5.3` supports `enabled` only, so `off` is expected to be
+/// refused on it), one invalid value goes through each form (the top-level one is also the
+/// silent-field detector), and the sampling row follows. Its output is what would let a wire be
+/// shipped (ADR-0061/ADR-0062, Phase 51 D-04).
+fn zai_effort_plan() -> Vec<EffortCall> {
+    let mut plan = vec![default_call()];
+    plan.extend(level_calls(
+        "top_level_effort",
+        &EFFORT_LEVELS,
+        top_level_effort,
+    ));
+    plan.push(EffortCall::new(
+        "thinking_object",
+        "off",
+        EffortRole::Off,
+        json!({"thinking": {"type": "disabled"}}),
+    ));
+    plan.push(EffortCall::new(
+        "thinking_object",
+        "auto",
+        EffortRole::Auto,
+        json!({"thinking": {"type": "enabled"}}),
+    ));
+    plan.push(invalid_call(
+        "top_level_effort",
+        top_level_effort(EFFORT_INVALID_VALUE),
+    ));
+    plan.push(invalid_call(
+        "thinking_object",
+        json!({"thinking": {"type": EFFORT_INVALID_VALUE}}),
+    ));
+    plan.push(sampling_call(
+        "top_level_effort",
+        "high+temperature=0.5",
+        top_level_effort("high"),
+    ));
+    plan
+}
+
 /// The Grok plan: every level through `reasoning_effort`, one invalid value (also the detector)
 /// and the sampling row. The chat-completions field is undocumented, so the plan only asks
 /// whether the OpenAI-style field is parsed and has an effect.
@@ -2878,6 +2946,7 @@ fn effort_plan(spec: &ProviderSpec) -> Vec<EffortCall> {
         "Qwen" => qwen_effort_plan(),
         "Grok" => grok_effort_plan(),
         "Gemini" => gemini_effort_plan(),
+        "Z.ai" => zai_effort_plan(),
         "Ollama" | "OpenAI-compatible" => self_hosted_effort_plan(),
         _ => Vec::new(),
     }
@@ -3137,7 +3206,7 @@ fn write_effort_section_facts(out: &mut String, spec: &ProviderSpec, base_url: &
     );
 }
 
-/// The offline `--effort` plan: every planned call for all nine providers, with no network access
+/// The offline `--effort` plan: every planned call for all ten providers, with no network access
 /// and no credential read. Only the `--models` ids are candidates.
 fn render_effort_dry_run(models: &[(String, Vec<String>)]) -> String {
     let mut out = String::new();
@@ -3351,6 +3420,7 @@ fn build_smoke_port(name: &str, knobs: SmokeKnobs) -> Result<Box<dyn LlmPort>, S
         "Qwen" => smoke_port!(QwenConfig, QwenAdapter),
         "Grok" => smoke_port!(GrokConfig, GrokAdapter),
         "Gemini" => smoke_port!(GeminiConfig, GeminiAdapter),
+        "Z.ai" => smoke_port!(ZaiConfig, ZaiAdapter),
         "Ollama" => smoke_port!(OllamaConfig, OllamaAdapter),
         "OpenAI-compatible" => smoke_port!(OpenAiCompatibleConfig, OpenAiCompatibleAdapter),
         other => Err(format!("no adapter builder for provider `{other}`")),
@@ -3716,12 +3786,53 @@ mod tests {
     }
 
     #[test]
-    fn the_table_has_nine_distinctly_named_providers() {
+    fn the_table_has_ten_distinctly_named_providers() {
         let mut names: Vec<&str> = PROVIDERS.iter().map(|p| p.name).collect();
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 9);
+        assert_eq!(names.len(), 10);
         assert!(PROVIDERS.iter().all(|p| !p.cred_vars.is_empty()));
+    }
+
+    /// The Z.ai row reads every Z.ai fact from the adapter's own constants (themselves cited to
+    /// docs.z.ai in `zai/adapter.rs`), never a restated copy, and it declares no live model list
+    /// because docs.z.ai documents no listing endpoint.
+    #[test]
+    fn the_zai_row_is_built_from_the_adapters_own_constants() {
+        let zai = spec("Z.ai");
+        assert_eq!(zai.cred_vars, &["ZAI_API_KEY"]);
+        assert_eq!(zai.default_base_url, Some(ZAI_DEFAULT_BASE_URL));
+        assert_eq!(zai.default_model, ZAI_DEFAULT_MODEL);
+        assert_eq!(zai.curated_models, ZAI_FALLBACK_MODELS);
+        assert_eq!(zai.curated_models[0], zai.default_model);
+        assert!(!zai.live_model_list);
+        assert_eq!(zai.wire, Wire::OpenAiChat);
+        assert_eq!(zai.temperature_range, Some((0.0, 1.0)));
+    }
+
+    #[test]
+    fn the_zai_plan_probes_the_documented_controls_and_the_silent_field_detector() {
+        let plan = effort_plan(spec("Z.ai"));
+        assert_eq!(plan[0].role, EffortRole::Default);
+        for level in EFFORT_LEVELS {
+            assert_eq!(
+                planned(&plan, "top_level_effort", level).extra,
+                json!({"reasoning_effort": level})
+            );
+        }
+        assert_eq!(
+            planned(&plan, "thinking_object", "off").extra,
+            json!({"thinking": {"type": "disabled"}})
+        );
+        assert_eq!(
+            planned(&plan, "thinking_object", "auto").extra,
+            json!({"thinking": {"type": "enabled"}})
+        );
+        assert_eq!(
+            planned(&plan, "top_level_effort", EFFORT_INVALID_VALUE).role,
+            EffortRole::Invalid
+        );
+        assert!(plan.iter().any(|c| c.role == EffortRole::Sampling));
     }
 
     #[test]
@@ -4040,9 +4151,9 @@ mod tests {
     }
 
     #[test]
-    fn the_dry_run_lists_all_nine_providers_and_names_no_credential() {
+    fn the_dry_run_lists_all_ten_providers_and_names_no_credential() {
         let plan = render_dry_run(&[("Kimi".to_string(), vec!["extra-model".to_string()])]);
-        assert_eq!(plan.lines().filter(|l| l.starts_with("## ")).count(), 9);
+        assert_eq!(plan.lines().filter(|l| l.starts_with("## ")).count(), 10);
         assert!(plan.contains("json_schema"));
         assert!(plan.contains("`extra-model`"));
         assert!(plan.contains("{\"thinking\":{\"type\":\"disabled\"}}"));
@@ -4239,9 +4350,9 @@ mod tests {
     }
 
     #[test]
-    fn the_usage_dry_run_lists_all_nine_providers_without_credentials() {
+    fn the_usage_dry_run_lists_all_ten_providers_without_credentials() {
         let plan = render_usage_dry_run(&[("Grok".to_string(), vec!["grok-4.5".to_string()])]);
-        assert_eq!(plan.lines().filter(|l| l.starts_with("## ")).count(), 9);
+        assert_eq!(plan.lines().filter(|l| l.starts_with("## ")).count(), 10);
         assert!(plan.contains("`grok-4.5`"));
         assert!(plan.contains("no network access"));
         // The extras that would suppress reasoning are not planned.
@@ -4604,7 +4715,7 @@ mod tests {
     #[test]
     fn the_effort_dry_run_lists_every_planned_kimi_call_with_no_credential() {
         let plan = render_effort_dry_run(&[("Kimi".to_string(), vec!["kimi-k3".to_string()])]);
-        assert_eq!(plan.lines().filter(|l| l.starts_with("## ")).count(), 9);
+        assert_eq!(plan.lines().filter(|l| l.starts_with("## ")).count(), 10);
         assert!(plan.contains("no network access"));
         assert!(plan.contains("`kimi-k3`: 18 calls"), "{plan}");
         for planned in effort_plan(spec("Kimi")) {
@@ -5163,7 +5274,7 @@ mod tests {
             Some(512),
             Some(30),
         );
-        assert_eq!(plan.lines().filter(|l| l.starts_with("## ")).count(), 9);
+        assert_eq!(plan.lines().filter(|l| l.starts_with("## ")).count(), 10);
         assert!(plan.contains("no network access"));
         assert!(
             plan.contains("`deepseek-v4-pro`: 2 adapter calls"),

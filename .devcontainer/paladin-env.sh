@@ -21,6 +21,7 @@
 #     ~/.config/paladin/xai_api_key         ->  XAI_API_KEY
 #     ~/.config/paladin/moonshot_api_key    ->  MOONSHOT_API_KEY   (Kimi)
 #     ~/.config/paladin/dashscope_api_key   ->  DASHSCOPE_API_KEY  (Qwen)
+#     ~/.config/paladin/zai_api_key         ->  ZAI_API_KEY        (Z.ai)
 #     ~/.config/paladin/gh_token            ->  GH_TOKEN           (gh CLI)
 #
 # The mapping is generic — no hardcoded provider list — so a new provider needs a
@@ -80,9 +81,10 @@ __paladin_load_secrets
 # `paladin-keys` — report which credentials resolved, WITHOUT printing any value.
 paladin-keys() {
     local vars=(OPENAI_API_KEY ANTHROPIC_API_KEY DEEPSEEK_API_KEY GEMINI_API_KEY
-                XAI_API_KEY MOONSHOT_API_KEY DASHSCOPE_API_KEY
+                XAI_API_KEY MOONSHOT_API_KEY DASHSCOPE_API_KEY ZAI_API_KEY
                 OPENAI_COMPATIBLE_API_KEY GH_TOKEN)
     local -A label=( [XAI_API_KEY]=Grok [MOONSHOT_API_KEY]=Kimi [DASHSCOPE_API_KEY]=Qwen
+                     [ZAI_API_KEY]=Z.ai
                      [GEMINI_API_KEY]=Gemini [OPENAI_API_KEY]=OpenAI
                      [ANTHROPIC_API_KEY]=Anthropic [DEEPSEEK_API_KEY]=DeepSeek
                      [OPENAI_COMPATIBLE_API_KEY]=generic [GH_TOKEN]=GitHub )

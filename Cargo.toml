@@ -527,11 +527,12 @@ llm-anthropic = ["paladin-llm/anthropic"]
 llm-deepseek = ["paladin-llm/deepseek"]
 llm-kimi = ["paladin-llm/kimi"]
 llm-qwen = ["paladin-llm/qwen"]
+llm-zai = ["paladin-llm/zai"]
 llm-grok = ["paladin-llm/grok"]
 llm-ollama = ["paladin-llm/ollama"]
 llm-gemini = ["paladin-llm/gemini"]
 llm-openai-compatible = ["paladin-llm/openai-compatible"]
-llm-all = ["llm-openai", "llm-anthropic", "llm-deepseek", "llm-kimi", "llm-qwen", "llm-grok", "llm-ollama", "llm-gemini", "llm-openai-compatible"]
+llm-all = ["llm-openai", "llm-anthropic", "llm-deepseek", "llm-kimi", "llm-qwen", "llm-grok", "llm-ollama", "llm-gemini", "llm-openai-compatible", "llm-zai"]
 
 # Subsystem feature flags
 # `vision` forwards into paladin-llm/vision (which itself depends on

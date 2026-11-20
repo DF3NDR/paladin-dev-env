@@ -347,7 +347,7 @@ test-llm: ## Run tests for paladin-llm
 .PHONY: test-llm-examples
 test-llm-examples: ## Run the unit tests inside paladin-llm's examples (live_vendor_smoke)
 	@echo "$(CYAN)Running paladin-llm example tests...$(NC)"
-	@$(CARGO) test -p paladin-llm --example live_vendor_smoke --features openai,anthropic,deepseek,kimi,qwen,grok,ollama,gemini,openai-compatible
+	@$(CARGO) test -p paladin-llm --example live_vendor_smoke --features openai,anthropic,deepseek,kimi,qwen,grok,ollama,gemini,zai,openai-compatible
 
 .PHONY: test-memory
 test-memory: ## Run tests for paladin-memory

@@ -1912,6 +1912,8 @@ pub mod cases {
             "kimi" => seeded::KIMI,
             #[cfg(feature = "qwen")]
             "qwen" => seeded::QWEN,
+            #[cfg(feature = "zai")]
+            "zai" => seeded::ZAI,
             #[cfg(feature = "grok")]
             "grok" => seeded::GROK,
             #[cfg(feature = "gemini")]

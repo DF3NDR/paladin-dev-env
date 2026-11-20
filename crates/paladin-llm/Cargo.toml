@@ -22,6 +22,7 @@ anthropic = ["dep:reqwest"]
 deepseek = ["dep:reqwest"]
 kimi = ["dep:reqwest"]
 qwen = ["dep:reqwest"]
+zai = ["dep:reqwest"]
 grok = ["dep:reqwest"]
 ollama = ["dep:reqwest"]
 openai-compatible = ["dep:reqwest"]
@@ -85,4 +86,4 @@ harness = false
 # Requires real credentials in the environment; never run in CI.
 [[example]]
 name = "live_vendor_smoke"
-required-features = ["openai", "anthropic", "deepseek", "kimi", "qwen", "grok", "ollama", "gemini", "openai-compatible"]
+required-features = ["openai", "anthropic", "deepseek", "kimi", "qwen", "grok", "ollama", "gemini", "zai", "openai-compatible"]

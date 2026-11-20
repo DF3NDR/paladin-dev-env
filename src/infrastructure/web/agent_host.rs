@@ -2332,6 +2332,12 @@ mod config_driven_tests {
 
         let mut checked = 0;
         for name in provider_names() {
+            // Z.ai has no `llm.zai` block in this release: it is configured through its
+            // `ZAI_*` environment variables, and an `llm.zai` section is not read. Remove this
+            // skip when the block lands.
+            if name == "zai" {
+                continue;
+            }
             let Some(block) = llm.get_provider_config(name) else {
                 panic!("config.example.yml has no `llm.{name}` block for a compiled provider");
             };

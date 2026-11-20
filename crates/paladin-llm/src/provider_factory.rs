@@ -82,6 +82,7 @@ type ConstructFromConfig = fn(
     feature = "deepseek",
     feature = "kimi",
     feature = "qwen",
+    feature = "zai",
     feature = "grok",
     feature = "ollama",
     feature = "gemini",
@@ -196,6 +197,21 @@ fn construct_grok(
     Ok(Arc::new(adapter))
 }
 
+#[cfg(feature = "zai")]
+fn construct_zai(
+    block: Option<&LlmProviderConfig>,
+    model: Option<&str>,
+    env: EnvLookup<'_>,
+) -> Result<Arc<dyn LlmPort>, ProviderFactoryError> {
+    use crate::config::bridge::zai_from_layers;
+    use crate::zai::ZaiAdapter;
+    let config =
+        zai_from_layers(block, model, env).map_err(ProviderFactoryError::ConfigurationMissing)?;
+    let subject = subject("zai", Some(&config.model));
+    let adapter = ZaiAdapter::new(config).map_err(|e| creation_failed(&subject, "Z.ai", e))?;
+    Ok(Arc::new(adapter))
+}
+
 #[cfg(feature = "gemini")]
 fn construct_gemini(
     block: Option<&LlmProviderConfig>,
@@ -298,18 +314,27 @@ fn build_provider_registry() -> Vec<ProviderRegistration> {
         construct_from_config: construct_grok,
     });
 
-    // Gemini is a curated (named-vendor) preset like Kimi/Qwen/Grok — it
+    // Gemini is a curated (named-vendor) preset like Kimi/Qwen/Grok/Z.ai — it
     // just happens to be bespoke-protocol rather than compat-engine-backed
     // (D-08). Declared alongside the other curated presets, before the
     // generic openai-compatible row and Ollama's credential-free row, for
     // the same reason those two are ordered last: neither should ever
     // pre-empt an explicitly-configured named provider in
-    // `get_default_provider()`'s declared-table-order scan.
+    // `get_default_provider()`'s declared-table-order scan. Z.ai is the
+    // same kind of curated (named-vendor, compat-engine-backed) preset and
+    // sits directly after Gemini for the same reason.
     #[cfg(feature = "gemini")]
     rows.push(ProviderRegistration {
         name: "gemini",
         env_var: Some("GEMINI_API_KEY"),
         construct_from_config: construct_gemini,
+    });
+
+    #[cfg(feature = "zai")]
+    rows.push(ProviderRegistration {
+        name: "zai",
+        env_var: Some("ZAI_API_KEY"),
+        construct_from_config: construct_zai,
     });
 
     // Placed after every curated (named-vendor) preset row so it never
@@ -844,7 +869,8 @@ mod tests {
         not(feature = "deepseek"),
         not(feature = "qwen"),
         not(feature = "grok"),
-        not(feature = "ollama")
+        not(feature = "ollama"),
+        not(feature = "zai")
     ))]
     mod kimi_only_build {
         use super::*;
@@ -958,7 +984,8 @@ mod tests {
         not(feature = "openai"),
         not(feature = "anthropic"),
         not(feature = "deepseek"),
-        not(feature = "openai-compatible")
+        not(feature = "openai-compatible"),
+        not(feature = "zai")
     ))]
     mod four_new_preset_build {
         use super::*;
@@ -993,7 +1020,8 @@ mod tests {
         not(feature = "openai"),
         not(feature = "anthropic"),
         not(feature = "deepseek"),
-        not(feature = "gemini")
+        not(feature = "gemini"),
+        not(feature = "zai")
     ))]
     mod five_new_preset_build {
         use super::*;
@@ -1024,7 +1052,8 @@ mod tests {
         feature = "gemini",
         not(feature = "openai"),
         not(feature = "anthropic"),
-        not(feature = "deepseek")
+        not(feature = "deepseek"),
+        not(feature = "zai")
     ))]
     mod six_preset_build {
         use super::*;
@@ -1039,6 +1068,46 @@ mod tests {
                     "qwen",
                     "grok",
                     "gemini",
+                    "openai-compatible",
+                    "ollama"
+                ]
+            );
+        }
+    }
+
+    // ── Z.ai (quick task 261117-t5c): the seven-preset build ──
+    //
+    // Exercised under `cargo test -p paladin-llm --no-default-features
+    // --features kimi,qwen,grok,ollama,openai-compatible,gemini,zai`. Proves
+    // Z.ai's row lands directly after Gemini among the curated (named-vendor)
+    // presets, before the generic `openai-compatible` row and Ollama's
+    // credential-free row.
+    #[cfg(all(
+        feature = "kimi",
+        feature = "qwen",
+        feature = "grok",
+        feature = "ollama",
+        feature = "openai-compatible",
+        feature = "gemini",
+        feature = "zai",
+        not(feature = "openai"),
+        not(feature = "anthropic"),
+        not(feature = "deepseek")
+    ))]
+    mod seven_preset_build {
+        use super::*;
+
+        #[test]
+        fn provider_names_returns_exactly_kimi_qwen_grok_gemini_zai_openai_compatible_ollama_in_table_order()
+         {
+            assert_eq!(
+                provider_names(),
+                vec![
+                    "kimi",
+                    "qwen",
+                    "grok",
+                    "gemini",
+                    "zai",
                     "openai-compatible",
                     "ollama"
                 ]
@@ -1178,6 +1247,7 @@ mod tests {
             feature = "deepseek",
             feature = "kimi",
             feature = "qwen",
+            feature = "zai",
             feature = "grok",
             feature = "ollama",
             feature = "openai-compatible",
@@ -1200,6 +1270,17 @@ mod tests {
 
         fn no_env(_: &str) -> Option<String> {
             None
+        }
+
+        /// The compiled providers an `llm.<provider>` block can drive. Z.ai is env-configured
+        /// only until it gains a block (quick task 261117-t5c, Task 2), so `config_with` has no
+        /// arm for it and the block-driven cases below skip it; its env-driven construction and
+        /// error naming are covered by the `zai_*` tests in this module.
+        fn block_driven_names() -> Vec<&'static str> {
+            provider_names()
+                .into_iter()
+                .filter(|name| *name != "zai")
+                .collect()
         }
 
         /// A `LlmConfig` carrying `block` as the block for `provider`.
@@ -1482,6 +1563,76 @@ mod tests {
             assert!(message.contains("MOONSHOT_API_KEY"), "{message}");
         }
 
+        // ── Z.ai (quick task 261117-t5c): the tracer, env vars to the mock wire ──
+
+        /// The leading end-to-end slice: no `llm.zai` block exists, so `ZAI_API_KEY` and
+        /// `ZAI_BASE_URL` alone drive `create_from_config_with_env` to an adapter named `zai`, and
+        /// its `generate()` reaches the mock vendor's `POST /chat/completions` with the bearer key
+        /// and returns the mocked content and usage.
+        #[cfg(feature = "zai")]
+        #[tokio::test]
+        async fn zai_builds_from_env_vars_and_reaches_the_mock_wire() {
+            let mut vendor = server().await;
+            let mock = vendor
+                .mock("POST", "/chat/completions")
+                .match_header("authorization", "Bearer test-key")
+                .with_status(200)
+                .with_header("content-type", "application/json")
+                .with_body(
+                    json!({
+                        "id": "cmpl-zai-tracer",
+                        "model": "glm-test",
+                        "choices": [{
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "zai-tracer-ok"},
+                            "finish_reason": "stop"
+                        }],
+                        "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10}
+                    })
+                    .to_string(),
+                )
+                .expect(1)
+                .create_async()
+                .await;
+            let url = vendor.url();
+            let pairs = [("ZAI_API_KEY", "test-key"), ("ZAI_BASE_URL", url.as_str())];
+            let env = env_of(&pairs);
+
+            let port = LlmProviderFactory::new()
+                .create_from_config_with_env(&LlmConfig::default(), "zai", None, &env)
+                .expect("ZAI_API_KEY alone is enough to build the adapter");
+            assert_eq!(port.get_provider_name(), "zai");
+
+            let response = generate_once(port.as_ref(), "glm-test")
+                .await
+                .expect("the mock vendor answers a well-formed completion");
+            assert_eq!(response.content, "zai-tracer-ok");
+            assert_eq!(response.usage.prompt_tokens, 7);
+            assert_eq!(response.usage.completion_tokens, 3);
+            assert_eq!(response.usage.total_tokens, 10);
+            mock.assert_async().await;
+        }
+
+        /// Without `ZAI_API_KEY` the factory builds nothing and the error names the variable.
+        #[cfg(feature = "zai")]
+        #[test]
+        fn zai_without_its_key_is_a_named_configuration_error() {
+            let Err(error) = LlmProviderFactory::new().create_from_config_with_env(
+                &LlmConfig::default(),
+                "zai",
+                Some("named-model"),
+                &no_env,
+            ) else {
+                panic!("an absent key must be a construction error");
+            };
+            let message = error.to_string();
+            assert!(
+                message.contains("provider 'zai' (model 'named-model')"),
+                "{message}"
+            );
+            assert!(message.contains("ZAI_API_KEY"), "{message}");
+        }
+
         // ── model overrides ─────────────────────────────────────────────────
 
         fn window_override(window: u32) -> ModelOverride {
@@ -1598,7 +1749,7 @@ mod tests {
             // Every compiled provider with a key to find: no block and no variable, an unset
             // placeholder and a malformed model each name provider and model.
             let secret_block = LlmProviderConfig::new("sk-super-secret-key-value");
-            for name in provider_names() {
+            for name in block_driven_names() {
                 let model = "named-model";
                 let expected = format!("provider '{name}' (model '{model}')");
 
@@ -1755,7 +1906,7 @@ mod tests {
         /// absence of shared mutable state.
         #[tokio::test]
         async fn concurrent_create_from_config_builds_independent_adapters() {
-            let names = provider_names();
+            let names = block_driven_names();
             assert!(!names.is_empty());
             let mut handles = Vec::new();
             for i in 0..16u32 {
@@ -1859,7 +2010,7 @@ mod tests {
             // A name `is_configured` reports is one the credential check lets through: for every
             // compiled provider, a literal-key block is configured and builds (given the base URL
             // and model the generic provider requires).
-            for name in provider_names() {
+            for name in block_driven_names() {
                 let block = LlmProviderConfig::new("sk-agree")
                     .with_base_url("http://127.0.0.1:1")
                     .with_default_model("agree-model");

@@ -301,7 +301,7 @@ jobs:
         run: rustup toolchain install "${PUBLIC_API_TOOLCHAIN}"
 
       - name: Install cargo-public-api
-        run: cargo install cargo-public-api
+        run: cargo install cargo-public-api --version 0.52.0 --locked
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2

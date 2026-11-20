@@ -21,7 +21,7 @@ Paladin uses Cargo feature flags to enable fine-grained control over compiled de
 Feature flags in Paladin follow these principles:
 
 1. **Core Framework Always Available** - Paladin agents, Battalion orchestration, Garrison memory, Arsenal tools, and Herald formatters are always compiled
-2. **Provider Choice** - Choose which of the nine LLM providers to support (OpenAI, Anthropic, DeepSeek, Kimi, Qwen, Grok, Ollama, Gemini, or the generic OpenAI-compatible adapter)
+2. **Provider Choice** - Choose which of the ten LLM providers to support (OpenAI, Anthropic, DeepSeek, Kimi, Qwen, Grok, Ollama, Gemini, Z.ai, or the generic OpenAI-compatible adapter)
 3. **Subsystem Opt-In** - Enable only the subsystems you need (web servers, content processing, notifications)
 4. **Infrastructure Selection** - Pick storage/queue adapters (Redis, S3/MinIO, Qdrant)
 5. **Testing Flexibility** - Enable integration tests only when needed
@@ -52,13 +52,15 @@ Feature flags in Paladin follow these principles:
 | `llm-kimi` | None (uses `reqwest`) | `paladin_llm::kimi` | Kimi (Moonshot AI). Not compiled by default. |
 | `llm-qwen` | None (uses `reqwest`) | `paladin_llm::qwen` | Qwen (Alibaba DashScope). Not compiled by default. |
 | `llm-grok` | None (uses `reqwest`) | `paladin_llm::grok` | Grok (xAI). Not compiled by default. |
+| `llm-zai` | None (uses `reqwest`) | `paladin_llm::zai` | Z.ai (Zhipu AI, GLM models). Configured through `ZAI_*` environment variables; no `llm.zai` config block yet. Not compiled by default. |
 | `llm-ollama` | None (uses `reqwest`) | `paladin_llm::ollama` | Ollama (self-hosted, no credential required). Not compiled by default. |
 | `llm-gemini` | None (uses `reqwest`) | `paladin_llm::gemini` | Gemini (Google) — bespoke `generateContent` protocol, not OpenAI-compatible. Not compiled by default. |
 | `llm-openai-compatible` | None (uses `reqwest`) | `paladin_llm::openai_compatible` | Generic operator-configured adapter for any OpenAI-compatible endpoint not covered above. Not compiled by default. |
-| `llm-all` | all nine flags above | All LLM adapters | Every supported LLM provider plus the generic OpenAI-compatible adapter |
+| `llm-all` | all ten flags above | All LLM adapters | Every supported LLM provider plus the generic OpenAI-compatible adapter |
 
 > Vendor base URLs and default model IDs for Kimi/Qwen/Grok/Gemini were recorded from vendor
-> documentation but have not been verified against a live endpoint in this environment.
+> documentation but have not been verified against a live endpoint in this environment. The same
+> holds for Z.ai, whose facts were read on docs.z.ai on 2026-11-17.
 
 ### Subsystem Flags
 
@@ -139,7 +141,7 @@ This enables:
 - ✅ Core framework (always available)
 
 The six providers Phase 17 added (`llm-kimi`, `llm-qwen`, `llm-grok`, `llm-ollama`,
-`llm-gemini`, `llm-openai-compatible`) are **not** in the default set — opt in explicitly
+`llm-gemini`, `llm-openai-compatible`) and the later `llm-zai` are **not** in the default set — opt in explicitly
 per-provider or via `llm-all`. See `CHANGELOG.md`'s `[Unreleased]` entry: the `llm-*` flags
 were rewired to actually gate their adapters, but the compiled default provider set is
 unchanged from before that fix.
@@ -278,6 +280,7 @@ full
 │   ├── llm-grok
 │   ├── llm-ollama
 │   ├── llm-gemini
+│   ├── llm-zai
 │   └── llm-openai-compatible
 ├── content-processing
 │   ├── pdf-extract

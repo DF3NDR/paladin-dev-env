@@ -42,6 +42,7 @@
         feature = "deepseek",
         feature = "kimi",
         feature = "qwen",
+        feature = "zai",
         feature = "grok",
         feature = "ollama",
         feature = "gemini",
@@ -561,6 +562,7 @@ pub(crate) fn resolve_layers(
     feature = "deepseek",
     feature = "kimi",
     feature = "qwen",
+    feature = "zai",
     feature = "grok",
     feature = "ollama",
     feature = "gemini"
@@ -1263,6 +1265,7 @@ mod tests {
         feature = "deepseek",
         feature = "kimi",
         feature = "qwen",
+        feature = "zai",
         feature = "grok",
         feature = "ollama",
         feature = "gemini"

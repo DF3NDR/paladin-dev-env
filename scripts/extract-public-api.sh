@@ -47,7 +47,7 @@ echo "Extracting public API surface using cargo-public-api (toolchain: ${PUBLIC_
 # Check if cargo-public-api is installed
 if ! command -v cargo-public-api &> /dev/null; then
     echo "❌ cargo-public-api not found. Installing..."
-    cargo install cargo-public-api || {
+    cargo install cargo-public-api --version 0.52.0 --locked || {
         echo "❌ Failed to install cargo-public-api"
         echo "   This tool requires OpenSSL 3.0.0+"
         echo "   If in devcontainer, rebuild with: Ctrl+Shift+P -> 'Dev Containers: Rebuild Container'"

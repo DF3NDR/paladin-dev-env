@@ -109,8 +109,9 @@ forwards into, and what it gates. `default = ["llm-openai", "llm-anthropic", "ll
 | `llm-grok` | paladin-llm | Grok adapter |
 | `llm-ollama` | paladin-llm | Ollama adapter |
 | `llm-gemini` | paladin-llm | Gemini adapter |
+| `llm-zai` | paladin-llm | Z.ai (GLM) adapter |
 | `llm-openai-compatible` | paladin-llm | Generic OpenAI-compatible adapter |
-| `llm-all` | paladin-llm | Aggregate: all nine LLM provider adapters above |
+| `llm-all` | paladin-llm | Aggregate: all ten LLM provider adapters above |
 | `vision` | paladin-llm | Vision / multimodal support (forwards into `paladin-llm/vision`, requires `llm-openai`) |
 | `content-processing` | paladin-content, paladin-memory | Content ingestion: PDF, HTTP, RSS, news, summarization, LLM bridge |
 | `web-server` | paladin-web | HTTP/REST API surface (Axum) |

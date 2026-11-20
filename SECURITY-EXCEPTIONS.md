@@ -13,7 +13,7 @@ Two configuration files mirror this register mechanically, and neither is itself
 governance:
 
 - **`.cargo/audit.toml`** is the authoritative *suppression* surface for `cargo audit`. Its
-  `[advisories] ignore` array holds exactly the nine `vulnerability`-class rows below, and nothing
+  `[advisories] ignore` array holds exactly the fourteen `vulnerability`-class rows below, and nothing
   else.
 - **`deny.toml`** mirrors `.cargo/audit.toml`'s vulnerability class exactly, and adds one
   clearly-labelled `unmaintained` class of its own. `cargo audit` does not fail a build on an
@@ -41,10 +41,10 @@ and security-advisory UI, aimed at a security researcher disclosing a *new* find
 developer auditing an *existing* suppression — is a separate deliverable for a different audience,
 and is deliberately not addressed by this file.
 
-## The sixteen live suppressions
+## The twenty-three live suppressions
 
-Nine vulnerability-class advisories (mirrored exactly between `.cargo/audit.toml` and `deny.toml`)
-and seven unmaintained-class advisories (`deny.toml` only). This is the tree-verified live set, not
+Fourteen vulnerability-class advisories (mirrored exactly between `.cargo/audit.toml` and `deny.toml`)
+and nine unmaintained-class advisories (`deny.toml` only). This is the tree-verified live set, not
 the fifteen the corpus's own record remembers — see the note immediately below the payload for why
 four advisories that appear in `deny.toml`'s history are absent from this register on purpose.
 
@@ -67,6 +67,17 @@ satisfied", exit 0. Only the register's account of itself was stale.)*
 advisory that newly failed CI's `License & Dependency Policy` job on every branch. The heading and
 the paragraph above were updated in the same commit, so this time the prose and the payload agree:
 12 rows, 12 `deny.toml` entries, 5 `.cargo/audit.toml` entries.)*
+
+*(Count updated 2026-11-20 on the z.ai adapter branch: seven rows were added because `make security`
+and the required `Security Audit` and `License & Dependency Policy` checks were red on `main` and on
+every pull request, and `protect-main-branch.json` carries no bypass. Five are vulnerability-class:
+`RUSTSEC-2026-0457` and `-0462` (`rmcp 2.1.0`), `RUSTSEC-2026-0459` (`libsqlite3-sys 0.30.1`) and
+`RUSTSEC-2026-0545` and `-0548` (`zip 3.0.0`). Two are unmaintained-class: `RUSTSEC-2026-0543`
+(`chrono`) and `-0555` (`chrono-tz`). Every row's fix is a major- or minor-version migration owned by
+the v0.12.0 milestone. One of them, `RUSTSEC-2026-0462`, is a live exposure with only a partial
+compensating control; its row says so. The six `lettre` advisories published 2026-11-17 are not here
+because they were fixed by a lockfile bump to 0.11.24. 23 rows, 23 `deny.toml` entries, 14
+`.cargo/audit.toml` entries.)*
 
 <!-- BEGIN MACHINE-READABLE REGISTER -->
 ```toml
@@ -188,6 +199,71 @@ compensating_control = "The build script never calls ZipArchive::extract or ZipS
 revisit_condition = "the utoipa 6 migration (utoipa, utoipa-axum, utoipa-swagger-ui 10.x) lands in a minor release"
 
 [[exception]]
+id = "RUSTSEC-2026-0457"
+class = "vulnerability"
+crate = "rmcp"
+path = "rmcp 2.1.0 (exact pin) -> paladin-ai (Arsenal MCP client engine; also a dev-dependency for the test MCP server)"
+why_present = "rmcp is the official Model Context Protocol SDK behind the Arsenal MCP client (stdio and Streamable HTTP transports). The advisory is in rmcp's OAuth client, which decides whether an authorization-server metadata URL is internal by its host string without resolving it."
+why_not_fixable = "The fix is rmcp >= 3.7.0. The workspace pins rmcp to exactly 2.1.0, and 2.x to 3.x is a major-version migration of the Arsenal MCP client and its test server, not a lockfile bump; it is scheduled as the first security item of the v0.12.0 milestone (.planning/todos/pending/2026-11-18-security-advisory-upgrade.md)."
+owner = "DF3NDR"
+review_date = "2026-12-31 or the first planning day of the v0.12.0 milestone, whichever is earlier"
+scope = "not compiled: the workspace enables rmcp features client, server, transport-child-process, transport-streamable-http-client, transport-streamable-http-client-reqwest, reqwest and transport-streamable-http-server only; the `auth` feature that builds the OAuth client is off in every feature combination"
+compensating_control = "rmcp's `auth` feature is not enabled anywhere in the workspace and its `oauth2` dependency is absent from Cargo.lock (measured 2026-11-20 with `cargo tree -e features -i rmcp --all-features`), so the OAuth discovery code the advisory concerns is not in any Paladin build; remote MCP servers authenticate with operator-supplied bearer or custom headers instead."
+revisit_condition = "rmcp is upgraded to >= 3.9.0 in v0.12.0, or the `auth` feature is enabled before that upgrade (which makes this exception invalid and must block the change)"
+
+[[exception]]
+id = "RUSTSEC-2026-0462"
+class = "vulnerability"
+crate = "rmcp"
+path = "rmcp 2.1.0 (exact pin) -> paladin-ai (Arsenal MCP client engine, Streamable HTTP reqwest transport)"
+why_present = "The Arsenal MCP client reaches hosted MCP servers through rmcp's Streamable HTTP reqwest client, which reads non-streaming `application/json` and non-2xx response bodies into memory with no size limit."
+why_not_fixable = "The fix is rmcp >= 3.9.0. The workspace pins rmcp to exactly 2.1.0, and 2.x to 3.x is a major-version migration of the Arsenal MCP client and its test server, not a lockfile bump; it is scheduled as the first security item of the v0.12.0 milestone (.planning/todos/pending/2026-11-18-security-advisory-upgrade.md)."
+owner = "DF3NDR"
+review_date = "2026-12-31 or the first planning day of the v0.12.0 milestone, whichever is earlier"
+scope = "any process that connects the Arsenal to a remote (Streamable HTTP) MCP server; stdio MCP servers and builds that configure no remote MCP server are not affected. The affected transport is compiled in and used, so this is a live exposure, not a dormant one"
+compensating_control = "Partial only. Paladin connects solely to MCP server endpoints the operator names in configuration (`arsenal.mcp_servers`), on the CLI or in embedding code; no paladin-web route and no model output selects an MCP server URL (checked 2026-11-20), so the unbounded read needs an operator-configured server that is itself malicious or compromised. The impact is memory exhaustion of the Paladin process (denial of service), not data exposure. No size cap is applied on Paladin's side; the upgrade is the fix."
+revisit_condition = "rmcp is upgraded to >= 3.9.0 in v0.12.0; if that migration slips past the review date, a response-size guard on the MCP HTTP client is added instead of extending this exception"
+
+[[exception]]
+id = "RUSTSEC-2026-0459"
+class = "vulnerability"
+crate = "libsqlite3-sys"
+path = "libsqlite3-sys 0.30.1 (bundled SQLite) -> sqlx-sqlite 0.8.6 -> sqlx 0.8 -> paladin-memory, paladin-storage, paladin-ai"
+why_present = "sqlx's sqlite backend is the persistence engine for the Garrison (paladin-memory) and the repositories (paladin-storage); it builds SQLite from libsqlite3-sys's bundled source, which is older than the patched SQLite 3.54.0."
+why_not_fixable = "The fix is libsqlite3-sys >= 0.39.0. sqlx-sqlite 0.8.x requires libsqlite3-sys ^0.30.1, so no 0.8 release reaches it; sqlx-sqlite 0.9.1 accepts < 0.41.0 (crates.io index, checked 2026-11-18), making the lift a sqlx 0.8 -> 0.9 minor-version migration across paladin-memory and paladin-storage, scheduled for the v0.12.0 milestone."
+owner = "DF3NDR"
+review_date = "2027-03-31 or the first planning day of the v0.12.0 milestone, whichever is earlier"
+scope = "processes that open a SQLite database file whose sibling `-wal` file a less trusted local party could have written; the advisory's vector is local and needs the victim process to open the crafted pair"
+compensating_control = "Paladin opens only SQLite files at operator-configured paths (for example `garrison.path`) that Paladin itself creates and writes; no API, upload or model-driven path lets a caller supply a database or `-wal` file, so a crafted pair requires local write access to the operator's data directory, which already exposes the data directly."
+revisit_condition = "sqlx is upgraded to 0.9.x with libsqlite3-sys >= 0.39.0 in v0.12.0"
+
+[[exception]]
+id = "RUSTSEC-2026-0545"
+class = "vulnerability"
+crate = "zip"
+path = "zip 3.0.0 -> utoipa-swagger-ui 9.0.2 [build-dependencies] -> paladin-web (Swagger UI bundle, `vendored` feature)"
+why_present = "utoipa-swagger-ui's build script unpacks the Swagger UI dist bundle with zip at build time so paladin-web can serve the OpenAPI UI; zip is a build-dependency only (the advisory is that WinZip AES entries can be returned without their authentication code being checked)."
+why_not_fixable = "Same lift as RUSTSEC-2026-0367/-0368/-0369/-0429: utoipa-swagger-ui 10.0.2 depends on zip ^9.0 (build) and utoipa ^6.0.0, so reaching zip >= 9.0.0 is the utoipa 6 migration, scheduled for the v0.12.0 milestone, not a build-dependency bump."
+owner = "DF3NDR"
+review_date = "2027-03-31 or the first planning day of the v0.12.0 milestone, whichever is earlier"
+scope = "build time only, and not compiled: zip runs inside utoipa-swagger-ui's build script and is linked into no shipped binary, and its `aes-crypto` feature is off"
+compensating_control = "zip's `aes-crypto` feature is not enabled (resolved features are the deflate family only, measured 2026-11-20 with `cargo tree -e features -i zip@3.0.0 --all-features`), so the AES decryption path the advisory concerns is not built; the build script opens only the crate's own embedded, unencrypted bundle."
+revisit_condition = "the utoipa 6 migration (utoipa, utoipa-axum, utoipa-swagger-ui 10.x) lands in v0.12.0"
+
+[[exception]]
+id = "RUSTSEC-2026-0548"
+class = "vulnerability"
+crate = "zip"
+path = "zip 3.0.0 -> utoipa-swagger-ui 9.0.2 [build-dependencies] -> paladin-web (Swagger UI bundle, `vendored` feature)"
+why_present = "utoipa-swagger-ui's build script unpacks the Swagger UI dist bundle with zip at build time so paladin-web can serve the OpenAPI UI; zip is a build-dependency only (the advisory is that ZipStreamReader extracts entries under local-header names that can differ from the central directory)."
+why_not_fixable = "Same lift as RUSTSEC-2026-0367/-0368/-0369/-0429: utoipa-swagger-ui 10.0.2 depends on zip ^9.0 (build) and utoipa ^6.0.0, so reaching zip >= 9.0.5 is the utoipa 6 migration, scheduled for the v0.12.0 milestone, not a build-dependency bump."
+owner = "DF3NDR"
+review_date = "2027-03-31 or the first planning day of the v0.12.0 milestone, whichever is earlier"
+scope = "build time only: zip runs inside utoipa-swagger-ui's build script and is linked into no shipped binary; with the `vendored` feature the archive it opens is the fixed bundle compiled into utoipa-swagger-ui-vendored, never a download or user-supplied file"
+compensating_control = "The 9.0.2 build script never uses ZipStreamReader or read_zipfile_from_stream, the APIs the advisory concerns (re-read 2026-11-20): it opens the bundle with ZipArchive and walks entries with by_index + enclosed_name(), which uses central-directory names, and its only input is the crate's own embedded bundle."
+revisit_condition = "the utoipa 6 migration (utoipa, utoipa-axum, utoipa-swagger-ui 10.x) lands in v0.12.0"
+
+[[exception]]
 id = "RUSTSEC-2026-0249"
 class = "unmaintained"
 crate = "smartstring"
@@ -277,6 +353,32 @@ review_date = "2026-12-31"
 scope = "YAML read from the local filesystem or from string literals by the CLI (off by default) and by the eval runner: operator-authored scenario, graph-document, config and template files; no network- or request-facing path in paladin-web or any LLM adapter parses YAML"
 compensating_control = "Every serde_yaml call site parses a file path the operator names on the command line, a file in the checked-in eval corpus, or a literal; paladin-web and the LLM adapters never deserialise YAML, so no attacker-supplied bytes reach the parser, and the cli feature that pulls serde_yaml into the facade is not in the default feature set."
 revisit_condition = "the workspace migrates serde_yaml to a safe-Rust YAML parser (serde-saphyr), or a maintained serde_yaml successor that does not depend on unsafe-libyaml is released"
+
+[[exception]]
+id = "RUSTSEC-2026-0543"
+class = "unmaintained"
+crate = "chrono"
+path = "chrono 0.4 -> every workspace crate (workspace dependency) and transitively via sqlx, utoipa and others"
+why_present = "chrono is the workspace's date-time type: Entity timestamps in paladin-core, serde formats, sqlx column mapping and the OpenAPI schema all use it."
+why_not_fixable = "The advisory marks every chrono version unmaintained and lists no patched release; the remedy is a migration to jiff or time across every crate and the sqlx/utoipa integrations, which is a decision for the v0.12.0 milestone (.planning/todos/pending/2026-11-18-security-advisory-upgrade.md), not a bump."
+owner = "DF3NDR"
+review_date = "2027-03-31 or the first planning day of the v0.12.0 milestone, whichever is earlier"
+scope = "all builds: chrono is a direct dependency of every workspace crate"
+compensating_control = "This advisory is an unmaintained notice, not a known vulnerability, so there is no exploitable condition to compensate for today; cargo-audit and cargo-deny keep scanning chrono for vulnerability-class advisories, which this exception does not suppress."
+revisit_condition = "the v0.12.0 milestone decides between a governed long-term exception and a migration to jiff or time, or the advisory is upgraded from unmaintained to a vulnerability class, whichever comes first"
+
+[[exception]]
+id = "RUSTSEC-2026-0555"
+class = "unmaintained"
+crate = "chrono-tz"
+path = "chrono-tz 0.10 -> paladin-storage -> paladin-ai, paladin-eval"
+why_present = "paladin-storage uses chrono-tz for IANA time-zone handling alongside chrono."
+why_not_fixable = "The advisory marks every chrono-tz version unmaintained and lists no patched release; replacing it follows the chrono decision (jiff carries its own time-zone database), scheduled for the v0.12.0 milestone."
+owner = "DF3NDR"
+review_date = "2027-03-31 or the first planning day of the v0.12.0 milestone, whichever is earlier"
+scope = "builds that include paladin-storage"
+compensating_control = "This advisory is an unmaintained notice, not a known vulnerability, so there is no exploitable condition to compensate for today; time-zone names reach chrono-tz from operator configuration and stored records, not from an unauthenticated request path."
+revisit_condition = "the v0.12.0 milestone's chrono decision is taken, or the advisory is upgraded from unmaintained to a vulnerability class, whichever comes first"
 ```
 <!-- END MACHINE-READABLE REGISTER -->
 

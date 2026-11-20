@@ -3145,6 +3145,24 @@ mod gemini_table {
 #[cfg(feature = "gemini")]
 pub(crate) use gemini_table::GEMINI;
 
+#[cfg(feature = "zai")]
+mod zai_table {
+    use crate::registry::SeededProfile;
+
+    /// Z.ai: empty. No operator live seed probe has been run for z.ai, so (per this file's
+    /// single-source rule: a value with no evidence in a probe transcript is not written here,
+    /// not from the vendor's documentation, not from memory) no model is seeded. Every z.ai model
+    /// runs on the adapter-wide fallback declared in `zai/adapter.rs`, visibly unprofiled
+    /// (D-07): its responses carry `paladin.unprofiled_model`, its reasoning effort is
+    /// unmeasured and its context window is whatever the operator sets.
+    ///
+    /// The `live_vendor_smoke` example is the tool that produces the evidence a later seed would
+    /// be written from.
+    pub(crate) static ZAI: &[SeededProfile] = &[];
+}
+#[cfg(feature = "zai")]
+pub(crate) use zai_table::ZAI;
+
 #[cfg(feature = "ollama")]
 mod ollama_table {
     use crate::registry::SeededProfile;

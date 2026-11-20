@@ -246,7 +246,12 @@ pub struct LlmConfig {
     /// Accepts any name this build's provider registry knows
     /// ([`provider_names`]) — `"openai"`, `"deepseek"`, `"anthropic"`, and
     /// (when compiled in) `"kimi"`, `"qwen"`, `"grok"`, `"ollama"`,
-    /// `"gemini"`, `"openai-compatible"`.
+    /// `"gemini"`, `"zai"`, `"openai-compatible"`.
+    ///
+    /// Z.ai has no `llm.zai` block in this release: it is configured through `ZAI_API_KEY`,
+    /// `ZAI_BASE_URL`, `ZAI_MODEL` and `ZAI_TIMEOUT_SECONDS`, and an `llm.zai` section is not read.
+    /// The file still loads; the section is silently ignored. `"zai"` is nonetheless a valid
+    /// `default_provider` when the `zai` feature is compiled in.
     pub default_provider: Option<String>,
     /// OpenAI configuration.
     pub openai: Option<LlmProviderConfig>,
@@ -324,6 +329,17 @@ impl LlmConfig {
                         // resolves from the provider's environment variables (D-13) through
                         // `LlmProviderFactory::create_from_config`, and `is_configured`
                         // reports a credential that is missing from both places.
+                        return Ok(());
+                    }
+                    // A provider this build registers but that has no `llm.<name>` field
+                    // (Z.ai, quick task 261117-t5c) is configured through its environment
+                    // variables alone and is just as valid as a default. Unlike the field
+                    // names above this IS feature-aware: the name must be one the registry
+                    // compiled in, so a build without the adapter still rejects it.
+                    if provider_names()
+                        .iter()
+                        .any(|name| name.eq_ignore_ascii_case(default))
+                    {
                         return Ok(());
                     }
                     return Err(format!(
@@ -1023,5 +1039,73 @@ llm:
         assert!(debug.contains("reasoning_fallback"), "{debug}");
         assert!(debug.contains("reasoning_wire"), "{debug}");
         assert!(!debug.contains("secret-key-value"), "{debug}");
+    }
+
+    // ── Quick task 261117-t5c: Z.ai is configured through the environment only ──
+
+    /// Z.ai has no `llm.zai` block in this release. `LlmConfig` does not deny unknown keys, so a
+    /// YAML file carrying an `llm.zai:` section still loads, and the section is simply not read:
+    /// `get_provider_config("zai")` is `None` and no other provider's block is disturbed. The
+    /// docs state this plainly (the section is silently ignored), so the behaviour is pinned here.
+    #[test]
+    fn a_zai_yaml_section_still_loads_but_is_not_read() {
+        let config = llm_from_yaml(
+            r#"
+llm:
+  default_provider: "openai"
+  openai:
+    api_key: "openai-key"
+  zai:
+    api_key: "zai-key-from-yaml"
+    default_model: "glm-5.3"
+"#,
+        );
+        assert_eq!(
+            config.openai.as_ref().map(|block| block.api_key.as_str()),
+            Some("openai-key")
+        );
+        assert!(
+            config.get_provider_config("zai").is_none(),
+            "an llm.zai block is not read in this release"
+        );
+        assert!(
+            config.get_provider_config("ZAI").is_none(),
+            "the lookup is case-insensitive and still finds nothing"
+        );
+        assert!(config.validate().is_ok());
+    }
+
+    /// With the `zai` feature compiled in, `default_provider: "zai"` validates even though no
+    /// `llm.zai` block can exist: the provider is built from `ZAI_API_KEY` and the other `ZAI_*`
+    /// variables, exactly like any recognised provider with no block (D-13).
+    #[cfg(feature = "zai")]
+    #[test]
+    fn validate_accepts_zai_as_the_default_provider_when_compiled_in() {
+        for spelling in ["zai", "ZAI", "Zai"] {
+            let config = LlmConfig {
+                default_provider: Some(spelling.to_string()),
+                ..Default::default()
+            };
+            assert!(
+                config.validate().is_ok(),
+                "default_provider {spelling:?} must validate: {:?}",
+                config.validate()
+            );
+        }
+    }
+
+    /// Without the `zai` feature the name is unknown to this build, and the error says which
+    /// names are registered, as for any other unrecognised name.
+    #[cfg(not(feature = "zai"))]
+    #[test]
+    fn validate_refuses_zai_as_the_default_provider_when_not_compiled_in() {
+        let config = LlmConfig {
+            default_provider: Some("zai".to_string()),
+            ..Default::default()
+        };
+        let err = config
+            .validate()
+            .expect_err("zai is not compiled into this build");
+        assert!(err.contains("Invalid default provider: zai"), "{err}");
     }
 }

@@ -27,6 +27,7 @@
     feature = "deepseek",
     feature = "kimi",
     feature = "qwen",
+    feature = "zai",
     feature = "grok",
     feature = "ollama",
     feature = "gemini",
@@ -41,6 +42,7 @@ use crate::config::layers::{CompiledDefaults, ProviderEnv, resolve_layers};
     feature = "deepseek",
     feature = "kimi",
     feature = "qwen",
+    feature = "zai",
     feature = "grok",
     feature = "ollama",
     feature = "gemini"
@@ -52,6 +54,7 @@ use crate::config::layers::{Layered, resolve_layers_lenient};
     feature = "deepseek",
     feature = "kimi",
     feature = "qwen",
+    feature = "zai",
     feature = "grok",
     feature = "ollama",
     feature = "gemini",
@@ -64,6 +67,7 @@ use crate::config::llm::LlmProviderConfig;
     feature = "deepseek",
     feature = "kimi",
     feature = "qwen",
+    feature = "zai",
     feature = "grok",
     feature = "ollama",
     feature = "gemini",
@@ -85,6 +89,9 @@ use crate::kimi::adapter::KimiConfig;
 
 #[cfg(feature = "qwen")]
 use crate::qwen::adapter::QwenConfig;
+
+#[cfg(feature = "zai")]
+use crate::zai::adapter::ZaiConfig;
 
 #[cfg(feature = "grok")]
 use crate::grok::adapter::GrokConfig;
@@ -115,6 +122,7 @@ use crate::openai::vision::{
     feature = "deepseek",
     feature = "kimi",
     feature = "qwen",
+    feature = "zai",
     feature = "grok",
     feature = "ollama",
     feature = "gemini",
@@ -252,6 +260,7 @@ fn anthropic_config(layered: Layered) -> AnthropicConfig {
     feature = "deepseek",
     feature = "kimi",
     feature = "qwen",
+    feature = "zai",
     feature = "grok",
     feature = "ollama",
     feature = "gemini",
@@ -525,6 +534,81 @@ impl From<&LlmProviderConfig> for QwenConfig {
             cfg,
             &QWEN_ENV,
             &QWEN_DEFAULTS,
+            &is_reasoning,
+        ))
+    }
+}
+
+// ── Z.ai (Zhipu AI, GLM) ─────────────────────────────────────────────────────
+
+// Env-only in this release: there is no `llm.zai` block, so the layers see `None` for the block
+// from `create` / `create_from_config` and read these four variables (quick task 261117-t5c).
+#[cfg(feature = "zai")]
+const ZAI_ENV: ProviderEnv = ProviderEnv {
+    provider: "zai",
+    key: Some("ZAI_API_KEY"),
+    base_url: Some("ZAI_BASE_URL"),
+    model: Some("ZAI_MODEL"),
+    timeout: Some("ZAI_TIMEOUT_SECONDS"),
+    retries: None,
+    max_tokens: None,
+};
+
+// The compiled timeout is the reasoning-model default: the vendor documents thinking as enabled
+// by default for the default model (see `zai::adapter`, fact F10), and it is a hosted preset, so
+// every other model keeps the same value rather than the 60 s hosted default.
+#[cfg(feature = "zai")]
+const ZAI_DEFAULTS: CompiledDefaults = CompiledDefaults {
+    base_url: Some(crate::zai::adapter::ZAI_DEFAULT_BASE_URL),
+    model: Some(crate::zai::adapter::ZAI_DEFAULT_MODEL),
+    model_required: false,
+    timeout_seconds: crate::registry::REASONING_DEFAULT_TIMEOUT_SECONDS,
+    max_retries: DEFAULT_MAX_RETRIES,
+    max_tokens: None,
+};
+
+#[cfg(feature = "zai")]
+fn zai_config(layered: Layered) -> ZaiConfig {
+    ZaiConfig {
+        api_key: layered.api_key,
+        base_url: layered.base_url,
+        model: layered.model,
+        timeout_seconds: layered.timeout_seconds,
+        max_tokens: layered.max_tokens,
+        max_retries: layered.max_retries,
+        context_window: layered.context_window,
+        model_overrides: layered.model_overrides,
+        reasoning_effort: layered.reasoning_effort,
+        reasoning_fallback: layered.reasoning_fallback,
+    }
+}
+
+/// Build a [`ZaiConfig`] from the layers (D-13).
+///
+/// # Errors
+///
+/// A message naming the provider, the model and the variable tried; see
+/// [`resolve_layers`](crate::config::layers::resolve_layers).
+#[cfg(feature = "zai")]
+pub(crate) fn zai_from_layers(
+    block: Option<&LlmProviderConfig>,
+    model: Option<&str>,
+    env: Env<'_>,
+) -> Result<ZaiConfig, String> {
+    let is_reasoning = reasoning_with_overrides("zai", block);
+    resolve_layers(block, model, &ZAI_ENV, &ZAI_DEFAULTS, &is_reasoning, env).map(zai_config)
+}
+
+#[cfg(feature = "zai")]
+impl From<&LlmProviderConfig> for ZaiConfig {
+    /// Convert an [`LlmProviderConfig`] into a [`ZaiConfig`], falling back
+    /// to Z.ai's own defaults for any absent optional field.
+    fn from(cfg: &LlmProviderConfig) -> Self {
+        let is_reasoning = reasoning_with_overrides("zai", Some(cfg));
+        zai_config(resolve_layers_lenient(
+            cfg,
+            &ZAI_ENV,
+            &ZAI_DEFAULTS,
             &is_reasoning,
         ))
     }
@@ -1300,6 +1384,41 @@ mod tests {
         let reasoning =
             qwen_from_layers(None, None, &env_of(&[("DASHSCOPE_API_KEY", "k")])).unwrap();
         assert_eq!(reasoning.timeout_seconds, 300);
+    }
+
+    #[cfg(feature = "zai")]
+    #[test]
+    fn zai_env_only_reads_exactly_the_legacy_variables() {
+        let env = env_of(&[
+            ("ZAI_API_KEY", "sk-env"),
+            ("ZAI_BASE_URL", "https://env.example/v1"),
+            ("ZAI_MODEL", "glm-env"),
+            ("ZAI_TIMEOUT_SECONDS", "42"),
+        ]);
+        let config = zai_from_layers(None, None, &env).unwrap();
+        assert_eq!(
+            (
+                config.api_key.as_str(),
+                config.base_url.as_str(),
+                config.model.as_str()
+            ),
+            ("sk-env", "https://env.example/v1", "glm-env")
+        );
+        assert_eq!(config.timeout_seconds, 42);
+        // Nothing else is read: with only the key set, the compiled defaults apply.
+        let defaulted = zai_from_layers(None, None, &env_of(&[("ZAI_API_KEY", "k")])).unwrap();
+        assert_eq!(
+            (
+                defaulted.base_url.as_str(),
+                defaulted.model.as_str(),
+                defaulted.timeout_seconds
+            ),
+            (
+                crate::zai::adapter::ZAI_DEFAULT_BASE_URL,
+                crate::zai::adapter::ZAI_DEFAULT_MODEL,
+                crate::registry::REASONING_DEFAULT_TIMEOUT_SECONDS
+            )
+        );
     }
 
     #[cfg(feature = "grok")]

@@ -6,14 +6,14 @@ use paladin_llm::provider_factory::{LlmProviderFactory, ProviderFactoryError, pr
 use std::env;
 use std::sync::Mutex;
 
-/// Serializes access to every environment variable the nine-row registry
+/// Serializes access to every environment variable the ten-row registry
 /// reads (`REGISTRY_ENV_VARS`) across every test in this file that reads or
 /// mutates any of them. `cargo test` runs tests in parallel threads within
 /// one process by default, and every test below observes or mutates this
 /// same process-wide state (T-02-23).
 static PROVIDER_ENV_LOCK: Mutex<()> = Mutex::new(());
 
-/// The ten environment variables the nine-row registry reads
+/// The eleven environment variables the ten-row registry reads
 /// (`build_provider_registry`), in registry declaration order, followed by
 /// the generic `openai-compatible` provider's two non-credential
 /// configuration variables (`OPENAI_COMPATIBLE_BASE_URL`,
@@ -23,7 +23,7 @@ static PROVIDER_ENV_LOCK: Mutex<()> = Mutex::new(());
 /// *entire* registry, so every variable any row reads must be owned by this
 /// one list — a registry row whose variable this list omits is a test that
 /// can observe the ambient environment.
-const REGISTRY_ENV_VARS: [&str; 10] = [
+const REGISTRY_ENV_VARS: [&str; 11] = [
     "OPENAI_API_KEY",
     "DEEPSEEK_API_KEY",
     "ANTHROPIC_API_KEY",
@@ -31,6 +31,7 @@ const REGISTRY_ENV_VARS: [&str; 10] = [
     "DASHSCOPE_API_KEY",
     "XAI_API_KEY",
     "GEMINI_API_KEY",
+    "ZAI_API_KEY",
     "OPENAI_COMPATIBLE_API_KEY",
     "OPENAI_COMPATIBLE_BASE_URL",
     "OPENAI_COMPATIBLE_MODEL",
@@ -125,7 +126,7 @@ impl Drop for CleanProviderEnv<'_> {
 /// `build_provider_registry`). `ollama` is deliberately absent — its row
 /// declares `env_var: None` (D-12, no credential required) — and this
 /// table's order must track `build_provider_registry`'s.
-const CREDENTIALED_PROVIDERS: [(&str, &str); 8] = [
+const CREDENTIALED_PROVIDERS: [(&str, &str); 9] = [
     ("openai", "OPENAI_API_KEY"),
     ("deepseek", "DEEPSEEK_API_KEY"),
     ("anthropic", "ANTHROPIC_API_KEY"),
@@ -133,6 +134,7 @@ const CREDENTIALED_PROVIDERS: [(&str, &str); 8] = [
     ("qwen", "DASHSCOPE_API_KEY"),
     ("grok", "XAI_API_KEY"),
     ("gemini", "GEMINI_API_KEY"),
+    ("zai", "ZAI_API_KEY"),
     ("openai-compatible", "OPENAI_COMPATIBLE_API_KEY"),
 ];
 
@@ -430,6 +432,7 @@ fn test_compiled_out_provider_absent_from_list_available_providers() {
         ("qwen", "DASHSCOPE_API_KEY"),
         ("grok", "XAI_API_KEY"),
         ("gemini", "GEMINI_API_KEY"),
+        ("zai", "ZAI_API_KEY"),
     ];
 
     let Some(&(name, env_var)) = candidates.iter().find(|(name, _)| !compiled.contains(name))
@@ -440,7 +443,7 @@ fn test_compiled_out_provider_absent_from_list_available_providers() {
                 .all(|available| compiled.contains(&available.as_str())),
             "every name list_available_providers() reports must be in the compiled-in registry \
              — the env-mutating compiled-out-provider form was not expressible under this \
-             build's feature set, which compiles every one of kimi/qwen/grok/gemini"
+             build's feature set, which compiles every one of kimi/qwen/grok/gemini/zai"
         );
         return;
     };
@@ -503,6 +506,16 @@ fn test_new_provider_names_resolve_through_create() {
         assert!(
             !matches!(result, Err(ProviderFactoryError::UnknownProvider(_))),
             "gemini is compiled in and its credential is set; create() must not return \
+             UnknownProvider: {:?}",
+            result.as_ref().err()
+        );
+    }
+    if compiled.contains(&"zai") {
+        _env.set("ZAI_API_KEY", "test-key");
+        let result = factory.create("zai");
+        assert!(
+            !matches!(result, Err(ProviderFactoryError::UnknownProvider(_))),
+            "zai is compiled in and its credential is set; create() must not return \
              UnknownProvider: {:?}",
             result.as_ref().err()
         );

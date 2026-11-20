@@ -164,12 +164,13 @@ src/
 | `ollama` | no | `OllamaAdapter` |
 | `openai-compatible` | no | Generic OpenAI-compatible adapter |
 | `gemini` | no | `GeminiAdapter` |
+| `zai` | no | `ZaiAdapter` |
 | `mock` | yes | `MockLlmAdapter`, `MultiStepMockLlmPort` |
 | `openai-embeddings` | no | Embedding API |
 | `vision` | no | Vision / multimodal extensions |
 
 **Key modules:** `src/openai/`, `src/anthropic/`, `src/deepseek/`, `src/kimi/`, `src/qwen/`,
-`src/grok/`, `src/ollama/`, `src/gemini/`, `src/mock.rs`
+`src/grok/`, `src/ollama/`, `src/gemini/`, `src/zai/`, `src/mock.rs`
 
 ---
 

@@ -27,8 +27,8 @@ Paladin supports multiple LLM providers out of the box, allowing you to choose t
 2. **DeepSeek** (DeepSeek-Chat, DeepSeek-Coder)
 3. **Anthropic** (Claude 3.5 Sonnet, Claude 3 Opus/Haiku)
 
-These three are the long-standing providers this guide describes in detail; six more ship behind
-their own feature flags (see the comparison table below). To move an agent between any of the nine
+These three are the long-standing providers this guide describes in detail; seven more ship behind
+their own feature flags (see the comparison table below). To move an agent between any of the ten
 by configuration, and for the per-model behaviour each was measured to have, read
 [Switching Providers](../user-guides/switching-providers.md). To set how hard a model thinks
 (`reasoning_effort`) and see which models take which effort on which wire, read
@@ -38,22 +38,31 @@ by configuration, and for the per-model behaviour each was measured to have, rea
 
 ## Provider Comparison
 
-All nine shipped providers report their capabilities through the same `ProviderCapabilities`
+All ten shipped providers report their capabilities through the same `ProviderCapabilities`
 struct (`crates/paladin-ports/src/output/llm_port.rs`); the table below is read directly from
 each adapter's `get_capabilities()` implementation, not hand-transcribed from provider marketing.
 No shipped adapter declares `supports_tool_calling` or `supports_function_calling` true today —
 the struct's own rustdoc notes this explicitly.
 
-| Feature | OpenAI | DeepSeek | Anthropic | xAI Grok | Moonshot Kimi | Alibaba Qwen | Ollama | Google Gemini | Generic OpenAI-compatible |
-|---------|--------|----------|-----------|----------|----------------|---------------|--------|----------------|----------------------------|
-| **Streaming** | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | configurable |
-| **Tool Calling** | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | configurable |
-| **Function Calling** | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | configurable |
-| **Vision/Images** | ✅ Yes | ❌ No | ✅ Yes | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | configurable |
-| **Max Context** | 128K (adapter-wide; seeded models differ) | 1.05M | 1M | 1M | 262K | 1M | model-dependent (unset) | 1.05M | server-dependent |
-| **Best For** | General purpose, production | Cost-effective, reasoning | Safety-critical, analysis | General purpose | Long-context reasoning | General purpose | Local/self-hosted | Very long context | Self-hosted or third-party OpenAI-API servers |
-| **Pricing** | $$ | $ | $$$ | Varies (see provider docs) | Varies (see provider docs) | Varies (see provider docs) | Free (self-hosted) | Varies (see provider docs) | Varies (server-dependent) |
-| **Latency** | Low | Low | Low-Medium | Varies (see provider docs) | Varies (see provider docs) | Varies (see provider docs) | Varies (local hardware) | Varies (see provider docs) | Varies (server-dependent) |
+| Feature | OpenAI | DeepSeek | Anthropic | xAI Grok | Moonshot Kimi | Alibaba Qwen | Ollama | Google Gemini | Z.ai (GLM) | Generic OpenAI-compatible |
+|---------|--------|----------|-----------|----------|----------------|---------------|--------|----------------|------------|----------------------------|
+| **Streaming** | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | configurable |
+| **Tool Calling** | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | configurable |
+| **Function Calling** | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | configurable |
+| **Vision/Images** | ✅ Yes | ❌ No | ✅ Yes | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | configurable |
+| **Max Context** | 128K (adapter-wide; seeded models differ) | 1.05M | 1M | 1M | 262K | 1M | model-dependent (unset) | 1.05M | model-dependent (unset) | server-dependent |
+| **Best For** | General purpose, production | Cost-effective, reasoning | Safety-critical, analysis | General purpose | Long-context reasoning | General purpose | Local/self-hosted | Very long context | GLM text models through Z.ai's hosted API | Self-hosted or third-party OpenAI-API servers |
+| **Pricing** | $$ | $ | $$$ | Varies (see provider docs) | Varies (see provider docs) | Varies (see provider docs) | Free (self-hosted) | Varies (see provider docs) | operator `PriceTable` (see provider docs) | Varies (server-dependent) |
+| **Latency** | Low | Low | Low-Medium | Varies (see provider docs) | Varies (see provider docs) | Varies (see provider docs) | Varies (local hardware) | Varies (see provider docs) | Varies (see provider docs) | Varies (server-dependent) |
+
+**Z.ai (GLM)** is a preset on the shared OpenAI-compatible engine (feature `zai`, facade feature
+`llm-zai`). It is configured through `ZAI_API_KEY`, `ZAI_BASE_URL`, `ZAI_MODEL` and
+`ZAI_TIMEOUT_SECONDS` only: there is no `llm.zai` config block yet, and an `llm.zai` section in
+`config.yml` is not read (it is planned for a later release). Its endpoint, default model and
+model list come from docs.z.ai (accessed 2026-11-17) and are vendor-documented, not live-measured.
+No seed or effort probe has run, so the "Max Context" cell is unset, every model is unprofiled and
+an explicit reasoning effort is refused. The crate carries no Z.ai prices; supply them through your
+`PriceTable`.
 
 ### Detailed Feature Matrix
 
@@ -135,6 +144,7 @@ values — the three permitted values below, and no fourth "in-between" value:
 | Ollama (OpenAI-compat `/v1/chat/completions`) | yes (usage frame) |
 | Anthropic | yes (event accumulation) |
 | Google Gemini | yes (event accumulation) |
+| Z.ai (GLM) | yes (usage frame) |
 | Generic OpenAI-compatible (`OpenAiCompatibleAdapter`) | server-dependent — `None` when omitted |
 
 **"yes (usage frame)"** — the OpenAI-compatible family (OpenAI itself, DeepSeek, Grok, Kimi, Qwen,
@@ -143,6 +153,11 @@ and parse the trailing usage frame the provider returns before `[DONE]`. For Oll
 this depends on the pinned dev-stack Ollama version having `stream_options` support in its
 OpenAI-compatibility layer — Ollama's own documentation lists it as supported, so this is a
 version caveat, not a known gap.
+
+**Z.ai's own cell** — docs.z.ai documents (accessed 2026-11-17) that a streamed response's `usage`
+"only appears in the last chunk", the same chunk that carries `finish_reason`, rather than in a
+separate trailing frame, and documents no `stream_options`. The shared engine reads usage from
+either shape, so the cell reads "yes (usage frame)"; it is vendor-documented, not live-measured.
 
 **"yes (event accumulation)"** — Anthropic and Gemini have no `stream_options`-style opt-in and no
 single trailing usage frame; each adapter accumulates usage across the event stream itself

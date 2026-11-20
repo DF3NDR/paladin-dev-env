@@ -4,7 +4,7 @@ LLM provider adapters for the Paladin framework.
 
 ## Purpose
 
-`paladin-llm` provides configurable adapters for nine LLM providers, a generic
+`paladin-llm` provides configurable adapters for ten LLM providers, a generic
 operator-configured OpenAI-compatible adapter for any endpoint not on that list, and a
 mock-backed testing provider. Every hosted-vendor adapter shares an `OPENAI_API_KEY`-style
 env-var-only credential posture — no API key is ever read from a config file.
@@ -21,6 +21,7 @@ env-var-only credential posture — no API key is ever read from a config file.
 | Grok (xAI) | `grok` | `XAI_API_KEY` | `https://api.x.ai/v1` |
 | Ollama (self-hosted) | `ollama` | none required — self-hosted, no vendor credential | `http://localhost:11434/v1` |
 | Gemini (Google) | `gemini` | `GEMINI_API_KEY` | `https://generativelanguage.googleapis.com/v1beta` (bespoke `generateContent` protocol, not OpenAI-compatible) |
+| Z.ai (Zhipu AI, GLM) | `zai` | `ZAI_API_KEY` | `https://api.z.ai/api/paas/v4` (environment-only: no `llm.zai` block yet) |
 | Generic OpenAI-compatible | `openai-compatible` | `OPENAI_COMPATIBLE_API_KEY` | none — operator-supplied, required |
 | Mock (testing) | `mock` | — | — |
 
@@ -32,6 +33,14 @@ env-var-only credential posture — no API key is ever read from a config file.
 > the shipped Singapore endpoint. Ollama has no vendor endpoint to verify at all — it is
 > self-hosted; its live exercise is the Docker Tier 2 suite (UAT test 3), which passed on
 > a GitHub Actions runner on 2026-08-19.
+>
+> **Z.ai (GLM) is not live-verified.** Its base URL, default model (`glm-5.3`), model list and
+> temperature range were read on docs.z.ai on 2026-11-17 and are vendor-documented, not
+> live-measured; no seed probe or effort probe has run, so every Z.ai model is unprofiled and an
+> explicit reasoning effort is refused. It is configured through `ZAI_API_KEY`, `ZAI_BASE_URL`,
+> `ZAI_MODEL` and `ZAI_TIMEOUT_SECONDS` only: an `llm.zai` config section is not read (it is
+> planned for a later release). Z.ai documents a separate endpoint and key family for its GLM
+> Coding Plan; see the module docs of `src/zai/adapter.rs` before pointing `ZAI_BASE_URL` at it.
 >
 > **DashScope (Qwen) region constraint:** API keys are scoped to the Model Studio region
 > that issued them and are rejected by every other region's endpoint. The base URL above
@@ -68,11 +77,11 @@ environment-variable table.
 - `config`: Provider configuration structures (`LlmConfig`, one `Option<LlmProviderConfig>`
   field per registered provider, structurally present regardless of compiled features).
 - `compat`: Shared OpenAI-compatible request/response engine used by `kimi`, `qwen`, `grok`,
-  `ollama`, and `openai-compatible` (Gemini implements the `LlmPort` trait directly instead,
+  `zai`, `ollama`, and `openai-compatible` (Gemini implements the `LlmPort` trait directly instead,
   since its wire protocol is not OpenAI-compatible).
 - `error`: Error types for provider operations.
 - `llm_analysis_service`: Higher-level LLM orchestration helpers.
-- `openai`, `anthropic`, `deepseek`, `kimi`, `qwen`, `grok`, `ollama`, `gemini`,
+- `openai`, `anthropic`, `deepseek`, `kimi`, `qwen`, `grok`, `ollama`, `gemini`, `zai`,
   `openai_compatible`, `mock`: Provider-specific adapters.
 
 ## Usage
@@ -95,6 +104,7 @@ let _factory = LlmProviderFactory::new();
 - `grok`: Enable Grok (xAI) provider adapter.
 - `ollama`: Enable Ollama (self-hosted) provider adapter.
 - `gemini`: Enable Gemini provider adapter.
+- `zai`: Enable Z.ai (Zhipu AI, GLM) provider adapter.
 - `openai-compatible`: Enable the generic operator-configured OpenAI-compatible provider
   adapter (see above).
 - `mock`: Enable mock provider for tests.

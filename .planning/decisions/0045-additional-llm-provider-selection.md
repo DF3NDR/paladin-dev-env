@@ -145,3 +145,30 @@ and 17-05 build against — it does not claim conformance that does not exist (D
   coarse-supersession-unit cost ADR-0034 already paid once).
 - **`.planning/REQUIREMENTS.md`'s PROV-01 row** — amended in place (plan 17-02, Task 2) with a dated
   verdict summary pointing at this ADR.
+
+## Amendment (2026-11-17): Z.ai
+
+The original table above is not edited. This amendment records one more candidate, scored on the
+same marginal-cost bar (D-01) and the same nine criteria, in the original table's column format:
+
+| Candidate | Endpoint / host | Wire shape | Auth | New dependency? | Testable without a paid key? | Verdict | Reason |
+|---|---|---|---|---|---|---|---|
+| **Z.ai** (Zhipu AI international platform, GLM models) | `https://api.z.ai/api/paas/v4` (docs.z.ai, accessed 2026-11-17) | OpenAI-compatible `/chat/completions` | `ZAI_API_KEY` bearer | No — `reqwest` suffices | No (hosted, paid) | **build** | The 2026-11-17 request for a named, curated z.ai preset is this ADR's stated reintroduction trigger ("a specific request for one of the rejected names' curated capabilities and model list, not merely for access to the endpoint"); access was already available through `openai-compatible`. Marginal cost is one preset on the shared `CompatEngine`. |
+
+**What the amendment does and does not change.**
+
+- Z.ai was not one of the rejected names in the original table; it reaches the same conclusion by
+  the same route. A bare request for access to an OpenAI-compatible endpoint is still answered by
+  the generic provider (D-03). This request asked for the curated preset, so it builds one.
+- The preset ships with **no live evidence**: no seed probe, no effort probe, no usage probe and no
+  quota-body capture exist for Z.ai. Its seeded model table is empty (every model is unprofiled),
+  its reasoning wire is `Unsupported` (every explicit effort is refused), it declares no
+  `error_override`, and every compiled fact cites its docs.z.ai page and access date in
+  `crates/paladin-llm/src/zai/adapter.rs`.
+- Z.ai is configured through `ZAI_API_KEY`, `ZAI_BASE_URL`, `ZAI_MODEL` and `ZAI_TIMEOUT_SECONDS`
+  only. It has **no `llm.zai` config block** in this release: adding a field to the published,
+  constructible `LlmConfig` would be a semver break, so the owner deferred it (quick task
+  261117-t5c, decision option-b, env-only-now) to a later release. Consequently Z.ai is not in
+  the provider swap matrix, which builds every provider from its config block.
+- Z.ai documents a separate endpoint and key family for its GLM Coding Plan. The preset defaults to
+  the general endpoint and reaches the other only through `ZAI_BASE_URL`.

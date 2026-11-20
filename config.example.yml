@@ -97,6 +97,17 @@ llm:
     default_model: "qwen3.8-flash"
     timeout_seconds: 60
 
+  # Z.ai (Zhipu AI, GLM). Deliberately NO `zai:` block: this release has no `llm.zai` config
+  # field, and `LlmConfig` ignores keys it does not know, so a `zai:` section placed here would
+  # load without error and be silently NOT read. Configure Z.ai through the environment:
+  #   ZAI_API_KEY             required
+  #   ZAI_BASE_URL            optional (default https://api.z.ai/api/paas/v4)
+  #   ZAI_MODEL               optional (default glm-5.3)
+  #   ZAI_TIMEOUT_SECONDS     optional (default 300)
+  # `default_provider: "zai"` and `model_fallback` hops to "zai" work with those variables set.
+  # An `llm.zai` block is planned for a later release. NOT live-verified; the endpoint and model
+  # facts come from docs.z.ai, accessed 2026-11-17.
+
   # Grok (xAI). Live-verified 2026-08-22 (plan 17-18, closing G-17-4a): a live GET
   # /models call and a generate() round trip both succeeded against api.x.ai using the
   # default model below. (Confirmed: model list + a completion round trip.)

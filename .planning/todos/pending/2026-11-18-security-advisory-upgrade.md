@@ -21,8 +21,10 @@ dispositioned_by: quick task 261117-t5c follow-up (owner decision 2026-11-18, se
 `make security` fails as of 2026-11-18 (measured with `cargo audit` on branch
 `claude/stoic-wright-60wtxw`). None of it was introduced by the z.ai work. The `lettre` advisories
 (RUSTSEC-2026-0560 to -0565) were fixed on that branch by a lockfile bump to 0.11.24. The owner
-chose NOT to add interim exceptions; the rest is fixed by upgrading in v0.12.0, so `make security`
-and CI's audit and deny jobs stay red until this lands.
+first chose not to add interim exceptions. That changed on 2026-11-20: `protect-main-branch.json` has
+no bypass and both checks are required, so nothing could merge. Seven governed exceptions were added
+(`SECURITY-EXCEPTIONS.md`, `.cargo/audit.toml`, `deny.toml`) and `make security` is green again. They
+are interim: every step below must also delete the exception rows it makes obsolete.
 
 | Crate | Advisories | Enters via | Fixed in |
 |---|---|---|---|
@@ -44,4 +46,7 @@ and CI's audit and deny jobs stay red until this lands.
 5. `cargo audit` also warns (does not fail) on unsound `event-listener` 5.4.1 (RUSTSEC-2026-0221),
    `rustix` 1.1.4 (RUSTSEC-2026-0486) and `scc` 2.4.0 (RUSTSEC-2026-0205). Check whether lockfile
    bumps clear them.
-6. Finish with `make security` green and `scripts/check-advisory-register.sh` passing.
+6. Remove the interim exceptions as each fix lands: `RUSTSEC-2026-0457`, `-0462` (rmcp), `-0459`
+   (libsqlite3-sys), `-0545`, `-0548` (zip), and `-0543`, `-0555` (chrono, chrono-tz) if step 4 chooses
+   a migration. `RUSTSEC-2026-0462` is a live exposure with only a partial control, so it goes first.
+7. Finish with `make security` green and `scripts/check-advisory-register.sh` passing.

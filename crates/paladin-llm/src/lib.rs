@@ -184,6 +184,12 @@ mod sse;
     feature = "openai-compatible"
 ))]
 mod backoff;
+/// Local (offline) adapters (Bulwark phase 7, D-11): [`local::embedding::LocalEmbeddingAdapter`]
+/// serves [`paladin_ports::output::embedding_port::EmbeddingPort`] from sha256-verified model files
+/// and a sha256-verified ONNX Runtime library on disk, and downloads nothing. Behind the
+/// off-by-default `local-embeddings` feature.
+#[cfg(feature = "local-embeddings")]
+pub mod local;
 /// The shared context-window precedence resolver (PRIM-04, D-01/D-02): one
 /// pure function, [`window::resolve_context_window`], that every consumer of
 /// [`paladin_ports::output::llm_port::ProviderCapabilities`] calls through

@@ -29,6 +29,10 @@ gemini = ["dep:reqwest"]
 mock = []
 vision = ["openai", "dep:base64"]
 openai-embeddings = ["openai"]
+# Offline local embedder (Bulwark phase 7, D-11): an `EmbeddingPort` that loads sha256-verified
+# model files and a sha256-verified ONNX Runtime library from disk and never downloads anything.
+# Off by default; a default build compiles none of the crates below.
+local-embeddings = ["dep:fastembed", "dep:ort", "dep:sha2"]
 
 [dependencies]
 paladin-core = { package = "paladin-ai-core", version = "0.11.0", path = "../paladin-core" }
@@ -52,6 +56,12 @@ reqwest = { workspace = true, features = ["json", "stream"], optional = true }
 # Pitfall 8, option a). `rand 0.8` is already a workspace dependency; no new package.
 rand = { workspace = true }
 base64 = { workspace = true, optional = true }
+# `local-embeddings` (D-11, D-31): `fastembed` is pinned `=7.1.0` so the crate builds at Paladin's
+# MSRV 1.88 (7.7.x needs `ort` rc.15, which needs rustc 1.92). Default features off keeps `hf-hub`
+# and every HTTP client out of the tree; only `TextEmbedding::try_new_from_user_defined` is used.
+fastembed = { version = "=7.1.0", optional = true, default-features = false, features = ["ort-load-dynamic"] }
+ort = { version = "=2.0.0-rc.13", optional = true, default-features = false, features = ["load-dynamic"] }
+sha2 = { version = "0.10", optional = true }
 
 [dev-dependencies]
 tokio-test = "0.4"
@@ -76,10 +86,17 @@ tokio = { workspace = true, features = ["test-util"] }
 # imposing no ordering constraint, while local tests keep resolving it by path.
 # `check-publish-order` (SC3) gates this edge.
 paladin-storage = { path = "../paladin-storage" }
+# Temporary model directories for the `local-embeddings` integrity tests; already in `Cargo.lock`.
+tempfile = "3"
 
 [[bench]]
 name = "llm_serialization_benchmarks"
 harness = false
+
+# `local-embeddings` (D-11): the hermetic dependency-tree guard.
+[[test]]
+name = "local_embedding_deps"
+required-features = ["local-embeddings"]
 
 # Phase 17 UAT test 4: live smoke test against the real vendor endpoints.
 # Requires real credentials in the environment; never run in CI.

@@ -190,6 +190,11 @@ pub use paladin_llm::openai::{OpenAIAdapter, OpenAIConfig};
 #[cfg(feature = "openai-embeddings")]
 pub use paladin_llm::openai::embedding::{OpenAIEmbeddingAdapter, OpenAIEmbeddingConfig};
 
+#[cfg(feature = "local-embeddings")]
+pub use paladin_llm::local::embedding::{
+    LOCAL_BGE_SMALL_SPEC, LocalEmbeddingAdapter, LocalEmbeddingConfig, LocalModelSpec,
+};
+
 #[cfg(feature = "llm-anthropic")]
 pub use paladin_llm::anthropic::{AnthropicAdapter, AnthropicConfig};
 

@@ -555,6 +555,11 @@ default = ["llm-openai", "llm-anthropic", "llm-deepseek"]
 redis-queue = ["paladin-storage/redis-queue"]
 s3-storage = ["paladin-storage/s3"]
 openai-embeddings = ["paladin-llm/openai-embeddings"]
+# Offline local embedder (Bulwark phase 7, D-11): `LocalEmbeddingAdapter`, an `EmbeddingPort` over
+# sha256-verified local model files and ONNX Runtime. Deliberately NOT part of `default` -- the
+# default `paladin-ai` build must gain no ONNX Runtime or tokenizer dependency (X-11.4); it is listed
+# in `full` below as an explicit passthrough, like `openai-embeddings`.
+local-embeddings = ["paladin-llm/local-embeddings"]
 qdrant = ["qdrant-client", "paladin-memory/qdrant"]
 integration-tests = []
 live-api-tests = []  # Tests requiring real API keys (OpenAI, DeepSeek, Anthropic)
@@ -617,7 +622,7 @@ dev-ui = ["paladin-web/dev-ui"]
 cli = ["dep:clap", "dep:dialoguer", "dep:indicatif", "dep:console", "dep:serde_yaml", "dep:colored", "dep:comfy-table", "dep:paladin-eval", "dep:glob", "paladin-herald/table", "paladin-herald/color"]
 
 # Convenience flag for enabling all optional features
-full = ["llm-all", "content-processing", "web-server", "notifications", "storage", "vision", "redis-queue", "s3-storage", "openai-embeddings", "qdrant", "cli"]
+full = ["llm-all", "content-processing", "web-server", "notifications", "storage", "vision", "redis-queue", "s3-storage", "openai-embeddings", "local-embeddings", "qdrant", "cli"]
 
 # Statically build OpenSSL from source (via openssl-sys vendored). Used only by
 # cross-compiled release binaries that lack a target-arch system libssl.

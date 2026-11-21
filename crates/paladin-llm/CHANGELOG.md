@@ -5,6 +5,12 @@ All notable changes to `paladin-llm` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project follows lockstep workspace versioning.
 
+## [Unreleased]
+
+### Added
+
+- `local-embeddings` feature (off by default, D-11): `paladin_llm::local::embedding` with `LocalEmbeddingAdapter`, `LocalEmbeddingConfig`, `LocalModelSpec`, `LOCAL_BGE_SMALL_SPEC` and `LocalEmbeddingError`. An offline `EmbeddingPort`: model files and the ONNX Runtime library are read from disk, checked by size and sha256 against the pinned spec (the same bytes are handed to `fastembed`), and a missing, short, altered or symlinked file is refused with the file named. The runtime library is loaded with `ort::init_from(<verified path>)`; the loader-path environment variable is never read. Construction is refused unless `ORT_DISABLE_TELEMETRY=1` is already set (the official runtime's telemetry uploader is on by default and the crate forbids `unsafe`). Inference runs on `spawn_blocking` behind a `Mutex`; `embed_batch` sorts by length, runs sub-batches of 8 and restores the caller's order. New optional dependencies `fastembed =7.1.0` (default features off, `ort-load-dynamic`; 7.1.0 keeps the crate at MSRV 1.88), `ort =2.0.0-rc.13` (`load-dynamic`) and `sha2`; the `local_embedding_deps` test bans `hf-hub`, `ureq` and `reqwest` from the feature's tree.
+
 ## [0.11.0] - 2026-10-26
 
 ### Added

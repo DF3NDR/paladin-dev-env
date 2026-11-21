@@ -166,6 +166,7 @@ src/
 | `gemini` | no | `GeminiAdapter` |
 | `mock` | yes | `MockLlmAdapter`, `MultiStepMockLlmPort` |
 | `openai-embeddings` | no | Embedding API |
+| `local-embeddings` | no | `LocalEmbeddingAdapter`: offline `EmbeddingPort` over sha256-verified local model files and ONNX Runtime (no download, needs `ORT_DISABLE_TELEMETRY=1`) |
 | `vision` | no | Vision / multimodal extensions |
 
 **Key modules:** `src/openai/`, `src/anthropic/`, `src/deepseek/`, `src/kimi/`, `src/qwen/`,

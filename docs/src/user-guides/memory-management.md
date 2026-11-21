@@ -560,6 +560,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+### Local embedder (offline)
+
+`LocalEmbeddingAdapter` (`paladin_llm::local::embedding`, behind the off-by-default
+`local-embeddings` feature) serves `EmbeddingPort` with no network call, for a garrison whose text
+must not leave the host. It embeds with `BAAI/bge-small-en-v1.5` (384 dimensions, 512-token
+window, CLS pooling, L2-normalised, no query prefix) on ONNX Runtime.
+
+What it loads: five model files (`onnx/model.onnx`, `tokenizer.json`, `config.json`,
+`special_tokens_map.json`, `tokenizer_config.json`) from a model directory, and the ONNX Runtime
+shared library from an absolute path. Both are pinned in `LOCAL_BGE_SMALL_SPEC` by size and
+sha256. The adapter reads each file once, checks it, and hands the same verified bytes to the
+model; a missing, short, altered or symlinked file is refused with the file named (and, for an
+altered one, the pinned and the actual digest). The library is hashed the same way and loaded
+from exactly that path.
+
+What it expects of you:
+
+- **The setup step.** The adapter downloads nothing, ever. Place the files with an explicit setup
+  step of your own (one that checks each digest while streaming) before constructing it; a missing
+  file's error tells you so.
+- **`ORT_DISABLE_TELEMETRY=1` in the environment.** The official ONNX Runtime build carries a
+  telemetry uploader that is on by default, and only this variable (set before the library
+  starts) stops it. The crate forbids `unsafe`, so it cannot set the variable itself; the adapter
+  refuses to construct unless the host process already did.
+- **One library per process.** The first verified runtime path wins; a second adapter naming a
+  different path is refused.
+
+```rust,ignore
+use paladin_llm::local::embedding::{LocalEmbeddingAdapter, LocalEmbeddingConfig};
+use paladin_ports::output::embedding_port::EmbeddingPort;
+
+// ORT_DISABLE_TELEMETRY=1 must already be set in the process environment.
+let embedder = LocalEmbeddingAdapter::try_new(LocalEmbeddingConfig {
+    model_dir: "/var/lib/paladin/embedder".into(),
+    runtime_path: "/var/lib/paladin/embedder/libonnxruntime.so.1.31.0".into(),
+    intra_threads: None, // min(4, cores)
+})
+.await?;
+let vector = embedder.embed_text("outdoor activities").await?;
+```
+
+The model identity is `local:BAAI/bge-small-en-v1.5@<revision>` (`embedder.model_name()`), with
+the 40-hex model revision in it. A Sanctum snapshot built by one embedder is refused by another:
+vectors from different models, or from the same model at a different revision, are not
+comparable, so rebuild the snapshot after any change of embedder or pin.
+
 ### Hybrid Search (Keyword + Semantic)
 
 ```rust,ignore

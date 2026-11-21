@@ -5,6 +5,12 @@ All notable changes to the Paladin project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `local-embeddings` (off by default; facade feature `paladin-ai/local-embeddings`, forwarded to `paladin-llm/local-embeddings`): `LocalEmbeddingAdapter`, an offline `EmbeddingPort` over `BAAI/bge-small-en-v1.5` (384 dimensions) on ONNX Runtime. It downloads nothing: it loads five model files and the ONNX Runtime shared library from paths it is given, checks the size and sha256 of every file against a pinned `LocalModelSpec` before use (the bytes it hashed are the bytes it loads), and refuses a missing, short, altered or symlinked file. It refuses to construct unless `ORT_DISABLE_TELEMETRY=1` is already in the environment, because the official ONNX Runtime build reports to its vendor otherwise and the crate forbids `unsafe` (so it cannot set the variable). `fastembed` is pinned `=7.1.0` so `paladin-llm` still builds at the workspace MSRV 1.88. The model identity carries the revision (`local:BAAI/bge-small-en-v1.5@<revision>`). A default build compiles none of the new crates.
+
 ## [0.11.0] - 2026-10-26
 
 This root entry is condensed to fit the GitHub Release body limit (Phase 47, B-1). Full per-change detail is in each crate's `CHANGELOG.md` `[0.11.0]` section, in `MIGRATION.md` section 10, and in the uncondensed text at commit `700a92d86f3d6b2e24bbd2c163daec7c307297e0` (`git show 700a92d86f3d6b2e24bbd2c163daec7c307297e0:CHANGELOG.md`).

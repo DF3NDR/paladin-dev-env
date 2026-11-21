@@ -93,9 +93,13 @@ tempfile = "3"
 name = "llm_serialization_benchmarks"
 harness = false
 
-# `local-embeddings` (D-11): the hermetic dependency-tree guard.
+# `local-embeddings` (D-11): the hermetic dependency-tree guard and the ignored real-weights tests.
 [[test]]
 name = "local_embedding_deps"
+required-features = ["local-embeddings"]
+
+[[test]]
+name = "local_embedding_real"
 required-features = ["local-embeddings"]
 
 # Phase 17 UAT test 4: live smoke test against the real vendor endpoints.
